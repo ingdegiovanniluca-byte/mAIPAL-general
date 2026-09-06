@@ -9,20 +9,19 @@ export default function DashboardLayout() {
 
   return (
     <div className="min-h-screen">
-      <header className="px-8 md:px-14 pt-8 flex items-center justify-between">
-        <button data-testid="brand" onClick={() => nav("/dashboard")} className="kicker">· mAIPAL</button>
-        <div className="flex items-center gap-4">
-          <div className="kicker hidden sm:block">{user?.email}</div>
-          <button data-testid="logout-btn" onClick={logout} className="p-2 rounded-full hover:bg-neutral-200/60">
-            <LogOut size={16} />
-          </button>
-        </div>
+      <header className="px-8 md:px-14 pt-8 flex items-center justify-end">
+        <button data-testid="logout-btn" onClick={logout} className="p-2 rounded-full hover:bg-neutral-200/60">
+          <LogOut size={16} />
+        </button>
       </header>
 
       <section className="px-8 md:px-14 pt-6">
-        <h1 className="mt-2 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
-          Cosa vuoi fare, <span className="gradient-word">{user?.name?.split(" ")[0] || "mAIPAL"}</span>?
-        </h1>
+        <div className="flex items-end justify-between flex-wrap gap-3">
+          <h1 className="mt-2 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
+            Cosa vuoi fare, <span className="gradient-word">{user?.name?.split(" ")[0] || "mAIPAL"}</span>?
+          </h1>
+          <div className="kicker-p hidden sm:block pb-3">{user?.email}</div>
+        </div>
 
         <nav className="mt-8 inline-flex items-center gap-1 p-1 rounded-full bg-neutral-200/60">
           <TabLink to="/dashboard/chat" icon={<MessageSquare size={15} />} label="Chat" testid="tab-chat" />

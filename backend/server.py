@@ -834,11 +834,13 @@ class JournalCreate(BaseModel):
 
 
 @api_router.get("/journal")
-async def list_journal(current: User = Depends(get_current_user), q: Optional[str] = None, mood: Optional[str] = None):
+async def list_journal(current: User = Depends(get_current_user), q: Optional[str] = None, mood: Optional[str] = None, favorite: Optional[bool] = None):
     import re as _re
     query: dict = {"user_id": current.user_id}
     if mood and mood != "all":
         query["mood"] = mood
+    if favorite is True:
+        query["favorite"] = True
     if q:
         safe = _re.escape(q.strip())
         query["$or"] = [
@@ -849,6 +851,19 @@ async def list_journal(current: User = Depends(get_current_user), q: Optional[st
         ]
     cursor = db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(365)
     return await cursor.to_list(365)
+
+
+@api_router.post("/journal/{entry_id}/favorite")
+async def toggle_journal_favorite(entry_id: str, current: User = Depends(get_current_user)):
+    doc = await db.journal_entries.find_one({"id": entry_id, "user_id": current.user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    new_val = not doc.get("favorite", False)
+    await db.journal_entries.update_one(
+        {"id": entry_id, "user_id": current.user_id},
+        {"$set": {"favorite": new_val}},
+    )
+    return {"id": entry_id, "favorite": new_val}
 
 
 @api_router.get("/journal/trend")

@@ -251,7 +251,7 @@ export default function ChatPage() {
           </div>
           <div className="p-5 rounded-2xl border border-white/40 shadow-lg" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-              <div className="kicker text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
+              <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
                 <div className="flex items-center gap-1 bg-white/20 rounded-full p-0.5" data-testid="scope-selector">
                   <button
@@ -429,9 +429,9 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: ACTION_COLOR[conv.action] || "#6EB7EC" }} />
-          <div className="kicker">{actionLabels[conv.action] || conv.action}</div>
-          <div className="kicker">· {d ? d.toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div>
-          {messageCount > 2 && <div className="kicker">· {messageCount} msg</div>}
+          <div className="kicker-p">{actionLabels[conv.action] || conv.action}</div>
+          <div className="kicker-p">· {d ? d.toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div>
+          {messageCount > 2 && <div className="kicker-p">· {messageCount} msg</div>}
         </div>
         <div className="flex items-center gap-1.5">
           <button data-testid="fav-btn" onClick={stop(onToggleFav)} title={isFav ? "Rimuovi preferito" : "Preferito"}

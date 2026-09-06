@@ -3,7 +3,7 @@ import { api, API } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp } from "lucide-react";
+import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 const MOODS = ["felice", "grato", "energico", "riflessivo", "neutro", "stanco", "stressato"];
@@ -22,6 +22,7 @@ export default function JournalPage() {
   // Search & filter
   const [q, setQ] = useState("");
   const [mood, setMood] = useState("all");
+  const [favOnly, setFavOnly] = useState(false);
 
   // Voice recording
   const [recording, setRecording] = useState(false);
@@ -38,6 +39,7 @@ export default function JournalPage() {
     const params = {};
     if (q.trim()) params.q = q.trim();
     if (mood && mood !== "all") params.mood = mood;
+    if (favOnly) params.favorite = true;
     const r = await api.get("/journal", { params });
     setEntries(r.data);
   };
@@ -45,7 +47,7 @@ export default function JournalPage() {
     const r = await api.get("/journal/trend", { params: { days: trendDays } });
     setTrend(r.data.days || []);
   };
-  useEffect(() => { load(); }, [q, mood]);
+  useEffect(() => { load(); }, [q, mood, favOnly]);
   useEffect(() => { loadTrend(); }, [trendDays, entries.length]);
 
   const save = async () => {
@@ -67,6 +69,15 @@ export default function JournalPage() {
     setEntries((es) => es.filter((e) => e.id !== id));
     try { await api.delete(`/journal/${id}`); toast.success("Voce eliminata"); }
     catch { toast.error("Errore"); setEntries(prev); }
+  };
+
+  const toggleFav = async (id, currentVal) => {
+    setEntries((es) => es.map((e) => (e.id === id ? { ...e, favorite: !currentVal } : e)));
+    try { await api.post(`/journal/${id}/favorite`); }
+    catch {
+      toast.error("Errore preferito");
+      setEntries((es) => es.map((e) => (e.id === id ? { ...e, favorite: currentVal } : e)));
+    }
   };
 
   // ==== Voice ====
@@ -236,11 +247,28 @@ export default function JournalPage() {
           <div className="flex items-center gap-1 flex-wrap">
             <button
               key="all"
+              data-testid="fav-filter-off"
+              onClick={() => setFavOnly(false)}
+              style={!favOnly ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+            >tutti</button>
+            <button
+              data-testid="fav-filter-on"
+              onClick={() => setFavOnly(true)}
+              style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+              title="Solo giornate memorabili"
+            >
+              <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
+            </button>
+            <span className="w-px h-4 bg-neutral-300 mx-1" />
+            <button
+              key="mood-all"
               data-testid="mood-filter-all"
               onClick={() => setMood("all")}
               style={mood === "all" ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
               className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${mood === "all" ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
-            >tutti</button>
+            >ogni umore</button>
             {MOODS.map((m) => (
               <button
                 key={m}
@@ -274,7 +302,17 @@ export default function JournalPage() {
                   </div>
                 </div>
               </div>
-              <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+              <div className="flex items-center gap-1">
+                <button
+                  data-testid="journal-fav"
+                  onClick={() => toggleFav(e.id, !!e.favorite)}
+                  title={e.favorite ? "Rimuovi da giornate memorabili" : "Segna come giornata memorabile"}
+                  className={`p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-500 hover:bg-amber-50" : "text-neutral-400 hover:bg-neutral-100 hover:text-amber-500"}`}
+                >
+                  <Star size={16} className={e.favorite ? "fill-current" : ""} />
+                </button>
+                <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+              </div>
             </div>
 
             <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-neutral-800">{e.cleaned_text}</div>
