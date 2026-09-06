@@ -31,6 +31,9 @@ db = client[os.environ['DB_NAME']]
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 
+# ============ ADMIN / WHITELIST ============
+ADMIN_EMAIL = (os.environ.get('ADMIN_EMAIL') or 'ingdegiovanniluca@gmail.com').strip().lower()
+
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
@@ -54,6 +57,7 @@ class User(BaseModel):
     work_address: Optional[str] = None
     created_at: Optional[str] = None
     telegram_chat_id: Optional[int] = None
+    role: Optional[str] = "user"
 
 
 class OnboardingPayload(BaseModel):
@@ -175,13 +179,30 @@ async def process_session(request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Auth failed")
     data = r.json()
 
-    email = data["email"]
+    email = (data["email"] or "").strip().lower()
+
+    # ===== WHITELIST CHECK =====
+    # Only pre-authorized emails may sign in. Admins are always allowed.
+    is_admin_seed = email == ADMIN_EMAIL
+    if not is_admin_seed:
+        allowed = await db.allowed_emails.find_one({"email": email})
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Il tuo account non è autorizzato ad accedere a mAIPAL. "
+                    f"Contatta l'amministratore ({ADMIN_EMAIL}) per essere aggiunto alla whitelist."
+                ),
+            )
+
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
+        # Ensure the admin role stays applied on every login for the admin email
+        role_update = {"role": "admin"} if is_admin_seed else {}
         await db.users.update_one(
             {"user_id": user_id},
-            {"$set": {"name": data.get("name"), "picture": data.get("picture")}},
+            {"$set": {"name": data.get("name"), "picture": data.get("picture"), **role_update}},
         )
         user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     else:
@@ -191,6 +212,7 @@ async def process_session(request: Request, response: Response):
             "email": email,
             "name": data.get("name", ""),
             "picture": data.get("picture"),
+            "role": "admin" if is_admin_seed else "user",
             "onboarded": False,
             "profession": None,
             "sector": None,
@@ -234,6 +256,82 @@ async def logout(request: Request, response: Response):
         await db.user_sessions.delete_one({"session_token": token})
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
+
+
+async def require_admin(current: User = Depends(get_current_user)) -> User:
+    if (current.role or "user") != "admin":
+        raise HTTPException(status_code=403, detail="Solo amministratori")
+    return current
+
+
+# ============ ADMIN: WHITELIST + USERS ============
+class AllowlistItem(BaseModel):
+    email: str
+    notes: Optional[str] = ""
+
+
+@api_router.get("/admin/allowlist")
+async def admin_list_allowed(current: User = Depends(require_admin)):
+    cursor = db.allowed_emails.find({}, {"_id": 0}).sort("added_at", -1)
+    return await cursor.to_list(500)
+
+
+@api_router.post("/admin/allowlist")
+async def admin_add_allowed(item: AllowlistItem, current: User = Depends(require_admin)):
+    email = (item.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email non valida")
+    notes = (item.notes or "").strip()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.allowed_emails.update_one(
+        {"email": email},
+        {
+            "$set": {"notes": notes, "email": email},
+            "$setOnInsert": {"added_by": current.email, "added_at": now_iso},
+        },
+        upsert=True,
+    )
+    doc = await db.allowed_emails.find_one({"email": email}, {"_id": 0})
+    return doc
+
+
+@api_router.delete("/admin/allowlist/{email}")
+async def admin_remove_allowed(email: str, current: User = Depends(require_admin)):
+    email = (email or "").strip().lower()
+    if email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Impossibile rimuovere l'amministratore")
+    r = await db.allowed_emails.delete_one({"email": email})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Email non presente")
+    return {"ok": True}
+
+
+@api_router.get("/admin/users")
+async def admin_list_users(current: User = Depends(require_admin)):
+    users = await db.users.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Attach last session info
+    out = []
+    for u in users:
+        last_sess = await db.user_sessions.find_one(
+            {"user_id": u.get("user_id")},
+            {"_id": 0, "created_at": 1, "expires_at": 1},
+            sort=[("created_at", -1)],
+        )
+        out.append({**u, "last_session_at": last_sess.get("created_at").isoformat() if last_sess and hasattr(last_sess.get("created_at"), "isoformat") else (last_sess or {}).get("created_at")})
+    return out
+
+
+@api_router.post("/admin/users/{user_id}/revoke")
+async def admin_revoke_user(user_id: str, current: User = Depends(require_admin)):
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    if user.get("email") == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Impossibile revocare l'amministratore")
+    # Remove from whitelist and drop all active sessions
+    await db.allowed_emails.delete_one({"email": user.get("email")})
+    await db.user_sessions.delete_many({"user_id": user_id})
+    return {"ok": True, "email": user.get("email")}
 
 
 @api_router.post("/onboarding")
@@ -1529,6 +1627,23 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def start_services():
+    # ===== Seed admin + whitelist =====
+    try:
+        await db.allowed_emails.update_one(
+            {"email": ADMIN_EMAIL},
+            {"$setOnInsert": {
+                "email": ADMIN_EMAIL,
+                "notes": "amministratore",
+                "added_by": "system",
+                "added_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=True,
+        )
+        # If an admin user already exists, ensure role=admin
+        await db.users.update_many({"email": ADMIN_EMAIL}, {"$set": {"role": "admin"}})
+        logger.info(f"admin whitelist seeded for {ADMIN_EMAIL}")
+    except Exception:
+        logger.exception("failed to seed admin whitelist")
     try:
         asyncio.create_task(tg.start_polling())
     except Exception:

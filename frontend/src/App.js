@@ -10,6 +10,7 @@ import ChatPage from "@/pages/ChatPage";
 import TaskBoardPage from "@/pages/TaskBoardPage";
 import JournalPage from "@/pages/JournalPage";
 import DocumentsPage from "@/pages/DocumentsPage";
+import AdminPage from "@/pages/AdminPage";
 import SettingsPage from "@/pages/SettingsPage";
 import TodoBoardPage from "@/pages/TodoBoardPage";
 
@@ -37,6 +38,7 @@ function AppRouter() {
         <Route path="todos" element={<TodoBoardPage />} />
         <Route path="journal" element={<JournalPage />} />
         <Route path="documents" element={<DocumentsPage />} />
+        <Route path="admin" element={<AdminPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
