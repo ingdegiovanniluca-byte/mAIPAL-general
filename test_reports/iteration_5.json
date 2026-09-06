@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 5 (semantic KB + attachments + profile + clean streaming): backend 8/8 pytest passed, frontend Playwright flows all green. Verified: (1) chat/stream info_upload streams clean Italian text, no <<<META>>>/```json leaks, kb_chunk stored with 384-float embedding; (2) semantic KB retrieval hits earlier fact using lexically-different wording, answer contains both SSID and password; (3) task_todo produces clean stream, meta parsed and task/todo created with due_time '10:00'; (4) POST /tasks/{id}/chat and /todos/{id}/chat return {answer, task|todo} with markers stripped; (5) PATCH /profile persists profession, verticals, tone, home_address, work_address and GET /auth/me reflects it; (6) POST /onboarding accepts home/work addresses; (7) /attachments/upload returns 400 with detail 'Google Workspace non collegato...' when Google not connected. Frontend: chat input area background = rgb(110,183,236), border-color rgba(0,0,0,0) transparent; no shortcut hint or CLAUDE SONNET badge; send button white on blue; action cards heights 60-62px (<90px); main content width 1920 == body width (full-width); settings profile-card exposes all required testids, saves via PATCH /profile, toast 'Profilo aggiornato' fires, changes persist after reload (AuthContext updated); onboarding step 5 has ob-home and ob-work inputs; attach-btn triggers file-input which POSTs to /attachments/upload and shows 'Upload hello.txt fallito: Google Workspace non collegato...' toast.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/test_reports/pytest/iteration5.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1015 lines mixing auth, chat streaming, tasks, todos, google oauth, telegram, reminders loop and STT — should be split into routers (auth/chat/tasks/todos/integrations/voice) and services (llm, kb, drive, calendar).",
+    "retrieve_kb() lazy-embeds legacy chunks in a hot request path; each backfill hits the ONNX model synchronously in a thread pool — for a user with many chunks this can add seconds to the first query. Consider a background job or embedding-on-insert only (which is already done for new uploads).",
+    "ChatPage.jsx (~460 lines) mixes chat, voice recording, attachments, thread and history-card concerns — extract HistoryCard, VoiceRecorder and Attachments into hooks/components.",
+    "SettingsPage container uses max-w-4xl while ChatPage uses w-full; layout width is inconsistent between tabs. Not a bug per spec (spec only requires full-width for chat outlet) but worth noting.",
+    "_parse_task_json() helper is now dead code (task_todo flow uses _extract_meta). Remove to avoid drift.",
+    "Chunk backfill inside retrieve_kb writes back to DB with await inside a loop (N round-trips). If chunks are many this is slow — bulk_write would be better."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/test_reports/iteration_5.json"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Session cookie session_token=test_session_demo_12345 for user_id=test-user-demo (demo@maipal.test)",
+  "seed_data_creation": "Tests create transient conv_TEST_*, kb_chunks and task_TEST_*/todo_TEST_* docs and clean them in try/finally. Modified home_address/work_address/profession/verticals on demo user during profile test; restored via db.users.update_one at teardown of run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 5 e2e green. Streaming filter correctly withholds partial <<<META>>> prefixes. Semantic retrieval works with fastembed multilingual MiniLM (DIM 384, cosine>=0.35). Drive upload only 400 branch tested (Google not configured). Testids: chat-input-card, chat-textarea, send-btn, attach-btn, file-input, action-{upload,query,todo}, profile-card, prof-{profession,sector,v-Lavoro,interests,tone-informale,home,work,save}, ob-{home,work}. Frontend chat main is w-full; SettingsPage still wrapped in max-w-4xl by design.",
+  "rca of the issue": "N/A - no issues found."
+}

@@ -17,6 +17,8 @@ export default function OnboardingPage() {
   const [verticals, setVerticals] = useState([]);
   const [interests, setInterests] = useState("");
   const [tone, setTone] = useState("informale");
+  const [homeAddress, setHomeAddress] = useState("");
+  const [workAddress, setWorkAddress] = useState("");
   const [saving, setSaving] = useState(false);
 
   const toggleVertical = (v) => {
@@ -30,6 +32,8 @@ export default function OnboardingPage() {
         profession, sector, verticals,
         interests: interests.split(",").map((s) => s.trim()).filter(Boolean),
         tone,
+        home_address: homeAddress,
+        work_address: workAddress,
       });
       const me = await api.get("/auth/me");
       setUser(me.data);
@@ -89,6 +93,22 @@ export default function OnboardingPage() {
               className={`px-5 py-3 rounded-full border transition-colors duration-150 ${tone === t ? "bg-black text-white border-black" : "bg-white border-neutral-200 hover:border-neutral-400"}`}
             >{t}</button>
           ))}
+        </div>
+      ),
+    },
+    {
+      title: "I tuoi indirizzi (facoltativi)",
+      body: (
+        <div className="space-y-4">
+          <div>
+            <div className="kicker mb-2">indirizzo di casa</div>
+            <Input data-testid="ob-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via Roma 10, Milano" className="h-14 rounded-2xl text-lg bg-white" />
+          </div>
+          <div>
+            <div className="kicker mb-2">indirizzo di lavoro</div>
+            <Input data-testid="ob-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via Uffici 20, Milano" className="h-14 rounded-2xl text-lg bg-white" />
+          </div>
+          <div className="text-xs text-neutral-500">Servono a mAIPAL per calcolare tragitti, aggiungerli agli eventi, o rispondere a domande contestuali.</div>
         </div>
       ),
     },

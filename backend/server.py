@@ -20,6 +20,7 @@ from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
 
 import google_integration as gi
 import telegram_bot as tg
+import embeddings as emb
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -49,6 +50,8 @@ class User(BaseModel):
     verticals: List[str] = []
     interests: List[str] = []
     tone: Optional[str] = "informale"
+    home_address: Optional[str] = None
+    work_address: Optional[str] = None
     created_at: Optional[str] = None
     telegram_chat_id: Optional[int] = None
 
@@ -59,6 +62,18 @@ class OnboardingPayload(BaseModel):
     verticals: List[str] = []
     interests: List[str] = []
     tone: Optional[str] = "informale"
+    home_address: Optional[str] = ""
+    work_address: Optional[str] = ""
+
+
+class ProfilePatch(BaseModel):
+    profession: Optional[str] = None
+    sector: Optional[str] = None
+    verticals: Optional[List[str]] = None
+    interests: Optional[List[str]] = None
+    tone: Optional[str] = None
+    home_address: Optional[str] = None
+    work_address: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -231,9 +246,20 @@ async def save_onboarding(payload: OnboardingPayload, current: User = Depends(ge
             "verticals": payload.verticals,
             "interests": payload.interests,
             "tone": payload.tone,
+            "home_address": payload.home_address,
+            "work_address": payload.work_address,
             "onboarded": True,
         }},
     )
+    user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
+    return User(**user_doc)
+
+
+@api_router.patch("/profile")
+async def update_profile(payload: ProfilePatch, current: User = Depends(get_current_user)):
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if updates:
+        await db.users.update_one({"user_id": current.user_id}, {"$set": updates})
     user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     return User(**user_doc)
 
@@ -243,47 +269,108 @@ def build_system_prompt(user: User, action: str) -> str:
     verticals = ", ".join(user.verticals) if user.verticals else "generico"
     interests = ", ".join(user.interests) if user.interests else "n/d"
     user_name = user.name or "l'utente"
+    addr_parts = []
+    if user.home_address: addr_parts.append(f"indirizzo casa: {user.home_address}")
+    if user.work_address: addr_parts.append(f"indirizzo lavoro: {user.work_address}")
+    addr = "; ".join(addr_parts)
     base = (
         f"Sei mAIPAL, un assistente personale AI (segretario digitale) per {user_name}. "
         f"Profilo: professione '{user.profession or 'n/d'}', settore '{user.sector or 'n/d'}', "
         f"verticali d'uso: {verticals}, interessi: {interests}. "
-        f"Tono di comunicazione: {user.tone or 'informale'}. "
-        "Rispondi sempre in italiano, in modo chiaro e conciso."
+        + (addr + ". " if addr else "")
+        + f"Tono di comunicazione: {user.tone or 'informale'}. "
+        "Rispondi sempre in italiano, in modo chiaro, naturale e conciso. "
+        "REGOLA CRITICA DI FORMATO: la parte visibile all'utente deve essere una conversazione naturale, "
+        "SENZA mai includere JSON, blocchi di codice ```, tag XML, campi 'title/description/priority' o elenchi di metadati. "
+        "Se devi produrre dati strutturati per il sistema, includili SOLO tra i marcatori speciali "
+        "<<<META>>> e <<<END>>>: tutto ciò che è dentro NON verrà mostrato all'utente."
     )
     if action == "info_upload":
         base += (
-            " L'utente sta caricando un'informazione da salvare nella sua knowledge base personale. "
-            "Rispondi confermando cosa hai memorizzato, estrai un titolo breve, tag (2-4 parole chiave) e una sintesi. "
-            "Termina con un JSON in un blocco ```json``` con chiavi: title, summary, tags (array)."
+            " L'utente sta caricando un'informazione. Conferma cosa hai memorizzato in modo naturale (1-3 frasi). "
+            "Poi in coda, ma solo per il sistema, aggiungi: "
+            "<<<META>>>{\"title\": \"...\", \"summary\": \"...\", \"tags\": [\"...\"]}<<<END>>>"
         )
     elif action == "info_request":
         base += (
-            " L'utente ti sta ponendo una domanda. "
-            "Se ti viene fornito un CONTESTO dalla knowledge base, usalo come fonte principale e cita testualmente "
-            "gli spunti rilevanti. Se il contesto è vuoto o non pertinente, indicalo esplicitamente e rispondi "
-            "con le tue conoscenze generali dichiarando che è una risposta senza fonti dalla KB personale."
+            " L'utente ti sta ponendo una domanda. Se ti viene fornito un CONTESTO dalla knowledge base personale, "
+            "usalo come fonte principale e rispondi in modo naturale (senza dire 'ecco il contesto', 'dal database'; parla come un assistente). "
+            "Se il contesto è vuoto o non pertinente, indica gentilmente che non hai fonti dalla KB personale e rispondi con le tue conoscenze generali."
         )
     elif action == "task_todo":
         base += (
-            " L'utente vuole salvare un task o un to-do. Estrai i seguenti campi e restituisci un blocco ```json``` "
-            "con: title (breve), description, due_date (ISO YYYY-MM-DD SE l'utente ha specificato una data ANCHE IMPLICITA come 'domani', 'lunedì prossimo', 'tra 3 giorni', 'il 15', altrimenti null), "
-            "due_time (HH:MM se specificato dall'utente, altrimenti null), priority ('alta'|'media'|'bassa'), tags (array di 1-4 parole chiave), notes (dettagli aggiuntivi). "
-            "REGOLA CRITICA: se rilevi una data o un'ora, includi due_date. Il sistema salverà come TASK se due_date è presente, altrimenti come TO-DO. "
-            "Prima del JSON, scrivi 1-2 frasi di conferma naturale."
+            " L'utente vuole salvare un task o un to-do. Scrivi UNA risposta di conferma naturale (1-2 frasi, es. "
+            "'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
+            "Poi in coda, solo per il sistema, aggiungi: "
+            "<<<META>>>{\"title\": \"breve\", \"description\": \"\", "
+            "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", "
+            "\"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}<<<END>>>. "
+            "REGOLA: se rilevi una data (anche implicita: 'domani', 'lunedì', 'tra 3 giorni'), imposta due_date. "
+            "Se rilevi un'ora, imposta due_time. Il sistema salva come TASK se due_date è presente, altrimenti come TO-DO."
         )
     return base
 
 
+def _extract_meta(text: str) -> tuple[str, Optional[dict]]:
+    """Return (visible_text, parsed_meta). Meta between <<<META>>>...<<<END>>> or legacy ```json``` fenced blocks."""
+    import re, json as _json
+    meta = None
+    visible = text
+    # Preferred: <<<META>>>...<<<END>>>
+    m = re.search(r"<<<META>>>\s*(\{.*?\})\s*<<<END>>>", text, re.DOTALL)
+    if m:
+        try: meta = _json.loads(m.group(1))
+        except Exception: meta = None
+        visible = (text[:m.start()] + text[m.end():]).strip()
+    else:
+        # Legacy fallback: ```json {...} ```
+        m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if m:
+            try: meta = _json.loads(m.group(1))
+            except Exception: meta = None
+            visible = (text[:m.start()] + text[m.end():]).strip()
+    return visible, meta
+
+
 async def retrieve_kb(user_id: str, query: str, limit: int = 4) -> List[dict]:
-    # simple keyword-based retrieval on knowledge chunks
+    """Semantic retrieval over kb_chunks using local multilingual embeddings + cosine similarity."""
+    try:
+        q_emb = await emb.embed_query(query)
+    except Exception as e:
+        logger.exception("embed_query failed, falling back to regex")
+        q_emb = None
+
+    # If we have an embedding, score all user's chunks; if no embedding is stored (legacy), score 0
+    if q_emb is not None:
+        cursor = db.kb_chunks.find({"user_id": user_id}, {"_id": 0})
+        chunks = await cursor.to_list(1000)
+        # Backfill missing embeddings lazily
+        to_embed = [(i, c) for i, c in enumerate(chunks) if not c.get("embedding")]
+        if to_embed:
+            texts = [c["text"] for _, c in to_embed]
+            try:
+                new_embs = await emb.embed_texts(texts)
+                for (i, c), e in zip(to_embed, new_embs):
+                    chunks[i]["embedding"] = e
+                    await db.kb_chunks.update_one({"chunk_id": c["chunk_id"]}, {"$set": {"embedding": e}})
+            except Exception:
+                logger.exception("backfill embeddings failed")
+        scored = []
+        for c in chunks:
+            e = c.get("embedding")
+            if not e: continue
+            scored.append((emb.cosine(q_emb, e), c))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        # Only keep chunks with reasonable similarity
+        top = [c for s, c in scored[:limit] if s >= 0.35]
+        return top
+
+    # Fallback keyword
     terms = [t for t in query.lower().split() if len(t) > 2][:6]
     if not terms:
         return []
-    regex = "|".join([t for t in terms])
-    cursor = db.kb_chunks.find(
-        {"user_id": user_id, "text": {"$regex": regex, "$options": "i"}},
-        {"_id": 0},
-    ).limit(limit)
+    regex = "|".join(terms)
+    cursor = db.kb_chunks.find({"user_id": user_id, "text": {"$regex": regex, "$options": "i"}}, {"_id": 0}).limit(limit)
     return await cursor.to_list(limit)
 
 
@@ -350,44 +437,80 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     )
 
     import json as _json
+    MARKER = "<<<META>>>"
     async def event_gen():
         full = []
+        pending = ""     # buffer with tail that could still be a partial marker prefix
+        stopped = False  # true once MARKER encountered
         try:
             async for ev in chat.stream_message(UserMessage(text=user_text)):
                 if isinstance(ev, TextDelta):
                     full.append(ev.content)
-                    yield _json.dumps({"type": "delta", "content": ev.content}) + "\n"
+                    if stopped:
+                        continue
+                    pending += ev.content
+                    idx = pending.find(MARKER)
+                    if idx >= 0:
+                        pre = pending[:idx].rstrip()
+                        if pre.endswith("```json"):
+                            pre = pre[:-7].rstrip()
+                        if pre:
+                            yield _json.dumps({"type": "delta", "content": pre}) + "\n"
+                        stopped = True
+                        pending = ""
+                        continue
+                    # Hold back any tail matching a marker prefix
+                    hold = 0
+                    for k in range(min(len(MARKER) - 1, len(pending)), 0, -1):
+                        if pending.endswith(MARKER[:k]):
+                            hold = k
+                            break
+                    if len(pending) > hold:
+                        out = pending[:len(pending) - hold]
+                        pending = pending[len(pending) - hold:]
+                        yield _json.dumps({"type": "delta", "content": out}) + "\n"
                 elif isinstance(ev, StreamDone):
                     break
+            if not stopped and pending:
+                yield _json.dumps({"type": "delta", "content": pending}) + "\n"
         except Exception as e:
             logger.exception("LLM stream error")
             yield _json.dumps({"type": "error", "content": str(e)}) + "\n"
 
-        answer = "".join(full)
+        raw_answer = "".join(full)
+        visible_answer, meta = _extract_meta(raw_answer)
+        visible_answer = visible_answer.replace("```json", "").replace("```", "").strip()
         completed_at = datetime.now(timezone.utc).isoformat()
         await db.conversations.update_one(
             {"conv_id": conv_id},
             {
-                "$push": {"messages": {"role": "assistant", "content": answer, "ts": completed_at}},
-                "$set": {"agent_response": answer, "completed_at": completed_at},
+                "$push": {"messages": {"role": "assistant", "content": visible_answer, "ts": completed_at}},
+                "$set": {"agent_response": visible_answer, "meta": meta or {}, "completed_at": completed_at},
             },
         )
 
         # side-effects only on first exchange of upload/task actions
         if not prior_messages:
             if action == "info_upload":
+                try:
+                    e = await emb.embed_texts([payload.content])
+                    embedding = e[0] if e else None
+                except Exception:
+                    embedding = None
                 await db.kb_chunks.insert_one({
                     "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
                     "user_id": current.user_id,
                     "text": payload.content,
-                    "summary": answer,
+                    "title": (meta or {}).get("title") if meta else None,
+                    "tags": (meta or {}).get("tags", []) if meta else [],
+                    "summary": (meta or {}).get("summary") if meta else visible_answer,
+                    "embedding": embedding,
                     "conv_id": conv_id,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
             elif action == "task_todo":
-                parsed = _parse_task_json(answer)
-                if parsed:
-                    await _create_task_or_todo(current.user_id, parsed, conv_id)
+                if meta:
+                    await _create_task_or_todo(current.user_id, meta, conv_id)
 
         yield _json.dumps({"type": "done", "conv_id": conv_id}) + "\n"
 
@@ -609,16 +732,18 @@ async def task_chat(task_id: str, payload: ContextChatRequest, current: User = D
 
     system = (
         f"Sei mAIPAL. L'utente sta modificando il task: {task}. "
-        "Aggiorna il task in base alla richiesta e restituisci un breve messaggio di conferma, "
-        "seguito da un blocco ```json``` con le SOLE chiavi da aggiornare tra: title, description, due_date, priority, tags, notes."
+        "Rispondi in modo naturale (1-2 frasi) con la conferma della modifica. "
+        "In coda includi SOLO per il sistema i campi da aggiornare tra i marcatori "
+        "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, due_date, due_time, priority, tags, notes."
     )
     chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"task_{task_id}", system_message=system).with_model("anthropic", "claude-sonnet-5")
-    answer = await chat.send_message(UserMessage(text=payload.message))
-    updates = _parse_task_json(answer) or {}
-    if updates:
-        await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": updates})
+    raw = await chat.send_message(UserMessage(text=payload.message))
+    visible, meta = _extract_meta(raw)
+    visible = visible.replace("```json", "").replace("```", "").strip()
+    if meta:
+        await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": meta})
     updated = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
-    return {"answer": answer, "task": updated}
+    return {"answer": visible, "task": updated}
 
 
 @api_router.post("/todos/{todo_id}/chat")
@@ -629,21 +754,53 @@ async def todo_chat(todo_id: str, payload: ContextChatRequest, current: User = D
 
     system = (
         f"Sei mAIPAL. L'utente sta modificando il to-do: {todo}. "
-        "Aggiorna il to-do e restituisci un breve messaggio di conferma seguito da un blocco ```json``` con "
-        "le SOLE chiavi da aggiornare tra: title, description, status ('da_fare'|'in_corso'|'fatto'), completion_percent, priority, tags, notes."
+        "Rispondi in modo naturale (1-2 frasi) con la conferma. "
+        "In coda includi SOLO per il sistema i campi da aggiornare tra i marcatori "
+        "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, status ('da_fare'|'in_corso'|'fatto'), completion_percent, priority, tags, notes."
     )
     chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"todo_{todo_id}", system_message=system).with_model("anthropic", "claude-sonnet-5")
-    answer = await chat.send_message(UserMessage(text=payload.message))
-    updates = _parse_task_json(answer) or {}
-    if updates:
-        await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": updates})
+    raw = await chat.send_message(UserMessage(text=payload.message))
+    visible, meta = _extract_meta(raw)
+    visible = visible.replace("```json", "").replace("```", "").strip()
+    if meta:
+        await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": meta})
     updated = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
-    return {"answer": answer, "todo": updated}
+    return {"answer": visible, "todo": updated}
 
 
 @api_router.get("/")
 async def root():
     return {"message": "mAIPAL API"}
+
+
+# ============ FILE ATTACHMENTS -> DRIVE ============
+@api_router.post("/attachments/upload")
+async def upload_attachment(file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    creds = await gi.get_credentials(db, current.user_id)
+    if not creds:
+        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
+
+    contents = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file.filename.rsplit('.',1)[-1] if '.' in (file.filename or '') else 'bin'}") as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        folder_id = await gi.ensure_maipal_folder(db, current.user_id, creds)
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        media = MediaFileUpload(tmp_path, mimetype=file.content_type or "application/octet-stream")
+        meta = {"name": file.filename or "file", "parents": [folder_id]}
+        created = service.files().create(body=meta, media_body=media, fields="id, webViewLink, name").execute()
+        return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": created["name"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("drive upload failed")
+        raise HTTPException(status_code=500, detail=f"Upload Drive fallito: {e}")
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
 
 
 # ============ INTEGRATIONS STATUS ============

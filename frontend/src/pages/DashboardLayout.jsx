@@ -33,7 +33,7 @@ export default function DashboardLayout() {
         </nav>
       </section>
 
-      <main className="px-8 md:px-14 py-8">
+      <main className="px-8 md:px-14 py-8 w-full">
         <Outlet />
       </main>
     </div>

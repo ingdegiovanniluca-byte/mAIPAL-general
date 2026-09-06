@@ -42,8 +42,11 @@ export default function ChatPage() {
   const [date, setDate] = useState("");
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [attachments, setAttachments] = useState([]); // [{name, id, url}]
+  const [uploadingFile, setUploadingFile] = useState(false);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
+  const fileInputRef = useRef(null);
 
   // ACTIVE THREAD: full conversation view when user is chatting in a specific thread
   const [thread, setThread] = useState(null); // { conv_id, action, messages: [{role, content}], liveAnswer: string }
@@ -79,10 +82,15 @@ export default function ChatPage() {
   const closeThread = () => setThread(null);
 
   const send = async () => {
-    if (!text.trim() || streaming) return;
+    if ((!text.trim() && attachments.length === 0) || streaming) return;
     setStreaming(true);
-    const currentQuestion = text;
+    let currentQuestion = text;
+    if (attachments.length > 0) {
+      const filesLine = attachments.map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
+      currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + `Allegati caricati su Drive:\n${filesLine}`;
+    }
     setText("");
+    setAttachments([]);
 
     // Optimistic: append user turn immediately
     if (thread) {
@@ -161,6 +169,34 @@ export default function ChatPage() {
     }
   };
 
+  const onAttachClick = () => fileInputRef.current?.click();
+
+  const onFilesPicked = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    e.target.value = "";
+    setUploadingFile(true);
+    for (const f of files) {
+      try {
+        const fd = new FormData();
+        fd.append("file", f, f.name);
+        const res = await fetch(`${API}/attachments/upload`, { method: "POST", body: fd, credentials: "include" });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+          throw new Error(errData.detail || `HTTP ${res.status}`);
+        }
+        const j = await res.json();
+        setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
+        toast.success(`${f.name} caricato su Drive`);
+      } catch (err) {
+        toast.error(`Upload ${f.name} fallito: ${err.message}`);
+      }
+    }
+    setUploadingFile(false);
+  };
+
+  const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
+
   const filtered = history.filter((h) => {
     if (filter === "fav") {
       if (!h.favorite) return false;
@@ -200,10 +236,10 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="max-w-6xl">
+    <div className="w-full">
       {/* Action selector — hidden when in a thread */}
       {!thread && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
           {ACTIONS.map((a) => {
             const selected = a.id === active;
             return (
@@ -211,16 +247,18 @@ export default function ChatPage() {
                 key={a.id}
                 data-testid={`action-${a.key}`}
                 onClick={() => setActive(a.id)}
-                className={`text-left card-soft p-5 transition-all duration-200 ${selected ? "card-selected" : "hover:-translate-y-0.5 hover:shadow-md"}`}
+                className={`flex items-center gap-3 text-left card-soft py-3 px-4 transition-all duration-200 ${selected ? "card-selected" : "hover:-translate-y-0.5 hover:shadow-md"}`}
               >
-                <div className="flex items-start justify-between">
-                  <div className="w-10 h-10 rounded-xl bg-neutral-100 flex items-center justify-center">{a.icon}</div>
-                  <span className={`text-[10px] font-mono-tight tracking-widest px-2.5 py-1 rounded-full border ${selected ? "border-[color:var(--accent-blue)] text-[color:var(--accent-blue)]" : "border-neutral-300 text-neutral-500"}`}>
-                    {selected ? "ATTIVO" : "SELEZIONA"}
-                  </span>
+                <div className={`w-9 h-9 shrink-0 rounded-xl flex items-center justify-center ${selected ? "bg-[color:var(--accent-blue)]/10 text-[color:var(--accent-blue)]" : "bg-neutral-100 text-neutral-700"}`}>
+                  {React.cloneElement(a.icon, { size: 18 })}
                 </div>
-                <div className="mt-4 text-lg font-semibold">{a.title}</div>
-                <div className="text-sm text-neutral-500 mt-1">{a.subtitle}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold truncate">{a.title}</div>
+                  <div className="text-xs text-neutral-500 truncate">{a.subtitle}</div>
+                </div>
+                <span className={`text-[9px] font-mono-tight tracking-widest px-2 py-0.5 rounded-full border shrink-0 ${selected ? "border-[color:var(--accent-blue)] text-[color:var(--accent-blue)]" : "border-neutral-300 text-neutral-500"}`}>
+                  {selected ? "ATTIVO" : "SEL"}
+                </span>
               </button>
             );
           })}
@@ -269,10 +307,9 @@ export default function ChatPage() {
       )}
 
       {/* Input area — always visible, targets thread if open, else starts new */}
-      <div className="mt-6 p-5 rounded-2xl border-2 shadow-[0_8px_24px_-8px_rgba(110,183,236,0.35)]" style={{ borderColor: "#6EB7EC", background: "linear-gradient(180deg, rgba(110,183,236,0.10) 0%, rgba(110,183,236,0.03) 100%)" }} data-testid="chat-input-card">
+      <div className="mt-6 p-5 rounded-2xl border border-transparent" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
         <div className="flex items-center justify-between mb-3">
-          <div className="kicker" style={{ color: "#1E7ABF" }}>· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
-          <div className="kicker">⌘/Ctrl + ⏎ per inviare</div>
+          <div className="kicker text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
         </div>
         <Textarea
           data-testid="chat-textarea"
@@ -282,31 +319,41 @@ export default function ChatPage() {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
           }}
           placeholder={thread ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
-          className="border-0 focus-visible:ring-0 bg-transparent text-lg min-h-[70px] px-0 resize-none placeholder:text-[color:#1E7ABF]/60"
+          className="border-0 focus-visible:ring-0 bg-transparent text-lg min-h-[70px] px-0 resize-none text-white placeholder:text-white/70"
         />
-        <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: "rgba(110,183,236,0.4)" }}>
-          <div className="flex items-center gap-2 text-neutral-500">
-            <button data-testid="attach-btn" className="p-2 rounded-full hover:bg-neutral-100"><Paperclip size={16} /></button>
+        <div className="flex items-center justify-between pt-2 border-t border-white/25">
+          <div className="flex items-center gap-2 text-white/85">
+            <button data-testid="attach-btn" onClick={onAttachClick} className="p-2 rounded-full hover:bg-white/15"><Paperclip size={16} /></button>
             <button
               data-testid="mic-btn"
               onClick={recording ? stopRec : startRec}
               disabled={transcribing}
-              className={`p-2 rounded-full transition-colors duration-150 ${recording ? "bg-red-100 text-red-600" : "hover:bg-neutral-100"}`}
+              className={`p-2 rounded-full transition-colors duration-150 ${recording ? "bg-white/25 text-white" : "hover:bg-white/15"}`}
               title={recording ? "Stop registrazione" : "Registra vocale"}
             >
               {recording ? <MicOff size={16} /> : <Mic size={16} />}
             </button>
             {(recording || transcribing) && (
-              <span className="kicker">{recording ? "· registrazione…" : "· trascrivo…"}</span>
+              <span className="kicker text-white/80">{recording ? "· registrazione…" : "· trascrivo…"}</span>
+            )}
+            {attachments.length > 0 && (
+              <div className="flex items-center gap-1 ml-2">
+                {attachments.map((a, i) => (
+                  <span key={i} className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white flex items-center gap-1">
+                    📎 {a.name.slice(0,18)}{a.name.length > 18 ? "…" : ""}
+                    <button onClick={() => removeAttachment(i)}><X size={10} /></button>
+                  </span>
+                ))}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-3">
-            <span className="kicker">claude sonnet 5</span>
-            <button data-testid="send-btn" onClick={send} disabled={streaming || !text.trim()} className="pill-btn">
+            <button data-testid="send-btn" onClick={send} disabled={streaming || (!text.trim() && attachments.length === 0)} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-[#0A6BBF] font-medium disabled:opacity-50 hover:bg-white/95">
               <Send size={14} /> {streaming ? "Elaboro…" : "Invia"}
             </button>
           </div>
         </div>
+        <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} data-testid="file-input" />
       </div>
 
       {/* History */}
