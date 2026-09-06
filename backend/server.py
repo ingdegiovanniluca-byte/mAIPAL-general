@@ -672,6 +672,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         else:
             scope = (payload.filters or {}).get("scope", "kb")
         kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope)
+        logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={payload.content[:60]!r} chunks={len(kb_context)}")
 
     system = build_system_prompt(current, action)
     user_text = payload.content
