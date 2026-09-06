@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
-import { MessageSquare, LayoutGrid, ListChecks, LogOut, Settings } from "lucide-react";
+import { MessageSquare, LayoutGrid, ListChecks, LogOut, Settings, BookOpen } from "lucide-react";
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -28,6 +28,7 @@ export default function DashboardLayout() {
           <TabLink to="/dashboard/chat" icon={<MessageSquare size={15} />} label="Chat" testid="tab-chat" />
           <TabLink to="/dashboard/tasks" icon={<LayoutGrid size={15} />} label="Task Board" testid="tab-tasks" />
           <TabLink to="/dashboard/todos" icon={<ListChecks size={15} />} label="To-Do" testid="tab-todos" />
+          <TabLink to="/dashboard/journal" icon={<BookOpen size={15} />} label="Diario" testid="tab-journal" />
           <TabLink to="/dashboard/settings" icon={<Settings size={15} />} label="Impostazioni" testid="tab-settings" />
         </nav>
       </section>

@@ -726,6 +726,18 @@ async def delete_todo(todo_id: str, current: User = Depends(get_current_user)):
     return {"ok": True}
 
 
+@api_router.post("/tasks/{task_id}/complete")
+async def toggle_task_complete(task_id: str, current: User = Depends(get_current_user)):
+    task = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("completed"):
+        await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": {"completed": False, "completed_at": None}})
+        return {"id": task_id, "completed": False}
+    await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": {"completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}})
+    return {"id": task_id, "completed": True}
+
+
 @api_router.post("/tasks/{task_id}/favorite")
 async def toggle_task_favorite(task_id: str, current: User = Depends(get_current_user)):
     task = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
@@ -744,6 +756,59 @@ async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current
     new_val = not todo.get("favorite", False)
     await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": {"favorite": new_val}})
     return {"id": todo_id, "favorite": new_val}
+
+
+# ============ JOURNAL ============
+class JournalCreate(BaseModel):
+    content: str
+    date: Optional[str] = None  # YYYY-MM-DD, defaults today
+
+
+@api_router.get("/journal")
+async def list_journal(current: User = Depends(get_current_user)):
+    cursor = db.journal_entries.find({"user_id": current.user_id}, {"_id": 0}).sort("date", -1).limit(365)
+    return await cursor.to_list(365)
+
+
+@api_router.post("/journal")
+async def create_journal(payload: JournalCreate, current: User = Depends(get_current_user)):
+    from datetime import date as _date
+    entry_date = payload.date or _date.today().isoformat()
+    system = (
+        f"Sei mAIPAL, l'assistente di {current.name}. L'utente ti sta raccontando la sua giornata. "
+        "Il tuo compito: (1) sistemare il testo (grammatica, punteggiatura, chiarezza) mantenendo la voce personale in prima persona, "
+        "(2) organizzare in paragrafi coerenti, (3) NON aggiungere fatti non presenti. "
+        "Restituisci una risposta con due parti: prima il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:'), "
+        "poi in coda solo per il sistema: "
+        "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", \"mood\": \"parola singola: felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
+        "\"highlights\": [\"1-3 momenti chiave estratti dal testo\"]}<<<END>>>"
+    )
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-5")
+    raw = await chat.send_message(UserMessage(text=payload.content))
+    cleaned, meta = _extract_meta(raw)
+    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    doc = {
+        "id": f"jr_{uuid.uuid4().hex[:12]}",
+        "user_id": current.user_id,
+        "date": entry_date,
+        "raw_text": payload.content,
+        "cleaned_text": cleaned,
+        "title": (meta or {}).get("title", ""),
+        "mood": (meta or {}).get("mood", ""),
+        "highlights": (meta or {}).get("highlights", []),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.journal_entries.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.delete("/journal/{entry_id}")
+async def delete_journal(entry_id: str, current: User = Depends(get_current_user)):
+    res = await db.journal_entries.delete_one({"id": entry_id, "user_id": current.user_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
 
 
 # ============ CONTEXTUAL CHAT (per task/todo) ============
@@ -1037,62 +1102,107 @@ async def _reminders_loop():
 
 
 async def _daily_summary_loop():
-    """Every 20 min: for each connected Telegram user, if it's between 07:00-07:59 UTC local-day AND
-    no summary was sent today, send them a morning summary with today's tasks + open todos, priority-sorted."""
+    """Every 20 min: 07:00-07:59 UTC morning summary + Sunday 19:00-19:59 weekly recap."""
     from datetime import date as _date
     PRIORITY_ORDER = {"alta": 0, "media": 1, "bassa": 2, None: 3}
     while True:
         try:
             now = datetime.now(timezone.utc)
             today = _date.today().isoformat()
-            if now.hour == 7:  # 07:00-07:59 UTC window
+            is_sunday_evening = (now.weekday() == 6 and now.hour == 19)
+            is_morning = (now.hour == 7)
+
+            if is_morning or is_sunday_evening:
                 async for user in db.users.find({"telegram_chat_id": {"$exists": True}}, {"_id": 0}):
+                    if is_sunday_evening:
+                        week_key = f"weekly_{now.strftime('%Y-W%V')}"
+                        if user.get("weekly_recap_key") == week_key:
+                            continue
+                        # Weekly recap: completed tasks this week + open tasks/todos
+                        seven_days_ago = (now - timedelta(days=7)).isoformat()
+                        done = await db.tasks.find(
+                            {"user_id": user["user_id"], "completed": True, "completed_at": {"$gte": seven_days_ago}},
+                            {"_id": 0},
+                        ).to_list(200)
+                        open_tasks = await db.tasks.find(
+                            {"user_id": user["user_id"], "$or": [{"completed": {"$exists": False}}, {"completed": False}]},
+                            {"_id": 0},
+                        ).to_list(200)
+                        open_todos = await db.todos.find(
+                            {"user_id": user["user_id"], "status": {"$in": ["da_fare", "in_corso"]}},
+                            {"_id": 0},
+                        ).to_list(200)
+                        lines = [f"📅 *Weekly Recap mAIPAL* — {user.get('name','').split(' ')[0]}", ""]
+                        lines.append(f"✅ *Completati questa settimana* ({len(done)})")
+                        for t in done[:10]:
+                            lines.append(f"  ✓ {t.get('title','(senza titolo)')}")
+                        if not done: lines.append("  _nessuno_")
+                        lines.append("")
+                        lines.append(f"📌 *Task aperti* ({len(open_tasks)})")
+                        for t in sorted(open_tasks, key=lambda x: PRIORITY_ORDER.get(x.get('priority'), 3))[:10]:
+                            e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get('priority','media'),"⚪️")
+                            lines.append(f"  {e} {t.get('title','(senza titolo)')} · {t.get('due_date','')}")
+                        lines.append("")
+                        lines.append(f"📝 *To-Do aperti* ({len(open_todos)})")
+                        for t in sorted(open_todos, key=lambda x: PRIORITY_ORDER.get(x.get('priority'), 3))[:10]:
+                            lines.append(f"  • {t.get('title','(senza titolo)')}")
+                        lines.append("")
+                        lines.append("Buona settimana! 🌟")
+                        try:
+                            from telegram import Bot
+                            await Bot(token=tg.bot_token()).send_message(
+                                chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown"
+                            )
+                            await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"weekly_recap_key": week_key}})
+                            logger.info(f"weekly recap sent to {user['telegram_chat_id']}")
+                        except Exception:
+                            logger.exception("weekly recap send failed")
+                        continue
+
+                    # Morning daily summary
                     if user.get("daily_summary_date") == today:
                         continue
                     tasks_today = await db.tasks.find(
-                        {"user_id": user["user_id"], "due_date": {"$lte": today}},
+                        {"user_id": user["user_id"], "due_date": {"$lte": today}, "$or": [{"completed": {"$exists": False}}, {"completed": False}]},
                         {"_id": 0},
                     ).to_list(200)
-                    # keep only not-done: we don't have status on tasks; assume all still relevant
                     tasks_today.sort(key=lambda t: (PRIORITY_ORDER.get(t.get("priority"), 3), t.get("due_date", "")))
                     open_todos = await db.todos.find(
                         {"user_id": user["user_id"], "status": {"$in": ["da_fare", "in_corso"]}},
                         {"_id": 0},
                     ).to_list(200)
                     open_todos.sort(key=lambda t: PRIORITY_ORDER.get(t.get("priority"), 3))
-
                     if not tasks_today and not open_todos:
-                        # mark as sent anyway
                         await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
                         continue
-
-                    lines = [f"☀️ *Buongiorno {user.get('name','').split(' ')[0]}!* Il tuo riassunto mAIPAL per oggi:", ""]
+                    lines = [f"☀️ *Buongiorno {user.get('name','').split(' ')[0]}!* Riassunto di oggi:", ""]
                     if tasks_today:
                         lines.append(f"📌 *Task* ({len(tasks_today)})")
                         for t in tasks_today[:10]:
-                            emoji = {"alta": "🔴", "media": "🟠", "bassa": "⚪️"}.get(t.get("priority","media"), "⚪️")
+                            e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get("priority","media"),"⚪️")
                             when = t.get("due_date", "")
                             if t.get("due_time"): when += f" · {t['due_time']}"
-                            lines.append(f"{emoji} {t.get('title','(senza titolo)')} — _{when}_")
+                            lines.append(f"{e} {t.get('title','(senza titolo)')} — _{when}_")
                         lines.append("")
                     if open_todos:
                         lines.append(f"✅ *To-Do aperti* ({len(open_todos)})")
                         for t in open_todos[:10]:
-                            emoji = {"alta": "🔴", "media": "🟠", "bassa": "⚪️"}.get(t.get("priority"), "⚪️")
+                            e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get("priority"),"⚪️")
                             pct = f" · {t.get('completion_percent',0)}%" if t.get("status") == "in_corso" else ""
-                            lines.append(f"{emoji} {t.get('title','(senza titolo)')}{pct}")
+                            lines.append(f"{e} {t.get('title','(senza titolo)')}{pct}")
                         lines.append("")
                     lines.append("Buon lavoro! 🚀")
                     try:
                         from telegram import Bot
-                        bot = Bot(token=tg.bot_token())
-                        await bot.send_message(chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown")
+                        await Bot(token=tg.bot_token()).send_message(
+                            chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown"
+                        )
                         await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
-                        logger.info(f"daily summary sent to chat {user['telegram_chat_id']}")
+                        logger.info(f"daily summary sent to {user['telegram_chat_id']}")
                     except Exception:
                         logger.exception("daily summary send failed")
         except Exception:
-            logger.exception("daily summary loop iteration failed")
+            logger.exception("daily/weekly loop iteration failed")
         await asyncio.sleep(20 * 60)
 
 

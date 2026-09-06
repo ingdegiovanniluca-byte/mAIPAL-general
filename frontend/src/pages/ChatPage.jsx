@@ -215,38 +215,32 @@ export default function ChatPage() {
 
   return (
     <div className="relative w-full">
-      {/* Top row: 3 action cards on one line */}
-      {!focusMode && (
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          {ACTIONS.map((a) => {
-            const selected = a.id === active;
-            return (
-              <button
-                key={a.id}
-                data-testid={`action-${a.key}`}
-                onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); }}
-                style={{ backgroundColor: "#6EB7EC", opacity: selected ? 1 : 0.6, border: "none" }}
-                className={`w-full flex items-center gap-3 text-left rounded-2xl py-3 px-4 text-white transition-all duration-200 ${selected ? "shadow-md" : "hover:opacity-80"} backdrop-blur-xl`}
-              >
-                <div className="w-9 h-9 shrink-0 rounded-xl bg-white flex items-center justify-center" style={{ color: a.color }}>
-                  {React.cloneElement(a.icon, { size: 18 })}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold truncate">{a.title}</div>
-                  <div className="text-xs text-white/90 truncate">{a.subtitle}</div>
-                </div>
-                <span className="text-[9px] font-mono-tight tracking-widest px-2 py-0.5 rounded-full shrink-0 bg-white/25 text-white">
-                  {selected ? "ATTIVO" : "SEL"}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[calc(100vh-19rem)]">
-        {/* LEFT 1/3 — input area only, scrolls independently, hidden in focus mode */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[calc(100vh-15rem)]">
+        {/* LEFT 1/3 — action cards on one row + input area below */}
         <aside className={`lg:col-span-1 space-y-3 overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
+          <div className="grid grid-cols-3 gap-2">
+            {ACTIONS.map((a) => {
+              const selected = a.id === active;
+              return (
+                <button
+                  key={a.id}
+                  data-testid={`action-${a.key}`}
+                  onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); }}
+                  style={{ backgroundColor: "#6EB7EC", opacity: selected ? 1 : 0.6, border: "none" }}
+                  className={`flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 px-2 text-white transition-all duration-200 ${selected ? "shadow-md" : "hover:opacity-80"}`}
+                  title={a.title}
+                >
+                  <div className="w-9 h-9 shrink-0 rounded-xl bg-white flex items-center justify-center" style={{ color: a.color }}>
+                    {React.cloneElement(a.icon, { size: 18 })}
+                  </div>
+                  <div className="text-[10px] font-semibold text-center leading-tight line-clamp-2">{a.title}</div>
+                  <span className="text-[8px] font-mono-tight tracking-widest px-1.5 py-0.5 rounded-full bg-white/25 text-white">
+                    {selected ? "ATTIVO" : "SEL"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
           <div className="p-5 rounded-2xl border border-white/40 shadow-lg" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3">
               <div className="kicker text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>

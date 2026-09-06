@@ -45,6 +45,11 @@
 
 html, body, #root {
     height: 100%;
+    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+*, *::before, *::after {
+    font-family: inherit;
 }
 
 body {

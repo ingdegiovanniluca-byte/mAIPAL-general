@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { Calendar, Tag, MessageSquare, Star, Trash2 } from "lucide-react";
+import { Calendar, Tag, MessageSquare, Star, Trash2, CircleCheck, Archive } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ const COLS = [
 export default function TaskBoardPage() {
   const [tasks, setTasks] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [showCompleted, setShowCompleted] = useState(false);
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -21,8 +22,6 @@ export default function TaskBoardPage() {
   };
   useEffect(() => { load(); }, []);
 
-  // Task ordering: strictly chronological by due_date (earliest first), then created_at desc as tiebreaker.
-  // Favorite flag does NOT affect ordering per user request.
   const sortTasks = (arr) => [...arr].sort((a, b) => {
     const da = a.due_date || "9999-12-31";
     const db_ = b.due_date || "9999-12-31";
@@ -30,12 +29,21 @@ export default function TaskBoardPage() {
     return (b.created_at || "").localeCompare(a.created_at || "");
   });
 
-  const grouped = COLS.map((c) => ({ ...c, items: sortTasks(tasks.filter((t) => t.priority === c.key)) }));
+  const visible = tasks.filter((t) => showCompleted ? !!t.completed : !t.completed);
+  const grouped = COLS.map((c) => ({ ...c, items: sortTasks(visible.filter((t) => t.priority === c.key)) }));
 
   const toggleFav = async (id, cur) => {
     setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: !cur } : t)));
     try { await api.post(`/tasks/${id}/favorite`); }
-    catch { toast.error("Errore preferito"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: cur } : t))); }
+    catch { toast.error("Errore"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: cur } : t))); }
+  };
+
+  const toggleDone = async (id, cur) => {
+    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: !cur } : t)));
+    try {
+      await api.post(`/tasks/${id}/complete`);
+      toast.success(cur ? "Riaperto" : "Task completato ✓");
+    } catch { toast.error("Errore"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: cur } : t))); }
   };
 
   const del = async (id) => {
@@ -43,7 +51,7 @@ export default function TaskBoardPage() {
     const prev = tasks;
     setTasks((ts) => ts.filter((t) => t.id !== id));
     try { await api.delete(`/tasks/${id}`); toast.success("Task eliminato"); }
-    catch { toast.error("Errore eliminazione"); setTasks(prev); }
+    catch { toast.error("Errore"); setTasks(prev); }
   };
 
   const mostImminent = (items) => {
@@ -53,6 +61,13 @@ export default function TaskBoardPage() {
 
   return (
     <div>
+      <div className="flex items-center justify-end gap-2 mb-3">
+        <button data-testid="toggle-completed" onClick={() => setShowCompleted((v) => !v)}
+                style={showCompleted ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
+                className={`px-4 py-2 rounded-full text-xs font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${showCompleted ? "" : "bg-white border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}>
+          <Archive size={12} /> {showCompleted ? "attivi" : "completati"}
+        </button>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
         {grouped.map((c) => {
           const imm = mostImminent(c.items);
@@ -68,7 +83,7 @@ export default function TaskBoardPage() {
               <div className="mt-5 space-y-3 min-h-[240px]">
                 {c.items.length === 0 && <div className="text-center text-neutral-400 py-16 kicker">vuoto</div>}
                 {c.items.map((t) => (
-                  <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onDelete={() => del(t.id)} />
+                  <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onToggleDone={() => toggleDone(t.id, !!t.completed)} onDelete={() => del(t.id)} />
                 ))}
               </div>
             </div>
@@ -83,22 +98,26 @@ export default function TaskBoardPage() {
   );
 }
 
-function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onDelete }) {
+function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggleDone, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   const isFav = !!task.favorite;
+  const isDone = !!task.completed;
   return (
     <div
       data-testid={`task-${task.id}`}
-      className={`relative w-full text-left card-soft ${sideClass} p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""}`}
+      className={`relative w-full text-left card-soft ${sideClass} p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""}`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
+        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-neutral-400 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+          <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
+        </button>
         <button data-testid="task-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-neutral-400 hover:bg-neutral-100 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
           <Star size={14} className={isFav ? "fill-current" : ""} />
         </button>
         <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
       </div>
-      <button onClick={onClick} className="w-full text-left pr-14">
-        <div className="font-semibold">{task.title}</div>
+      <button onClick={onClick} className="w-full text-left pr-20">
+        <div className={`font-semibold ${isDone ? "line-through" : ""}`}>{task.title}</div>
         {task.description && <div className="text-sm text-neutral-500 mt-1">{task.description}</div>}
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           {task.due_date && (
@@ -114,6 +133,11 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onDelete
           {task.notes && (
             <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
               📝 note
+            </span>
+          )}
+          {isDone && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 border border-green-200 text-green-700">
+              ✓ fatto
             </span>
           )}
         </div>
