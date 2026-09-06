@@ -515,8 +515,22 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
     # Build candidate pool: kb_chunks always, plus extras when scope=='all'
     candidates: List[dict] = []
     kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+    # Map: doc_id → list of sibling chunks (ordered by chunk_index) — used for doc expansion
+    doc_siblings: dict = {}
     for c in kb_docs:
-        candidates.append({"text": c.get("text", ""), "source": "kb", "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title")}, "embedding": c.get("embedding")})
+        item = {
+            "text": c.get("text", ""),
+            "source": "kb",
+            "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title"), "doc_id": c.get("doc_id"), "chunk_index": c.get("chunk_index", 0)},
+            "embedding": c.get("embedding"),
+        }
+        candidates.append(item)
+        did = c.get("doc_id")
+        if did:
+            doc_siblings.setdefault(did, []).append(item)
+    # Sort each doc's siblings by chunk_index for stable ordering
+    for did in doc_siblings:
+        doc_siblings[did].sort(key=lambda x: x["meta"].get("chunk_index", 0))
 
     if scope == "all":
         tasks = await db.tasks.find({"user_id": user_id}, {"_id": 0}).to_list(500)
@@ -582,6 +596,29 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
     scored.sort(key=lambda x: x[0], reverse=True)
     top = [c for _s, _sem, _kh, c in scored[:limit]]
 
+    # DOCUMENT EXPANSION: for each KB chunk in the top, pull in ALL sibling chunks from the same doc.
+    # This preserves the full document context (e.g., all Rovigno chunks together) so the LLM sees
+    # the complete picture instead of scattered fragments diluted by other unrelated docs.
+    seen_chunk_ids = set()
+    expanded: List[dict] = []
+    seen_doc_ids: set = set()
+    for c in top:
+        cid = (c.get("meta") or {}).get("chunk_id")
+        did = (c.get("meta") or {}).get("doc_id")
+        if c.get("source") == "kb" and did and did in doc_siblings and did not in seen_doc_ids:
+            # Add all siblings of this doc (already sorted by chunk_index)
+            for sib in doc_siblings[did]:
+                scid = sib["meta"].get("chunk_id")
+                if scid and scid not in seen_chunk_ids:
+                    expanded.append(sib)
+                    seen_chunk_ids.add(scid)
+            seen_doc_ids.add(did)
+        else:
+            if cid and cid not in seen_chunk_ids:
+                expanded.append(c)
+                if cid: seen_chunk_ids.add(cid)
+    top = expanded
+
     # Fallback: if nothing passed filters but we have keyword terms, do a raw substring scan
     if not top and terms:
         for c in candidates:
@@ -626,17 +663,25 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             "messages": [],
         })
 
-    # RAG context only on first turn of info_request
+    # RAG context: run on EVERY info_request turn (not just first) so follow-up questions
+    # can pull fresh chunks based on the new question.
     kb_context = []
-    if action == "info_request" and not prior_messages:
-        scope = (payload.filters or {}).get("scope") or (conv.get("filters", {}) if payload.conv_id else {}).get("scope", "kb")
+    if action == "info_request":
+        if payload.conv_id:
+            scope = (conv.get("filters", {}) or {}).get("scope", "kb")
+        else:
+            scope = (payload.filters or {}).get("scope", "kb")
         kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope)
 
     system = build_system_prompt(current, action)
     user_text = payload.content
     if kb_context:
         def _fmt(c):
-            return c.get("display") or c.get("text", "")[:400]
+            # Non-KB sources (task/todo/journal) use a compact display line.
+            # KB chunks are already chunked to ~1400 chars during upload — send them in full.
+            if c.get("display"):
+                return c["display"]
+            return c.get("text", "")
         ctx = "\n\n".join([f"- {_fmt(c)}" for c in kb_context])
         user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{payload.content}"
 
