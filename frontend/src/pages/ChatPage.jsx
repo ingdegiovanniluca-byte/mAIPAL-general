@@ -472,7 +472,7 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
       </div>
 
       <button onClick={onOpen} className="w-full text-left mt-3" data-testid="open-thread-btn">
-        {title && <div className="text-sm font-semibold mb-1 text-[#403A3C]" data-testid="conv-title">{title}</div>}
+        {title && <div className="text-sm font-semibold mb-1 text-[#482B94]" data-testid="conv-title">{title}</div>}
         <div className="bg-white/5 rounded-xl p-3 text-sm text-white/90 line-clamp-2">{preview}</div>
         {summary && (
           <div className="mt-2 text-xs text-white/60 line-clamp-2 leading-relaxed" data-testid="conv-summary">
