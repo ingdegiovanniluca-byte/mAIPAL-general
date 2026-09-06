@@ -13,7 +13,7 @@ export default function DashboardLayout() {
 
       <section className="px-8 md:px-14 pt-6">
         <div className="flex items-end justify-between flex-wrap gap-3">
-          <h1 className="mt-2 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
+          <h1 className="mt-2 text-2xl md:text-3xl lg:text-4xl font-bold tracking-tight leading-tight">
             Cosa vuoi fare, <span className="gradient-word">{user?.name?.split(" ")[0] || "mAIPAL"}</span>?
           </h1>
           <div className="flex items-center gap-3 pb-3">
@@ -26,7 +26,7 @@ export default function DashboardLayout() {
 
         <nav className="mt-8 inline-flex items-center gap-1 p-1 rounded-full bg-white/5  backdrop-blur-md">
           <TabLink to="/dashboard/chat" icon={<MessageSquare size={15} />} label="Chat" testid="tab-chat" />
-          <TabLink to="/dashboard/tasks" icon={<LayoutGrid size={15} />} label="Task Board" testid="tab-tasks" />
+          <TabLink to="/dashboard/tasks" icon={<LayoutGrid size={15} />} label="Task" testid="tab-tasks" />
           <TabLink to="/dashboard/todos" icon={<ListChecks size={15} />} label="To-Do" testid="tab-todos" />
           <TabLink to="/dashboard/journal" icon={<BookOpen size={15} />} label="Diario" testid="tab-journal" />
           <TabLink to="/dashboard/documents" icon={<FolderOpen size={15} />} label="Documenti" testid="tab-documents" />

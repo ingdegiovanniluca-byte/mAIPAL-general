@@ -253,8 +253,7 @@ export default function ChatPage() {
         {/* LEFT 1/3 — action icons + input area */}
         <aside className={`lg:col-span-1 flex flex-col overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
-          <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
-            <div className="flex items-center gap-3 justify-start">
+          <div className="flex items-center gap-1.5 md:gap-2 p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0">
               {ACTIONS.map((a) => {
                 const selected = a.id === active;
                 return (
@@ -270,20 +269,19 @@ export default function ChatPage() {
                       opacity: selected ? 1 : 0.5,
                       borderColor: selected ? a.color : "rgba(206,202,208,0.25)",
                     }}
-                    className={`group relative w-10 h-10 rounded-xl border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 card-hover`}
+                    className={`group relative h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:shadow-md`}
                   >
-                    {React.cloneElement(a.icon, { size: 18 })}
+                    {React.cloneElement(a.icon, { size: 15 })}
                     <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#403A3C] text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
                       {a.title}
                     </span>
                   </button>
                 );
               })}
-            </div>
           </div>
           <div className="flex items-center justify-between px-2 mt-4 shrink-0">
-            <div className="kicker-p">· nuovo messaggio</div>
-            <div className="kicker-p">{activeAction.title.toLowerCase()}</div>
+            <div className="text-xs font-bold uppercase tracking-wider text-white">nuovo messaggio</div>
+            <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
           </div>
           <div className="p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ background: "linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%)" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
@@ -414,8 +412,8 @@ export default function ChatPage() {
           ) : (
             <>
               <div className="flex items-center justify-between px-2 mt-4 shrink-0">
-                <div className="kicker">· cronologia</div>
-                <div className="kicker">{filtered.length} messaggi</div>
+                <div className="text-xs font-bold uppercase tracking-wider text-white">cronologia</div>
+                <div className="text-xs font-bold uppercase tracking-wider text-white/70">{filtered.length} messaggi</div>
               </div>
               <div className="space-y-3 flex-1 overflow-y-auto pr-1 mt-2">
                 {filtered.length === 0 && <div className="text-white/60 text-sm">Nessuna conversazione ancora.</div>}
