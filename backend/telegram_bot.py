@@ -420,17 +420,32 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     voice = update.message.voice
     if not voice: return
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    tmp_path = None
+    mp3_path = None
     try:
         tg_file = await ctx.bot.get_file(voice.file_id)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
             tmp_path = tmp.name
         await tg_file.download_to_drive(custom_path=tmp_path)
+        # Telegram voice notes are OGG/Opus. Whisper wrapper only accepts mp3/mp4/mpeg/mpga/m4a/wav/webm.
+        # Convert to mp3 with ffmpeg.
+        mp3_path = tmp_path.replace(".ogg", ".mp3")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-loglevel", "error", "-i", tmp_path,
+            "-ac", "1", "-ar", "16000", "-b:a", "64k", mp3_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, ffmpeg_err = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {ffmpeg_err.decode()[:200]}")
         stt = OpenAISpeechToText(api_key=os.environ["EMERGENT_LLM_KEY"])
-        with open(tmp_path, "rb") as f:
+        with open(mp3_path, "rb") as f:
             result = await stt.transcribe(file=f, model="whisper-1", response_format="json", language="it")
         transcript = getattr(result, "text", None) or (result.get("text") if isinstance(result, dict) else "")
-        try: os.unlink(tmp_path)
-        except Exception: pass
+        for p in (tmp_path, mp3_path):
+            try:
+                if p: os.unlink(p)
+            except Exception: pass
         if not transcript.strip():
             await update.message.reply_text("🎙️ Non ho capito l'audio. Riprova più chiaramente.")
             return
