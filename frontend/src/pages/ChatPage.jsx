@@ -358,12 +358,37 @@ export default function ChatPage() {
               <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60" />
               <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca…" className="pl-8 h-8 md:h-9 text-xs md:text-sm rounded-full bg-white/10  text-white placeholder:text-white/60" />
             </div>
-            {[["all","tutti"],["fav","preferiti"],["upload","upload"],["query","query"],["todo","todo"],["journal","diario"]].map(([k, l]) => (
-              <button key={k} data-testid={`filter-${k}`} onClick={() => setFilter(k)}
-                style={filter === k ? { backgroundColor: "#CECAD0", color: "#403A3C", border: "none" } : {}}
-                className={`shrink-0 px-2 py-1 md:px-2.5 md:py-1.5 rounded-full text-[9px] md:text-[10px] font-mono-tight uppercase tracking-wider inline-flex items-center gap-1 ${filter === k ? "" : "bg-white/10  text-white/70 hover:text-white"}`}
-              >{k === "fav" && <Star size={10} className={filter === k ? "fill-current" : ""} />}{l}</button>
-            ))}
+            {[
+              { k: "all",     label: "tutti",     icon: <Layers size={15} />,       color: "#CECAD0" },
+              { k: "fav",     label: "preferiti", icon: <Star size={15} className={filter === "fav" ? "fill-current" : ""} />, color: "#F5B942" },
+              { k: "upload",  label: "upload",    icon: <CloudUpload size={15} />,  color: "#6D6181" },
+              { k: "query",   label: "query",     icon: <Search size={15} />,       color: "#DD772F" },
+              { k: "todo",    label: "todo",      icon: <CheckSquare size={15} />,  color: "#7C6A7D" },
+              { k: "journal", label: "diario",    icon: <BookOpen size={15} />,     color: "#8E2E11" },
+            ].map(({ k, label, icon, color }) => {
+              const selected = filter === k;
+              return (
+                <button
+                  key={k}
+                  data-testid={`filter-${k}`}
+                  onClick={() => setFilter(k)}
+                  title={label}
+                  aria-label={label}
+                  style={{
+                    backgroundColor: selected ? color : "transparent",
+                    color: selected && k === "all" ? "#403A3C" : "#CECAD0",
+                    opacity: selected ? 1 : 0.5,
+                    borderColor: selected ? color : "rgba(206,202,208,0.25)",
+                  }}
+                  className="group relative shrink-0 h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:shadow-md"
+                >
+                  {icon}
+                  <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#403A3C] text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
             <input data-testid="history-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="shrink-0 h-8 md:h-9 w-28 md:w-32 rounded-full bg-white/10  text-white px-2 text-[10px] md:text-[11px]" />
           </div>
           )}
@@ -483,7 +508,7 @@ function HistoryCard({ conv, index = 0, onOpen, onToggleFav, onDelete }) {
       </div>
 
       <button onClick={onOpen} className="w-full text-left mt-3" data-testid="open-thread-btn">
-        {title && <div className="text-sm font-semibold mb-1 text-[#482B94]" data-testid="conv-title">{title}</div>}
+        {title && <div className="text-sm font-semibold mb-1" style={{ color: ACTION_COLOR[conv.action] || "#482B94" }} data-testid="conv-title">{title}</div>}
         <div className="bg-white/5 rounded-xl p-3 text-sm text-white/90 line-clamp-2">{preview}</div>
         {summary && (
           <div className="mt-2 text-xs text-white/60 line-clamp-2 leading-relaxed" data-testid="conv-summary">
