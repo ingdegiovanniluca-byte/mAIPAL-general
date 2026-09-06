@@ -8,6 +8,7 @@ import OnboardingPage from "@/pages/OnboardingPage";
 import DashboardLayout from "@/pages/DashboardLayout";
 import ChatPage from "@/pages/ChatPage";
 import TaskBoardPage from "@/pages/TaskBoardPage";
+import SettingsPage from "@/pages/SettingsPage";
 import TodoBoardPage from "@/pages/TodoBoardPage";
 
 function Protected({ children, requireOnboard = true }) {
@@ -32,6 +33,7 @@ function AppRouter() {
         <Route path="chat" element={<ChatPage />} />
         <Route path="tasks" element={<TaskBoardPage />} />
         <Route path="todos" element={<TodoBoardPage />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

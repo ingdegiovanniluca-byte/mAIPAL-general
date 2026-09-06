@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, Send, Calendar, Check } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { api, streamChat } from "@/lib/api";
+import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 
 const ACTIONS = [
@@ -41,6 +41,10 @@ export default function ChatPage() {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [date, setDate] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
   const scrollRef = useRef(null);
 
   const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
@@ -52,6 +56,45 @@ export default function ChatPage() {
     } catch (e) { console.error(e); }
   };
   useEffect(() => { load(); }, []);
+
+  const startRec = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        stream.getTracks().forEach((t) => t.stop());
+        setTranscribing(true);
+        try {
+          const fd = new FormData();
+          fd.append("file", blob, "voice.webm");
+          const res = await fetch(`${API}/voice/transcribe`, { method: "POST", body: fd, credentials: "include" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const j = await res.json();
+          setText((prev) => (prev ? prev + " " : "") + (j.text || ""));
+          toast.success("Trascrizione completata");
+        } catch (e) {
+          toast.error("Trascrizione fallita: " + e.message);
+        } finally {
+          setTranscribing(false);
+        }
+      };
+      mr.start();
+      mediaRecorderRef.current = mr;
+      setRecording(true);
+    } catch (e) {
+      toast.error("Microfono non disponibile: " + e.message);
+    }
+  };
+
+  const stopRec = () => {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  };
 
   const send = async () => {
     if (!text.trim() || streaming) return;
@@ -130,7 +173,18 @@ export default function ChatPage() {
         <div className="flex items-center justify-between pt-2 border-t border-neutral-200">
           <div className="flex items-center gap-2 text-neutral-500">
             <button data-testid="attach-btn" className="p-2 rounded-full hover:bg-neutral-100"><Paperclip size={16} /></button>
-            <button data-testid="mic-btn" className="p-2 rounded-full hover:bg-neutral-100"><Mic size={16} /></button>
+            <button
+              data-testid="mic-btn"
+              onClick={recording ? stopRec : startRec}
+              disabled={transcribing}
+              className={`p-2 rounded-full transition-colors duration-150 ${recording ? "bg-red-100 text-red-600" : "hover:bg-neutral-100"}`}
+              title={recording ? "Stop registrazione" : "Registra vocale"}
+            >
+              {recording ? <MicOff size={16} /> : <Mic size={16} />}
+            </button>
+            {(recording || transcribing) && (
+              <span className="kicker">{recording ? "· registrazione…" : "· trascrivo…"}</span>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <span className="kicker">claude sonnet 5</span>

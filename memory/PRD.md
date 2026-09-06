@@ -15,7 +15,14 @@ Build **mAIPAL** — un assistente personale AI (segretario digitale) con knowle
 - Auth: Emergent Google Auth (session token in httpOnly cookie)
 - Storage: MongoDB (users, user_sessions, conversations, tasks, todos, kb_chunks)
 
-## Implemented (2026-02-06)
+## Implemented (2026-02-06 - iteration 2)
+- **Google Drive + Calendar OAuth** (playbook completo pronto, endpoint `/api/integrations/google/authorize`, `/callback`, `/disconnect`). Auto-crea cartella `mAIPAL` su Drive al primo collegamento. Toggle `calendar_synced` sui task crea/rimuove eventi sul Calendar primario. **Richiede** `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` (attualmente vuoti in .env - vedi UI Impostazioni per istruzioni).
+- **Voice STT**: `/api/voice/transcribe` con OpenAI Whisper via Emergent LLM Key. Frontend: pulsante mic in Chat usa MediaRecorder (webm), invia al backend, inserisce trascrizione in textarea.
+- **Telegram Bot** (`@mAIPAL_bot`): long polling attivo su avvio backend. Comandi `/start <codice>`, `/ask`, `/save`, `/task`, `/help`. Messaggi liberi: rilevamento azione automatico (info_request / info_upload / task_todo). Pagina Impostazioni con generatore codice + deep link.
+- **Pagina Impostazioni** (`/dashboard/settings`) con tile Google e Telegram
+- Fix 404 corretto su PATCH/DELETE /api/tasks|todos/{id}
+
+## Implemented (2026-02-06 - iteration 1)
 - **Auth flow**: Login page → Emergent Google Auth → `AuthCallback` (hash session_id) → `/api/auth/session` → dashboard
 - **Onboarding**: 4-step wizard (professione/settore, verticali, interessi, tono) → personalizza system prompt LLM
 - **Dashboard shell**: headline "Cosa vuoi fare, {name}?" con parola gradient, tab pills (Chat / Task Board / To-Do)

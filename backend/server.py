@@ -1,11 +1,14 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Cookie, Header
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Cookie, Header, UploadFile, File
+from fastapi.responses import StreamingResponse, RedirectResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import uuid
+import secrets
+import tempfile
+import asyncio
 import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -13,6 +16,10 @@ from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
+from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+
+import google_integration as gi
+import telegram_bot as tg
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -43,6 +50,7 @@ class User(BaseModel):
     interests: List[str] = []
     tone: Optional[str] = "informale"
     created_at: Optional[str] = None
+    telegram_chat_id: Optional[int] = None
 
 
 class OnboardingPayload(BaseModel):
@@ -440,6 +448,34 @@ async def create_task(payload: TaskUpsert, current: User = Depends(get_current_u
 @api_router.patch("/tasks/{task_id}")
 async def update_task(task_id: str, payload: dict, current: User = Depends(get_current_user)):
     payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None)
+    existing = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Handle calendar_synced toggle
+    if "calendar_synced" in payload and payload["calendar_synced"] != existing.get("calendar_synced"):
+        try:
+            creds = await gi.get_credentials(db, current.user_id)
+            if not creds:
+                raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni.")
+            if payload["calendar_synced"]:
+                event_id = await gi.create_calendar_event(
+                    creds,
+                    title=existing.get("title","Task mAIPAL"),
+                    description=existing.get("description","") or "",
+                    due_date=existing.get("due_date"),
+                )
+                payload["calendar_event_id"] = event_id
+            else:
+                if existing.get("calendar_event_id"):
+                    await gi.delete_calendar_event(creds, existing["calendar_event_id"])
+                payload["calendar_event_id"] = None
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("calendar sync failed")
+            raise HTTPException(status_code=500, detail=f"Sync calendar fallita: {e}")
+
     await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": payload})
     doc = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
     return doc
@@ -447,6 +483,16 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, current: User = Depends(get_current_user)):
+    existing = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if existing.get("calendar_event_id"):
+        try:
+            creds = await gi.get_credentials(db, current.user_id)
+            if creds:
+                await gi.delete_calendar_event(creds, existing["calendar_event_id"])
+        except Exception:
+            logger.exception("failed removing calendar event on delete")
     await db.tasks.delete_one({"id": task_id, "user_id": current.user_id})
     return {"ok": True}
 
@@ -535,6 +581,146 @@ async def root():
     return {"message": "mAIPAL API"}
 
 
+# ============ INTEGRATIONS STATUS ============
+@api_router.get("/integrations/status")
+async def integrations_status(current: User = Depends(get_current_user)):
+    google_doc = await db.integrations.find_one({"user_id": current.user_id, "provider": "google"}, {"_id": 0})
+    user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
+    return {
+        "google": {
+            "configured": gi.is_configured(),
+            "connected": bool(google_doc),
+            "email": google_doc.get("email") if google_doc else None,
+            "drive_folder_id": google_doc.get("drive_folder_id") if google_doc else None,
+        },
+        "telegram": {
+            "configured": bool(tg.bot_token()),
+            "connected": bool(user_doc and user_doc.get("telegram_chat_id")),
+            "bot_username": await tg.bot_username(),
+        },
+    }
+
+
+# ============ GOOGLE OAUTH ============
+@api_router.get("/integrations/google/authorize")
+async def google_authorize(current: User = Depends(get_current_user)):
+    if not gi.is_configured():
+        raise HTTPException(status_code=400, detail="Google OAuth non configurato (GOOGLE_CLIENT_ID/SECRET mancanti)")
+    state = f"{current.user_id}:{secrets.token_urlsafe(16)}"
+    await db.google_oauth_states.insert_one({
+        "state": state,
+        "user_id": current.user_id,
+        "created_at": datetime.now(timezone.utc),
+    })
+    url = gi.build_authorization_url(state)
+    return {"authorization_url": url}
+
+
+@api_router.get("/integrations/google/callback")
+async def google_callback(code: str, state: str):
+    st = await db.google_oauth_states.find_one({"state": state}, {"_id": 0})
+    if not st:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    user_id = st["user_id"]
+    await db.google_oauth_states.delete_one({"state": state})
+
+    try:
+        creds_dict = gi.exchange_code(code)
+    except Exception as e:
+        logger.exception("Google exchange failed")
+        return RedirectResponse(f"{os.environ['APP_BASE_URL']}/dashboard/settings?google=error")
+
+    # Get user email
+    try:
+        async with httpx.AsyncClient() as hc:
+            r = await hc.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {creds_dict['access_token']}"},
+                timeout=10.0,
+            )
+        google_email = r.json().get("email") if r.status_code == 200 else None
+    except Exception:
+        google_email = None
+
+    doc = {**creds_dict, "provider": "google", "user_id": user_id, "email": google_email,
+           "connected_at": datetime.now(timezone.utc).isoformat()}
+    await db.integrations.update_one(
+        {"user_id": user_id, "provider": "google"},
+        {"$set": doc}, upsert=True,
+    )
+
+    # Auto-create mAIPAL folder
+    try:
+        creds = await gi.get_credentials(db, user_id)
+        if creds:
+            await gi.ensure_maipal_folder(db, user_id, creds)
+    except Exception as e:
+        logger.exception("mAIPAL folder creation failed")
+
+    return RedirectResponse(f"{os.environ['APP_BASE_URL']}/dashboard/settings?google=ok")
+
+
+@api_router.post("/integrations/google/disconnect")
+async def google_disconnect(current: User = Depends(get_current_user)):
+    await db.integrations.delete_one({"user_id": current.user_id, "provider": "google"})
+    return {"ok": True}
+
+
+# ============ TELEGRAM LINKING ============
+@api_router.post("/integrations/telegram/link-code")
+async def telegram_link_code(current: User = Depends(get_current_user)):
+    if not tg.bot_token():
+        raise HTTPException(status_code=400, detail="Telegram non configurato")
+    # Delete any previous unused code for this user
+    await db.telegram_links.delete_many({"user_id": current.user_id})
+    code = secrets.token_urlsafe(8)
+    await db.telegram_links.insert_one({
+        "code": code,
+        "user_id": current.user_id,
+        "created_at": datetime.now(timezone.utc),
+    })
+    username = await tg.bot_username()
+    return {
+        "code": code,
+        "bot_username": username,
+        "deep_link": f"https://t.me/{username}?start={code}" if username else None,
+    }
+
+
+@api_router.post("/integrations/telegram/disconnect")
+async def telegram_disconnect(current: User = Depends(get_current_user)):
+    await db.users.update_one({"user_id": current.user_id}, {"$unset": {"telegram_chat_id": ""}})
+    return {"ok": True}
+
+
+# ============ VOICE STT ============
+@api_router.post("/voice/transcribe")
+async def voice_transcribe(file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    # Save to temp file with proper extension
+    ext = "webm"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].lower()
+    if ext not in ("mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"):
+        ext = "webm"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+        contents = await file.read()
+        tmp.write(contents)
+        tmp_path = tmp.name
+
+    try:
+        stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+        with open(tmp_path, "rb") as f:
+            result = await stt.transcribe(file=f, model="whisper-1", response_format="json", language="it")
+        text = getattr(result, "text", None) or (result.get("text") if isinstance(result, dict) else str(result))
+        return {"text": text}
+    except Exception as e:
+        logger.exception("stt failed")
+        raise HTTPException(status_code=500, detail=f"Trascrizione fallita: {str(e)}")
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -546,6 +732,18 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def start_services():
+    try:
+        asyncio.create_task(tg.start_polling())
+    except Exception:
+        logger.exception("failed to start telegram polling")
+
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    try:
+        await tg.stop_polling()
+    except Exception:
+        pass
     client.close()
