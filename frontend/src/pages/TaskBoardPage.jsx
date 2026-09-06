@@ -63,8 +63,8 @@ export default function TaskBoardPage() {
     <div>
       <div className="flex items-center justify-end gap-2 mb-3">
         <button data-testid="toggle-completed" onClick={() => setShowCompleted((v) => !v)}
-                style={showCompleted ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                className={`px-4 py-2 rounded-full text-xs font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${showCompleted ? "" : "bg-white  text-neutral-500 hover:"}`}>
+                style={showCompleted ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                className={`px-4 py-2 rounded-full text-xs font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${showCompleted ? "" : "bg-white/10  text-white/60 hover:"}`}>
           <Archive size={12} /> {showCompleted ? "attivi" : "completati"}
         </button>
       </div>
@@ -81,7 +81,7 @@ export default function TaskBoardPage() {
                 <div className="kicker">{c.items.length}</div>
               </div>
               <div className="mt-5 space-y-3 min-h-[240px]">
-                {c.items.length === 0 && <div className="text-center text-neutral-400 py-16 kicker">vuoto</div>}
+                {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
                 {c.items.map((t) => (
                   <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onToggleDone={() => toggleDone(t.id, !!t.completed)} onDelete={() => del(t.id)} />
                 ))}
@@ -108,25 +108,25 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
       className={`relative w-full text-left card-soft ${sideClass} p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""}`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
-        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-neutral-400 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-white/40 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
           <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
         </button>
-        <button data-testid="task-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-neutral-400 hover:bg-neutral-100 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
+        <button data-testid="task-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
           <Star size={14} className={isFav ? "fill-current" : ""} />
         </button>
-        <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
+        <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
       </div>
       <button onClick={onClick} className="w-full text-left pr-20">
         <div className={`font-semibold ${isDone ? "line-through" : ""}`}>{task.title}</div>
-        {task.description && <div className="text-sm text-neutral-500 mt-1">{task.description}</div>}
+        {task.description && <div className="text-sm text-white/60 mt-1">{task.description}</div>}
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           {task.due_date && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-neutral-100 ">
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white/10 ">
               <Calendar size={10} /> {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}{task.due_time ? ` · ${task.due_time}` : ""}
             </span>
           )}
           {(task.tags || []).map((tag, i) => (
-            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white  text-neutral-500">
+            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white/10  text-white/60">
               <Tag size={10} /> {tag}
             </span>
           ))}
@@ -200,20 +200,20 @@ function TaskDialog({ task, onClose, onUpdated }) {
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">{task.title}</DialogTitle>
         </DialogHeader>
-        <div className="text-neutral-600 text-sm">{task.description}</div>
+        <div className="text-white/70 text-sm">{task.description}</div>
         <div className="flex flex-wrap gap-2">
-          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white border">📅 {task.due_date}{task.due_time ? ` · ${task.due_time}` : ""}</span>}
-          <span className={`text-xs px-2 py-1 rounded-md border ${task.priority === "alta" ? "bg-red-50 text-red-700" : task.priority === "media" ? "bg-orange-50 text-orange-700" : "bg-neutral-100"}`}>priorità {task.priority}</span>
-          {(task.tags || []).map((t, i) => <span key={i} className="text-xs px-2 py-1 rounded-md bg-white border">#{t}</span>)}
+          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white/10 border">📅 {task.due_date}{task.due_time ? ` · ${task.due_time}` : ""}</span>}
+          <span className={`text-xs px-2 py-1 rounded-md border ${task.priority === "alta" ? "bg-red-50 text-red-700" : task.priority === "media" ? "bg-orange-50 text-orange-700" : "bg-white/10"}`}>priorità {task.priority}</span>
+          {(task.tags || []).map((t, i) => <span key={i} className="text-xs px-2 py-1 rounded-md bg-white/10 border">#{t}</span>)}
           {task.calendar_synced && <span className="text-xs px-2 py-1 rounded-md bg-blue-50 text-blue-700 border border-blue-200">✓ Calendar</span>}
           {task.reminder_sent && <span className="text-xs px-2 py-1 rounded-md bg-purple-50 text-purple-700 border border-purple-200">⏰ promemoria inviato</span>}
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          <button data-testid="toggle-calendar" onClick={toggleCal} className="px-3 py-1.5 rounded-full text-xs bg-white border">
+          <button data-testid="toggle-calendar" onClick={toggleCal} className="px-3 py-1.5 rounded-full text-xs bg-white/10 border">
             {task.calendar_synced ? "✓ In Calendar" : "+ Aggiungi a Calendar"}
           </button>
-          <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white border text-red-600">Elimina</button>
+          <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 border text-red-600">Elimina</button>
         </div>
 
         {/* NOTES */}
@@ -224,7 +224,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Aggiungi note libere sul task…"
-            className="bg-white rounded-2xl min-h-[80px]"
+            className="bg-white/10 rounded-2xl min-h-[80px]"
           />
           <div className="flex justify-end mt-2">
             <button data-testid="task-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (task.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
@@ -236,14 +236,14 @@ function TaskDialog({ task, onClose, onUpdated }) {
         <div className="mt-3 space-y-3 max-h-60 overflow-y-auto">
           {thread.map((t, i) => (
             <div key={i} className="space-y-2">
-              <div className="bg-neutral-100 rounded-xl p-3 text-sm">{t.user}</div>
+              <div className="bg-white/10 rounded-xl p-3 text-sm">{t.user}</div>
               <div className="prose-answer text-sm whitespace-pre-wrap">{t.agent}</div>
             </div>
           ))}
         </div>
 
         <div className="mt-3">
-          <Textarea data-testid="task-chat-input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Modifica titolo, scadenza, priorità, tag… (parla in linguaggio naturale)" className="bg-white rounded-2xl min-h-[80px]" />
+          <Textarea data-testid="task-chat-input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Modifica titolo, scadenza, priorità, tag… (parla in linguaggio naturale)" className="bg-white/10 rounded-2xl min-h-[80px]" />
           <div className="flex justify-end mt-2">
             <button data-testid="task-chat-send" onClick={send} disabled={busy} className="pill-btn">{busy ? "…" : "Invia a mAIPAL"}</button>
           </div>

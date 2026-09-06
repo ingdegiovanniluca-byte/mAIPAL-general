@@ -76,7 +76,7 @@ export default function DocumentsPage() {
   return (
     <div className="max-w-6xl">
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-2xl bg-neutral-100 flex items-center justify-center"><FolderOpen size={18} /></div>
+        <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center"><FolderOpen size={18} /></div>
         <div>
           <div className="kicker">· documenti</div>
           <h2 className="text-2xl font-bold tracking-tight">La tua knowledge base</h2>
@@ -92,19 +92,19 @@ export default function DocumentsPage() {
       </div>
 
       {/* Toolbar */}
-      <div className="p-4 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm">
+      <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[220px]">
-            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
+            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
             <Input
               data-testid="docs-search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Cerca per nome, parola chiave, anteprima…"
-              className="pl-10 pr-10 h-10 rounded-full bg-white/80"
+              className="pl-10 pr-10 h-10 rounded-full bg-white/10"
             />
             {q && (
-              <button data-testid="docs-search-clear" onClick={() => setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-700"><X size={14} /></button>
+              <button data-testid="docs-search-clear" onClick={() => setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"><X size={14} /></button>
             )}
           </div>
           <div className="flex items-center gap-1 flex-wrap">
@@ -122,9 +122,9 @@ export default function DocumentsPage() {
 
       {/* Grid */}
       <div className="mt-6">
-        {loading && <div className="text-neutral-500 text-sm">Carico…</div>}
+        {loading && <div className="text-white/60 text-sm">Carico…</div>}
         {!loading && docs.length === 0 && (
-          <div className="p-8 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm text-neutral-500 text-sm" data-testid="docs-empty">
+          <div className="p-8 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm text-white/60 text-sm" data-testid="docs-empty">
             Nessun documento ancora. Vai in <b>Chat → Caricamento informazioni</b> per aggiungere file (pdf, docx, xlsx, immagini con OCR, note…).
           </div>
         )}
@@ -132,14 +132,14 @@ export default function DocumentsPage() {
           {docs.map((d) => {
             const meta = CATEGORY_META[d.category] || CATEGORY_META.altro;
             return (
-              <div key={d.doc_id} className="group p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md" data-testid="doc-card">
+              <div key={d.doc_id} className="group p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md" data-testid="doc-card">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: meta.color + "22", color: meta.color }}>
                       {extIcon(d.ext, d.source_type)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="font-semibold text-neutral-800 truncate" title={d.name}>{d.name}</div>
+                      <div className="font-semibold text-white truncate" title={d.name}>{d.name}</div>
                       <div className="kicker-p mt-0.5">
                         {new Date(d.created_at).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}
                         {d.chars ? ` · ${new Intl.NumberFormat("it-IT").format(d.chars)} car.` : ""}
@@ -147,7 +147,7 @@ export default function DocumentsPage() {
                       </div>
                     </div>
                   </div>
-                  <button data-testid="doc-delete" onClick={() => del(d.doc_id)} title="Elimina" className="p-1.5 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button data-testid="doc-delete" onClick={() => del(d.doc_id)} title="Elimina" className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -157,32 +157,32 @@ export default function DocumentsPage() {
                     {meta.label}
                   </span>
                   {d.source_type === "image_ocr" && (
-                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-neutral-500 bg-white inline-flex items-center gap-1"><Sparkles size={10} /> ocr</span>
+                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-white/60 bg-white/10 inline-flex items-center gap-1"><Sparkles size={10} /> ocr</span>
                   )}
                   {d.source_type === "chat" && (
-                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-neutral-500 bg-white">via chat</span>
+                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-white/60 bg-white/10">via chat</span>
                   )}
                   {(d.keywords || []).slice(0, 6).map((k, i) => (
-                    <span key={i} className="text-[10px] font-mono-tight lowercase tracking-widest px-2 py-0.5 rounded-md bg-neutral-100 text-neutral-600 ">
+                    <span key={i} className="text-[10px] font-mono-tight lowercase tracking-widest px-2 py-0.5 rounded-md bg-white/10 text-white/70 ">
                       #{k}
                     </span>
                   ))}
                 </div>
 
                 {d.preview && (
-                  <div className="mt-3 text-sm text-neutral-600 line-clamp-3 leading-relaxed">
+                  <div className="mt-3 text-sm text-white/70 line-clamp-3 leading-relaxed">
                     {d.preview}
                   </div>
                 )}
 
                 <div className="mt-3 pt-3 border-t  flex items-center justify-between">
-                  <span className="kicker-p text-neutral-400">{d.chunks_count || 1} chunk indicizzati</span>
+                  <span className="kicker-p text-white/40">{d.chunks_count || 1} chunk indicizzati</span>
                   {d.drive_link ? (
                     <a href={d.drive_link} target="_blank" rel="noreferrer" data-testid="doc-drive-link" className="kicker-p text-blue-600 inline-flex items-center gap-1 hover:underline">
                       apri su drive <ExternalLink size={11} />
                     </a>
                   ) : (
-                    <span className="kicker-p text-neutral-300 inline-flex items-center gap-1" title="Sarà attivo quando collegherai Google Drive dalle Impostazioni">
+                    <span className="kicker-p text-white/30 inline-flex items-center gap-1" title="Sarà attivo quando collegherai Google Drive dalle Impostazioni">
                       drive · presto <ExternalLink size={11} />
                     </span>
                   )}
@@ -198,9 +198,9 @@ export default function DocumentsPage() {
 
 function StatCard({ label, value, muted }) {
   return (
-    <div className={`p-4 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm ${muted ? "opacity-70" : ""}`}>
+    <div className={`p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm ${muted ? "opacity-70" : ""}`}>
       <div className="kicker-p">{label}</div>
-      <div className={`mt-1 text-xl font-semibold ${muted ? "text-neutral-500" : ""}`}>{value}</div>
+      <div className={`mt-1 text-xl font-semibold ${muted ? "text-white/60" : ""}`}>{value}</div>
     </div>
   );
 }
@@ -210,8 +210,8 @@ function CatButton({ active, onClick, label, color, count, testid }) {
     <button
       data-testid={testid}
       onClick={onClick}
-      style={active ? { backgroundColor: color || "#6EB7EC", color: "#fff", border: "none" } : {}}
-      className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${active ? "" : "bg-white/70  text-neutral-500 hover:"}`}
+      style={active ? { backgroundColor: color || "#CECAD0", color: "#fff", border: "none" } : {}}
+      className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${active ? "" : "bg-white/5  text-white/60 hover:"}`}
     >
       {label} <span className={`ml-0.5 ${active ? "opacity-80" : "opacity-60"}`}>{count}</span>
     </button>

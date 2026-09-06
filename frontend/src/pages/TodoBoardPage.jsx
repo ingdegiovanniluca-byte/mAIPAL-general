@@ -48,7 +48,7 @@ export default function TodoBoardPage() {
     <div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
         {grouped.map((c) => (
-          <div key={c.key} className="rounded-2xl p-5 bg-white/60 " data-testid={`col-${c.key}`}>
+          <div key={c.key} className="rounded-2xl p-5 bg-white/5 " data-testid={`col-${c.key}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${c.dot}`} />
@@ -57,7 +57,7 @@ export default function TodoBoardPage() {
               <div className="kicker">{c.items.length}</div>
             </div>
             <div className="mt-5 space-y-3 min-h-[240px]">
-              {c.items.length === 0 && <div className="text-center text-neutral-400 py-16 kicker">vuoto</div>}
+              {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
               {c.items.map((t) => (
                 <TodoCard key={t.id} todo={t} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onDelete={() => del(t.id)} />
               ))}
@@ -81,14 +81,14 @@ function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
       className={`relative w-full text-left card-soft ${priorityStripe} p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
-        <button data-testid="todo-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-neutral-400 hover:bg-neutral-100 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
+        <button data-testid="todo-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
           <Star size={14} className={isFav ? "fill-current" : ""} />
         </button>
-        <button data-testid="todo-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
+        <button data-testid="todo-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
       </div>
       <button onClick={onClick} className="w-full text-left pr-14">
         <div className="font-semibold">{todo.title}</div>
-        {todo.description && <div className="text-sm text-neutral-500 mt-1 line-clamp-2">{todo.description}</div>}
+        {todo.description && <div className="text-sm text-white/60 mt-1 line-clamp-2">{todo.description}</div>}
         {todo.status === "in_corso" && (
           <div className="mt-3">
             <Progress value={todo.completion_percent || 0} className="h-1.5" />
@@ -97,7 +97,7 @@ function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
         )}
         <div className="mt-3 flex flex-wrap gap-2">
           {(todo.tags || []).map((tag, i) => (
-            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white  text-neutral-500">
+            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white/10  text-white/60">
               <Tag size={10} /> {tag}
             </span>
           ))}
@@ -168,17 +168,17 @@ function TodoDialog({ todo, onClose, onUpdated }) {
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">{todo.title}</DialogTitle>
         </DialogHeader>
-        <div className="text-neutral-600 text-sm">{todo.description}</div>
+        <div className="text-white/70 text-sm">{todo.description}</div>
 
         <div className="flex flex-wrap gap-2">
           {["da_fare", "in_corso", "fatto"].map((s) => (
             <button key={s} data-testid={`status-${s}`} onClick={() => persistStatus(s)}
-                    style={status === s ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                    className={`px-3 py-1.5 rounded-full text-xs ${status === s ? "" : "bg-white border"}`}>
+                    style={status === s ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                    className={`px-3 py-1.5 rounded-full text-xs ${status === s ? "" : "bg-white/10 border"}`}>
               {s.replace("_", " ")}
             </button>
           ))}
-          <button data-testid="delete-todo" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white border text-red-600">Elimina</button>
+          <button data-testid="delete-todo" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 border text-red-600">Elimina</button>
         </div>
 
         {status === "in_corso" && (
@@ -196,7 +196,7 @@ function TodoDialog({ todo, onClose, onUpdated }) {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Aggiungi note libere sul to-do…"
-            className="bg-white rounded-2xl min-h-[80px]"
+            className="bg-white/10 rounded-2xl min-h-[80px]"
           />
           <div className="flex justify-end mt-2">
             <button data-testid="todo-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (todo.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
@@ -208,14 +208,14 @@ function TodoDialog({ todo, onClose, onUpdated }) {
         <div className="mt-3 space-y-3 max-h-60 overflow-y-auto">
           {thread.map((t, i) => (
             <div key={i} className="space-y-2">
-              <div className="bg-neutral-100 rounded-xl p-3 text-sm">{t.user}</div>
+              <div className="bg-white/10 rounded-xl p-3 text-sm">{t.user}</div>
               <div className="prose-answer text-sm whitespace-pre-wrap">{t.agent}</div>
             </div>
           ))}
         </div>
 
         <div className="mt-3">
-          <Textarea data-testid="todo-chat-input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Aggiorna stato, avanzamento, tag, note…" className="bg-white rounded-2xl min-h-[80px]" />
+          <Textarea data-testid="todo-chat-input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Aggiorna stato, avanzamento, tag, note…" className="bg-white/10 rounded-2xl min-h-[80px]" />
           <div className="flex justify-end mt-2">
             <button data-testid="todo-chat-send" onClick={send} disabled={busy} className="pill-btn">{busy ? "…" : "Invia a mAIPAL"}</button>
           </div>

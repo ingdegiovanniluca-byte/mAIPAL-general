@@ -48,11 +48,11 @@ export default function OnboardingPage() {
         <div className="space-y-4">
           <div>
             <div className="kicker mb-2">professione</div>
-            <Input data-testid="ob-profession" value={profession} onChange={(e) => setProfession(e.target.value)} placeholder="es. Product Manager" className="h-14 rounded-2xl text-lg bg-white" />
+            <Input data-testid="ob-profession" value={profession} onChange={(e) => setProfession(e.target.value)} placeholder="es. Product Manager" className="h-14 rounded-2xl text-lg bg-white/10" />
           </div>
           <div>
             <div className="kicker mb-2">settore</div>
-            <Input data-testid="ob-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-14 rounded-2xl text-lg bg-white" />
+            <Input data-testid="ob-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-14 rounded-2xl text-lg bg-white/10" />
           </div>
         </div>
       ),
@@ -66,8 +66,8 @@ export default function OnboardingPage() {
               key={v}
               data-testid={`ob-vertical-${v}`}
               onClick={() => toggleVertical(v)}
-              style={verticals.includes(v) ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-5 py-3 rounded-full transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white  hover:"}`}
+              style={verticals.includes(v) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+              className={`px-5 py-3 rounded-full transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white/10  hover:"}`}
             >{v}</button>
           ))}
         </div>
@@ -78,7 +78,7 @@ export default function OnboardingPage() {
       body: (
         <div>
           <div className="kicker mb-2">tag separati da virgola</div>
-          <Textarea data-testid="ob-interests" value={interests} onChange={(e) => setInterests(e.target.value)} placeholder="palestra, viaggi, cucina, cinema" className="rounded-2xl text-lg bg-white min-h-[120px]" />
+          <Textarea data-testid="ob-interests" value={interests} onChange={(e) => setInterests(e.target.value)} placeholder="palestra, viaggi, cucina, cinema" className="rounded-2xl text-lg bg-white/10 min-h-[120px]" />
         </div>
       ),
     },
@@ -91,8 +91,8 @@ export default function OnboardingPage() {
               key={t}
               data-testid={`ob-tone-${t}`}
               onClick={() => setTone(t)}
-              style={tone === t ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-5 py-3 rounded-full transition-colors duration-150 ${tone === t ? "" : "bg-white  hover:"}`}
+              style={tone === t ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+              className={`px-5 py-3 rounded-full transition-colors duration-150 ${tone === t ? "" : "bg-white/10  hover:"}`}
             >{t}</button>
           ))}
         </div>
@@ -104,13 +104,13 @@ export default function OnboardingPage() {
         <div className="space-y-4">
           <div>
             <div className="kicker mb-2">indirizzo di casa</div>
-            <Input data-testid="ob-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via Roma 10, Milano" className="h-14 rounded-2xl text-lg bg-white" />
+            <Input data-testid="ob-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via Roma 10, Milano" className="h-14 rounded-2xl text-lg bg-white/10" />
           </div>
           <div>
             <div className="kicker mb-2">indirizzo di lavoro</div>
-            <Input data-testid="ob-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via Uffici 20, Milano" className="h-14 rounded-2xl text-lg bg-white" />
+            <Input data-testid="ob-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via Uffici 20, Milano" className="h-14 rounded-2xl text-lg bg-white/10" />
           </div>
-          <div className="text-xs text-neutral-500">Servono a mAIPAL per calcolare tragitti, aggiungerli agli eventi, o rispondere a domande contestuali.</div>
+          <div className="text-xs text-white/60">Servono a mAIPAL per calcolare tragitti, aggiungerli agli eventi, o rispondere a domande contestuali.</div>
         </div>
       ),
     },
@@ -125,7 +125,7 @@ export default function OnboardingPage() {
       <h1 className="mt-3 text-4xl md:text-5xl font-bold tracking-tight">
         Ciao {user?.name?.split(" ")[0] || ""}, <span className="gradient-word">personalizziamoci</span>.
       </h1>
-      <p className="mt-3 text-neutral-600 text-lg">{current.title}</p>
+      <p className="mt-3 text-white/70 text-lg">{current.title}</p>
 
       <div className="mt-10 flex-1">{current.body}</div>
 
@@ -134,7 +134,7 @@ export default function OnboardingPage() {
           data-testid="ob-back"
           disabled={step === 0}
           onClick={() => setStep((s) => Math.max(0, s - 1))}
-          className="text-neutral-500 hover:text-black disabled:opacity-30"
+          className="text-white/60 hover:text-black disabled:opacity-30"
         >← indietro</button>
         {!isLast ? (
           <button data-testid="ob-next" onClick={() => setStep((s) => s + 1)} className="pill-btn">Avanti →</button>

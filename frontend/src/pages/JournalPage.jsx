@@ -133,7 +133,7 @@ export default function JournalPage() {
   return (
     <div className="max-w-4xl">
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-2xl bg-neutral-100 flex items-center justify-center"><BookOpen size={18} /></div>
+        <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center"><BookOpen size={18} /></div>
         <div>
           <div className="kicker">· diario</div>
           <h2 className="text-2xl font-bold tracking-tight">Racconta la tua giornata</h2>
@@ -141,7 +141,7 @@ export default function JournalPage() {
       </div>
 
       {/* Composer */}
-      <div className="rounded-2xl p-5 shadow-md" style={{ background: "#6EB7EC" }}>
+      <div className="rounded-2xl p-5 shadow-md" style={{ background: "#403A3C" }}>
         <div className="kicker text-white/85 mb-3">· oggi · {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</div>
         <Textarea
           data-testid="journal-input"
@@ -166,26 +166,26 @@ export default function JournalPage() {
             </button>
           </div>
           <button data-testid="journal-save" onClick={save} disabled={saving || !text.trim() || transcribing}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white text-[#0A6BBF] font-medium disabled:opacity-50 hover:bg-white/95 text-sm">
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white/10 text-sm">
             <Sparkles size={14} /> {saving ? "mAIPAL sta scrivendo…" : "Salva nel diario"}
           </button>
         </div>
       </div>
 
       {/* Mood trend chart */}
-      <div className="mt-8 p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm" data-testid="mood-trend-card">
+      <div className="mt-8 p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm" data-testid="mood-trend-card">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <div className="flex items-center gap-2">
-            <TrendingUp size={16} className="text-neutral-500" />
+            <TrendingUp size={16} className="text-white/60" />
             <div className="kicker">· trend umore</div>
           </div>
-          <div className="flex items-center gap-1 bg-neutral-100 rounded-full p-0.5" data-testid="trend-range">
+          <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="trend-range">
             {[7, 30, 90].map((d) => (
               <button
                 key={d}
                 data-testid={`trend-${d}`}
                 onClick={() => setTrendDays(d)}
-                className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "bg-[#6EB7EC] text-white shadow-sm" : "text-neutral-500 hover:text-neutral-800"}`}
+                className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "bg-[#CECAD0] text-white shadow-sm" : "text-white/60 hover:text-white"}`}
               >
                 {d}g
               </button>
@@ -218,27 +218,27 @@ export default function JournalPage() {
             </ResponsiveContainer>
           </div>
         ) : (
-          <div className="text-neutral-500 text-sm py-8 text-center">Nessun dato di umore ancora. Racconta qualche giornata per vedere il trend.</div>
+          <div className="text-white/60 text-sm py-8 text-center">Nessun dato di umore ancora. Racconta qualche giornata per vedere il trend.</div>
         )}
       </div>
 
       {/* Search + mood filter */}
-      <div className="mt-8 p-4 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm">
+      <div className="mt-8 p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[220px]">
-            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
+            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
             <Input
               data-testid="journal-search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Cerca nel diario…"
-              className="pl-10 pr-10 h-10 rounded-full bg-white/80"
+              className="pl-10 pr-10 h-10 rounded-full bg-white/10"
             />
             {q && (
               <button
                 data-testid="journal-search-clear"
                 onClick={() => setQ("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-700"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"
               >
                 <X size={14} />
               </button>
@@ -249,14 +249,14 @@ export default function JournalPage() {
               key="all"
               data-testid="fav-filter-off"
               onClick={() => setFavOnly(false)}
-              style={!favOnly ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/70  text-neutral-500 hover:"}`}
+              style={!favOnly ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
             >tutti</button>
             <button
               data-testid="fav-filter-on"
               onClick={() => setFavOnly(true)}
               style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/70  text-neutral-500 hover:"}`}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
               title="Solo giornate memorabili"
             >
               <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
@@ -266,16 +266,16 @@ export default function JournalPage() {
               key="mood-all"
               data-testid="mood-filter-all"
               onClick={() => setMood("all")}
-              style={mood === "all" ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${mood === "all" ? "" : "bg-white/70  text-neutral-500 hover:"}`}
+              style={mood === "all" ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${mood === "all" ? "" : "bg-white/5  text-white/60 hover:"}`}
             >ogni umore</button>
             {MOODS.map((m) => (
               <button
                 key={m}
                 data-testid={`mood-filter-${m}`}
                 onClick={() => setMood(m)}
-                style={mood === m ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${mood === m ? "" : "bg-white/70  text-neutral-500 hover:"}`}
+                style={mood === m ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${mood === m ? "" : "bg-white/5  text-white/60 hover:"}`}
                 title={m}
               >
                 <span>{MOOD_EMOJI[m]}</span> {m}
@@ -288,9 +288,9 @@ export default function JournalPage() {
       {/* Entries */}
       <div className="mt-6 space-y-4">
         <div className="kicker">· voci precedenti · {entries.length}</div>
-        {entries.length === 0 && <div className="text-neutral-500 text-sm">Nessuna voce trovata con questi filtri.</div>}
+        {entries.length === 0 && <div className="text-white/60 text-sm">Nessuna voce trovata con questi filtri.</div>}
         {entries.map((e) => (
-          <div key={e.id} className="p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm" data-testid="journal-entry">
+          <div key={e.id} className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm" data-testid="journal-entry">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-3">
                 <span className="text-2xl">{MOOD_EMOJI[e.mood] || "📝"}</span>
@@ -307,20 +307,20 @@ export default function JournalPage() {
                   data-testid="journal-fav"
                   onClick={() => toggleFav(e.id, !!e.favorite)}
                   title={e.favorite ? "Rimuovi da giornate memorabili" : "Segna come giornata memorabile"}
-                  className={`p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-500 hover:bg-amber-50" : "text-neutral-400 hover:bg-neutral-100 hover:text-amber-500"}`}
+                  className={`p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`}
                 >
                   <Star size={16} className={e.favorite ? "fill-current" : ""} />
                 </button>
-                <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+                <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
               </div>
             </div>
 
-            <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-neutral-800">{e.cleaned_text}</div>
+            <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-white">{e.cleaned_text}</div>
 
             {(e.highlights || []).length > 0 && (
               <div className="mt-4 pt-4 border-t ">
                 <div className="kicker mb-2">· momenti chiave</div>
-                <ul className="text-sm text-neutral-600 space-y-1">
+                <ul className="text-sm text-white/70 space-y-1">
                   {(e.highlights || []).map((h, i) => (<li key={i}>· {h}</li>))}
                 </ul>
               </div>

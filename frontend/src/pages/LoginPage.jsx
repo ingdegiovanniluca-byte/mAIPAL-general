@@ -23,7 +23,7 @@ export default function LoginPage() {
             <br />
             quello che non hai tempo di fare.
           </h1>
-          <p className="mt-6 text-lg text-neutral-600 max-w-lg">
+          <p className="mt-6 text-lg text-white/70 max-w-lg">
             Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do,
             e risponde con la tua knowledge base. Chatta, salva, organizza.
           </p>
@@ -55,7 +55,7 @@ export default function LoginPage() {
         }}
       >
         <div className="absolute inset-0 bg-black/5" />
-        <div className="absolute bottom-10 left-10 right-10 bg-white/70 backdrop-blur-md rounded-2xl p-6 ">
+        <div className="absolute bottom-10 left-10 right-10 bg-white/5 backdrop-blur-md rounded-2xl p-6 ">
           <div className="kicker">preview</div>
           <div className="mt-2 text-lg font-medium">
             &ldquo;Ricordami di chiamare il fornitore martedì alle 15&rdquo; → task creato con scadenza, tag e priorità.

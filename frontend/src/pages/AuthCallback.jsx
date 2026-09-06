@@ -48,17 +48,17 @@ export default function AuthCallback() {
   if (denied) {
     return (
       <div className="min-h-screen flex items-center justify-center px-6" data-testid="access-denied">
-        <div className="max-w-lg p-8 rounded-2xl bg-white/70  backdrop-blur-xl shadow-lg text-center">
+        <div className="max-w-lg p-8 rounded-2xl bg-white/5  backdrop-blur-xl shadow-lg text-center">
           <div className="mx-auto w-14 h-14 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mb-4">
             <ShieldAlert size={28} />
           </div>
           <div className="kicker mb-2">· accesso non autorizzato</div>
           <h1 className="text-2xl font-bold tracking-tight mb-3">Il tuo account non è ancora abilitato</h1>
-          <p className="text-neutral-600 text-sm leading-relaxed">{denied.message}</p>
+          <p className="text-white/70 text-sm leading-relaxed">{denied.message}</p>
           <button
             data-testid="access-denied-home"
             onClick={() => navigate("/", { replace: true })}
-            className="mt-6 px-5 py-2 rounded-full bg-neutral-900 text-white text-sm hover:bg-neutral-800"
+            className="mt-6 px-5 py-2 rounded-full bg-[#403A3C] text-white text-sm hover:bg-[#403A3C]"
           >
             Torna alla home
           </button>
