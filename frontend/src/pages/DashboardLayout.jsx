@@ -18,13 +18,13 @@ export default function DashboardLayout() {
           </h1>
           <div className="flex items-center gap-3 pb-3">
             <div className="kicker-p hidden sm:block">{user?.email}</div>
-            <button data-testid="logout-btn" onClick={logout} title="Esci" className="p-2 rounded-full hover:bg-neutral-200/60">
+            <button data-testid="logout-btn" onClick={logout} title="Esci" className="p-2 rounded-full text-white/70 hover:text-white hover:bg-white/10">
               <LogOut size={16} />
             </button>
           </div>
         </div>
 
-        <nav className="mt-8 inline-flex items-center gap-1 p-1 rounded-full bg-neutral-200/60">
+        <nav className="mt-8 inline-flex items-center gap-1 p-1 rounded-full bg-white/5 border border-white/10 backdrop-blur-md">
           <TabLink to="/dashboard/chat" icon={<MessageSquare size={15} />} label="Chat" testid="tab-chat" />
           <TabLink to="/dashboard/tasks" icon={<LayoutGrid size={15} />} label="Task Board" testid="tab-tasks" />
           <TabLink to="/dashboard/todos" icon={<ListChecks size={15} />} label="To-Do" testid="tab-todos" />
@@ -50,8 +50,10 @@ function TabLink({ to, icon, label, testid }) {
       to={to}
       data-testid={testid}
       className={({ isActive }) =>
-        `inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors duration-150 ${
-          isActive ? "bg-[#6EB7EC] text-white shadow-sm" : "text-neutral-500 hover:text-black"
+        `inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all duration-150 ${
+          isActive
+            ? "bg-[#CECAD0] text-[#403A3C] shadow-sm font-medium"
+            : "text-[#CECAD0]/50 hover:text-[#CECAD0]"
         }`
       }
     >
