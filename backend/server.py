@@ -1024,6 +1024,131 @@ async def upload_attachment(file: UploadFile = File(...), current: User = Depend
         except Exception: pass
 
 
+# ============ KB DIRECT UPLOAD (no Google) ============
+def _extract_text_from_file(path: str, filename: str) -> str:
+    """Extract plain text from common file formats. Raises ValueError on unsupported types."""
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+    if ext in ("txt", "md", "markdown", "csv", "json", "log", "yaml", "yml", "html", "htm", "xml"):
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    if ext == "pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(path)
+        pages = []
+        for p in reader.pages:
+            try: pages.append(p.extract_text() or "")
+            except Exception: pass
+        return "\n\n".join(pages)
+    if ext in ("docx",):
+        from docx import Document
+        doc = Document(path)
+        return "\n".join(p.text for p in doc.paragraphs if p.text)
+    if ext in ("xlsx",):
+        from openpyxl import load_workbook
+        wb = load_workbook(path, read_only=True, data_only=True)
+        parts = []
+        for sn in wb.sheetnames:
+            ws = wb[sn]
+            parts.append(f"# {sn}")
+            for row in ws.iter_rows(values_only=True):
+                line = " | ".join("" if v is None else str(v) for v in row)
+                if line.strip(): parts.append(line)
+        return "\n".join(parts)
+    raise ValueError(f"Formato .{ext} non supportato (prova pdf, docx, xlsx, txt, md, csv, json, html)")
+
+
+def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 150) -> List[str]:
+    text = (text or "").strip()
+    if not text: return []
+    if len(text) <= max_chars: return [text]
+    chunks = []
+    i = 0
+    while i < len(text):
+        end = min(len(text), i + max_chars)
+        # try to break at a sentence/paragraph boundary
+        window = text[i:end]
+        if end < len(text):
+            for sep in ["\n\n", "\n", ". ", "! ", "? "]:
+                idx = window.rfind(sep)
+                if idx >= int(max_chars * 0.6):
+                    end = i + idx + len(sep)
+                    window = text[i:end]
+                    break
+        chunks.append(window.strip())
+        if end >= len(text): break
+        i = max(end - overlap, i + 1)
+    return [c for c in chunks if c]
+
+
+@api_router.post("/kb/upload")
+async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    """Upload a file, extract its text and store it (chunked, with embeddings) in the user's KB.
+    No Google connection required."""
+    contents = await file.read()
+    if len(contents) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File troppo grande (max 20 MB)")
+    if not (file.filename or "").strip():
+        raise HTTPException(status_code=400, detail="File senza nome")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "bin"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        try:
+            text = _extract_text_from_file(tmp_path, file.filename)
+        except ValueError as ve:
+            raise HTTPException(status_code=415, detail=str(ve))
+        except Exception as e:
+            logger.exception("text extraction failed")
+            raise HTTPException(status_code=500, detail=f"Impossibile estrarre testo: {e}")
+
+        text = (text or "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="Nessun testo estraibile dal file")
+
+        chunks = _chunk_text(text)
+        # Embed all chunks in one batch (best-effort)
+        try:
+            embeddings = await emb.embed_texts(chunks)
+        except Exception:
+            logger.exception("kb upload embedding failed")
+            embeddings = [None] * len(chunks)
+
+        doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        docs = []
+        for i, (chunk, e) in enumerate(zip(chunks, embeddings)):
+            docs.append({
+                "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
+                "user_id": current.user_id,
+                "text": chunk,
+                "title": file.filename,
+                "tags": [ext],
+                "summary": chunks[0][:140] if i == 0 else None,
+                "embedding": e,
+                "doc_id": doc_id,
+                "source_type": "file",
+                "source_name": file.filename,
+                "chunk_index": i,
+                "created_at": now,
+            })
+        if docs:
+            await db.kb_chunks.insert_many(docs)
+
+        return {
+            "doc_id": doc_id,
+            "name": file.filename,
+            "size": len(contents),
+            "chunks": len(docs),
+            "chars": len(text),
+            "preview": text[:280],
+        }
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
+
+
 # ============ INTEGRATIONS STATUS ============
 @api_router.get("/integrations/status")
 async def integrations_status(current: User = Depends(get_current_user)):

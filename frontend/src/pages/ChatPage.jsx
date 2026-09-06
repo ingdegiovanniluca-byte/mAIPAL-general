@@ -141,8 +141,12 @@ export default function ChatPage() {
     setStreaming(true);
     let currentQuestion = [text.trim(), voiceText].filter(Boolean).join(" ").trim();
     if (attachments.length > 0) {
-      const filesLine = attachments.map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
-      currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + `Allegati caricati su Drive:\n${filesLine}`;
+      const kbLine = attachments.filter((a) => a.kb).map((a) => `📎 ${a.name} · ${a.chunks} chunk indicizzati (~${a.chars} caratteri)`).join("\n");
+      const driveLine = attachments.filter((a) => !a.kb).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
+      const parts = [];
+      if (kbLine) parts.push(`Allegati caricati nella knowledge base personale:\n${kbLine}`);
+      if (driveLine) parts.push(`Allegati caricati su Drive:\n${driveLine}`);
+      currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
     }
     setText("");
     setAttachments([]);
@@ -178,18 +182,27 @@ export default function ChatPage() {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     e.target.value = "";
+    // In info_upload: extract text and save into personal KB (no Google needed)
+    // In other actions: keep the previous behaviour (upload to Drive as attachment)
+    const useKb = active === "info_upload";
     for (const f of files) {
       try {
         const fd = new FormData();
         fd.append("file", f, f.name);
-        const res = await fetch(`${API}/attachments/upload`, { method: "POST", body: fd, credentials: "include" });
+        const endpoint = useKb ? "/kb/upload" : "/attachments/upload";
+        const res = await fetch(`${API}${endpoint}`, { method: "POST", body: fd, credentials: "include" });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
           throw new Error(errData.detail || `HTTP ${res.status}`);
         }
         const j = await res.json();
-        setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
-        toast.success(`${f.name} → Drive`);
+        if (useKb) {
+          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview }]);
+          toast.success(`${f.name} → Knowledge Base (${j.chunks} chunk)`);
+        } else {
+          setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
+          toast.success(`${f.name} → Drive`);
+        }
       } catch (err) { toast.error(`Upload ${f.name}: ${err.message}`); }
     }
   };
