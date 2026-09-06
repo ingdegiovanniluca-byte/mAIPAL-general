@@ -243,30 +243,38 @@ export default function ChatPage() {
     <div className="relative w-full">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[calc(100vh-15rem)]">
         {/* LEFT 1/3 — action icons + input area */}
-        <aside className={`lg:col-span-1 space-y-3 overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
-          <div className="flex items-center gap-3 justify-start px-1">
-            {ACTIONS.map((a) => {
-              const selected = a.id === active;
-              return (
-                <button
-                  key={a.id}
-                  data-testid={`action-${a.key}`}
-                  onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); }}
-                  title={a.title}
-                  aria-label={a.title}
-                  style={{ backgroundColor: selected ? a.color : "#ffffff", color: selected ? "#ffffff" : a.color, borderColor: selected ? a.color : "rgba(0,0,0,0.08)" }}
-                  className={`group relative w-12 h-12 rounded-2xl border shadow-sm flex items-center justify-center transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${selected ? "" : "hover:border-neutral-300"}`}
-                >
-                  {React.cloneElement(a.icon, { size: 20 })}
-                  {/* Tooltip on hover */}
-                  <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-900 text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
-                    {a.title}
-                  </span>
-                </button>
-              );
-            })}
+        <aside className={`lg:col-span-1 flex flex-col overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
+          {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
+          <div className="p-4 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm shrink-0">
+            <div className="flex items-center gap-3 justify-start">
+              {ACTIONS.map((a) => {
+                const selected = a.id === active;
+                return (
+                  <button
+                    key={a.id}
+                    data-testid={`action-${a.key}`}
+                    onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); }}
+                    title={a.title}
+                    aria-label={a.title}
+                    style={{ backgroundColor: selected ? a.color : "#ffffff", color: selected ? "#ffffff" : a.color, borderColor: selected ? a.color : "rgba(0,0,0,0.08)" }}
+                    className={`group relative w-10 h-10 rounded-xl border shadow-sm flex items-center justify-center transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${selected ? "" : "hover:border-neutral-300"}`}
+                  >
+                    {React.cloneElement(a.icon, { size: 18 })}
+                    {/* Tooltip on hover */}
+                    <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-900 text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
+                      {a.title}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <div className="p-5 rounded-2xl border border-white/40 shadow-lg" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
+          {/* Mirror of "· cronologia" label on the right so the two columns share vertical rhythm */}
+          <div className="flex items-center justify-between px-2 mt-4 shrink-0">
+            <div className="kicker-p">· nuovo messaggio</div>
+            <div className="kicker-p">{activeAction.title.toLowerCase()}</div>
+          </div>
+          <div className="p-5 rounded-2xl border border-white/40 shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
@@ -296,7 +304,7 @@ export default function ChatPage() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send(); }}
               placeholder={thread ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
-              className="border-0 focus-visible:ring-0 bg-transparent text-base min-h-[110px] px-0 resize-none text-white placeholder:text-white/70"
+              className="border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/70"
             />
             <div className="flex items-center justify-between pt-2 border-t border-white/25">
               <div className="flex items-center gap-1.5 text-white/85 flex-wrap">

@@ -558,6 +558,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     embedding = e[0] if e else None
                 except Exception:
                     embedding = None
+                doc_id = f"doc_{uuid.uuid4().hex[:12]}"
                 await db.kb_chunks.insert_one({
                     "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
                     "user_id": current.user_id,
@@ -566,8 +567,32 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     "tags": (meta or {}).get("tags", []) if meta else [],
                     "summary": (meta or {}).get("summary") if meta else visible_answer,
                     "embedding": embedding,
+                    "doc_id": doc_id,
+                    "source_type": "chat",
+                    "chunk_index": 0,
                     "conv_id": conv_id,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                # Classify + persist document-level record so it appears in the Documents page
+                try:
+                    classification = await _classify_document(payload.content)
+                except Exception:
+                    classification = {"category": "altro", "keywords": []}
+                await db.kb_documents.insert_one({
+                    "doc_id": doc_id,
+                    "user_id": current.user_id,
+                    "name": (meta or {}).get("title") if meta else (payload.content[:60] + ("…" if len(payload.content) > 60 else "")),
+                    "ext": "chat",
+                    "source_type": "chat",
+                    "category": classification["category"],
+                    "keywords": list({*(classification["keywords"] or []), *(((meta or {}).get("tags") or []))})[:8],
+                    "chunks_count": 1,
+                    "chars": len(payload.content),
+                    "size_bytes": len(payload.content.encode("utf-8")),
+                    "preview": ((meta or {}).get("summary") if meta else payload.content)[:280],
+                    "drive_link": None,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "conv_id": conv_id,
                 })
             elif action == "task_todo":
                 if meta:
@@ -1107,6 +1132,37 @@ def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 150) -> List[st
     return [c for c in chunks if c]
 
 
+async def _classify_document(text: str) -> dict:
+    """Ask the LLM for a category + keywords for the uploaded document. Best-effort."""
+    sample = (text or "")[:3500]
+    if not sample.strip():
+        return {"category": "altro", "keywords": []}
+    system = (
+        "Sei un classificatore di documenti personali. Ricevi il testo di un documento e restituisci SOLO un JSON: "
+        "{\"category\": \"...\", \"keywords\": [\"...\"]}. "
+        "Categorie ammesse: lavoro, personale, finanza, salute, viaggi, casa, ricevute, documenti_identità, istruzione, note, altro. "
+        "Keywords: da 3 a 8 termini brevi (1-2 parole ciascuno), in italiano minuscolo, senza duplicati e senza stopwords. "
+        "Rispondi con SOLO il JSON, senza commenti né markdown."
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cls_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-5")
+        raw = await chat.send_message(UserMessage(text=sample))
+        import json as _json, re as _re
+        raw = (raw or "").strip()
+        # strip fences if any
+        m = _re.search(r"\{[\s\S]*\}", raw)
+        data = _json.loads(m.group(0)) if m else {}
+        cat = (data.get("category") or "altro").lower().strip()
+        allowed = {"lavoro","personale","finanza","salute","viaggi","casa","ricevute","documenti_identità","istruzione","note","altro"}
+        if cat not in allowed: cat = "altro"
+        kws = data.get("keywords") or []
+        kws = [str(k).lower().strip() for k in kws if str(k).strip()][:8]
+        return {"category": cat, "keywords": kws}
+    except Exception:
+        logger.exception("classify failed")
+        return {"category": "altro", "keywords": []}
+
+
 @api_router.post("/kb/upload")
 async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_current_user)):
     """Upload a file, extract its text and store it (chunked, with embeddings) in the user's KB.
@@ -1166,6 +1222,9 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
             logger.exception("kb upload embedding failed")
             embeddings = [None] * len(chunks)
 
+        # Classify (category + keywords) — best effort, does not block upload on failure
+        classification = await _classify_document(text)
+
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
         docs = []
@@ -1175,7 +1234,7 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
                 "user_id": current.user_id,
                 "text": chunk,
                 "title": file.filename,
-                "tags": [ext] + (["ocr"] if source_type == "image_ocr" else []),
+                "tags": [ext] + (["ocr"] if source_type == "image_ocr" else []) + [classification["category"]],
                 "summary": chunks[0][:140] if i == 0 else None,
                 "embedding": e,
                 "doc_id": doc_id,
@@ -1187,6 +1246,23 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
         if docs:
             await db.kb_chunks.insert_many(docs)
 
+        # Persist the document-level record
+        await db.kb_documents.insert_one({
+            "doc_id": doc_id,
+            "user_id": current.user_id,
+            "name": file.filename,
+            "ext": ext,
+            "source_type": source_type,
+            "category": classification["category"],
+            "keywords": classification["keywords"],
+            "chunks_count": len(docs),
+            "chars": len(text),
+            "size_bytes": len(contents),
+            "preview": text[:280],
+            "drive_link": None,      # populated in the future when Drive is connected
+            "created_at": now,
+        })
+
         return {
             "doc_id": doc_id,
             "name": file.filename,
@@ -1195,10 +1271,109 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
             "chars": len(text),
             "preview": text[:280],
             "source_type": source_type,
+            "category": classification["category"],
+            "keywords": classification["keywords"],
         }
     finally:
         try: os.unlink(tmp_path)
         except Exception: pass
+
+
+# ============ KB DOCUMENTS LIST ============
+@api_router.get("/kb/documents")
+async def list_kb_documents(current: User = Depends(get_current_user), q: Optional[str] = None, category: Optional[str] = None):
+    import re as _re
+    query: dict = {"user_id": current.user_id}
+    if category and category != "all":
+        query["category"] = category
+    if q:
+        safe = _re.escape(q.strip())
+        query["$or"] = [
+            {"name": {"$regex": safe, "$options": "i"}},
+            {"keywords": {"$regex": safe, "$options": "i"}},
+            {"preview": {"$regex": safe, "$options": "i"}},
+        ]
+    cursor = db.kb_documents.find(query, {"_id": 0}).sort("created_at", -1).limit(500)
+    docs = await cursor.to_list(500)
+
+    # Backfill: aggregate kb_chunks for doc_ids that don't have a kb_documents entry yet
+    known_ids = {d["doc_id"] for d in docs}
+    pipeline = [
+        {"$match": {"user_id": current.user_id}},
+        {"$group": {
+            "_id": {"$ifNull": ["$doc_id", "$chunk_id"]},
+            "name":         {"$first": "$title"},
+            "chunk_id_ref": {"$first": "$chunk_id"},
+            "source_type":  {"$first": "$source_type"},
+            "summary":      {"$first": "$summary"},
+            "text":         {"$first": "$text"},
+            "tags":         {"$first": "$tags"},
+            "created_at":   {"$first": "$created_at"},
+            "chunks_count": {"$sum": 1},
+            "chars":        {"$sum": {"$strLenCP": {"$ifNull": ["$text", ""]}}},
+        }},
+    ]
+    async for r in db.kb_chunks.aggregate(pipeline):
+        gid = r["_id"]
+        if not gid or gid in known_ids:
+            continue
+        known_ids.add(gid)
+        name = r.get("name") or (r.get("text") or "")[:40]
+        docs.append({
+            "doc_id": gid,
+            "user_id": current.user_id,
+            "name": name or "senza titolo",
+            "ext": "chat" if (r.get("source_type") == "chat") else "txt",
+            "source_type": r.get("source_type") or "chat",
+            "category": "altro",
+            "keywords": r.get("tags") or [],
+            "chunks_count": r.get("chunks_count", 1),
+            "chars": r.get("chars", 0),
+            "size_bytes": r.get("chars", 0),
+            "preview": (r.get("summary") or r.get("text") or "")[:280],
+            "drive_link": None,
+            "created_at": r.get("created_at", ""),
+            "legacy": True,
+        })
+
+    # If filter narrowed to empty result but legacy exists, still applies via filter above
+    if category and category != "all":
+        docs = [d for d in docs if d.get("category") == category]
+    if q:
+        needle = q.lower().strip()
+        docs = [d for d in docs if needle in (d.get("name","") + " " + " ".join(d.get("keywords", []) or []) + " " + d.get("preview","")).lower()]
+
+    docs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return docs
+
+
+@api_router.get("/kb/documents/categories")
+async def kb_categories(current: User = Depends(get_current_user)):
+    pipe = [
+        {"$match": {"user_id": current.user_id}},
+        {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]
+    out = []
+    async for r in db.kb_documents.aggregate(pipe):
+        cat = r.get("_id") or "altro"
+        out.append({"category": cat, "count": r.get("count", 0)})
+    return out
+
+
+@api_router.delete("/kb/documents/{doc_id}")
+async def delete_kb_document(doc_id: str, current: User = Depends(get_current_user)):
+    doc = await db.kb_documents.find_one({"doc_id": doc_id, "user_id": current.user_id}, {"_id": 0})
+    # Fallback: legacy record — try to delete a single chunk by chunk_id
+    if not doc:
+        legacy = await db.kb_chunks.find_one({"chunk_id": doc_id, "user_id": current.user_id}, {"_id": 0})
+        if not legacy:
+            raise HTTPException(status_code=404, detail="Not found")
+        await db.kb_chunks.delete_one({"chunk_id": doc_id, "user_id": current.user_id})
+        return {"ok": True, "deleted_chunks": 1}
+    await db.kb_chunks.delete_many({"doc_id": doc_id, "user_id": current.user_id})
+    await db.kb_documents.delete_one({"doc_id": doc_id, "user_id": current.user_id})
+    return {"ok": True}
 
 
 # ============ INTEGRATIONS STATUS ============
