@@ -1065,6 +1065,56 @@ async def journal_trend(current: User = Depends(get_current_user), days: int = 3
         })
     return {"days": out, "mood_score_map": MOOD_SCORE}
 
+@api_router.get("/journal/stats")
+async def journal_stats(current: User = Depends(get_current_user)):
+    """Aggregated numbers for the journal summary card:
+    - total entries
+    - most frequent mood (with count)
+    - streak of consecutive days ending today (or yesterday if today is missing)."""
+    from datetime import date as _date, timedelta as _td
+    docs = await db.journal_entries.find(
+        {"user_id": current.user_id},
+        {"_id": 0, "date": 1, "mood": 1},
+    ).sort("date", -1).to_list(2000)
+
+    total = len(docs)
+
+    # most common mood
+    mood_counts: dict = {}
+    for d in docs:
+        m = (d.get("mood") or "").strip()
+        if not m: continue
+        mood_counts[m] = mood_counts.get(m, 0) + 1
+    top_mood = None
+    if mood_counts:
+        best = max(mood_counts.items(), key=lambda x: x[1])
+        top_mood = {"mood": best[0], "count": best[1]}
+
+    # streak: unique dates sorted desc, count consecutive from today (or yesterday)
+    dates = sorted({d.get("date") for d in docs if d.get("date")}, reverse=True)
+    streak = 0
+    today = _date.today()
+    if dates:
+        first = _date.fromisoformat(dates[0])
+        if first == today or first == today - _td(days=1):
+            cur = first
+            for ds in dates:
+                if _date.fromisoformat(ds) == cur:
+                    streak += 1
+                    cur = cur - _td(days=1)
+                elif _date.fromisoformat(ds) < cur:
+                    break
+
+    return {
+        "total": total,
+        "top_mood": top_mood,
+        "streak_days": streak,
+        "mood_breakdown": mood_counts,
+    }
+
+
+
+
 
 @api_router.post("/journal")
 async def create_journal(payload: JournalCreate, current: User = Depends(get_current_user)):

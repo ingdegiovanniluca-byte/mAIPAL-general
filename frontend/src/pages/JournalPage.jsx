@@ -3,7 +3,7 @@ import { api, API } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star } from "lucide-react";
+import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 const MOODS = ["felice", "grato", "energico", "riflessivo", "neutro", "stanco", "stressato"];
@@ -35,6 +35,9 @@ export default function JournalPage() {
   const [trend, setTrend] = useState([]);
   const [trendDays, setTrendDays] = useState(7);
 
+  // Stats
+  const [stats, setStats] = useState(null);
+
   const load = async () => {
     const params = {};
     if (q.trim()) params.q = q.trim();
@@ -47,8 +50,15 @@ export default function JournalPage() {
     const r = await api.get("/journal/trend", { params: { days: trendDays } });
     setTrend(r.data.days || []);
   };
+  const loadStats = async () => {
+    try {
+      const r = await api.get("/journal/stats");
+      setStats(r.data);
+    } catch { /* silent */ }
+  };
   useEffect(() => { load(); }, [q, mood, favOnly]);
   useEffect(() => { loadTrend(); }, [trendDays, entries.length]);
+  useEffect(() => { loadStats(); }, [entries.length]);
 
   const save = async () => {
     if (!text.trim() || saving) return;
@@ -180,8 +190,35 @@ export default function JournalPage() {
         </div>
       </div>
 
+      {/* Stats summary */}
+      {stats && (
+        <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="journal-stats">
+          <StatCard
+            icon={<Notebook size={18} />}
+            label="Voci scritte"
+            value={new Intl.NumberFormat("it-IT").format(stats.total || 0)}
+            hint={stats.total === 1 ? "voce nel diario" : "voci nel diario"}
+            color="#DD772F"
+          />
+          <StatCard
+            icon={<BarChart3 size={18} />}
+            label="Umore più frequente"
+            value={stats.top_mood ? `${MOOD_EMOJI[stats.top_mood.mood] || ""} ${stats.top_mood.mood}` : "—"}
+            hint={stats.top_mood ? `${stats.top_mood.count} volte` : "nessun mood ancora"}
+            color="#6D6181"
+          />
+          <StatCard
+            icon={<Flame size={18} />}
+            label="Streak"
+            value={`${stats.streak_days || 0} ${stats.streak_days === 1 ? "giorno" : "giorni"}`}
+            hint={stats.streak_days >= 3 ? "continua così!" : "scrivi ogni giorno per crescere"}
+            color="#8E2E11"
+          />
+        </div>
+      )}
+
       {/* Mood trend chart */}
-      <div className="mt-8 p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm" data-testid="mood-trend-card">
+      <div className="mt-8 p-5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm" data-testid="mood-trend-card">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <div className="flex items-center gap-2">
             <TrendingUp size={16} className="text-white/60" />
@@ -335,6 +372,21 @@ export default function JournalPage() {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ icon, label, value, hint, color }) {
+  return (
+    <div className="p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm card-hover flex items-start gap-3" data-testid="stat-card">
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: color + "22", color }}>
+        {icon}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-bold uppercase tracking-wider text-white/70">{label}</div>
+        <div className="mt-1 text-lg font-semibold text-white truncate capitalize">{value}</div>
+        {hint && <div className="text-[11px] text-white/50 mt-0.5">{hint}</div>}
       </div>
     </div>
   );
