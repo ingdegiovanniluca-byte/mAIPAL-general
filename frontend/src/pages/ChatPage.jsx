@@ -229,14 +229,22 @@ export default function ChatPage() {
     catch { toast.error("Errore preferito"); setHistory((hs) => hs.map((h) => (h.conv_id === convId ? { ...h, favorite: currentVal } : h))); }
   };
   const deleteConv = async (convId) => {
-    if (!confirm("Eliminare questa conversazione?")) return;
-    const prev = history;
-    setHistory((hs) => hs.filter((h) => h.conv_id !== convId));
-    try {
-      await api.delete(`/conversations/${convId}`);
-      if (thread?.conv_id === convId) setThread(null);
-      toast.success("Eliminata");
-    } catch { toast.error("Errore"); setHistory(prev); }
+    toast("Eliminare questa conversazione?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const prev = history;
+          setHistory((hs) => hs.filter((h) => h.conv_id !== convId));
+          try {
+            await api.delete(`/conversations/${convId}`);
+            if (thread?.conv_id === convId) setThread(null);
+            toast.success("Eliminata");
+          } catch { toast.error("Errore"); setHistory(prev); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   return (
@@ -347,18 +355,18 @@ export default function ChatPage() {
         <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden`}>
           {/* Filters (hidden in focus mode when a thread is open) */}
           {!(focusMode && thread) && (
-            <div className="flex items-center gap-3 flex-wrap p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
-            <div className="relative flex-1 min-w-[220px]">
-              <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/60" />
-              <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nella cronologia…" className="pl-10 h-10 rounded-full bg-white/10  text-white placeholder:text-white/60" />
+            <div className="flex items-center gap-1.5 md:gap-2 flex-nowrap overflow-x-auto no-scrollbar p-3 md:p-3.5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
+            <div className="relative shrink-0 w-32 md:w-40 lg:w-48">
+              <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60" />
+              <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca…" className="pl-8 h-8 md:h-9 text-xs md:text-sm rounded-full bg-white/10  text-white placeholder:text-white/60" />
             </div>
             {[["all","tutti"],["fav","preferiti"],["upload","upload"],["query","query"],["todo","todo"],["journal","diario"]].map(([k, l]) => (
               <button key={k} data-testid={`filter-${k}`} onClick={() => setFilter(k)}
                 style={filter === k ? { backgroundColor: "#CECAD0", color: "#403A3C", border: "none" } : {}}
-                className={`px-3 py-2 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${filter === k ? "" : "bg-white/10  text-white/70 hover: hover:text-white"}`}
-              >{k === "fav" && <Star size={11} className={filter === k ? "fill-current" : ""} />}{l}</button>
+                className={`shrink-0 px-2 py-1 md:px-2.5 md:py-1.5 rounded-full text-[9px] md:text-[10px] font-mono-tight uppercase tracking-wider inline-flex items-center gap-1 ${filter === k ? "" : "bg-white/10  text-white/70 hover:text-white"}`}
+              >{k === "fav" && <Star size={10} className={filter === k ? "fill-current" : ""} />}{l}</button>
             ))}
-            <input data-testid="history-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-full bg-white/10  text-white px-4 text-sm" />
+            <input data-testid="history-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="shrink-0 h-8 md:h-9 w-28 md:w-32 rounded-full bg-white/10  text-white px-2 text-[10px] md:text-[11px]" />
           </div>
           )}
 

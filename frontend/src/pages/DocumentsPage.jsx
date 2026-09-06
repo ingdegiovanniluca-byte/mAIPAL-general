@@ -63,11 +63,19 @@ export default function DocumentsPage() {
   useEffect(() => { load(); }, [q, category]);
 
   const del = async (id) => {
-    if (!confirm("Eliminare questo documento dalla knowledge base?")) return;
-    const prev = docs;
-    setDocs((ds) => ds.filter((d) => d.doc_id !== id));
-    try { await api.delete(`/kb/documents/${id}`); toast.success("Documento rimosso"); }
-    catch { toast.error("Errore"); setDocs(prev); }
+    toast("Eliminare questo documento dalla knowledge base?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const prev = docs;
+          setDocs((ds) => ds.filter((d) => d.doc_id !== id));
+          try { await api.delete(`/kb/documents/${id}`); toast.success("Documento rimosso"); }
+          catch { toast.error("Errore"); setDocs(prev); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   const total = docs.length;

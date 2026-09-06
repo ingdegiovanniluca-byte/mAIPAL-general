@@ -37,11 +37,19 @@ export default function TodoBoardPage() {
   };
 
   const del = async (id) => {
-    if (!confirm("Eliminare questo to-do?")) return;
-    const prev = todos;
-    setTodos((ts) => ts.filter((t) => t.id !== id));
-    try { await api.delete(`/todos/${id}`); toast.success("To-do eliminato"); }
-    catch { toast.error("Errore eliminazione"); setTodos(prev); }
+    toast("Eliminare questo to-do?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const prev = todos;
+          setTodos((ts) => ts.filter((t) => t.id !== id));
+          try { await api.delete(`/todos/${id}`); toast.success("To-do eliminato"); }
+          catch { toast.error("Errore eliminazione"); setTodos(prev); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   return (
@@ -157,9 +165,17 @@ function TodoDialog({ todo, onClose, onUpdated }) {
   };
 
   const del = async () => {
-    if (!confirm("Eliminare questo to-do?")) return;
-    await api.delete(`/todos/${todo.id}`);
-    onUpdated(); onClose();
+    toast("Eliminare questo to-do?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          await api.delete(`/todos/${todo.id}`);
+          onUpdated(); onClose();
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   return (

@@ -64,11 +64,19 @@ export default function JournalPage() {
   };
 
   const del = async (id) => {
-    if (!confirm("Eliminare questa voce di diario?")) return;
-    const prev = entries;
-    setEntries((es) => es.filter((e) => e.id !== id));
-    try { await api.delete(`/journal/${id}`); toast.success("Voce eliminata"); }
-    catch { toast.error("Errore"); setEntries(prev); }
+    toast("Eliminare questa voce di diario?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const prev = entries;
+          setEntries((es) => es.filter((e) => e.id !== id));
+          try { await api.delete(`/journal/${id}`); toast.success("Voce eliminata"); }
+          catch { toast.error("Errore"); setEntries(prev); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   const toggleFav = async (id, currentVal) => {

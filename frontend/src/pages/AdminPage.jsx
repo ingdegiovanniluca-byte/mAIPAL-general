@@ -42,21 +42,39 @@ export default function AdminPage() {
   };
 
   const removeEmail = async (email) => {
-    if (!confirm(`Rimuovere ${email} dalla whitelist? L'utente non potrà più accedere.`)) return;
-    try {
-      await api.delete(`/admin/allowlist/${encodeURIComponent(email)}`);
-      await loadAll();
-      toast.success("Rimosso");
-    } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+    toast(`Rimuovere ${email} dalla whitelist?`, {
+      description: "L'utente non potrà più accedere.",
+      action: {
+        label: "Rimuovi",
+        onClick: async () => {
+          try {
+            await api.delete(`/admin/allowlist/${encodeURIComponent(email)}`);
+            await loadAll();
+            toast.success("Rimosso");
+          } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 8000,
+    });
   };
 
   const revokeUser = async (u) => {
-    if (!confirm(`Revocare l'accesso a ${u.email}?\n\nLe sue sessioni verranno chiuse e verrà rimosso dalla whitelist. I suoi dati (task, diario, KB) verranno mantenuti.`)) return;
-    try {
-      await api.post(`/admin/users/${u.user_id}/revoke`);
-      await loadAll();
-      toast.success(`Accesso revocato a ${u.email}`);
-    } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+    toast(`Revocare l'accesso a ${u.email}?`, {
+      description: "Le sessioni verranno chiuse e verrà rimosso dalla whitelist. I dati saranno mantenuti.",
+      action: {
+        label: "Revoca",
+        onClick: async () => {
+          try {
+            await api.post(`/admin/users/${u.user_id}/revoke`);
+            await loadAll();
+            toast.success(`Accesso revocato a ${u.email}`);
+          } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 8000,
+    });
   };
 
   const restoreUser = async (u) => {
@@ -68,17 +86,23 @@ export default function AdminPage() {
   };
 
   const deleteUser = async (u) => {
-    const confirm1 = confirm(`ELIMINARE completamente ${u.email}?\n\nVerranno cancellati: account, task, to-do, diario, knowledge base, conversazioni e sessioni. Operazione IRREVERSIBILE.`);
-    if (!confirm1) return;
-    const typed = prompt(`Per confermare digita: ELIMINA`);
-    if ((typed || "").trim().toUpperCase() !== "ELIMINA") { toast.error("Conferma non valida, eliminazione annullata"); return; }
-    try {
-      const r = await api.delete(`/admin/users/${u.user_id}`);
-      await loadAll();
-      const c = r.data?.deleted || {};
-      const tot = Object.values(c).reduce((a, b) => a + (b || 0), 0);
-      toast.success(`${u.email} eliminato · ${tot} record rimossi`);
-    } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+    toast(`Eliminare completamente ${u.email}?`, {
+      description: "Verranno cancellati account, task, to-do, diario, KB, conversazioni e sessioni. IRREVERSIBILE.",
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          try {
+            const r = await api.delete(`/admin/users/${u.user_id}`);
+            await loadAll();
+            const c = r.data?.deleted || {};
+            const tot = Object.values(c).reduce((a, b) => a + (b || 0), 0);
+            toast.success(`${u.email} eliminato · ${tot} record rimossi`);
+          } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 10000,
+    });
   };
 
   return (

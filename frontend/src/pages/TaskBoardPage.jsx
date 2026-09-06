@@ -47,11 +47,19 @@ export default function TaskBoardPage() {
   };
 
   const del = async (id) => {
-    if (!confirm("Eliminare questo task?")) return;
-    const prev = tasks;
-    setTasks((ts) => ts.filter((t) => t.id !== id));
-    try { await api.delete(`/tasks/${id}`); toast.success("Task eliminato"); }
-    catch { toast.error("Errore"); setTasks(prev); }
+    toast("Eliminare questo task?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const prev = tasks;
+          setTasks((ts) => ts.filter((t) => t.id !== id));
+          try { await api.delete(`/tasks/${id}`); toast.success("Task eliminato"); }
+          catch { toast.error("Errore"); setTasks(prev); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   const mostImminent = (items) => {
@@ -188,10 +196,18 @@ function TaskDialog({ task, onClose, onUpdated }) {
   };
 
   const del = async () => {
-    if (!confirm("Eliminare questo task?")) return;
-    await api.delete(`/tasks/${task.id}`);
-    onUpdated();
-    onClose();
+    toast("Eliminare questo task?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          await api.delete(`/tasks/${task.id}`);
+          onUpdated();
+          onClose();
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
   };
 
   return (
