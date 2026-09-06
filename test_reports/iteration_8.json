@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 8 (Journal + scope + retrocompat) fully verified. Backend pytest: 11/11 PASSED in 25s (auth/me, chat action='journal' persists entry with title+mood+highlights+cleaned_text, GET /api/journal?mood=grato, GET /api/journal?q=corsa across cleaned/raw/title/highlights, GET /api/journal/trend?days=7 returns exactly 7 days with mood_score_map incl. felice=5/stressato=1, scope='all' surfaces task/journal context (dentist task hit with due_date 2030-04-15 referenced in answer), default scope='kb' does NOT leak the task date, action='task_todo' retrocompat creates a task/todo, action='info_upload' retrocompat streams OK, /api/voice/transcribe accepts webm and requires auth). Frontend (1440x1000, real session cookie): ChatPage exposes all 4 action-testids (action-query, action-upload, action-todo, action-journal); scope-all/scope-kb visible only when action-query is active (count=0 when action-todo is active); switching to action-journal changes chat-textarea placeholder to \"Com'è andata oggi? Cosa vuoi ricordare…\". JournalPage renders journal-input, journal-save, journal-mic-btn, journal-search, mood-filter-all + all 7 mood filters (felice/grato/energico/riflessivo/neutro/stanco/stressato), trend-7/30/90, mood-trend-card. Search 'corsa' narrowed 3 entries to 1; journal-search-clear resets the field; mood-filter-grato narrowed to 1; trend range 7↔90 switching works and the Recharts LineChart renders.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "JournalPage / mood-trend-card", "issues": ["Recharts logs 'width(-1) and height(-1) of chart should be greater than 0' on first mount — the ResponsiveContainer parent has no explicit min-height until data loads. Consider wrapping in a fixed-height div (e.g. h-56) or setting minHeight on ResponsiveContainer to silence the warning and avoid a brief 0-size flash."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/test_reports/pytest/iteration8.xml"
+  ],
+  "action_items": [
+    "Optional: fix Recharts responsive-container initial 0x0 warning by giving mood-trend-card chart a stable min height."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1330 lines; journal + chat + integrations + reminders + weekly recap all live in one module. Consider splitting into routers (auth, chat, journal, tasks, todos, integrations, background_jobs).",
+    "chat_stream: when payload.conv_id is set and action=='info_request' with prior_messages, kb_context is intentionally skipped. If the user changes scope mid-thread, the scope=all context won't be re-fetched on later turns — acceptable behavior but worth documenting.",
+    "retrieve_kb embeds non-kb candidates (tasks/todos/journal) on the fly on every scope=all query with no cache. For heavy users this is O(N) per request. Consider persisting embeddings on task/todo/journal insert (same pattern already used for kb_chunks).",
+    "GET /api/journal uses `$regex` with user-supplied `q` unescaped — a specially crafted `q` (e.g. '(a+)+') can trigger ReDoS on large corpora. Escape or wrap with `re.escape` server-side before building the regex."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "session_token=test_session_1788714113067_it8 (user_id=test-user-1788714113067-it8, valid 7 days)",
+  "seed_data_creation": "1 task 'Riunione con dentista Rossi' (due 2030-04-15) + several journal entries created via /api/chat/stream action='journal' during tests. Not auto-cleaned; all scoped to the disposable test user above.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter8 green. Stable testids on ChatPage: action-{query,upload,todo,journal}, scope-{all,kb} (only visible when action-query active), chat-textarea, send-btn. Stable testids on JournalPage: journal-input, journal-save, journal-mic-btn, journal-search, journal-search-clear, mood-filter-all, mood-filter-{felice,grato,energico,riflessivo,neutro,stanco,stressato}, trend-{7,30,90}, mood-trend-card, journal-entry, journal-delete. Journal chat streaming takes ~5-15s. For scope='all' assertions use loose contains-checks on the streamed visible text; the model paraphrases dates.",
+  "rca of the issue": "N/A - no issues found."
+}

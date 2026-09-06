@@ -77,7 +77,7 @@ class ProfilePatch(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    action: Literal["info_upload", "info_request", "task_todo"]
+    action: Literal["info_upload", "info_request", "task_todo", "journal"]
     content: str
     filters: Optional[dict] = None
     conv_id: Optional[str] = None
@@ -310,6 +310,18 @@ def build_system_prompt(user: User, action: str) -> str:
             "REGOLA: se rilevi una data (anche implicita: 'domani', 'lunedì', 'tra 3 giorni'), imposta due_date. "
             "Se rilevi un'ora, imposta due_time. Il sistema salva come TASK se due_date è presente, altrimenti come TO-DO."
         )
+    elif action == "journal":
+        base += (
+            " L'utente ti sta raccontando la sua giornata per il DIARIO. "
+            "Il tuo compito: (1) sistemare il testo (grammatica, punteggiatura, chiarezza) mantenendo la voce personale in prima persona, "
+            "(2) organizzare in paragrafi coerenti, (3) NON aggiungere fatti non presenti. "
+            "Rispondi con il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:'). "
+            "Poi in coda, solo per il sistema, aggiungi: "
+            "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", "
+            "\"summary\": \"riassunto in 1 riga max 140 caratteri\", "
+            "\"mood\": \"parola singola: felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
+            "\"highlights\": [\"1-3 momenti chiave estratti dal testo\"]}<<<END>>>"
+        )
     return base
 
 
@@ -334,46 +346,85 @@ def _extract_meta(text: str) -> tuple[str, Optional[dict]]:
     return visible, meta
 
 
-async def retrieve_kb(user_id: str, query: str, limit: int = 4) -> List[dict]:
-    """Semantic retrieval over kb_chunks using local multilingual embeddings + cosine similarity."""
+async def retrieve_kb(user_id: str, query: str, limit: int = 4, scope: str = "kb") -> List[dict]:
+    """Semantic retrieval over kb_chunks using local multilingual embeddings + cosine similarity.
+    scope: 'kb' (only knowledge base) or 'all' (also tasks, todos, journal entries)."""
     try:
         q_emb = await emb.embed_query(query)
     except Exception as e:
         logger.exception("embed_query failed, falling back to regex")
         q_emb = None
 
-    # If we have an embedding, score all user's chunks; if no embedding is stored (legacy), score 0
+    # Build candidate pool: kb_chunks always, plus extras when scope=='all'
+    candidates: List[dict] = []
+    kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(1000)
+    for c in kb_docs:
+        candidates.append({"text": c.get("text", ""), "source": "kb", "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title")}, "embedding": c.get("embedding")})
+
+    if scope == "all":
+        tasks = await db.tasks.find({"user_id": user_id}, {"_id": 0}).to_list(500)
+        for t in tasks:
+            txt_parts = [t.get("title", ""), t.get("description", ""), t.get("notes", "")]
+            txt = " · ".join([p for p in txt_parts if p])
+            if not txt: continue
+            when = t.get("due_date", "") + (f" {t.get('due_time','')}" if t.get("due_time") else "")
+            display = f"[Task] {t.get('title','')} — {when} · priorità {t.get('priority','media')}. {t.get('description','') or ''}".strip()
+            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": None})
+        todos = await db.todos.find({"user_id": user_id}, {"_id": 0}).to_list(500)
+        for td in todos:
+            txt_parts = [td.get("title", ""), td.get("description", ""), td.get("notes", "")]
+            txt = " · ".join([p for p in txt_parts if p])
+            if not txt: continue
+            display = f"[To-Do] {td.get('title','')} — stato {td.get('status','da_fare')} ({td.get('completion_percent',0)}%). {td.get('description','') or ''}".strip()
+            candidates.append({"text": txt, "display": display, "source": "todo", "meta": {"id": td.get("id")}, "embedding": None})
+        journal_docs = await db.journal_entries.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
+        for j in journal_docs:
+            txt = (j.get("cleaned_text") or j.get("raw_text") or "").strip()
+            if not txt: continue
+            display = f"[Diario · {j.get('date','')}] {j.get('title','')} · mood: {j.get('mood','')}. {txt[:400]}".strip()
+            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": None})
+
+    # If we have an embedding, score all candidates by cosine (compute embeddings on the fly for non-kb)
     if q_emb is not None:
-        cursor = db.kb_chunks.find({"user_id": user_id}, {"_id": 0})
-        chunks = await cursor.to_list(1000)
-        # Backfill missing embeddings lazily
-        to_embed = [(i, c) for i, c in enumerate(chunks) if not c.get("embedding")]
-        if to_embed:
-            texts = [c["text"] for _, c in to_embed]
+        # Backfill kb_chunks embeddings lazily
+        missing_kb = [c for c in candidates if c["source"] == "kb" and not c.get("embedding")]
+        if missing_kb:
             try:
-                new_embs = await emb.embed_texts(texts)
-                for (i, c), e in zip(to_embed, new_embs):
-                    chunks[i]["embedding"] = e
-                    await db.kb_chunks.update_one({"chunk_id": c["chunk_id"]}, {"$set": {"embedding": e}})
+                new_embs = await emb.embed_texts([c["text"] for c in missing_kb])
+                for c, e in zip(missing_kb, new_embs):
+                    c["embedding"] = e
+                    await db.kb_chunks.update_one({"chunk_id": c["meta"]["chunk_id"]}, {"$set": {"embedding": e}})
             except Exception:
                 logger.exception("backfill embeddings failed")
+        # Embed non-kb candidates on the fly (best-effort, single batch)
+        non_kb = [c for c in candidates if c["source"] != "kb" and not c.get("embedding")]
+        if non_kb:
+            try:
+                nk_embs = await emb.embed_texts([c["text"] for c in non_kb])
+                for c, e in zip(non_kb, nk_embs):
+                    c["embedding"] = e
+            except Exception:
+                logger.exception("non-kb embed failed")
         scored = []
-        for c in chunks:
+        for c in candidates:
             e = c.get("embedding")
             if not e: continue
             scored.append((emb.cosine(q_emb, e), c))
         scored.sort(key=lambda x: x[0], reverse=True)
-        # Only keep chunks with reasonable similarity
-        top = [c for s, c in scored[:limit] if s >= 0.35]
+        top = [c for s, c in scored[:limit] if s >= 0.30]
         return top
 
-    # Fallback keyword
+    # Fallback keyword search
     terms = [t for t in query.lower().split() if len(t) > 2][:6]
     if not terms:
         return []
-    regex = "|".join(terms)
-    cursor = db.kb_chunks.find({"user_id": user_id, "text": {"$regex": regex, "$options": "i"}}, {"_id": 0}).limit(limit)
-    return await cursor.to_list(limit)
+    out = []
+    for c in candidates:
+        low = c["text"].lower()
+        if any(t in low for t in terms):
+            out.append(c)
+            if len(out) >= limit: break
+    return out
 
 
 @api_router.post("/chat/stream")
@@ -413,12 +464,15 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     # RAG context only on first turn of info_request
     kb_context = []
     if action == "info_request" and not prior_messages:
-        kb_context = await retrieve_kb(current.user_id, payload.content)
+        scope = (payload.filters or {}).get("scope") or (conv.get("filters", {}) if payload.conv_id else {}).get("scope", "kb")
+        kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope)
 
     system = build_system_prompt(current, action)
     user_text = payload.content
     if kb_context:
-        ctx = "\n\n".join([f"- {c.get('text','')[:400]}" for c in kb_context])
+        def _fmt(c):
+            return c.get("display") or c.get("text", "")[:400]
+        ctx = "\n\n".join([f"- {_fmt(c)}" for c in kb_context])
         user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{payload.content}"
 
     initial = [{"role": "system", "content": system}]
@@ -518,6 +572,21 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             elif action == "task_todo":
                 if meta:
                     await _create_task_or_todo(current.user_id, meta, conv_id)
+            elif action == "journal":
+                from datetime import date as _date
+                jr = {
+                    "id": f"jr_{uuid.uuid4().hex[:12]}",
+                    "user_id": current.user_id,
+                    "date": _date.today().isoformat(),
+                    "raw_text": payload.content,
+                    "cleaned_text": visible_answer,
+                    "title": (meta or {}).get("title", ""),
+                    "mood": (meta or {}).get("mood", ""),
+                    "highlights": (meta or {}).get("highlights", []),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "source_conv": conv_id,
+                }
+                await db.journal_entries.insert_one(jr)
 
         yield _json.dumps({"type": "done", "conv_id": conv_id}) + "\n"
 
@@ -765,9 +834,54 @@ class JournalCreate(BaseModel):
 
 
 @api_router.get("/journal")
-async def list_journal(current: User = Depends(get_current_user)):
-    cursor = db.journal_entries.find({"user_id": current.user_id}, {"_id": 0}).sort("date", -1).limit(365)
+async def list_journal(current: User = Depends(get_current_user), q: Optional[str] = None, mood: Optional[str] = None):
+    import re as _re
+    query: dict = {"user_id": current.user_id}
+    if mood and mood != "all":
+        query["mood"] = mood
+    if q:
+        safe = _re.escape(q.strip())
+        query["$or"] = [
+            {"cleaned_text": {"$regex": safe, "$options": "i"}},
+            {"raw_text": {"$regex": safe, "$options": "i"}},
+            {"title": {"$regex": safe, "$options": "i"}},
+            {"highlights": {"$regex": safe, "$options": "i"}},
+        ]
+    cursor = db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(365)
     return await cursor.to_list(365)
+
+
+@api_router.get("/journal/trend")
+async def journal_trend(current: User = Depends(get_current_user), days: int = 30):
+    """Return per-day mood score for the last `days` days.
+    mood → score mapping favours a simple positive/neutral/negative axis for line chart."""
+    from datetime import date as _date, timedelta as _td
+    MOOD_SCORE = {
+        "felice": 5, "grato": 5, "energico": 4,
+        "riflessivo": 3, "neutro": 3,
+        "stanco": 2, "stressato": 1,
+    }
+    since = (_date.today() - _td(days=max(1, min(days, 365)) - 1)).isoformat()
+    cursor = db.journal_entries.find(
+        {"user_id": current.user_id, "date": {"$gte": since}},
+        {"_id": 0, "date": 1, "mood": 1, "title": 1},
+    ).sort("date", 1)
+    docs = await cursor.to_list(1000)
+    # Group by date, take last mood of the day
+    by_date: dict = {}
+    for d in docs:
+        by_date[d.get("date")] = d.get("mood") or "neutro"
+    out = []
+    today = _date.today()
+    for i in range(max(1, min(days, 365))):
+        day = (today - _td(days=(days - 1 - i))).isoformat()
+        mood = by_date.get(day)
+        out.append({
+            "date": day,
+            "mood": mood,
+            "score": MOOD_SCORE.get(mood) if mood else None,
+        })
+    return {"days": out, "mood_score_map": MOOD_SCORE}
 
 
 @api_router.post("/journal")

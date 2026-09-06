@@ -1,18 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2 } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 
 const ACTIONS = [
-  {
-    id: "info_upload", key: "upload", icon: <CloudUpload size={22} />,
-    title: "Caricamento informazioni",
-    subtitle: "Archivia documenti, note o dati nel sistema",
-    placeholder: "Cosa vuoi salvare nella tua knowledge base?",
-    color: "#FFAC33",
-  },
   {
     id: "info_request", key: "query", icon: <Search size={22} />,
     title: "Richiesta informazioni",
@@ -21,18 +14,33 @@ const ACTIONS = [
     color: "#FF0061",
   },
   {
+    id: "info_upload", key: "upload", icon: <CloudUpload size={22} />,
+    title: "Caricamento informazioni",
+    subtitle: "Archivia documenti, note o dati nel sistema",
+    placeholder: "Cosa vuoi salvare nella tua knowledge base?",
+    color: "#FFAC33",
+  },
+  {
     id: "task_todo", key: "todo", icon: <CheckSquare size={22} />,
     title: "Salvataggio task o to-do",
     subtitle: "Crea task e sincronizzali con n8n + Supabase",
     placeholder: "Es. Ricordami di chiamare il fornitore martedì alle 15",
     color: "#007E9A",
   },
+  {
+    id: "journal", key: "journal", icon: <BookOpen size={22} />,
+    title: "Diario",
+    subtitle: "Racconta la giornata: la salvo nel diario",
+    placeholder: "Com'è andata oggi? Cosa vuoi ricordare…",
+    color: "#8B5CF6",
+  },
 ];
 
-const ACTION_COLOR = { info_upload: "#FFAC33", info_request: "#FF0061", task_todo: "#007E9A" };
+const ACTION_COLOR = { info_upload: "#FFAC33", info_request: "#FF0061", task_todo: "#007E9A", journal: "#8B5CF6" };
 
 export default function ChatPage() {
   const [active, setActive] = useState("info_request");
+  const [scope, setScope] = useState("kb"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [history, setHistory] = useState([]);
@@ -146,6 +154,7 @@ export default function ChatPage() {
     }
 
     const payload = { action: active, content: currentQuestion };
+    if (active === "info_request") payload.filters = { scope };
     if (thread?.conv_id) payload.conv_id = thread.conv_id;
 
     await streamChat(
@@ -189,7 +198,7 @@ export default function ChatPage() {
   const filtered = history.filter((h) => {
     if (filter === "fav") { if (!h.favorite) return false; }
     else if (filter !== "all") {
-      const map = { upload: "info_upload", query: "info_request", todo: "task_todo" };
+      const map = { upload: "info_upload", query: "info_request", todo: "task_todo", journal: "journal" };
       if (h.action !== map[filter]) return false;
     }
     if (search && !(h.user_message || "").toLowerCase().includes(search.toLowerCase())) return false;
@@ -216,9 +225,9 @@ export default function ChatPage() {
   return (
     <div className="relative w-full">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[calc(100vh-15rem)]">
-        {/* LEFT 1/3 — action cards on one row + input area below */}
+        {/* LEFT 1/3 — action icons + input area */}
         <aside className={`lg:col-span-1 space-y-3 overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="flex items-center gap-3 justify-start px-1">
             {ACTIONS.map((a) => {
               const selected = a.id === active;
               return (
@@ -226,24 +235,43 @@ export default function ChatPage() {
                   key={a.id}
                   data-testid={`action-${a.key}`}
                   onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); }}
-                  style={{ backgroundColor: "#6EB7EC", opacity: selected ? 1 : 0.6, border: "none" }}
-                  className={`flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 px-2 text-white transition-all duration-200 ${selected ? "shadow-md" : "hover:opacity-80"}`}
                   title={a.title}
+                  aria-label={a.title}
+                  style={{ backgroundColor: selected ? a.color : "#ffffff", color: selected ? "#ffffff" : a.color, borderColor: selected ? a.color : "rgba(0,0,0,0.08)" }}
+                  className={`group relative w-12 h-12 rounded-2xl border shadow-sm flex items-center justify-center transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${selected ? "" : "hover:border-neutral-300"}`}
                 >
-                  <div className="w-9 h-9 shrink-0 rounded-xl bg-white flex items-center justify-center" style={{ color: a.color }}>
-                    {React.cloneElement(a.icon, { size: 18 })}
-                  </div>
-                  <div className="text-[10px] font-semibold text-center leading-tight line-clamp-2">{a.title}</div>
-                  <span className="text-[8px] font-mono-tight tracking-widest px-1.5 py-0.5 rounded-full bg-white/25 text-white">
-                    {selected ? "ATTIVO" : "SEL"}
+                  {React.cloneElement(a.icon, { size: 20 })}
+                  {/* Tooltip on hover */}
+                  <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-900 text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
+                    {a.title}
                   </span>
                 </button>
               );
             })}
           </div>
           <div className="p-5 rounded-2xl border border-white/40 shadow-lg" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
+              {active === "info_request" && !thread && (
+                <div className="flex items-center gap-1 bg-white/20 rounded-full p-0.5" data-testid="scope-selector">
+                  <button
+                    data-testid="scope-all"
+                    onClick={() => setScope("all")}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 transition-all ${scope === "all" ? "bg-white text-[#0A6BBF]" : "text-white/90 hover:bg-white/10"}`}
+                    title="Cerca su Task, To-Do, Knowledge Base e Diario"
+                  >
+                    <Layers size={11} /> tutto
+                  </button>
+                  <button
+                    data-testid="scope-kb"
+                    onClick={() => setScope("kb")}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 transition-all ${scope === "kb" ? "bg-white text-[#0A6BBF]" : "text-white/90 hover:bg-white/10"}`}
+                    title="Cerca solo nella Knowledge Base"
+                  >
+                    <Database size={11} /> solo kb
+                  </button>
+                </div>
+              )}
             </div>
             <Textarea
               data-testid="chat-textarea"
@@ -295,7 +323,7 @@ export default function ChatPage() {
               <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
               <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nella cronologia…" className="pl-10 h-10 rounded-full bg-white/80" />
             </div>
-            {[["all","tutti"],["fav","preferiti"],["upload","upload"],["query","query"],["todo","todo"]].map(([k, l]) => (
+            {[["all","tutti"],["fav","preferiti"],["upload","upload"],["query","query"],["todo","todo"],["journal","diario"]].map(([k, l]) => (
               <button key={k} data-testid={`filter-${k}`} onClick={() => setFilter(k)}
                 style={filter === k ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
                 className={`px-3 py-2 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${filter === k ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
@@ -312,7 +340,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#6EB7EC" }} />
                   <div className="kicker">
-                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : "task / to-do"}
+                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -377,6 +405,7 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
     info_upload: "Caricamento Informazioni",
     info_request: "Richiesta Informazioni",
     task_todo: "Task / To-Do",
+    journal: "Diario",
   };
   const badge = (label, ok) => (
     <span className={`text-[10px] font-mono-tight tracking-widest uppercase px-2.5 py-1 rounded-md border ${ok ? "border-green-500/40 text-green-700 bg-green-50" : "border-neutral-300 text-neutral-500 bg-neutral-100"}`}>

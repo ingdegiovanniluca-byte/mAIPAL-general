@@ -15,7 +15,22 @@ Build **mAIPAL** — un assistente personale AI (segretario digitale) con knowle
 - Auth: Emergent Google Auth (session token in httpOnly cookie)
 - Storage: MongoDB (users, user_sessions, conversations, tasks, todos, kb_chunks)
 
-## Implemented (2026-02-06 - iteration 2)
+## Implemented (2026-02-06 - iteration 10)
+- **Chat: nuova azione "Diario"**. Le 4 action card sono ora **icone-only** (`action-query`, `action-upload`, `action-todo`, `action-journal`) con tooltip on-hover. Ordine: Richiesta info (prima) → Upload → Task/To-Do → Diario. Quando "Diario" è attiva e l'utente invia un messaggio, viene salvata una voce in `journal_entries` con title/mood/highlights via LLM.
+- **Chat: selettore scope per Richiesta info** (`scope-all` / `scope-kb`). Con `scope=all` la RAG cerca anche in `tasks`, `todos`, `journal_entries` oltre che in `kb_chunks`.
+- **Journal: microfono** (`journal-mic-btn`) — MediaRecorder + Whisper, la trascrizione viene appesa al campo diario.
+- **Journal: grafico trend umore** (Recharts LineChart) con selettore `trend-7 / trend-30 / trend-90`. Endpoint `/api/journal/trend?days=N` mappa mood→score (grato/felice=5, energico=4, neutro/riflessivo=3, stanco=2, stressato=1).
+- **Journal: ricerca e filtri**. `journal-search` (case-insensitive, ReDoS-safe via `re.escape`) + `mood-filter-all / mood-filter-{felice,grato,energico,riflessivo,neutro,stanco,stressato}`. Il filtro per mood è server-side (`GET /api/journal?q=…&mood=…`).
+- Verificato end-to-end da testing_agent (iteration_8.json): backend 11/11, frontend 100%.
+
+## Implemented (2026-02-06 - iteration 9)
+- **Diario (Journal)**: pagina `/dashboard/journal`, endpoint `POST/GET/DELETE /api/journal`, LLM riscrive testo + estrae mood + highlights
+- **Task complete**: `POST /api/tasks/{id}/complete` (toggle) e chip "Segna come fatto" sulla card
+- **Weekly recap Telegram**: la domenica alle 19:00 UTC, riepilogo settimanale con task completati + task/todo aperti
+- **Font Poppins** globale (via `index.css` + `tailwind.config.js`)
+- Action cards condensate in una singola riga a sinistra
+
+
 - **Google Drive + Calendar OAuth** (playbook completo pronto, endpoint `/api/integrations/google/authorize`, `/callback`, `/disconnect`). Auto-crea cartella `mAIPAL` su Drive al primo collegamento. Toggle `calendar_synced` sui task crea/rimuove eventi sul Calendar primario. **Richiede** `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` (attualmente vuoti in .env - vedi UI Impostazioni per istruzioni).
 - **Voice STT**: `/api/voice/transcribe` con OpenAI Whisper via Emergent LLM Key. Frontend: pulsante mic in Chat usa MediaRecorder (webm), invia al backend, inserisce trascrizione in textarea.
 - **Telegram Bot** (`@mAIPAL_bot`): long polling attivo su avvio backend. Comandi `/start <codice>`, `/ask`, `/save`, `/task`, `/help`. Messaggi liberi: rilevamento azione automatico (info_request / info_upload / task_todo). Pagina Impostazioni con generatore codice + deep link.
