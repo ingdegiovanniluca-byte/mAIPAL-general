@@ -1,0 +1,42 @@
+{
+  "summary": "First-finish smoke test of mAIPAL. Backend: root, auth (401/200), tasks/todos/conversations CRUD list, NDJSON streaming with all 3 actions (info_upload, info_request, task_todo), task creation from LLM JSON block, and multi-user isolation all pass. Frontend: landing, chat, tasks, todos pages render correctly with seeded data and Apple-style design.",
+  "tested_scope": ["backend", "frontend", "auth", "integration"],
+  "passed": [
+    "GET /api/ returns {message: 'mAIPAL API'}",
+    "GET /api/auth/me: 401 without token, 200 with Bearer test_session_demo_12345 returning Marco Rossi profile (onboarded=true)",
+    "GET /api/tasks returns 2 seeded tasks for demo user",
+    "GET /api/todos returns 2 seeded todos (in_corso 40%, da_fare)",
+    "GET /api/conversations returns list scoped to user",
+    "POST /api/chat/stream action=info_upload streams delta tokens then {type:done, conv_id}, persists conversation with pipeline {claude:ok, n8n:skip, mongodb:ok}",
+    "POST /api/chat/stream action=info_request retrieves KB context (recalled '15 marzo' compleanno) and streams contextual answer",
+    "POST /api/chat/stream action=task_todo parses ```json``` block and creates new task in Mongo (verified 3rd task 'Chiamare il dentista' appears in GET /api/tasks)",
+    "POST /api/tasks creates a task ('Test CRUD') owned by demo user",
+    "Multi-user isolation: user A PATCH on user B task returned null response with DB state unchanged (task_b1 still owned by user B, title unchanged)",
+    "FRONTEND Landing: 'Accedi con Google' button visible, gradient 'mAIPAL' word rendered",
+    "FRONTEND Chat page: headline 'Cosa vuoi fare, Marco?', 3 action selector cards, CLAUDE SONNET 5 badge, history filters (Tutti/Upload/Query/ToDo), date input all rendered",
+    "FRONTEND Action toggle: clicking 'Richiesta informazioni' switches it to ATTIVO (confirmed in screenshot)",
+    "FRONTEND Task Board: 3 columns Alta/Media/Bassa with tasks in correct columns, tag chips, due-date pill",
+    "FRONTEND ToDo Board: 3 status columns, progress bar visible (40%) for in_corso todo"
+  ],
+  "failed": [
+    {
+      "area": "backend/models",
+      "issue": "User pydantic model has created_at: Optional[str]; if any user document has created_at stored as BSON Date (datetime) instead of ISO string, get_current_user throws ValidationError and returns 500. Real signup path uses .isoformat() strings so production is safe, but seed scripts or admin inserts could break it.",
+      "evidence": "Backend log: 'Input should be a valid string [type=string_type, input_value=datetime.datetime(...)]' when I test-seeded a user with new Date().",
+      "priority": "LOW"
+    },
+    {
+      "area": "backend/tasks",
+      "issue": "PATCH /api/tasks/{id} on a task not owned by caller returns HTTP 200 with null body instead of 404. Data is safe (no modification occurs), but response is misleading.",
+      "evidence": "curl PATCH user_A auth against task_b1 -> 200 null; DB unchanged.",
+      "priority": "LOW"
+    }
+  ],
+  "action_items": [
+    "(Optional) Return 404 from PATCH/DELETE /api/tasks/{id} and /api/todos/{id} when task/todo is not found or not owned, instead of 200 null.",
+    "(Optional) Make User.created_at accept both str and datetime, or normalize on load, to harden against BSON date inserts."
+  ],
+  "success_rate": {"backend": "100% (all critical endpoints pass; only two low-severity response-code polish items)", "frontend": "100% (all 4 pages render; core interactions verified)"},
+  "retest_needed": false,
+  "full_testing_deferred": true
+}

@@ -1,0 +1,104 @@
+{
+  "theme_mode": "light",
+  "typography": {
+    "font_families": {
+      "heading": "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+      "body": "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+    },
+    "scale": {
+      "h1": "text-4xl sm:text-5xl font-bold tracking-tight text-black",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight text-black",
+      "h3": "text-xl font-semibold text-black",
+      "body": "text-base text-zinc-600",
+      "kicker": "text-xs font-bold tracking-[0.2em] uppercase text-zinc-500",
+      "badge": "text-[10px] font-bold tracking-widest uppercase text-black"
+    },
+    "instructions": "Use bold, sharp headings. Apply the 'kicker' style strictly to section labels like 'DASHBOARD', 'CRONOLOGIA', 'ALTA PRIORITÀ'. Never center text for long reads. Apple-style minimal emphasizes high contrast between heavy headers and neat, muted body text."
+  },
+  "colors": {
+    "background": {
+      "app": "#F7F7F5",
+      "card": "#FFFFFF",
+      "input": "#F0F0EE"
+    },
+    "text": {
+      "primary": "#000000",
+      "secondary": "#525252",
+      "muted": "#A3A3A3"
+    },
+    "accents": {
+      "primary": "#000000",
+      "blue": "#007AFF",
+      "priority_high": "#FF3B30",
+      "priority_medium": "#FF9500",
+      "priority_low": "#8E8E93"
+    },
+    "instructions": "App background strictly #F7F7F5. Cards are crisp white #FFFFFF. CTAs and primary action buttons are solid black with white text. Selected states in the 3-action cards get a solid blue border (#007AFF)."
+  },
+  "visual_enhancers": {
+    "shadows": "Use very subtle, diffused shadows. 'shadow-sm' for generic cards, 'shadow-md' for hover states. No heavy or muddy drop shadows.",
+    "border_radius": "Rounded corners: 'rounded-2xl' or 'rounded-3xl' for main cards. 'rounded-full' for buttons, tab pills, and badges. Input area is 'rounded-3xl'.",
+    "gradients": "Abstract colorful gradient blur used as text-fill (background-clip: text) for the word 'mAIPAL' in the headline, or as a subtle accent blur behind it.",
+    "borders": "Kanban columns or task cards use colored left-side borders mapping to their priority: High (Red), Medium (Orange), Low (Gray)."
+  },
+  "layouts": {
+    "dashboard_grid": "Generous padding ('p-8' or 'p-12'). Top section for headline and action cards. Bottom/side section for chat input and Kanban board. Use flex or CSS Grid with gap-6.",
+    "kanban_board": "3 columns layout. Use 'grid-cols-1 md:grid-cols-3' with 'gap-6'. Each column has a distinct header and scrollable area.",
+    "chat_area": "Contextual input fixed at bottom of its container. Conversation history uses a vertical list."
+  },
+  "components": {
+    "action_cards": {
+      "description": "3 large selectable cards (Caricamento informazioni, Richiesta informazioni, Salvataggio task).",
+      "style": "White background, rounded-2xl, p-6. Unselected: transparent or very subtle border. Selected: 2px solid blue border. Contains icon, bold title, and description. Also shows an uppercase 'SELEZIONA' or 'ATTIVO' badge."
+    },
+    "input_area": {
+      "description": "Contextual input with textarea.",
+      "style": "Pill or rounded-3xl shape, gray background (#F0F0EE). Contains attach paperclip icon, mic icon. Inside, a badge for 'CLAUDE SONNET 5'. Right side: Solid black 'Invia' pill button. Underneath: small text '⌘/Ctrl + ⏎ per inviare'."
+    },
+    "task_board_cards": {
+      "description": "Kanban cards for tasks.",
+      "style": "White bg, subtle shadow, rounded-xl, left border indicator for priority. Contains title, description snippet, due date pill, tag chips, created date."
+    },
+    "tab_switcher": {
+      "description": "Pill-shaped tabs for navigating 'Chat' vs 'Task Board'.",
+      "style": "Container rounded-full bg-gray-200/50 p-1. Active tab: white bg, rounded-full, subtle shadow, black text. Inactive: transparent bg, gray text."
+    },
+    "history_badges": {
+      "description": "Pipeline step badges in conversation history.",
+      "style": "Small rounded-md badges showing flow: '✓ CLAUDE' (green text/bg) → 'N8N · skip' (gray text/bg) → 'SUPABASE · skip' (gray text/bg)."
+    }
+  },
+  "motion": {
+    "interactions": "Smooth hover effects. Scale down slightly on click ('active:scale-95'). Transform 'translate-y-[-2px]' on card hover with enhanced shadow.",
+    "transitions": "Use 'transition-all duration-200 ease-out'."
+  },
+  "image_urls": {
+    "abstract_gradient": {
+      "url": "https://images.unsplash.com/photo-1646038572822-432f8ccf2522?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGdyYWRpZW50JTIwYmx1ciUyMG9yYW5nZSUyMGJsdWV8ZW58MHx8fHwxNzg4Njk5Mzc4fDA&ixlib=rb-4.1.0&q=85",
+      "category": "background",
+      "description": "Used for the glowing text effect on 'mAIPAL' or as a subtle blurred accent behind the header."
+    }
+  },
+  "accessibility": {
+    "contrast": "Ensure text contrast against #F7F7F5 is high. Primary text is solid black.",
+    "testing": "All interactive and key informational elements MUST include a `data-testid` attribute (e.g., `data-testid='action-card-upload'`).",
+    "motion": "Respect `prefers-reduced-motion` for all transitions."
+  },
+  "instructions_to_main_agent": "Implement a full React frontend using JavaScript (.js/.jsx). DO NOT use TypeScript (.ts/.tsx). Use Shadcn/UI and Tailwind CSS. The app is named 'mAIPAL'. Create the dashboard layout mimicking Apple's Music app minimal style. Background must be #F7F7F5. Focus heavily on typographic hierarchy using KICKER labels (uppercase, high tracking) and thick, bold, clean headings. Build the 3-action selection flow as large interactive cards. Build the contextual input area precisely as specified with the icons, shortcuts, and solid black 'Invia' pill button. Create the Kanban board with the specified column statuses and left-colored borders for priorities. Ensure 100% Light Mode implementation.",
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects selectively, though prefer solid whites for cards in this minimalist Apple-style theme.",
+    "You MUST NOT apply universal transition. Eg: `transition: all`. Always add transitions for specific interactive elements excluding transforms.",
+    "You MUST NOT center align the app container, ie do not add `.App { text-align: center; }` in the css file.",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style.",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons. Use Phosphor Icons or Lucide.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, custom cursors, selection states, and loading animations separate good from extraordinary.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Use sonner for toasts.",
+    "Add `data-testid` attributes to all interactive elements."
+  ]
+}
