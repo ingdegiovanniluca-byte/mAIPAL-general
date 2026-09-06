@@ -175,6 +175,55 @@ async def _cmd_task(update, ctx): await _cmd_generic(update, ctx, "task_todo")
 async def _msg_free(update, ctx): await _cmd_generic(update, ctx, None)
 
 
+async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle voice messages: download, transcribe via Whisper, then process as text."""
+    from server import db
+    from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+    import tempfile
+
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: mAIPAL → Impostazioni → Telegram → /start <codice>.")
+        return
+
+    voice = update.message.voice
+    if not voice:
+        return
+
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+    try:
+        tg_file = await ctx.bot.get_file(voice.file_id)
+        # Telegram voice notes are .ogg (Opus)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
+            tmp_path = tmp.name
+        await tg_file.download_to_drive(custom_path=tmp_path)
+
+        stt = OpenAISpeechToText(api_key=os.environ["EMERGENT_LLM_KEY"])
+        with open(tmp_path, "rb") as f:
+            result = await stt.transcribe(file=f, model="whisper-1", response_format="json", language="it")
+        transcript = getattr(result, "text", None) or (result.get("text") if isinstance(result, dict) else "")
+        try: os.unlink(tmp_path)
+        except Exception: pass
+
+        if not transcript.strip():
+            await update.message.reply_text("🎙️ Non ho capito l'audio. Riprova a parlare più chiaramente.")
+            return
+
+        await update.message.reply_text(f"🎙️ Ho trascritto: _{transcript}_", parse_mode="Markdown")
+
+        action = _infer_action(transcript)
+        answer = await _process_action(db, user, action, transcript)
+        if len(answer) > 3500:
+            answer = answer[:3500] + "\n…"
+        action_label = {"info_upload": "💾 Salvato", "info_request": "🔍 Risposta", "task_todo": "✅ Task/To-Do"}.get(action, "")
+        await update.message.reply_text(f"{action_label}\n\n{answer}")
+    except Exception as e:
+        logger.exception("voice message failed")
+        await update.message.reply_text(f"⚠️ Errore trascrizione: {str(e)[:200]}")
+
+
 def build_application() -> Application:
     app = Application.builder().token(bot_token()).build()
     app.add_handler(CommandHandler("start", _cmd_start))
@@ -182,6 +231,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ask", _cmd_ask))
     app.add_handler(CommandHandler("save", _cmd_save))
     app.add_handler(CommandHandler("task", _cmd_task))
+    app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _msg_free))
     return app
 

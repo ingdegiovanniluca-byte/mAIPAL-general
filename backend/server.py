@@ -65,6 +65,7 @@ class ChatRequest(BaseModel):
     action: Literal["info_upload", "info_request", "task_todo"]
     content: str
     filters: Optional[dict] = None
+    conv_id: Optional[str] = None
 
 
 class Task(BaseModel):
@@ -264,10 +265,11 @@ def build_system_prompt(user: User, action: str) -> str:
         )
     elif action == "task_todo":
         base += (
-            " L'utente vuole salvare un task o un to-do. Estrai i seguenti campi e restituisci SOLO un blocco ```json``` "
-            "con: type ('task' se c'è una data di scadenza esplicita o implicita, altrimenti 'todo'), title (breve), "
-            "description, due_date (ISO YYYY-MM-DD o null), priority ('alta'|'media'|'bassa'), tags (array), notes. "
-            "Prima del JSON, scrivi una breve conferma in linguaggio naturale (1-2 frasi)."
+            " L'utente vuole salvare un task o un to-do. Estrai i seguenti campi e restituisci un blocco ```json``` "
+            "con: title (breve), description, due_date (ISO YYYY-MM-DD SE l'utente ha specificato una data ANCHE IMPLICITA come 'domani', 'lunedì prossimo', 'tra 3 giorni', 'il 15', altrimenti null), "
+            "due_time (HH:MM se specificato dall'utente, altrimenti null), priority ('alta'|'media'|'bassa'), tags (array di 1-4 parole chiave), notes (dettagli aggiuntivi). "
+            "REGOLA CRITICA: se rilevi una data o un'ora, includi due_date. Il sistema salverà come TASK se due_date è presente, altrimenti come TO-DO. "
+            "Prima del JSON, scrivi 1-2 frasi di conferma naturale."
         )
     return base
 
@@ -287,40 +289,65 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 4) -> List[dict]:
 
 @api_router.post("/chat/stream")
 async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_user)):
-    conv_id = f"conv_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()
 
+    # Load or create conversation
+    if payload.conv_id:
+        conv = await db.conversations.find_one({"conv_id": payload.conv_id, "user_id": current.user_id}, {"_id": 0})
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        conv_id = conv["conv_id"]
+        action = conv["action"]
+        prior_messages = conv.get("messages", [])
+        # Legacy fallback: rebuild from old top-level fields if messages array missing
+        if not prior_messages and conv.get("user_message"):
+            prior_messages = [
+                {"role": "user", "content": conv["user_message"], "ts": conv.get("created_at", now)},
+            ]
+            if conv.get("agent_response"):
+                prior_messages.append({"role": "assistant", "content": conv["agent_response"], "ts": conv.get("completed_at", now)})
+    else:
+        conv_id = f"conv_{uuid.uuid4().hex[:12]}"
+        action = payload.action
+        prior_messages = []
+        await db.conversations.insert_one({
+            "conv_id": conv_id,
+            "user_id": current.user_id,
+            "action": action,
+            "created_at": now,
+            "user_message": payload.content,   # legacy: first message for cronologia preview
+            "filters": payload.filters or {},
+            "pipeline": {"claude": "ok", "n8n": "skip", "mongodb": "ok"},
+            "messages": [],
+        })
+
+    # RAG context only on first turn of info_request
     kb_context = []
-    if payload.action == "info_request":
+    if action == "info_request" and not prior_messages:
         kb_context = await retrieve_kb(current.user_id, payload.content)
 
-    user_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
-    await db.conversations.insert_one({
-        "conv_id": conv_id,
-        "user_id": current.user_id,
-        "action": payload.action,
-        "created_at": now,
-        "user_message": payload.content,
-        "user_message_id": user_msg_id,
-        "filters": payload.filters or {},
-        "pipeline": {
-            "claude": "ok",
-            "n8n": "skip",
-            "mongodb": "ok",
-        },
-    })
-
-    system = build_system_prompt(current, payload.action)
+    system = build_system_prompt(current, action)
     user_text = payload.content
     if kb_context:
         ctx = "\n\n".join([f"- {c.get('text','')[:400]}" for c in kb_context])
         user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{payload.content}"
 
+    initial = [{"role": "system", "content": system}]
+    for m in prior_messages:
+        initial.append({"role": m["role"], "content": m["content"]})
+
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=conv_id,
         system_message=system,
+        initial_messages=initial,
     ).with_model("anthropic", "claude-sonnet-5")
+
+    # Save the user turn to the messages array immediately
+    await db.conversations.update_one(
+        {"conv_id": conv_id},
+        {"$push": {"messages": {"role": "user", "content": payload.content, "ts": now}}},
+    )
 
     import json as _json
     async def event_gen():
@@ -337,27 +364,30 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             yield _json.dumps({"type": "error", "content": str(e)}) + "\n"
 
         answer = "".join(full)
-        # persist answer
+        completed_at = datetime.now(timezone.utc).isoformat()
         await db.conversations.update_one(
             {"conv_id": conv_id},
-            {"$set": {"agent_response": answer, "completed_at": datetime.now(timezone.utc).isoformat()}},
+            {
+                "$push": {"messages": {"role": "assistant", "content": answer, "ts": completed_at}},
+                "$set": {"agent_response": answer, "completed_at": completed_at},
+            },
         )
 
-        # side-effects based on action
-        if payload.action == "info_upload":
-            chunk = {
-                "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
-                "user_id": current.user_id,
-                "text": payload.content,
-                "summary": answer,
-                "conv_id": conv_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.kb_chunks.insert_one(chunk)
-        elif payload.action == "task_todo":
-            parsed = _parse_task_json(answer)
-            if parsed:
-                await _create_task_or_todo(current.user_id, parsed, conv_id)
+        # side-effects only on first exchange of upload/task actions
+        if not prior_messages:
+            if action == "info_upload":
+                await db.kb_chunks.insert_one({
+                    "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
+                    "user_id": current.user_id,
+                    "text": payload.content,
+                    "summary": answer,
+                    "conv_id": conv_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            elif action == "task_todo":
+                parsed = _parse_task_json(answer)
+                if parsed:
+                    await _create_task_or_todo(current.user_id, parsed, conv_id)
 
         yield _json.dumps({"type": "done", "conv_id": conv_id}) + "\n"
 
@@ -381,18 +411,22 @@ def _parse_task_json(text: str) -> Optional[dict]:
 
 async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
     now = datetime.now(timezone.utc).isoformat()
-    t_type = parsed.get("type", "todo")
-    if t_type == "task" and parsed.get("due_date"):
+    # RULE: if due_date is present → TASK, otherwise → TODO (regardless of any 'type' field the LLM returned)
+    due_date = parsed.get("due_date")
+    due_time = parsed.get("due_time")
+    if due_date:
         doc = {
             "id": f"task_{uuid.uuid4().hex[:12]}",
             "user_id": user_id,
             "title": parsed.get("title", "Nuovo task"),
             "description": parsed.get("description", ""),
-            "due_date": parsed.get("due_date"),
+            "due_date": due_date,
+            "due_time": due_time,
             "priority": parsed.get("priority", "media"),
             "tags": parsed.get("tags", []),
             "notes": parsed.get("notes", ""),
             "calendar_synced": False,
+            "reminder_sent": False,
             "created_at": now,
             "source_conv": conv_id,
         }
@@ -416,12 +450,43 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
 
 # ============ CONVERSATIONS ============
 @api_router.get("/conversations")
-async def list_conversations(current: User = Depends(get_current_user), action: Optional[str] = None):
+async def list_conversations(current: User = Depends(get_current_user), action: Optional[str] = None, favorite: Optional[bool] = None):
     q = {"user_id": current.user_id}
     if action and action != "all":
         q["action"] = action
-    cursor = db.conversations.find(q, {"_id": 0}).sort("created_at", -1).limit(100)
-    return await cursor.to_list(100)
+    if favorite is True:
+        q["favorite"] = True
+    cursor = db.conversations.find(q, {"_id": 0}).sort("created_at", -1).limit(200)
+    return await cursor.to_list(200)
+
+
+@api_router.get("/conversations/{conv_id}")
+async def get_conversation(conv_id: str, current: User = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"conv_id": conv_id, "user_id": current.user_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Not found")
+    return conv
+
+
+@api_router.post("/conversations/{conv_id}/favorite")
+async def toggle_favorite(conv_id: str, current: User = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"conv_id": conv_id, "user_id": current.user_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Not found")
+    new_val = not conv.get("favorite", False)
+    await db.conversations.update_one(
+        {"conv_id": conv_id, "user_id": current.user_id},
+        {"$set": {"favorite": new_val}},
+    )
+    return {"conv_id": conv_id, "favorite": new_val}
+
+
+@api_router.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str, current: User = Depends(get_current_user)):
+    res = await db.conversations.delete_one({"conv_id": conv_id, "user_id": current.user_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
 
 
 # ============ TASKS ============
@@ -738,6 +803,50 @@ async def start_services():
         asyncio.create_task(tg.start_polling())
     except Exception:
         logger.exception("failed to start telegram polling")
+    try:
+        asyncio.create_task(_reminders_loop())
+    except Exception:
+        logger.exception("failed to start reminders loop")
+
+
+async def _reminders_loop():
+    """Every 30 min: for each task with due_date == tomorrow (user local ≈ UTC ok for MVP) and reminder_sent!=True,
+    send a Telegram message to the connected user (if any) and mark reminder_sent."""
+    from datetime import date as _date
+    while True:
+        try:
+            today = _date.today()
+            tomorrow = (today + timedelta(days=1)).isoformat()
+            # find candidates
+            cursor = db.tasks.find(
+                {"due_date": tomorrow, "$or": [{"reminder_sent": {"$exists": False}}, {"reminder_sent": False}]},
+                {"_id": 0},
+            )
+            async for t in cursor:
+                user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
+                if not user or not user.get("telegram_chat_id"):
+                    # mark as processed anyway so we don't keep scanning
+                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True}})
+                    continue
+                try:
+                    from telegram import Bot
+                    bot = Bot(token=tg.bot_token())
+                    time_part = f" alle {t.get('due_time')}" if t.get("due_time") else ""
+                    text = (
+                        f"⏰ Promemoria mAIPAL\n\n"
+                        f"Domani ({tomorrow}{time_part}) hai in scadenza:\n"
+                        f"📌 *{t.get('title','(senza titolo)')}*\n"
+                        f"{t.get('description','') or ''}\n\n"
+                        f"Priorità: {t.get('priority','media')}"
+                    )
+                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown")
+                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True, "reminder_sent_at": datetime.now(timezone.utc).isoformat()}})
+                    logger.info(f"reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
+                except Exception:
+                    logger.exception("failed to send reminder")
+        except Exception:
+            logger.exception("reminders loop iteration failed")
+        await asyncio.sleep(30 * 60)  # every 30 minutes
 
 
 @app.on_event("shutdown")

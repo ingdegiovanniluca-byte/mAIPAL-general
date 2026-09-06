@@ -72,7 +72,7 @@ function TaskCard({ task, highlighted, sideClass, onClick }) {
       <div className="mt-3 flex flex-wrap gap-2 items-center">
         {task.due_date && (
           <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-neutral-100 border border-neutral-200">
-            <Calendar size={10} /> {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}
+            <Calendar size={10} /> {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}{task.due_time ? ` · ${task.due_time}` : ""}
           </span>
         )}
         {(task.tags || []).map((tag, i) => (
@@ -80,6 +80,11 @@ function TaskCard({ task, highlighted, sideClass, onClick }) {
             <Tag size={10} /> {tag}
           </span>
         ))}
+        {task.notes && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
+            📝 note
+          </span>
+        )}
       </div>
       <div className="mt-3 kicker">
         {task.created_at ? new Date(task.created_at).toLocaleDateString("it-IT") : ""}
@@ -92,6 +97,8 @@ function TaskDialog({ task, onClose, onUpdated }) {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [thread, setThread] = useState([]);
+  const [notes, setNotes] = useState(task.notes || "");
+  const [savingNotes, setSavingNotes] = useState(false);
 
   const send = async () => {
     if (!msg.trim()) return;
@@ -106,12 +113,22 @@ function TaskDialog({ task, onClose, onUpdated }) {
     finally { setBusy(false); }
   };
 
+  const saveNotes = async () => {
+    setSavingNotes(true);
+    try {
+      await api.patch(`/tasks/${task.id}`, { notes });
+      onUpdated();
+      toast.success("Note salvate");
+    } catch (e) { toast.error("Errore salvataggio note"); }
+    finally { setSavingNotes(false); }
+  };
+
   const toggleCal = async () => {
     try {
       await api.patch(`/tasks/${task.id}`, { calendar_synced: !task.calendar_synced });
       onUpdated();
       toast.success(task.calendar_synced ? "Rimosso da Calendar" : "Aggiunto a Calendar");
-    } catch { toast.error("Errore"); }
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
   const del = async () => {
@@ -123,22 +140,41 @@ function TaskDialog({ task, onClose, onUpdated }) {
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)]" data-testid="task-dialog">
+      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="task-dialog">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">{task.title}</DialogTitle>
         </DialogHeader>
         <div className="text-neutral-600 text-sm">{task.description}</div>
         <div className="flex flex-wrap gap-2">
-          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white border">📅 {task.due_date}</span>}
+          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white border">📅 {task.due_date}{task.due_time ? ` · ${task.due_time}` : ""}</span>}
           <span className={`text-xs px-2 py-1 rounded-md border ${task.priority === "alta" ? "bg-red-50 text-red-700" : task.priority === "media" ? "bg-orange-50 text-orange-700" : "bg-neutral-100"}`}>priorità {task.priority}</span>
           {(task.tags || []).map((t, i) => <span key={i} className="text-xs px-2 py-1 rounded-md bg-white border">#{t}</span>)}
+          {task.calendar_synced && <span className="text-xs px-2 py-1 rounded-md bg-blue-50 text-blue-700 border border-blue-200">✓ Calendar</span>}
+          {task.reminder_sent && <span className="text-xs px-2 py-1 rounded-md bg-purple-50 text-purple-700 border border-purple-200">⏰ promemoria inviato</span>}
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button data-testid="toggle-calendar" onClick={toggleCal} className="px-3 py-1.5 rounded-full text-xs bg-white border">
             {task.calendar_synced ? "✓ In Calendar" : "+ Aggiungi a Calendar"}
           </button>
           <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white border text-red-600">Elimina</button>
+        </div>
+
+        {/* NOTES */}
+        <div className="pt-2">
+          <div className="kicker mb-2">· note</div>
+          <Textarea
+            data-testid="task-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Aggiungi note libere sul task…"
+            className="bg-white rounded-2xl min-h-[80px]"
+          />
+          <div className="flex justify-end mt-2">
+            <button data-testid="task-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (task.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
+              {savingNotes ? "…" : "Salva note"}
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 space-y-3 max-h-60 overflow-y-auto">

@@ -73,6 +73,11 @@ function TodoCard({ todo, onClick }) {
             <Tag size={10} /> {tag}
           </span>
         ))}
+        {todo.notes && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
+            📝 note
+          </span>
+        )}
       </div>
       <div className="mt-3 kicker">{todo.created_at ? new Date(todo.created_at).toLocaleDateString("it-IT") : ""}</div>
     </button>
@@ -85,6 +90,8 @@ function TodoDialog({ todo, onClose, onUpdated }) {
   const [thread, setThread] = useState([]);
   const [pct, setPct] = useState(todo.completion_percent || 0);
   const [status, setStatus] = useState(todo.status);
+  const [notes, setNotes] = useState(todo.notes || "");
+  const [savingNotes, setSavingNotes] = useState(false);
 
   const persistStatus = async (s) => {
     setStatus(s);
@@ -95,6 +102,16 @@ function TodoDialog({ todo, onClose, onUpdated }) {
     setPct(v);
     await api.patch(`/todos/${todo.id}`, { completion_percent: v });
     onUpdated();
+  };
+
+  const saveNotes = async () => {
+    setSavingNotes(true);
+    try {
+      await api.patch(`/todos/${todo.id}`, { notes });
+      onUpdated();
+      toast.success("Note salvate");
+    } catch { toast.error("Errore"); }
+    finally { setSavingNotes(false); }
   };
 
   const send = async () => {
@@ -118,7 +135,7 @@ function TodoDialog({ todo, onClose, onUpdated }) {
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)]" data-testid="todo-dialog">
+      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="todo-dialog">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">{todo.title}</DialogTitle>
         </DialogHeader>
@@ -139,6 +156,23 @@ function TodoDialog({ todo, onClose, onUpdated }) {
             <input data-testid="todo-progress" type="range" min="0" max="100" value={pct} onChange={(e) => persistPct(parseInt(e.target.value))} className="w-full" />
           </div>
         )}
+
+        {/* NOTES */}
+        <div className="pt-2">
+          <div className="kicker mb-2">· note</div>
+          <Textarea
+            data-testid="todo-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Aggiungi note libere sul to-do…"
+            className="bg-white rounded-2xl min-h-[80px]"
+          />
+          <div className="flex justify-end mt-2">
+            <button data-testid="todo-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (todo.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
+              {savingNotes ? "…" : "Salva note"}
+            </button>
+          </div>
+        </div>
 
         <div className="mt-3 space-y-3 max-h-60 overflow-y-auto">
           {thread.map((t, i) => (
