@@ -48,7 +48,7 @@ export default function AuthCallback() {
   if (denied) {
     return (
       <div className="min-h-screen flex items-center justify-center px-6" data-testid="access-denied">
-        <div className="max-w-lg p-8 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-lg text-center">
+        <div className="max-w-lg p-8 rounded-2xl bg-white/70  backdrop-blur-xl shadow-lg text-center">
           <div className="mx-auto w-14 h-14 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mb-4">
             <ShieldAlert size={28} />
           </div>

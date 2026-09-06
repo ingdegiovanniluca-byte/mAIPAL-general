@@ -55,7 +55,7 @@ export default function LoginPage() {
         }}
       >
         <div className="absolute inset-0 bg-black/5" />
-        <div className="absolute bottom-10 left-10 right-10 bg-white/70 backdrop-blur-md rounded-2xl p-6 border border-white/60">
+        <div className="absolute bottom-10 left-10 right-10 bg-white/70 backdrop-blur-md rounded-2xl p-6 ">
           <div className="kicker">preview</div>
           <div className="mt-2 text-lg font-medium">
             &ldquo;Ricordami di chiamare il fornitore martedì alle 15&rdquo; → task creato con scadenza, tag e priorità.

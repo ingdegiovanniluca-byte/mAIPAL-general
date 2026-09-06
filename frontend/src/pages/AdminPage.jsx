@@ -99,7 +99,7 @@ export default function AdminPage() {
 
       {tab === "whitelist" && (
         <div>
-          <div className="p-5 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm">
+          <div className="p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm">
             <div className="kicker mb-3">· aggiungi email autorizzata</div>
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative flex-1 min-w-[240px]">
@@ -115,10 +115,10 @@ export default function AdminPage() {
 
           <div className="mt-6">
             <div className="kicker mb-3">· email autorizzate ({allowlist.length})</div>
-            <div className="rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm overflow-hidden">
+            <div className="rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm overflow-hidden">
               {allowlist.length === 0 && <div className="p-6 text-sm text-neutral-500">Nessuna email in whitelist</div>}
               {allowlist.map((a) => (
-                <div key={a.email} className="flex items-center justify-between px-5 py-3 border-b border-neutral-100 last:border-0" data-testid="allowlist-row">
+                <div key={a.email} className="flex items-center justify-between px-5 py-3 border-b  last:border-0" data-testid="allowlist-row">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><CheckCircle2 size={14} /></div>
                     <div className="min-w-0">
@@ -149,10 +149,10 @@ export default function AdminPage() {
       {tab === "users" && (
         <div>
           <div className="kicker mb-3">· utenti registrati ({users.length})</div>
-          <div className="rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm overflow-hidden">
+          <div className="rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm overflow-hidden">
             {users.length === 0 && <div className="p-6 text-sm text-neutral-500">Nessun utente ancora</div>}
             {users.map((u) => (
-              <div key={u.user_id} className="flex items-center justify-between px-5 py-3 border-b border-neutral-100 last:border-0" data-testid="user-row">
+              <div key={u.user_id} className="flex items-center justify-between px-5 py-3 border-b  last:border-0" data-testid="user-row">
                 <div className="flex items-center gap-3 min-w-0">
                   {u.picture ? (
                     <img src={u.picture} alt="" className="w-9 h-9 rounded-full shrink-0" />

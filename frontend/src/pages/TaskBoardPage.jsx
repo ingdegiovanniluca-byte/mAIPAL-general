@@ -64,7 +64,7 @@ export default function TaskBoardPage() {
       <div className="flex items-center justify-end gap-2 mb-3">
         <button data-testid="toggle-completed" onClick={() => setShowCompleted((v) => !v)}
                 style={showCompleted ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                className={`px-4 py-2 rounded-full text-xs font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${showCompleted ? "" : "bg-white border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}>
+                className={`px-4 py-2 rounded-full text-xs font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${showCompleted ? "" : "bg-white  text-neutral-500 hover:"}`}>
           <Archive size={12} /> {showCompleted ? "attivi" : "completati"}
         </button>
       </div>
@@ -72,7 +72,7 @@ export default function TaskBoardPage() {
         {grouped.map((c) => {
           const imm = mostImminent(c.items);
           return (
-            <div key={c.key} className={`rounded-2xl p-5 ${c.tint} border border-neutral-200/60`} data-testid={`col-${c.key}`}>
+            <div key={c.key} className={`rounded-2xl p-5 ${c.tint} `} data-testid={`col-${c.key}`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${c.dot}`} />
@@ -121,12 +121,12 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
         {task.description && <div className="text-sm text-neutral-500 mt-1">{task.description}</div>}
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           {task.due_date && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-neutral-100 border border-neutral-200">
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-neutral-100 ">
               <Calendar size={10} /> {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}{task.due_time ? ` · ${task.due_time}` : ""}
             </span>
           )}
           {(task.tags || []).map((tag, i) => (
-            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white border border-neutral-200 text-neutral-500">
+            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white  text-neutral-500">
               <Tag size={10} /> {tag}
             </span>
           ))}

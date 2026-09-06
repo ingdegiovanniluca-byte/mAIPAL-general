@@ -48,7 +48,7 @@ export default function TodoBoardPage() {
     <div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
         {grouped.map((c) => (
-          <div key={c.key} className="rounded-2xl p-5 bg-white/60 border border-neutral-200/60" data-testid={`col-${c.key}`}>
+          <div key={c.key} className="rounded-2xl p-5 bg-white/60 " data-testid={`col-${c.key}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${c.dot}`} />
@@ -97,7 +97,7 @@ function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
         )}
         <div className="mt-3 flex flex-wrap gap-2">
           {(todo.tags || []).map((tag, i) => (
-            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white border border-neutral-200 text-neutral-500">
+            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white  text-neutral-500">
               <Tag size={10} /> {tag}
             </span>
           ))}

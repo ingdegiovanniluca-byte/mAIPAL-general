@@ -245,7 +245,7 @@ export default function ChatPage() {
         {/* LEFT 1/3 — action icons + input area */}
         <aside className={`lg:col-span-1 flex flex-col overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
-          <div className="p-4 rounded-2xl bg-white/5 border border-white/15 backdrop-blur-xl shadow-sm shrink-0">
+          <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
             <div className="flex items-center gap-3 justify-start">
               {ACTIONS.map((a) => {
                 const selected = a.id === active;
@@ -277,7 +277,7 @@ export default function ChatPage() {
             <div className="kicker-p">· nuovo messaggio</div>
             <div className="kicker-p">{activeAction.title.toLowerCase()}</div>
           </div>
-          <div className="p-5 rounded-2xl border border-white/10 shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ backgroundColor: "#403A3C" }} data-testid="chat-input-card">
+          <div className="p-5 rounded-2xl  shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ backgroundColor: "#403A3C" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
@@ -309,7 +309,7 @@ export default function ChatPage() {
               placeholder={thread ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
               className="border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
             />
-            <div className="flex items-center justify-between pt-2 border-t border-white/25">
+            <div className="flex items-center justify-between pt-2 border-t ">
               <div className="flex items-center gap-1.5 text-white/85 flex-wrap">
                 <button data-testid="attach-btn" onClick={onAttachClick} className="p-2 rounded-full hover:bg-white/15"><Paperclip size={16} /></button>
                 <button
@@ -347,24 +347,24 @@ export default function ChatPage() {
         <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden`}>
           {/* Filters (hidden in focus mode when a thread is open) */}
           {!(focusMode && thread) && (
-            <div className="flex items-center gap-3 flex-wrap p-4 rounded-2xl bg-white/5 border border-white/15 backdrop-blur-xl shadow-sm shrink-0">
+            <div className="flex items-center gap-3 flex-wrap p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
             <div className="relative flex-1 min-w-[220px]">
               <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/60" />
-              <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nella cronologia…" className="pl-10 h-10 rounded-full bg-white/10 border-white/20 text-white placeholder:text-white/60" />
+              <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nella cronologia…" className="pl-10 h-10 rounded-full bg-white/10  text-white placeholder:text-white/60" />
             </div>
             {[["all","tutti"],["fav","preferiti"],["upload","upload"],["query","query"],["todo","todo"],["journal","diario"]].map(([k, l]) => (
               <button key={k} data-testid={`filter-${k}`} onClick={() => setFilter(k)}
                 style={filter === k ? { backgroundColor: "#CECAD0", color: "#403A3C", border: "none" } : {}}
-                className={`px-3 py-2 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${filter === k ? "" : "bg-white/10 border border-white/20 text-white/70 hover:border-white/40 hover:text-white"}`}
+                className={`px-3 py-2 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${filter === k ? "" : "bg-white/10  text-white/70 hover: hover:text-white"}`}
               >{k === "fav" && <Star size={11} className={filter === k ? "fill-current" : ""} />}{l}</button>
             ))}
-            <input data-testid="history-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-full bg-white/10 border border-white/20 text-white px-4 text-sm" />
+            <input data-testid="history-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-full bg-white/10  text-white px-4 text-sm" />
           </div>
           )}
 
           {/* Thread view (replaces list when open) */}
           {thread ? (
-            <div className="p-5 rounded-2xl bg-white/5 border border-white/15 backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden" data-testid="thread-card">
+            <div className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden" data-testid="thread-card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
@@ -374,10 +374,10 @@ export default function ChatPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full border border-white/20 bg-white/10 text-white hover:border-white/40 inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
+                  <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
                     {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {focusMode ? "esci focus" : "focus"}
                   </button>
-                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); }} className="kicker px-3 py-1.5 rounded-full border border-white/20 bg-white/10 text-white hover:border-white/40 inline-flex items-center gap-1">
+                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); }} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1">
                     <MessageSquarePlus size={12} /> nuova
                   </button>
                   <button data-testid="close-thread-btn" onClick={closeThread} className="p-1.5 rounded-full hover:bg-white/10 text-white"><X size={14} /></button>
@@ -437,7 +437,7 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
     journal: "Diario",
   };
   const badge = (label, ok) => (
-    <span className={`text-[10px] font-mono-tight tracking-widest uppercase px-2.5 py-1 rounded-md border ${ok ? "border-emerald-400/50 text-emerald-200 bg-emerald-500/10" : "border-white/20 text-white/50 bg-white/5"}`}>
+    <span className={`text-[10px] font-mono-tight tracking-widest uppercase px-2.5 py-1 rounded-md border ${ok ? "border-emerald-400/50 text-emerald-200 bg-emerald-500/10" : " text-white/50 bg-white/5"}`}>
       {ok ? <Check size={10} className="inline mr-1" /> : null}{label}
     </span>
   );
@@ -453,7 +453,7 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
 
   return (
-    <div className="p-4 rounded-2xl bg-white/5 border border-white/15 backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:bg-white/10" data-testid="history-card">
+    <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:bg-white/10" data-testid="history-card">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: ACTION_COLOR[conv.action] || "#CECAD0" }} />

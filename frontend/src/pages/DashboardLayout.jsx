@@ -24,7 +24,7 @@ export default function DashboardLayout() {
           </div>
         </div>
 
-        <nav className="mt-8 inline-flex items-center gap-1 p-1 rounded-full bg-white/5 border border-white/10 backdrop-blur-md">
+        <nav className="mt-8 inline-flex items-center gap-1 p-1 rounded-full bg-white/5  backdrop-blur-md">
           <TabLink to="/dashboard/chat" icon={<MessageSquare size={15} />} label="Chat" testid="tab-chat" />
           <TabLink to="/dashboard/tasks" icon={<LayoutGrid size={15} />} label="Task Board" testid="tab-tasks" />
           <TabLink to="/dashboard/todos" icon={<ListChecks size={15} />} label="To-Do" testid="tab-todos" />

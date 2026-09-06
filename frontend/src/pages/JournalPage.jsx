@@ -150,7 +150,7 @@ export default function JournalPage() {
           placeholder="Come è andata oggi? Cosa hai fatto, com'era il tuo umore, cosa vuoi ricordare…"
           className="border-0 focus-visible:ring-0 bg-transparent text-base min-h-[160px] px-0 resize-none text-white placeholder:text-white/70"
         />
-        <div className="flex items-center justify-between pt-2 border-t border-white/25 gap-2 flex-wrap">
+        <div className="flex items-center justify-between pt-2 border-t  gap-2 flex-wrap">
           <div className="flex items-center gap-1.5 text-white/85">
             <button
               data-testid="journal-mic-btn"
@@ -173,7 +173,7 @@ export default function JournalPage() {
       </div>
 
       {/* Mood trend chart */}
-      <div className="mt-8 p-5 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm" data-testid="mood-trend-card">
+      <div className="mt-8 p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm" data-testid="mood-trend-card">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <div className="flex items-center gap-2">
             <TrendingUp size={16} className="text-neutral-500" />
@@ -223,7 +223,7 @@ export default function JournalPage() {
       </div>
 
       {/* Search + mood filter */}
-      <div className="mt-8 p-4 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm">
+      <div className="mt-8 p-4 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[220px]">
             <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
@@ -250,13 +250,13 @@ export default function JournalPage() {
               data-testid="fav-filter-off"
               onClick={() => setFavOnly(false)}
               style={!favOnly ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/70  text-neutral-500 hover:"}`}
             >tutti</button>
             <button
               data-testid="fav-filter-on"
               onClick={() => setFavOnly(true)}
               style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/70  text-neutral-500 hover:"}`}
               title="Solo giornate memorabili"
             >
               <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
@@ -267,7 +267,7 @@ export default function JournalPage() {
               data-testid="mood-filter-all"
               onClick={() => setMood("all")}
               style={mood === "all" ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${mood === "all" ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${mood === "all" ? "" : "bg-white/70  text-neutral-500 hover:"}`}
             >ogni umore</button>
             {MOODS.map((m) => (
               <button
@@ -275,7 +275,7 @@ export default function JournalPage() {
                 data-testid={`mood-filter-${m}`}
                 onClick={() => setMood(m)}
                 style={mood === m ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${mood === m ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${mood === m ? "" : "bg-white/70  text-neutral-500 hover:"}`}
                 title={m}
               >
                 <span>{MOOD_EMOJI[m]}</span> {m}
@@ -290,7 +290,7 @@ export default function JournalPage() {
         <div className="kicker">· voci precedenti · {entries.length}</div>
         {entries.length === 0 && <div className="text-neutral-500 text-sm">Nessuna voce trovata con questi filtri.</div>}
         {entries.map((e) => (
-          <div key={e.id} className="p-5 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm" data-testid="journal-entry">
+          <div key={e.id} className="p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm" data-testid="journal-entry">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-3">
                 <span className="text-2xl">{MOOD_EMOJI[e.mood] || "📝"}</span>
@@ -318,7 +318,7 @@ export default function JournalPage() {
             <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-neutral-800">{e.cleaned_text}</div>
 
             {(e.highlights || []).length > 0 && (
-              <div className="mt-4 pt-4 border-t border-neutral-200">
+              <div className="mt-4 pt-4 border-t ">
                 <div className="kicker mb-2">· momenti chiave</div>
                 <ul className="text-sm text-neutral-600 space-y-1">
                   {(e.highlights || []).map((h, i) => (<li key={i}>· {h}</li>))}

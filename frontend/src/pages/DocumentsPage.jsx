@@ -92,7 +92,7 @@ export default function DocumentsPage() {
       </div>
 
       {/* Toolbar */}
-      <div className="p-4 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm">
+      <div className="p-4 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[220px]">
             <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
@@ -124,7 +124,7 @@ export default function DocumentsPage() {
       <div className="mt-6">
         {loading && <div className="text-neutral-500 text-sm">Carico…</div>}
         {!loading && docs.length === 0 && (
-          <div className="p-8 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm text-neutral-500 text-sm" data-testid="docs-empty">
+          <div className="p-8 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm text-neutral-500 text-sm" data-testid="docs-empty">
             Nessun documento ancora. Vai in <b>Chat → Caricamento informazioni</b> per aggiungere file (pdf, docx, xlsx, immagini con OCR, note…).
           </div>
         )}
@@ -132,7 +132,7 @@ export default function DocumentsPage() {
           {docs.map((d) => {
             const meta = CATEGORY_META[d.category] || CATEGORY_META.altro;
             return (
-              <div key={d.doc_id} className="group p-5 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md" data-testid="doc-card">
+              <div key={d.doc_id} className="group p-5 rounded-2xl bg-white/70  backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md" data-testid="doc-card">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: meta.color + "22", color: meta.color }}>
@@ -157,13 +157,13 @@ export default function DocumentsPage() {
                     {meta.label}
                   </span>
                   {d.source_type === "image_ocr" && (
-                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md border border-neutral-300 text-neutral-500 bg-white inline-flex items-center gap-1"><Sparkles size={10} /> ocr</span>
+                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-neutral-500 bg-white inline-flex items-center gap-1"><Sparkles size={10} /> ocr</span>
                   )}
                   {d.source_type === "chat" && (
-                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md border border-neutral-300 text-neutral-500 bg-white">via chat</span>
+                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-neutral-500 bg-white">via chat</span>
                   )}
                   {(d.keywords || []).slice(0, 6).map((k, i) => (
-                    <span key={i} className="text-[10px] font-mono-tight lowercase tracking-widest px-2 py-0.5 rounded-md bg-neutral-100 text-neutral-600 border border-neutral-200">
+                    <span key={i} className="text-[10px] font-mono-tight lowercase tracking-widest px-2 py-0.5 rounded-md bg-neutral-100 text-neutral-600 ">
                       #{k}
                     </span>
                   ))}
@@ -175,7 +175,7 @@ export default function DocumentsPage() {
                   </div>
                 )}
 
-                <div className="mt-3 pt-3 border-t border-neutral-100 flex items-center justify-between">
+                <div className="mt-3 pt-3 border-t  flex items-center justify-between">
                   <span className="kicker-p text-neutral-400">{d.chunks_count || 1} chunk indicizzati</span>
                   {d.drive_link ? (
                     <a href={d.drive_link} target="_blank" rel="noreferrer" data-testid="doc-drive-link" className="kicker-p text-blue-600 inline-flex items-center gap-1 hover:underline">
@@ -198,7 +198,7 @@ export default function DocumentsPage() {
 
 function StatCard({ label, value, muted }) {
   return (
-    <div className={`p-4 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm ${muted ? "opacity-70" : ""}`}>
+    <div className={`p-4 rounded-2xl bg-white/60  backdrop-blur-xl shadow-sm ${muted ? "opacity-70" : ""}`}>
       <div className="kicker-p">{label}</div>
       <div className={`mt-1 text-xl font-semibold ${muted ? "text-neutral-500" : ""}`}>{value}</div>
     </div>
@@ -211,7 +211,7 @@ function CatButton({ active, onClick, label, color, count, testid }) {
       data-testid={testid}
       onClick={onClick}
       style={active ? { backgroundColor: color || "#6EB7EC", color: "#fff", border: "none" } : {}}
-      className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${active ? "" : "bg-white/70 border border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+      className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${active ? "" : "bg-white/70  text-neutral-500 hover:"}`}
     >
       {label} <span className={`ml-0.5 ${active ? "opacity-80" : "opacity-60"}`}>{count}</span>
     </button>

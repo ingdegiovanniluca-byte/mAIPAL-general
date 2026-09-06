@@ -67,7 +67,7 @@ export default function OnboardingPage() {
               data-testid={`ob-vertical-${v}`}
               onClick={() => toggleVertical(v)}
               style={verticals.includes(v) ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-5 py-3 rounded-full transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}
+              className={`px-5 py-3 rounded-full transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white  hover:"}`}
             >{v}</button>
           ))}
         </div>
@@ -92,7 +92,7 @@ export default function OnboardingPage() {
               data-testid={`ob-tone-${t}`}
               onClick={() => setTone(t)}
               style={tone === t ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-              className={`px-5 py-3 rounded-full transition-colors duration-150 ${tone === t ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}
+              className={`px-5 py-3 rounded-full transition-colors duration-150 ${tone === t ? "" : "bg-white  hover:"}`}
             >{t}</button>
           ))}
         </div>

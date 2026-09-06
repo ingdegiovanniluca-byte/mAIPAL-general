@@ -126,7 +126,7 @@ export default function SettingsPage() {
               {VERTICALS.map((v) => (
                 <button key={v} data-testid={`prof-v-${v}`} onClick={() => toggleV(v)}
                         style={verticals.includes(v) ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}>
+                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white  hover:"}`}>
                   {v}
                 </button>
               ))}
@@ -142,7 +142,7 @@ export default function SettingsPage() {
               {TONES.map((t) => (
                 <button key={t} data-testid={`prof-tone-${t}`} onClick={() => setTone(t)}
                         style={tone === t ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
-                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${tone === t ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}>
+                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${tone === t ? "" : "bg-white  hover:"}`}>
                   {t}
                 </button>
               ))}
@@ -200,7 +200,7 @@ export default function SettingsPage() {
               )}
               <div className="mt-4 flex gap-2">
                 {status.google.connected ? (
-                  <button data-testid="google-disconnect" onClick={disconnectGoogle} className="px-4 py-2 rounded-full text-sm bg-white border border-neutral-200 hover:border-red-300 text-red-600 flex items-center gap-2">
+                  <button data-testid="google-disconnect" onClick={disconnectGoogle} className="px-4 py-2 rounded-full text-sm bg-white  hover:border-red-300 text-red-600 flex items-center gap-2">
                     <Unlink size={14} /> Scollega
                   </button>
                 ) : (
@@ -255,7 +255,7 @@ export default function SettingsPage() {
 
               {status.telegram.connected && (
                 <div className="mt-4 flex gap-2">
-                  <button data-testid="tg-disconnect" onClick={disconnectTg} className="px-4 py-2 rounded-full text-sm bg-white border border-neutral-200 hover:border-red-300 text-red-600 flex items-center gap-2">
+                  <button data-testid="tg-disconnect" onClick={disconnectTg} className="px-4 py-2 rounded-full text-sm bg-white  hover:border-red-300 text-red-600 flex items-center gap-2">
                     <Unlink size={14} /> Scollega Telegram
                   </button>
                 </div>
