@@ -277,7 +277,7 @@ export default function ChatPage() {
             <div className="kicker-p">· nuovo messaggio</div>
             <div className="kicker-p">{activeAction.title.toLowerCase()}</div>
           </div>
-          <div className="p-5 rounded-2xl  shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ backgroundColor: "#403A3C" }} data-testid="chat-input-card">
+          <div className="p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ background: "linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%)" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
@@ -436,12 +436,6 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
     task_todo: "Task / To-Do",
     journal: "Diario",
   };
-  const badge = (label, ok) => (
-    <span className={`text-[10px] font-mono-tight tracking-widest uppercase px-2.5 py-1 rounded-md border ${ok ? "border-emerald-400/50 text-emerald-200 bg-emerald-500/10" : " text-white/50 bg-white/5"}`}>
-      {ok ? <Check size={10} className="inline mr-1" /> : null}{label}
-    </span>
-  );
-  const p = conv.pipeline || {};
   const d = conv.created_at ? new Date(conv.created_at) : null;
   const preview = (conv.messages && conv.messages[0]?.content) || conv.user_message || "";
   const messageCount = (conv.messages?.length || 0) || (conv.user_message ? (conv.agent_response ? 2 : 1) : 0);
@@ -470,9 +464,6 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
             className="p-1.5 rounded-full text-white/50 hover:bg-red-500/20 hover:text-red-300">
             <Trash2 size={14} />
           </button>
-          <span className="w-px h-4 bg-white/20 mx-1" />
-          {badge(p.claude === "ok" ? "✓ claude" : "claude · skip", p.claude === "ok")}
-          {badge(p.mongodb === "ok" ? "✓ db" : "db · skip", p.mongodb === "ok")}
         </div>
       </div>
 
