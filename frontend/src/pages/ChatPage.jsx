@@ -262,7 +262,7 @@ export default function ChatPage() {
                       opacity: selected ? 1 : 0.5,
                       borderColor: selected ? a.color : "rgba(206,202,208,0.25)",
                     }}
-                    className={`group relative w-10 h-10 rounded-xl border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:-translate-y-0.5 hover:shadow-md`}
+                    className={`group relative w-10 h-10 rounded-xl border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 card-hover`}
                   >
                     {React.cloneElement(a.icon, { size: 18 })}
                     <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#403A3C] text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
@@ -447,7 +447,7 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
 
   return (
-    <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:bg-white/10" data-testid="history-card">
+    <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm card-hover" data-testid="history-card">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: ACTION_COLOR[conv.action] || "#CECAD0" }} />

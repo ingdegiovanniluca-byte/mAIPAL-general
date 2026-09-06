@@ -78,7 +78,7 @@ function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
   return (
     <div
       data-testid={`todo-${todo.id}`}
-      className={`relative w-full text-left card-soft ${priorityStripe} p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md`}
+      className={`relative w-full text-left card-soft ${priorityStripe} p-4 card-hover`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
         <button data-testid="todo-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>

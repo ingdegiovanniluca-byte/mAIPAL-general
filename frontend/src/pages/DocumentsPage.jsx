@@ -132,7 +132,7 @@ export default function DocumentsPage() {
           {docs.map((d) => {
             const meta = CATEGORY_META[d.category] || CATEGORY_META.altro;
             return (
-              <div key={d.doc_id} className="group p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md" data-testid="doc-card">
+              <div key={d.doc_id} className="group p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm card-hover" data-testid="doc-card">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: meta.color + "22", color: meta.color }}>

@@ -105,7 +105,7 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
   return (
     <div
       data-testid={`task-${task.id}`}
-      className={`relative w-full text-left card-soft ${sideClass} p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""}`}
+      className={`relative w-full text-left card-soft ${sideClass} p-4 card-hover ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""}`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
         <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-white/40 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
