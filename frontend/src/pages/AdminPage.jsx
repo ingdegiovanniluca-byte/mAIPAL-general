@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
-import { Shield, Mail, UserCheck, UserX, Trash2, PlusCircle, Loader2, CheckCircle2 } from "lucide-react";
+import { Shield, Mail, UserCheck, UserX, Trash2, PlusCircle, Loader2, CheckCircle2, RotateCcw } from "lucide-react";
 
 export default function AdminPage() {
   const [tab, setTab] = useState("whitelist");
@@ -51,11 +51,33 @@ export default function AdminPage() {
   };
 
   const revokeUser = async (u) => {
-    if (!confirm(`Revocare l'accesso a ${u.email}? Le sue sessioni verranno chiuse e verrà rimosso dalla whitelist.`)) return;
+    if (!confirm(`Revocare l'accesso a ${u.email}?\n\nLe sue sessioni verranno chiuse e verrà rimosso dalla whitelist. I suoi dati (task, diario, KB) verranno mantenuti.`)) return;
     try {
       await api.post(`/admin/users/${u.user_id}/revoke`);
       await loadAll();
       toast.success(`Accesso revocato a ${u.email}`);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+  };
+
+  const restoreUser = async (u) => {
+    try {
+      await api.post(`/admin/users/${u.user_id}/restore`);
+      await loadAll();
+      toast.success(`${u.email} ripristinato`);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+  };
+
+  const deleteUser = async (u) => {
+    const confirm1 = confirm(`ELIMINARE completamente ${u.email}?\n\nVerranno cancellati: account, task, to-do, diario, knowledge base, conversazioni e sessioni. Operazione IRREVERSIBILE.`);
+    if (!confirm1) return;
+    const typed = prompt(`Per confermare digita: ELIMINA`);
+    if ((typed || "").trim().toUpperCase() !== "ELIMINA") { toast.error("Conferma non valida, eliminazione annullata"); return; }
+    try {
+      const r = await api.delete(`/admin/users/${u.user_id}`);
+      await loadAll();
+      const c = r.data?.deleted || {};
+      const tot = Object.values(c).reduce((a, b) => a + (b || 0), 0);
+      toast.success(`${u.email} eliminato · ${tot} record rimossi`);
     } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
   };
 
@@ -143,24 +165,49 @@ export default function AdminPage() {
                     <div className="font-medium truncate flex items-center gap-2">
                       {u.name || u.email}
                       {u.role === "admin" && <span className="text-[9px] font-mono-tight tracking-widest uppercase px-1.5 py-0.5 rounded-md bg-neutral-900 text-white">admin</span>}
-                      {!u.onboarded && <span className="text-[9px] font-mono-tight tracking-widest uppercase px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700">no-onboarding</span>}
+                      {u.revoked_at && <span className="text-[9px] font-mono-tight tracking-widest uppercase px-1.5 py-0.5 rounded-md bg-red-100 text-red-700" data-testid="revoked-badge">revocato</span>}
+                      {!u.onboarded && !u.revoked_at && <span className="text-[9px] font-mono-tight tracking-widest uppercase px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700">no-onboarding</span>}
                     </div>
                     <div className="kicker-p">
                       {u.email}
                       {u.last_session_at ? ` · ultimo accesso ${new Date(u.last_session_at).toLocaleDateString("it-IT", { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" })}` : ""}
                       {u.telegram_chat_id ? " · telegram ✓" : ""}
+                      {u.revoked_at ? ` · revocato il ${new Date(u.revoked_at).toLocaleDateString("it-IT", { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" })}` : ""}
                     </div>
                   </div>
                 </div>
-                <button
-                  data-testid={`revoke-${u.user_id}`}
-                  onClick={() => revokeUser(u)}
-                  disabled={u.role === "admin"}
-                  className="px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 text-red-600 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent"
-                  title={u.role === "admin" ? "Impossibile revocare l'amministratore" : "Revoca accesso"}
-                >
-                  <UserX size={13} /> revoca
-                </button>
+                <div className="flex items-center gap-1">
+                  {u.revoked_at ? (
+                    <button
+                      data-testid={`restore-${u.user_id}`}
+                      onClick={() => restoreUser(u)}
+                      disabled={u.role === "admin"}
+                      className="px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 text-emerald-600 hover:bg-emerald-50 disabled:opacity-30 disabled:hover:bg-transparent"
+                      title="Riabilita l'accesso"
+                    >
+                      <RotateCcw size={13} /> ripristina
+                    </button>
+                  ) : (
+                    <button
+                      data-testid={`revoke-${u.user_id}`}
+                      onClick={() => revokeUser(u)}
+                      disabled={u.role === "admin"}
+                      className="px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 text-amber-700 hover:bg-amber-50 disabled:opacity-30 disabled:hover:bg-transparent"
+                      title={u.role === "admin" ? "Impossibile revocare l'amministratore" : "Revoca accesso (dati mantenuti)"}
+                    >
+                      <UserX size={13} /> revoca
+                    </button>
+                  )}
+                  <button
+                    data-testid={`delete-${u.user_id}`}
+                    onClick={() => deleteUser(u)}
+                    disabled={u.role === "admin"}
+                    className="px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 text-red-600 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent"
+                    title={u.role === "admin" ? "Impossibile eliminare l'amministratore" : "Elimina utente e tutti i suoi dati"}
+                  >
+                    <Trash2 size={13} /> elimina
+                  </button>
+                </div>
               </div>
             ))}
           </div>

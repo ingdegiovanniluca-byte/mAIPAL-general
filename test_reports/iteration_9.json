@@ -1,0 +1,33 @@
+{
+  "summary": "Backend-only testing of admin user lifecycle endpoints (revoke/restore/delete). Created pytest suite with 11 tests covering: auth guards (401/403), revoke behavior (DB flags, session deletion, whitelist removal), admin protection (400 on self-target), 404 on unknown user, restore flow (whitelist reinstated, revoked_at cleared), full delete (all owned collections wiped + user doc removed + admin list no longer contains user), and full lifecycle create→revoke→restore→revoke→delete. All 11 tests passed. Test user seeded/torn down via pymongo directly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_users_lifecycle.py",
+    "/app/test_reports/pytest/pytest_admin_lifecycle.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 1856 lines — consider splitting into routers (admin, chat, tasks, journal, kb) for maintainability.",
+    "admin_delete_user does not delete related uploaded files on disk (if any); only DB collections. Verify no orphan files under any user-specific upload dir.",
+    "admin_revoke_user rimuove sessioni ma il body ritorna 'sessions_removed' basato su delete_many.deleted_count — corretto. Nessun bug.",
+    "restore endpoint imposta notes='ripristinato dopo revoca' anche se la mail era gia' in whitelist con altre notes — usa $setOnInsert per added_by/added_at ma sovrascrive notes ogni volta; comportamento accettabile ma da documentare."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_admin_users_lifecycle.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested"},
+  "test_credentials": "Admin: admin_session_1788717776_v2 (user_e6fb16f2cc33, ingdegiovanniluca@gmail.com). Regular: test_session_1788713374_v11.",
+  "seed_data_creation": "Fixture test_user seeds a fresh user + session + whitelist entry + 1 doc each in tasks/todos/journal_entries/conversations/kb_documents/kb_chunks per test, all cleaned up in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Admin lifecycle endpoints verified. If future changes touch server.py admin section (~lines 309-378), rerun `pytest /app/backend/tests/test_admin_users_lifecycle.py -o addopts=''`. Note: pytest.ini uses xdist by default; pass -o addopts='' when running a single file to avoid loadscope errors on isolated runs.",
+  "rca of the issue": "Original bug: (a) DELETE endpoint missing entirely; (b) revoke had no visible state change nor cascade. Fix (server.py 324-378): revoke now sets revoked_at/revoked_by, deletes user sessions, removes from whitelist. Restore un-sets those and re-adds email to whitelist. DELETE cascade-wipes tasks/todos/journal/conversations/kb_chunks/kb_documents/user_sessions/allowed_emails and finally users. Admin self-protection via email == ADMIN_EMAIL check. All verified end-to-end via DB assertions."
+}

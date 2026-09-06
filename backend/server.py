@@ -328,10 +328,54 @@ async def admin_revoke_user(user_id: str, current: User = Depends(require_admin)
         raise HTTPException(status_code=404, detail="Utente non trovato")
     if user.get("email") == ADMIN_EMAIL:
         raise HTTPException(status_code=400, detail="Impossibile revocare l'amministratore")
-    # Remove from whitelist and drop all active sessions
+    # Remove from whitelist, drop all active sessions and mark the user as revoked
+    now_iso = datetime.now(timezone.utc).isoformat()
     await db.allowed_emails.delete_one({"email": user.get("email")})
-    await db.user_sessions.delete_many({"user_id": user_id})
-    return {"ok": True, "email": user.get("email")}
+    sessions = await db.user_sessions.delete_many({"user_id": user_id})
+    await db.users.update_one({"user_id": user_id}, {"$set": {"revoked_at": now_iso, "revoked_by": current.email}})
+    return {"ok": True, "email": user.get("email"), "sessions_removed": sessions.deleted_count}
+
+
+@api_router.post("/admin/users/{user_id}/restore")
+async def admin_restore_user(user_id: str, current: User = Depends(require_admin)):
+    """Undo a revoke: put the email back in the whitelist and clear the revoked_at flag."""
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    email = (user.get("email") or "").strip().lower()
+    await db.allowed_emails.update_one(
+        {"email": email},
+        {"$set": {"email": email, "notes": "ripristinato dopo revoca"},
+         "$setOnInsert": {"added_by": current.email, "added_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    await db.users.update_one({"user_id": user_id}, {"$unset": {"revoked_at": "", "revoked_by": ""}})
+    return {"ok": True, "email": email}
+
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, current: User = Depends(require_admin)):
+    """Fully delete a user and every piece of data they own."""
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    if user.get("email") == ADMIN_EMAIL or user.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="Impossibile eliminare l'amministratore")
+
+    counts = {}
+    # per-user collections
+    for coll in [
+        "tasks", "todos", "journal_entries", "conversations",
+        "kb_chunks", "kb_documents", "user_sessions",
+    ]:
+        r = await db[coll].delete_many({"user_id": user_id})
+        counts[coll] = r.deleted_count
+    # whitelist + user doc
+    r = await db.allowed_emails.delete_one({"email": user.get("email")})
+    counts["allowed_emails"] = r.deleted_count
+    r = await db.users.delete_one({"user_id": user_id})
+    counts["users"] = r.deleted_count
+    return {"ok": True, "email": user.get("email"), "deleted": counts}
 
 
 @api_router.post("/onboarding")
