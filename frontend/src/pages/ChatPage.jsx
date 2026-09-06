@@ -37,6 +37,7 @@ const ACTIONS = [
 ];
 
 const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11" };
+const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11" };
 
 export default function ChatPage() {
   const [active, setActive] = useState("info_request");
@@ -508,7 +509,7 @@ function HistoryCard({ conv, index = 0, onOpen, onToggleFav, onDelete }) {
       </div>
 
       <button onClick={onOpen} className="w-full text-left mt-3" data-testid="open-thread-btn">
-        {title && <div className="text-sm font-semibold mb-1" style={{ color: ACTION_COLOR[conv.action] || "#482B94" }} data-testid="conv-title">{title}</div>}
+        {title && <div className="text-sm font-semibold mb-1" style={{ color: TITLE_COLOR[conv.action] || "#482B94" }} data-testid="conv-title">{title}</div>}
         <div className="bg-white/5 rounded-xl p-3 text-sm text-white/90 line-clamp-2">{preview}</div>
         {summary && (
           <div className="mt-2 text-xs text-white/60 line-clamp-2 leading-relaxed" data-testid="conv-summary">
