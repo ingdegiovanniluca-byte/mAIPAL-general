@@ -488,18 +488,33 @@ def _extract_meta(text: str) -> tuple[str, Optional[dict]]:
     return visible, meta
 
 
-async def retrieve_kb(user_id: str, query: str, limit: int = 4, scope: str = "kb") -> List[dict]:
-    """Semantic retrieval over kb_chunks using local multilingual embeddings + cosine similarity.
-    scope: 'kb' (only knowledge base) or 'all' (also tasks, todos, journal entries)."""
+async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb") -> List[dict]:
+    """Hybrid semantic + keyword retrieval over kb_chunks (and tasks/todos/journal if scope='all').
+    - Semantic scoring via multilingual MiniLM cosine similarity.
+    - Keyword boost for exact term matches (proper nouns, place names, etc.) to help generic queries
+      like "informazioni su Rovigno" recover chunks that mention "Rovigno" but score low semantically.
+    - Union of top-N semantic + top-M keyword hits, deduped by chunk id."""
+    import re as _re
     try:
         q_emb = await emb.embed_query(query)
-    except Exception as e:
-        logger.exception("embed_query failed, falling back to regex")
+    except Exception:
+        logger.exception("embed_query failed, falling back to keyword-only")
         q_emb = None
+
+    # Extract meaningful query terms (drop very short + Italian stopwords)
+    _STOP = {"per","con","del","dei","della","delle","degli","dal","dalla","dai","dagli","dallo",
+             "sul","sulla","sui","sugli","sullo","nel","nella","nei","negli","nello","the","and",
+             "che","chi","cosa","come","dove","quando","quale","quali","quanti","quanto",
+             "sono","siamo","siete","essere","stato","stata","stati","state","molto","poco",
+             "questa","questo","questi","queste","quello","quella","quelli","quelle","hai","hanno",
+             "una","uno","gli","voi","noi","tuo","tua","tuoi","tue","mio","mia","miei","mie",
+             "info","informazione","informazioni","dimmi","dammi","raccontami","parlami","cerca",
+             "trova","voglio","sapere","cosa","tutto","tutti","tutte","tutta"}
+    terms = [t for t in _re.findall(r"[\wàèéìòù']+", query.lower()) if len(t) >= 3 and t not in _STOP][:8]
 
     # Build candidate pool: kb_chunks always, plus extras when scope=='all'
     candidates: List[dict] = []
-    kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(1000)
+    kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
     for c in kb_docs:
         candidates.append({"text": c.get("text", ""), "source": "kb", "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title")}, "embedding": c.get("embedding")})
 
@@ -526,9 +541,8 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 4, scope: str = "kb
             display = f"[Diario · {j.get('date','')}] {j.get('title','')} · mood: {j.get('mood','')}. {txt[:400]}".strip()
             candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": None})
 
-    # If we have an embedding, score all candidates by cosine (compute embeddings on the fly for non-kb)
+    # Compute embeddings for all candidates (semantic scoring)
     if q_emb is not None:
-        # Backfill kb_chunks embeddings lazily
         missing_kb = [c for c in candidates if c["source"] == "kb" and not c.get("embedding")]
         if missing_kb:
             try:
@@ -538,7 +552,6 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 4, scope: str = "kb
                     await db.kb_chunks.update_one({"chunk_id": c["meta"]["chunk_id"]}, {"$set": {"embedding": e}})
             except Exception:
                 logger.exception("backfill embeddings failed")
-        # Embed non-kb candidates on the fly (best-effort, single batch)
         non_kb = [c for c in candidates if c["source"] != "kb" and not c.get("embedding")]
         if non_kb:
             try:
@@ -547,26 +560,36 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 4, scope: str = "kb
                     c["embedding"] = e
             except Exception:
                 logger.exception("non-kb embed failed")
-        scored = []
-        for c in candidates:
-            e = c.get("embedding")
-            if not e: continue
-            scored.append((emb.cosine(q_emb, e), c))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top = [c for s, c in scored[:limit] if s >= 0.30]
-        return top
 
-    # Fallback keyword search
-    terms = [t for t in query.lower().split() if len(t) > 2][:6]
-    if not terms:
-        return []
-    out = []
+    # Hybrid scoring: semantic cosine + keyword boost
+    def _kw_hits(text: str) -> int:
+        if not terms: return 0
+        low = text.lower()
+        return sum(1 for t in terms if t in low)
+
+    scored = []
     for c in candidates:
-        low = c["text"].lower()
-        if any(t in low for t in terms):
-            out.append(c)
-            if len(out) >= limit: break
-    return out
+        e = c.get("embedding")
+        sem = emb.cosine(q_emb, e) if (q_emb is not None and e) else 0.0
+        kh = _kw_hits(c["text"])
+        # Each keyword hit adds 0.15; capped at +0.60. Ensures a chunk containing all terms wins.
+        kw_boost = min(0.60, kh * 0.15)
+        score = sem + kw_boost
+        scored.append((score, sem, kh, c))
+
+    # Keep chunks that have EITHER decent semantic score OR at least one keyword match
+    scored = [s for s in scored if s[1] >= 0.20 or s[2] >= 1]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [c for _s, _sem, _kh, c in scored[:limit]]
+
+    # Fallback: if nothing passed filters but we have keyword terms, do a raw substring scan
+    if not top and terms:
+        for c in candidates:
+            if any(t in c["text"].lower() for t in terms):
+                top.append(c)
+                if len(top) >= limit: break
+
+    return top
 
 
 @api_router.post("/chat/stream")
