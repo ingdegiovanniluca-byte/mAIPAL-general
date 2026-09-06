@@ -456,6 +456,10 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
           {messageCount > 2 && <div className="kicker-p">· {messageCount} msg</div>}
         </div>
         <div className="flex items-center gap-1.5">
+          <button data-testid="open-thread-icon-btn" onClick={stop(onOpen)} title="Apri thread"
+            className="p-1.5 rounded-full text-white/50 hover:bg-white/10 hover:text-white transition-colors duration-150">
+            <Maximize2 size={14} />
+          </button>
           <button data-testid="fav-btn" onClick={stop(onToggleFav)} title={isFav ? "Rimuovi preferito" : "Preferito"}
             className={`p-1.5 rounded-full transition-colors duration-150 ${isFav ? "text-amber-300 hover:bg-white/10" : "text-white/50 hover:bg-white/10 hover:text-amber-300"}`}>
             <Star size={14} className={isFav ? "fill-current" : ""} />
@@ -475,7 +479,6 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
             {summary}
           </div>
         )}
-        <div className="mt-2 kicker text-[#CECAD0]">apri thread →</div>
       </button>
     </div>
   );
