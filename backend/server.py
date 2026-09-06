@@ -288,21 +288,23 @@ def build_system_prompt(user: User, action: str) -> str:
     if action == "info_upload":
         base += (
             " L'utente sta caricando un'informazione. Conferma cosa hai memorizzato in modo naturale (1-3 frasi). "
-            "Poi in coda, ma solo per il sistema, aggiungi: "
-            "<<<META>>>{\"title\": \"...\", \"summary\": \"...\", \"tags\": [\"...\"]}<<<END>>>"
+            "Poi in coda, solo per il sistema, aggiungi: "
+            "<<<META>>>{\"title\": \"...\", \"summary\": \"riassunto in 1 riga, max 140 caratteri\", \"tags\": [\"...\"]}<<<END>>>"
         )
     elif action == "info_request":
         base += (
             " L'utente ti sta ponendo una domanda. Se ti viene fornito un CONTESTO dalla knowledge base personale, "
             "usalo come fonte principale e rispondi in modo naturale (senza dire 'ecco il contesto', 'dal database'; parla come un assistente). "
-            "Se il contesto è vuoto o non pertinente, indica gentilmente che non hai fonti dalla KB personale e rispondi con le tue conoscenze generali."
+            "Se il contesto è vuoto o non pertinente, indica gentilmente che non hai fonti dalla KB personale e rispondi con le tue conoscenze generali. "
+            "Al termine, solo per il sistema, aggiungi: "
+            "<<<META>>>{\"title\": \"argomento in 3-6 parole\", \"summary\": \"riassunto naturale in 1 riga, max 140 caratteri, che descriva cosa hai risposto\"}<<<END>>>"
         )
     elif action == "task_todo":
         base += (
             " L'utente vuole salvare un task o un to-do. Scrivi UNA risposta di conferma naturale (1-2 frasi, es. "
             "'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
             "Poi in coda, solo per il sistema, aggiungi: "
-            "<<<META>>>{\"title\": \"breve\", \"description\": \"\", "
+            "<<<META>>>{\"title\": \"breve titolo del task/todo\", \"summary\": \"riassunto in 1 riga max 140 caratteri\", \"description\": \"\", "
             "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", "
             "\"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}<<<END>>>. "
             "REGOLA: se rilevi una data (anche implicita: 'domani', 'lunedì', 'tra 3 giorni'), imposta due_date. "
@@ -481,11 +483,16 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         visible_answer, meta = _extract_meta(raw_answer)
         visible_answer = visible_answer.replace("```json", "").replace("```", "").strip()
         completed_at = datetime.now(timezone.utc).isoformat()
+        conv_set = {"agent_response": visible_answer, "meta": meta or {}, "completed_at": completed_at}
+        # Persist a first-turn summary/title at conversation root so the history card can always display them
+        if not prior_messages and meta:
+            if meta.get("title"): conv_set["title"] = meta["title"]
+            if meta.get("summary"): conv_set["summary"] = meta["summary"]
         await db.conversations.update_one(
             {"conv_id": conv_id},
             {
                 "$push": {"messages": {"role": "assistant", "content": visible_answer, "ts": completed_at}},
-                "$set": {"agent_response": visible_answer, "meta": meta or {}, "completed_at": completed_at},
+                "$set": conv_set,
             },
         )
 

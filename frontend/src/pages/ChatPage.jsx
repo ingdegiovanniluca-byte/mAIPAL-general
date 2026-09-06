@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2 } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { api, streamChat, API } from "@/lib/api";
@@ -49,6 +49,7 @@ export default function ChatPage() {
   const fileInputRef = useRef(null);
 
   const [thread, setThread] = useState(null);
+  const [focusMode, setFocusMode] = useState(false);
   const threadEndRef = useRef(null);
 
   const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
@@ -75,7 +76,7 @@ export default function ChatPage() {
     setThread({ conv_id: conv.conv_id, action: conv.action, messages, liveAnswer: "" });
     setActive(conv.action);
   };
-  const closeThread = () => setThread(null);
+  const closeThread = () => { setThread(null); setFocusMode(false); };
 
   const startRec = async () => {
     try {
@@ -214,17 +215,9 @@ export default function ChatPage() {
 
   return (
     <div className="relative w-full">
-      {/* Ambient gradient blobs for frosted feel */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
-        <div className="absolute -top-40 -left-20 w-[520px] h-[520px] rounded-full opacity-40 blur-3xl" style={{ background: "radial-gradient(circle, #6EB7EC 0%, transparent 60%)" }} />
-        <div className="absolute top-1/3 right-0 w-[480px] h-[480px] rounded-full opacity-30 blur-3xl" style={{ background: "radial-gradient(circle, #FF0061 0%, transparent 60%)" }} />
-        <div className="absolute bottom-0 left-1/3 w-[520px] h-[520px] rounded-full opacity-25 blur-3xl" style={{ background: "radial-gradient(circle, #FFAC33 0%, transparent 60%)" }} />
-        <div className="absolute bottom-10 right-1/4 w-[420px] h-[420px] rounded-full opacity-25 blur-3xl" style={{ background: "radial-gradient(circle, #007E9A 0%, transparent 60%)" }} />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
-        {/* LEFT 1/3 — sticky non-scrollable */}
-        <aside className="lg:col-span-1 lg:sticky lg:top-6 self-start space-y-3">
+      {/* Top row: 3 action cards on one line */}
+      {!focusMode && (
+        <div className="grid grid-cols-3 gap-3 mb-4">
           {ACTIONS.map((a) => {
             const selected = a.id === active;
             return (
@@ -248,7 +241,12 @@ export default function ChatPage() {
               </button>
             );
           })}
+        </div>
+      )}
 
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[calc(100vh-19rem)]">
+        {/* LEFT 1/3 — input area only, scrolls independently, hidden in focus mode */}
+        <aside className={`lg:col-span-1 space-y-3 overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
           <div className="p-5 rounded-2xl border border-white/40 shadow-lg" style={{ background: "#6EB7EC" }} data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3">
               <div className="kicker text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
@@ -295,9 +293,10 @@ export default function ChatPage() {
         </aside>
 
         {/* RIGHT 2/3 — scrolls */}
-        <section className="lg:col-span-2 space-y-4">
-          {/* Filters */}
-          <div className="flex items-center gap-3 flex-wrap p-4 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm">
+        <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden`}>
+          {/* Filters (hidden in focus mode when a thread is open) */}
+          {!(focusMode && thread) && (
+            <div className="flex items-center gap-3 flex-wrap p-4 rounded-2xl bg-white/60 border border-white/50 backdrop-blur-xl shadow-sm shrink-0">
             <div className="relative flex-1 min-w-[220px]">
               <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
               <Input data-testid="history-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cerca nella cronologia…" className="pl-10 h-10 rounded-full bg-white/80" />
@@ -310,10 +309,11 @@ export default function ChatPage() {
             ))}
             <input data-testid="history-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-full bg-white/80 border border-neutral-200 px-4 text-sm" />
           </div>
+          )}
 
           {/* Thread view (replaces list when open) */}
           {thread ? (
-            <div className="p-5 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm" data-testid="thread-card">
+            <div className="p-5 rounded-2xl bg-white/70 border border-white/50 backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden" data-testid="thread-card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#6EB7EC" }} />
@@ -323,13 +323,16 @@ export default function ChatPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button data-testid="new-thread-btn" onClick={() => setThread(null)} className="kicker px-3 py-1.5 rounded-full border border-neutral-200 bg-white hover:border-neutral-400 inline-flex items-center gap-1">
+                  <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full border border-neutral-200 bg-white hover:border-neutral-400 inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
+                    {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {focusMode ? "esci focus" : "focus"}
+                  </button>
+                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); }} className="kicker px-3 py-1.5 rounded-full border border-neutral-200 bg-white hover:border-neutral-400 inline-flex items-center gap-1">
                     <MessageSquarePlus size={12} /> nuova
                   </button>
                   <button data-testid="close-thread-btn" onClick={closeThread} className="p-1.5 rounded-full hover:bg-neutral-100"><X size={14} /></button>
                 </div>
               </div>
-              <div className="space-y-4 max-h-[68vh] overflow-y-auto pr-2">
+              <div className="space-y-4 flex-1 overflow-y-auto pr-2">
                 {thread.messages.map((m, i) => (
                   <div key={i}>
                     <div className="kicker mb-1">{m.role === "user" ? "· tu" : "· mAIPAL"}</div>
@@ -351,11 +354,11 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between px-2">
+              <div className="flex items-center justify-between px-2 mt-4 shrink-0">
                 <div className="kicker">· cronologia</div>
                 <div className="kicker">{filtered.length} messaggi</div>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-3 flex-1 overflow-y-auto pr-1 mt-2">
                 {filtered.length === 0 && <div className="text-neutral-500 text-sm">Nessuna conversazione ancora.</div>}
                 {filtered.map((c) => (
                   <HistoryCard
@@ -391,9 +394,11 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
   const preview = (conv.messages && conv.messages[0]?.content) || conv.user_message || "";
   const messageCount = (conv.messages?.length || 0) || (conv.user_message ? (conv.agent_response ? 2 : 1) : 0);
   const isFav = !!conv.favorite;
-  // Short summary: prefer meta.summary; else last assistant reply first N chars
-  const rawSummary = (conv.meta && conv.meta.summary) || conv.agent_response || (conv.messages && [...conv.messages].reverse().find((m) => m.role === "assistant")?.content) || "";
-  const summary = rawSummary.replace(/\s+/g, " ").trim().slice(0, 180) + (rawSummary.length > 180 ? "…" : "");
+  // Prefer server-generated title + summary. Fallback to meta.summary or first N chars of agent_response.
+  const title = conv.title || (conv.meta && conv.meta.title) || "";
+  const rawSummary = conv.summary || (conv.meta && conv.meta.summary) || conv.agent_response || (conv.messages && [...conv.messages].reverse().find((m) => m.role === "assistant")?.content) || "";
+  const collapsed = rawSummary.replace(/\s+/g, " ").trim();
+  const summary = collapsed.length > 180 ? collapsed.slice(0, 180) + "…" : collapsed;
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
 
   return (
@@ -421,6 +426,7 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
       </div>
 
       <button onClick={onOpen} className="w-full text-left mt-3" data-testid="open-thread-btn">
+        {title && <div className="text-sm font-semibold text-neutral-800 mb-1" data-testid="conv-title">{title}</div>}
         <div className="bg-neutral-50/70 rounded-xl p-3 text-neutral-800 line-clamp-2">{preview}</div>
         {summary && (
           <div className="mt-2 text-xs text-neutral-500 line-clamp-2 leading-relaxed" data-testid="conv-summary">
