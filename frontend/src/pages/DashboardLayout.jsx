@@ -20,7 +20,6 @@ export default function DashboardLayout() {
       </header>
 
       <section className="px-8 md:px-14 pt-6">
-        <div className="kicker">· dashboard</div>
         <h1 className="mt-2 text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
           Cosa vuoi fare, <span className="gradient-word">{user?.name?.split(" ")[0] || "mAIPAL"}</span>?
         </h1>
@@ -47,7 +46,7 @@ function TabLink({ to, icon, label, testid }) {
       data-testid={testid}
       className={({ isActive }) =>
         `inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors duration-150 ${
-          isActive ? "bg-white text-black shadow-sm" : "text-neutral-500 hover:text-black"
+          isActive ? "bg-[#6EB7EC] text-white shadow-sm" : "text-neutral-500 hover:text-black"
         }`
       }
     >

@@ -125,7 +125,8 @@ export default function SettingsPage() {
             <div className="flex flex-wrap gap-2">
               {VERTICALS.map((v) => (
                 <button key={v} data-testid={`prof-v-${v}`} onClick={() => toggleV(v)}
-                        className={`px-4 py-2 rounded-full text-sm border transition-colors duration-150 ${verticals.includes(v) ? "bg-black text-white border-black" : "bg-white border-neutral-200 hover:border-neutral-400"}`}>
+                        style={verticals.includes(v) ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
+                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}>
                   {v}
                 </button>
               ))}
@@ -140,7 +141,8 @@ export default function SettingsPage() {
             <div className="flex flex-wrap gap-2">
               {TONES.map((t) => (
                 <button key={t} data-testid={`prof-tone-${t}`} onClick={() => setTone(t)}
-                        className={`px-4 py-2 rounded-full text-sm border transition-colors duration-150 ${tone === t ? "bg-black text-white border-black" : "bg-white border-neutral-200 hover:border-neutral-400"}`}>
+                        style={tone === t ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
+                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${tone === t ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}>
                   {t}
                 </button>
               ))}

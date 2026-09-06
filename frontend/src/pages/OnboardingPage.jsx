@@ -66,7 +66,8 @@ export default function OnboardingPage() {
               key={v}
               data-testid={`ob-vertical-${v}`}
               onClick={() => toggleVertical(v)}
-              className={`px-5 py-3 rounded-full border transition-colors duration-150 ${verticals.includes(v) ? "bg-black text-white border-black" : "bg-white border-neutral-200 hover:border-neutral-400"}`}
+              style={verticals.includes(v) ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
+              className={`px-5 py-3 rounded-full transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}
             >{v}</button>
           ))}
         </div>
@@ -90,7 +91,8 @@ export default function OnboardingPage() {
               key={t}
               data-testid={`ob-tone-${t}`}
               onClick={() => setTone(t)}
-              className={`px-5 py-3 rounded-full border transition-colors duration-150 ${tone === t ? "bg-black text-white border-black" : "bg-white border-neutral-200 hover:border-neutral-400"}`}
+              style={tone === t ? { backgroundColor: "#6EB7EC", color: "#fff", border: "none" } : {}}
+              className={`px-5 py-3 rounded-full transition-colors duration-150 ${tone === t ? "" : "bg-white border border-neutral-200 hover:border-neutral-400"}`}
             >{t}</button>
           ))}
         </div>

@@ -719,6 +719,26 @@ async def delete_todo(todo_id: str, current: User = Depends(get_current_user)):
     return {"ok": True}
 
 
+@api_router.post("/tasks/{task_id}/favorite")
+async def toggle_task_favorite(task_id: str, current: User = Depends(get_current_user)):
+    task = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    new_val = not task.get("favorite", False)
+    await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": {"favorite": new_val}})
+    return {"id": task_id, "favorite": new_val}
+
+
+@api_router.post("/todos/{todo_id}/favorite")
+async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current_user)):
+    todo = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    new_val = not todo.get("favorite", False)
+    await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": {"favorite": new_val}})
+    return {"id": todo_id, "favorite": new_val}
+
+
 # ============ CONTEXTUAL CHAT (per task/todo) ============
 class ContextChatRequest(BaseModel):
     message: str
@@ -964,6 +984,10 @@ async def start_services():
         asyncio.create_task(_reminders_loop())
     except Exception:
         logger.exception("failed to start reminders loop")
+    try:
+        asyncio.create_task(_daily_summary_loop())
+    except Exception:
+        logger.exception("failed to start daily summary loop")
 
 
 async def _reminders_loop():
@@ -982,7 +1006,6 @@ async def _reminders_loop():
             async for t in cursor:
                 user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
                 if not user or not user.get("telegram_chat_id"):
-                    # mark as processed anyway so we don't keep scanning
                     await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True}})
                     continue
                 try:
@@ -1003,7 +1026,67 @@ async def _reminders_loop():
                     logger.exception("failed to send reminder")
         except Exception:
             logger.exception("reminders loop iteration failed")
-        await asyncio.sleep(30 * 60)  # every 30 minutes
+        await asyncio.sleep(30 * 60)
+
+
+async def _daily_summary_loop():
+    """Every 20 min: for each connected Telegram user, if it's between 07:00-07:59 UTC local-day AND
+    no summary was sent today, send them a morning summary with today's tasks + open todos, priority-sorted."""
+    from datetime import date as _date
+    PRIORITY_ORDER = {"alta": 0, "media": 1, "bassa": 2, None: 3}
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            today = _date.today().isoformat()
+            if now.hour == 7:  # 07:00-07:59 UTC window
+                async for user in db.users.find({"telegram_chat_id": {"$exists": True}}, {"_id": 0}):
+                    if user.get("daily_summary_date") == today:
+                        continue
+                    tasks_today = await db.tasks.find(
+                        {"user_id": user["user_id"], "due_date": {"$lte": today}},
+                        {"_id": 0},
+                    ).to_list(200)
+                    # keep only not-done: we don't have status on tasks; assume all still relevant
+                    tasks_today.sort(key=lambda t: (PRIORITY_ORDER.get(t.get("priority"), 3), t.get("due_date", "")))
+                    open_todos = await db.todos.find(
+                        {"user_id": user["user_id"], "status": {"$in": ["da_fare", "in_corso"]}},
+                        {"_id": 0},
+                    ).to_list(200)
+                    open_todos.sort(key=lambda t: PRIORITY_ORDER.get(t.get("priority"), 3))
+
+                    if not tasks_today and not open_todos:
+                        # mark as sent anyway
+                        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
+                        continue
+
+                    lines = [f"☀️ *Buongiorno {user.get('name','').split(' ')[0]}!* Il tuo riassunto mAIPAL per oggi:", ""]
+                    if tasks_today:
+                        lines.append(f"📌 *Task* ({len(tasks_today)})")
+                        for t in tasks_today[:10]:
+                            emoji = {"alta": "🔴", "media": "🟠", "bassa": "⚪️"}.get(t.get("priority","media"), "⚪️")
+                            when = t.get("due_date", "")
+                            if t.get("due_time"): when += f" · {t['due_time']}"
+                            lines.append(f"{emoji} {t.get('title','(senza titolo)')} — _{when}_")
+                        lines.append("")
+                    if open_todos:
+                        lines.append(f"✅ *To-Do aperti* ({len(open_todos)})")
+                        for t in open_todos[:10]:
+                            emoji = {"alta": "🔴", "media": "🟠", "bassa": "⚪️"}.get(t.get("priority"), "⚪️")
+                            pct = f" · {t.get('completion_percent',0)}%" if t.get("status") == "in_corso" else ""
+                            lines.append(f"{emoji} {t.get('title','(senza titolo)')}{pct}")
+                        lines.append("")
+                    lines.append("Buon lavoro! 🚀")
+                    try:
+                        from telegram import Bot
+                        bot = Bot(token=tg.bot_token())
+                        await bot.send_message(chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown")
+                        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
+                        logger.info(f"daily summary sent to chat {user['telegram_chat_id']}")
+                    except Exception:
+                        logger.exception("daily summary send failed")
+        except Exception:
+            logger.exception("daily summary loop iteration failed")
+        await asyncio.sleep(20 * 60)
 
 
 @app.on_event("shutdown")

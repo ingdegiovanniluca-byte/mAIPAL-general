@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration 7 UX overhaul verified end-to-end. Backend 4/4 pytest passed (auth/me, /api/conversations returns pipeline and meta, favorite toggle round-trip, conversation detail). Frontend Playwright at 1440 viewport confirmed: (1) Split layout: div.grid.lg:grid-cols-3 present; aside.lg:col-span-1 has computed position:sticky; section.lg:col-span-2 present. (2) Left aside contains action-upload, action-query, action-todo (all visible) and chat-input-card (visible). chat-input-card computed backgroundColor = rgb(110, 183, 236) (#6EB7EC). (3) Action cards all bg rgb(110,183,236); selected (query) opacity 1, others 0.6; inner icon tile colors: upload rgb(255,172,51), query rgb(255,0,97), todo rgb(0,126,154). (4) Filters bar has history-search, filter-all/fav/upload/query/todo, history-date. (5) 14 history-cards rendered; each has fav-btn (Star), delete-conv-btn (Trash), open-thread-btn, preview and conv-summary. conv-summary uses text-xs text-neutral-500 classes, length 82 chars (<=180). (6) Clicking fav-btn calls POST /conversations/{id}/favorite (200) and does NOT open thread; second toggle restored. (7) Clicking open-thread-btn opens thread-card on right column and the list is replaced (0 history-cards). close-thread-btn restores list (14 cards back). (8) Voice flow (MediaRecorder stubbed via add_init_script): first mic-btn click starts recording and Send button label becomes 'Ferma & invia'; second mic-btn click stops recording WITHOUT calling /api/voice/transcribe (transcribe_called_before_send=false); voice-chip becomes visible; clicking Send THEN calls /api/voice/transcribe. chat/stream did not fire because backend returned HTTP 500 for the synthetic 100-byte webm blob (expected — invalid audio); DOM state transitions and network sequence all match spec.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7.py",
+    "/app/test_reports/pytest/iteration7.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ChatPage.jsx is now ~435 lines mixing chat streaming, voice recording, attachments, thread view, filters, and HistoryCard — HistoryCard already isolated but voice + attachments should be extracted into hooks (useVoiceRecorder, useAttachments) to keep the page under 300 lines.",
+    "conv-summary derivation duplicates ellipsis logic: `rawSummary.trim().slice(0,180) + (rawSummary.length > 180 ? '…' : '')` compares against untrimmed length. Minor: use the collapsed string length for the ellipsis check.",
+    "The sticky aside will overlap the right column's scroll on narrow-but-not-mobile viewports where the aside is taller than the viewport (no lg:max-h / overflow rule). Consider `lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto` when action cards + input exceed the viewport height.",
+    "voice-chip renders an inline emoji + duration but no aria-label; accessibility could be improved with role=status and aria-live for streaming/transcribing states."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration7.py",
+    "/app/test_reports/iteration_7.json"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "session_token=test_session_demo_12345 (user_id=test-user-demo)",
+  "seed_data_creation": "None. Favorite toggle test restores prior state.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter7 e2e green. Testids stable: action-{upload,query,todo}, chat-input-card, chat-textarea, mic-btn, voice-chip, voice-discard, send-btn, attach-btn, file-input, history-search, history-date, filter-{all,fav,upload,query,todo}, history-card, fav-btn, delete-conv-btn, open-thread-btn, conv-summary, thread-card, close-thread-btn, new-thread-btn. For voice testing, stub MediaRecorder via page.add_init_script (100-byte Blob('audio/webm')) — /api/voice/transcribe will return 500 on the fake blob which is fine for DOM/network-sequence assertions; if real transcription must be exercised, upload a real webm fixture instead. Aside computed position is sticky at lg breakpoint (>=1024px).",
+  "rca of the issue": "N/A - no issues found."
+}
