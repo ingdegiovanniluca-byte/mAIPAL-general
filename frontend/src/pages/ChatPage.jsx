@@ -197,8 +197,12 @@ export default function ChatPage() {
         }
         const j = await res.json();
         if (useKb) {
-          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview }]);
-          toast.success(`${f.name} → Knowledge Base (${j.chunks} chunk)`);
+          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview, ocr: j.source_type === "image_ocr" }]);
+          if (j.source_type === "image_ocr") {
+            toast.success(`${f.name} → OCR + Knowledge Base (${j.chars} caratteri)`);
+          } else {
+            toast.success(`${f.name} → Knowledge Base (${j.chunks} chunk)`);
+          }
         } else {
           setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
           toast.success(`${f.name} → Drive`);
@@ -311,8 +315,9 @@ export default function ChatPage() {
                   </span>
                 )}
                 {attachments.map((a, i) => (
-                  <span key={i} className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white flex items-center gap-1">
-                    📎 {a.name.slice(0,12)}{a.name.length > 12 ? "…" : ""}
+                  <span key={i} className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white flex items-center gap-1" title={a.preview || a.name}>
+                    {a.ocr ? "🖼️" : "📎"} {a.name.slice(0,12)}{a.name.length > 12 ? "…" : ""}
+                    {a.ocr && <span className="opacity-70">· ocr</span>}
                     <button onClick={() => removeAttachment(i)}><X size={10} /></button>
                   </span>
                 ))}
@@ -323,7 +328,7 @@ export default function ChatPage() {
                 <Send size={14} /> {streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : recording ? "Ferma & invia" : "Invia"}
               </button>
             </div>
-            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} data-testid="file-input" />
+            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : undefined} data-testid="file-input" />
           </div>
         </aside>
 

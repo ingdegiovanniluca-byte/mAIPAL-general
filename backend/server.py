@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
+from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent
 from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
 
 import google_integration as gi
@@ -1025,6 +1025,33 @@ async def upload_attachment(file: UploadFile = File(...), current: User = Depend
 
 
 # ============ KB DIRECT UPLOAD (no Google) ============
+IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "heic", "heif")
+
+
+async def _ocr_image_bytes(contents: bytes, filename: str) -> str:
+    """Run OCR on an image using Claude Sonnet 5 vision via emergentintegrations."""
+    import base64 as _b64
+    b64 = _b64.b64encode(contents).decode("ascii")
+    system = (
+        "Sei un motore OCR. Estrai FEDELMENTE TUTTO il testo visibile nell'immagine. "
+        "Regole: (1) rispetta l'ordine di lettura originale, (2) mantieni righe/paragrafi come nell'immagine, "
+        "(3) se noti tabelle, ricostruiscile riga per riga separando le celle con ' | ', "
+        "(4) NON aggiungere commenti né descrizioni, (5) se l'immagine non contiene testo leggibile, "
+        "rispondi esattamente con: [NO_TEXT]."
+    )
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"ocr_{uuid.uuid4().hex[:8]}",
+        system_message=system,
+    ).with_model("anthropic", "claude-sonnet-5")
+    msg = UserMessage(text="Estrai tutto il testo dall'immagine.", file_contents=[ImageContent(image_base64=b64)])
+    result = await chat.send_message(msg)
+    text = (result or "").strip()
+    if text == "[NO_TEXT]":
+        return ""
+    return text
+
+
 def _extract_text_from_file(path: str, filename: str) -> str:
     """Extract plain text from common file formats. Raises ValueError on unsupported types."""
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
@@ -1054,7 +1081,7 @@ def _extract_text_from_file(path: str, filename: str) -> str:
                 line = " | ".join("" if v is None else str(v) for v in row)
                 if line.strip(): parts.append(line)
         return "\n".join(parts)
-    raise ValueError(f"Formato .{ext} non supportato (prova pdf, docx, xlsx, txt, md, csv, json, html)")
+    raise ValueError(f"Formato .{ext} non supportato (prova pdf, docx, xlsx, immagini, txt, md, csv, json, html)")
 
 
 def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 150) -> List[str]:
@@ -1095,10 +1122,34 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
         tmp.write(contents)
         tmp_path = tmp.name
     try:
+        source_type = "file"
         try:
-            text = _extract_text_from_file(tmp_path, file.filename)
+            if ext in IMAGE_EXTS:
+                # HEIC/HEIF or exotic image: transcode to JPEG for Claude compatibility
+                send_bytes = contents
+                if ext in ("heic", "heif", "webp"):
+                    try:
+                        from PIL import Image
+                        try:
+                            import pillow_heif  # noqa: F401 - registers heif
+                            pillow_heif.register_heif_opener()
+                        except Exception:
+                            pass
+                        from io import BytesIO
+                        img = Image.open(BytesIO(contents))
+                        if img.mode not in ("RGB", "L"): img = img.convert("RGB")
+                        buf = BytesIO(); img.save(buf, format="JPEG", quality=88)
+                        send_bytes = buf.getvalue()
+                    except Exception:
+                        logger.exception("image transcode failed; using original bytes")
+                text = await _ocr_image_bytes(send_bytes, file.filename)
+                source_type = "image_ocr"
+            else:
+                text = _extract_text_from_file(tmp_path, file.filename)
         except ValueError as ve:
             raise HTTPException(status_code=415, detail=str(ve))
+        except HTTPException:
+            raise
         except Exception as e:
             logger.exception("text extraction failed")
             raise HTTPException(status_code=500, detail=f"Impossibile estrarre testo: {e}")
@@ -1124,11 +1175,11 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
                 "user_id": current.user_id,
                 "text": chunk,
                 "title": file.filename,
-                "tags": [ext],
+                "tags": [ext] + (["ocr"] if source_type == "image_ocr" else []),
                 "summary": chunks[0][:140] if i == 0 else None,
                 "embedding": e,
                 "doc_id": doc_id,
-                "source_type": "file",
+                "source_type": source_type,
                 "source_name": file.filename,
                 "chunk_index": i,
                 "created_at": now,
@@ -1143,6 +1194,7 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
             "chunks": len(docs),
             "chars": len(text),
             "preview": text[:280],
+            "source_type": source_type,
         }
     finally:
         try: os.unlink(tmp_path)
