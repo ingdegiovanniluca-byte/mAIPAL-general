@@ -417,10 +417,11 @@ export default function ChatPage() {
               </div>
               <div className="space-y-3 flex-1 overflow-y-auto pr-1 mt-2">
                 {filtered.length === 0 && <div className="text-white/60 text-sm">Nessuna conversazione ancora.</div>}
-                {filtered.map((c) => (
+                {filtered.map((c, idx) => (
                   <HistoryCard
                     key={c.conv_id}
                     conv={c}
+                    index={idx}
                     onOpen={() => openThread(c.conv_id)}
                     onToggleFav={() => toggleFavorite(c.conv_id, !!c.favorite)}
                     onDelete={() => deleteConv(c.conv_id)}
@@ -435,7 +436,7 @@ export default function ChatPage() {
   );
 }
 
-function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
+function HistoryCard({ conv, index = 0, onOpen, onToggleFav, onDelete }) {
   const actionLabels = {
     info_upload: "Caricamento Informazioni",
     info_request: "Richiesta Informazioni",
@@ -453,7 +454,11 @@ function HistoryCard({ conv, onOpen, onToggleFav, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
 
   return (
-    <div className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm card-hover" data-testid="history-card">
+    <div
+      className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm card-hover card-enter"
+      style={{ ["--i"]: index }}
+      data-testid="history-card"
+    >
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: ACTION_COLOR[conv.action] || "#CECAD0" }} />
