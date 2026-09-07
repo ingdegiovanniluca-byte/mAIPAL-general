@@ -15,8 +15,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent
-from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent, OpenAISpeechToText
 
 import google_integration as gi
 import telegram_bot as tg
@@ -29,7 +28,9 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+# Passed as `api_key=` into LlmChat/OpenAISpeechToText for interface compatibility, but
+# llm_integrations.py ignores it and reads ANTHROPIC_API_KEY / OPENAI_API_KEY directly.
+EMERGENT_LLM_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
 # ============ ADMIN / WHITELIST ============
 ADMIN_EMAIL = (os.environ.get('ADMIN_EMAIL') or 'ingdegiovanniluca@gmail.com').strip().lower()
@@ -162,24 +163,44 @@ async def get_current_user(
 
 
 # ============ AUTH ROUTES ============
-@api_router.post("/auth/session")
-async def process_session(request: Request, response: Response):
-    body = await request.json()
-    session_id = body.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Missing session_id")
+LOGIN_STATE_TTL_MIN = 10
 
-    async with httpx.AsyncClient() as hc:
-        r = await hc.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id},
-            timeout=15.0,
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Auth failed")
-    data = r.json()
 
-    email = (data["email"] or "").strip().lower()
+@api_router.get("/auth/google/login")
+async def google_login():
+    if not gi.is_configured():
+        raise HTTPException(status_code=400, detail="Google OAuth non configurato (GOOGLE_CLIENT_ID/SECRET mancanti)")
+    state = secrets.token_urlsafe(24)
+    await db.google_login_states.insert_one({"state": state, "created_at": datetime.now(timezone.utc)})
+    return RedirectResponse(gi.build_login_authorization_url(state))
+
+
+@api_router.get("/auth/google/callback")
+async def google_login_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    base = os.environ["APP_BASE_URL"]
+    if error or not code or not state:
+        return RedirectResponse(f"{base}/?auth_error=denied")
+
+    st = await db.google_login_states.find_one({"state": state}, {"_id": 0})
+    if st:
+        await db.google_login_states.delete_one({"state": state})
+    created_at = st.get("created_at") if st else None
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+    if created_at and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if not st or not created_at or created_at < datetime.now(timezone.utc) - timedelta(minutes=LOGIN_STATE_TTL_MIN):
+        return RedirectResponse(f"{base}/?auth_error=invalid_state")
+
+    try:
+        info = gi.exchange_login_code(code)
+    except Exception:
+        logger.exception("Google login exchange failed")
+        return RedirectResponse(f"{base}/?auth_error=oauth_failed")
+
+    email = (info.get("email") or "").strip().lower()
+    if not email:
+        return RedirectResponse(f"{base}/?auth_error=no_email")
 
     # ===== WHITELIST CHECK =====
     # Only pre-authorized emails may sign in. Admins are always allowed.
@@ -187,13 +208,7 @@ async def process_session(request: Request, response: Response):
     if not is_admin_seed:
         allowed = await db.allowed_emails.find_one({"email": email})
         if not allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Il tuo account non è autorizzato ad accedere a mAIPAL. "
-                    f"Contatta l'amministratore ({ADMIN_EMAIL}) per essere aggiunto alla whitelist."
-                ),
-            )
+            return RedirectResponse(f"{base}/?auth_error=not_whitelisted")
 
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
@@ -202,7 +217,7 @@ async def process_session(request: Request, response: Response):
         role_update = {"role": "admin"} if is_admin_seed else {}
         await db.users.update_one(
             {"user_id": user_id},
-            {"$set": {"name": data.get("name"), "picture": data.get("picture"), **role_update}},
+            {"$set": {"name": info.get("name"), "picture": info.get("picture"), **role_update}},
         )
         user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     else:
@@ -210,8 +225,8 @@ async def process_session(request: Request, response: Response):
         user_doc = {
             "user_id": user_id,
             "email": email,
-            "name": data.get("name", ""),
-            "picture": data.get("picture"),
+            "name": info.get("name", ""),
+            "picture": info.get("picture"),
             "role": "admin" if is_admin_seed else "user",
             "onboarded": False,
             "profession": None,
@@ -223,7 +238,7 @@ async def process_session(request: Request, response: Response):
         }
         await db.users.insert_one(user_doc)
 
-    session_token = data["session_token"]
+    session_token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     await db.user_sessions.insert_one({
         "user_id": user_id,
@@ -232,16 +247,18 @@ async def process_session(request: Request, response: Response):
         "created_at": datetime.now(timezone.utc),
     })
 
+    dest = f"{base}/dashboard" if user_doc.get("onboarded") else f"{base}/onboarding"
+    response = RedirectResponse(dest)
     response.set_cookie(
         key="session_token",
         value=session_token,
         httponly=True,
         secure=True,
-        samesite="none",
+        samesite="lax",
         path="/",
         max_age=7 * 24 * 60 * 60,
     )
-    return {"user": User(**user_doc).model_dump()}
+    return response
 
 
 @api_router.get("/auth/me", response_model=User)
@@ -1315,7 +1332,7 @@ IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "heic", "heif")
 
 
 async def _ocr_image_bytes(contents: bytes, filename: str) -> str:
-    """Run OCR on an image using Claude Sonnet 5 vision via emergentintegrations."""
+    """Run OCR on an image using Claude Sonnet 5 vision."""
     import base64 as _b64
     b64 = _b64.b64encode(contents).decode("ascii")
     system = (

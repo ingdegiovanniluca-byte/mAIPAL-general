@@ -1,6 +1,7 @@
 """Google Drive + Calendar OAuth and helpers."""
 import os
 import logging
+import requests
 from datetime import datetime, timezone
 from typing import Optional
 from google_auth_oauthlib.flow import Flow
@@ -15,6 +16,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
+]
+
+LOGIN_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
 ]
 
 
@@ -73,6 +80,47 @@ def _credentials_from_doc(doc: dict) -> Credentials:
         client_secret=doc["client_secret"],
         scopes=doc.get("scopes"),
     )
+
+
+def login_redirect_uri() -> str:
+    return f"{os.environ['APP_BASE_URL']}/api/auth/google/callback"
+
+
+def _login_client_config():
+    return {
+        "web": {
+            "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [login_redirect_uri()],
+        }
+    }
+
+
+def build_login_authorization_url(state: str) -> str:
+    flow = Flow.from_client_config(_login_client_config(), scopes=LOGIN_SCOPES, redirect_uri=login_redirect_uri())
+    url, _ = flow.authorization_url(
+        access_type="online",
+        include_granted_scopes="true",
+        prompt="select_account",
+        state=state,
+    )
+    return url
+
+
+def exchange_login_code(code: str) -> dict:
+    """Exchange a login-flow auth code for the user's email/name/picture."""
+    flow = Flow.from_client_config(_login_client_config(), scopes=LOGIN_SCOPES, redirect_uri=login_redirect_uri())
+    flow.fetch_token(code=code)
+    r = requests.get(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {flow.credentials.token}"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+    return {"email": data.get("email"), "name": data.get("name"), "picture": data.get("picture")}
 
 
 async def get_credentials(db, user_id: str) -> Optional[Credentials]:

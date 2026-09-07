@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from llm_integrations import LlmChat, UserMessage, OpenAISpeechToText
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ async def _classify_intent(text: str, last_context: dict | None) -> dict:
     )
     try:
         chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
+            api_key=os.environ.get("ANTHROPIC_API_KEY"),
             session_id=f"tg_cls_{uuid.uuid4().hex[:8]}",
             system_message=system,
         ).with_model("anthropic", "claude-sonnet-5")
@@ -162,7 +162,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
             user_text = f"CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {_fmt(c)}" for c in kb) + f"\n\nDOMANDA:\n{content}"
 
     chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
+        api_key=os.environ.get("ANTHROPIC_API_KEY"),
         session_id=conv_id,
         system_message=system,
     ).with_model("anthropic", "claude-sonnet-5")
@@ -409,7 +409,6 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from server import db
-    from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
     import tempfile
 
     chat_id = update.effective_chat.id
@@ -438,7 +437,7 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _, ffmpeg_err = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {ffmpeg_err.decode()[:200]}")
-        stt = OpenAISpeechToText(api_key=os.environ["EMERGENT_LLM_KEY"])
+        stt = OpenAISpeechToText(api_key=os.environ.get("OPENAI_API_KEY"))
         with open(mp3_path, "rb") as f:
             result = await stt.transcribe(file=f, model="whisper-1", response_format="json", language="it")
         transcript = getattr(result, "text", None) or (result.get("text") if isinstance(result, dict) else "")

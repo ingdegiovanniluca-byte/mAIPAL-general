@@ -1,9 +1,8 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import LoginPage from "@/pages/LoginPage";
-import AuthCallback from "@/pages/AuthCallback";
 import OnboardingPage from "@/pages/OnboardingPage";
 import DashboardLayout from "@/pages/DashboardLayout";
 import ChatPage from "@/pages/ChatPage";
@@ -23,10 +22,6 @@ function Protected({ children, requireOnboard = true }) {
 }
 
 function AppRouter() {
-  const location = useLocation();
-  if (location.hash?.includes("session_id=")) {
-    return <AuthCallback />;
-  }
   return (
     <Routes>
       <Route path="/" element={<LoginPage />} />
@@ -48,7 +43,7 @@ function AppRouter() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={process.env.PUBLIC_URL || undefined}>
       <AuthProvider>
         <AppRouter />
         <Toaster position="bottom-right" richColors />

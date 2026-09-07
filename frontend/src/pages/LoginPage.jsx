@@ -1,11 +1,21 @@
 import React from "react";
-import { Sparkles, ArrowRight } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { Sparkles, ArrowRight, ShieldAlert } from "lucide-react";
 
-// REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+const AUTH_ERROR_MESSAGES = {
+  not_whitelisted: "Il tuo account non è ancora abilitato. Contatta l'amministratore per essere aggiunto alla whitelist.",
+  denied: "Accesso negato da Google.",
+  invalid_state: "Sessione di accesso scaduta, riprova.",
+  oauth_failed: "Accesso con Google non riuscito, riprova.",
+  no_email: "Impossibile leggere l'email dal tuo account Google.",
+};
+
 export default function LoginPage() {
+  const [searchParams] = useSearchParams();
+  const authError = searchParams.get("auth_error");
+
   const handleLogin = () => {
-    const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+    window.location.href = `${process.env.REACT_APP_BACKEND_URL}/api/auth/google/login`;
   };
 
   return (
@@ -36,6 +46,13 @@ export default function LoginPage() {
             <Sparkles size={16} /> Accedi con Google
             <ArrowRight size={18} />
           </button>
+
+          {authError && (
+            <div data-testid="login-auth-error" className="mt-4 flex items-center gap-2 text-sm text-amber-400">
+              <ShieldAlert size={16} />
+              {AUTH_ERROR_MESSAGES[authError] || "Accesso non riuscito, riprova."}
+            </div>
+          )}
 
           <div className="mt-4 kicker">powered by claude sonnet 5</div>
         </div>
