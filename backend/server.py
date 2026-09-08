@@ -14,6 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
+import bcrypt
 
 from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent, OpenAISpeechToText
 
@@ -34,6 +35,14 @@ EMERGENT_LLM_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
 # ============ ADMIN / WHITELIST ============
 ADMIN_EMAIL = (os.environ.get('ADMIN_EMAIL') or 'ingdegiovanniluca@gmail.com').strip().lower()
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -59,6 +68,17 @@ class User(BaseModel):
     created_at: Optional[str] = None
     telegram_chat_id: Optional[int] = None
     role: Optional[str] = "user"
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
 class OnboardingPayload(BaseModel):
@@ -166,6 +186,98 @@ async def get_current_user(
 LOGIN_STATE_TTL_MIN = 10
 
 
+def _set_session_cookie(response: Response, session_token: str):
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+        max_age=7 * 24 * 60 * 60,
+    )
+
+
+async def _create_session(user_id: str) -> str:
+    session_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return session_token
+
+
+async def _check_whitelist(email: str) -> tuple[bool, bool]:
+    """Returns (is_admin_seed, is_allowed). Admins are always allowed."""
+    is_admin_seed = email == ADMIN_EMAIL
+    if is_admin_seed:
+        return True, True
+    allowed = await db.allowed_emails.find_one({"email": email})
+    return False, bool(allowed)
+
+
+@api_router.post("/auth/register")
+async def register(payload: RegisterRequest, response: Response):
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email non valida")
+    if len(payload.password or "") < 8:
+        raise HTTPException(status_code=400, detail="La password deve avere almeno 8 caratteri")
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome obbligatorio")
+
+    is_admin_seed, allowed = await _check_whitelist(email)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Il tuo account non è autorizzato ad accedere a mAIPAL. "
+                f"Contatta l'amministratore ({ADMIN_EMAIL}) per essere aggiunto alla whitelist."
+            ),
+        )
+
+    if await db.users.find_one({"email": email}, {"_id": 0}):
+        raise HTTPException(status_code=409, detail="Un account con questa email esiste già. Prova ad accedere.")
+
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    user_doc = {
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "picture": None,
+        "password_hash": _hash_password(payload.password),
+        "role": "admin" if is_admin_seed else "user",
+        "onboarded": False,
+        "profession": None,
+        "sector": None,
+        "verticals": [],
+        "interests": [],
+        "tone": "informale",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(user_doc)
+
+    session_token = await _create_session(user_id)
+    _set_session_cookie(response, session_token)
+    return {"user": User(**user_doc).model_dump()}
+
+
+@api_router.post("/auth/login")
+async def login(payload: LoginRequest, response: Response):
+    email = (payload.email or "").strip().lower()
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user_doc or not user_doc.get("password_hash") or not _verify_password(payload.password, user_doc["password_hash"]):
+        raise HTTPException(status_code=401, detail="Email o password errati")
+
+    session_token = await _create_session(user_doc["user_id"])
+    _set_session_cookie(response, session_token)
+    return {"user": User(**user_doc).model_dump()}
+
+
 @api_router.get("/auth/google/login")
 async def google_login():
     if not gi.is_configured():
@@ -202,13 +314,9 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
     if not email:
         return RedirectResponse(f"{base}/?auth_error=no_email")
 
-    # ===== WHITELIST CHECK =====
-    # Only pre-authorized emails may sign in. Admins are always allowed.
-    is_admin_seed = email == ADMIN_EMAIL
-    if not is_admin_seed:
-        allowed = await db.allowed_emails.find_one({"email": email})
-        if not allowed:
-            return RedirectResponse(f"{base}/?auth_error=not_whitelisted")
+    is_admin_seed, allowed = await _check_whitelist(email)
+    if not allowed:
+        return RedirectResponse(f"{base}/?auth_error=not_whitelisted")
 
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
@@ -238,26 +346,11 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
         }
         await db.users.insert_one(user_doc)
 
-    session_token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-    await db.user_sessions.insert_one({
-        "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": expires_at,
-        "created_at": datetime.now(timezone.utc),
-    })
+    session_token = await _create_session(user_id)
 
     dest = f"{base}/dashboard" if user_doc.get("onboarded") else f"{base}/onboarding"
     response = RedirectResponse(dest)
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/",
-        max_age=7 * 24 * 60 * 60,
-    )
+    _set_session_cookie(response, session_token)
     return response
 
 

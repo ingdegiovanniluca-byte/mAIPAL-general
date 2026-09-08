@@ -1,6 +1,8 @@
-import React from "react";
-import { useSearchParams } from "react-router-dom";
-import { Sparkles, ArrowRight, ShieldAlert } from "lucide-react";
+import React, { useState } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import { Sparkles, ArrowRight, ShieldAlert, Mail } from "lucide-react";
+import { api } from "@/lib/api";
+import { useAuth } from "@/auth/AuthContext";
 
 const AUTH_ERROR_MESSAGES = {
   not_whitelisted: "Il tuo account non è ancora abilitato. Contatta l'amministratore per essere aggiunto alla whitelist.",
@@ -10,11 +12,100 @@ const AUTH_ERROR_MESSAGES = {
   no_email: "Impossibile leggere l'email dal tuo account Google.",
 };
 
+function EmailPasswordForm() {
+  const navigate = useNavigate();
+  const { setUser } = useAuth();
+  const [mode, setMode] = useState("login"); // "login" | "register"
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const path = mode === "login" ? "/auth/login" : "/auth/register";
+      const body = mode === "login" ? { email, password } : { email, password, name };
+      const r = await api.post(path, body);
+      setUser(r.data.user);
+      navigate(r.data.user?.onboarded ? "/dashboard" : "/onboarding", { replace: true });
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Operazione non riuscita, riprova.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-6 max-w-sm">
+      {mode === "register" && (
+        <input
+          data-testid="register-name-input"
+          type="text"
+          placeholder="Nome"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+          className="w-full mb-2 px-4 py-2.5 rounded-full bg-white/5 border border-white/10 text-sm placeholder:text-white/40 outline-none focus:border-white/30"
+        />
+      )}
+      <input
+        data-testid="email-input"
+        type="email"
+        placeholder="Email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+        className="w-full mb-2 px-4 py-2.5 rounded-full bg-white/5 border border-white/10 text-sm placeholder:text-white/40 outline-none focus:border-white/30"
+      />
+      <input
+        data-testid="password-input"
+        type="password"
+        placeholder="Password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        required
+        minLength={mode === "register" ? 8 : undefined}
+        className="w-full mb-3 px-4 py-2.5 rounded-full bg-white/5 border border-white/10 text-sm placeholder:text-white/40 outline-none focus:border-white/30"
+      />
+
+      <button
+        data-testid="email-submit-btn"
+        type="submit"
+        disabled={loading}
+        className="pill-btn text-base px-6 py-3.5 disabled:opacity-50"
+      >
+        <Mail size={16} /> {mode === "login" ? "Accedi" : "Registrati"}
+        <ArrowRight size={18} />
+      </button>
+
+      {error && (
+        <div data-testid="email-auth-error" className="mt-3 flex items-center gap-2 text-sm text-amber-400">
+          <ShieldAlert size={16} /> {error}
+        </div>
+      )}
+
+      <button
+        type="button"
+        data-testid="toggle-register-mode"
+        onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(null); }}
+        className="mt-3 block text-sm text-white/60 hover:text-white/90 underline"
+      >
+        {mode === "login" ? "Non hai un account? Registrati" : "Hai già un account? Accedi"}
+      </button>
+    </form>
+  );
+}
+
 export default function LoginPage() {
   const [searchParams] = useSearchParams();
   const authError = searchParams.get("auth_error");
+  const [method, setMethod] = useState("google"); // "google" | "email"
 
-  const handleLogin = () => {
+  const handleGoogleLogin = () => {
     window.location.href = `${process.env.REACT_APP_BACKEND_URL}/api/auth/google/login`;
   };
 
@@ -38,14 +129,35 @@ export default function LoginPage() {
             e risponde con la tua knowledge base. Chatta, salva, organizza.
           </p>
 
-          <button
-            data-testid="login-google-btn"
-            onClick={handleLogin}
-            className="pill-btn mt-10 text-base px-6 py-3.5"
-          >
-            <Sparkles size={16} /> Accedi con Google
-            <ArrowRight size={18} />
-          </button>
+          <div className="mt-10 flex gap-2 text-sm">
+            <button
+              data-testid="login-method-google"
+              onClick={() => setMethod("google")}
+              className={`px-4 py-1.5 rounded-full border ${method === "google" ? "bg-white/10 border-white/30" : "border-white/10 text-white/50"}`}
+            >
+              Google
+            </button>
+            <button
+              data-testid="login-method-email"
+              onClick={() => setMethod("email")}
+              className={`px-4 py-1.5 rounded-full border ${method === "email" ? "bg-white/10 border-white/30" : "border-white/10 text-white/50"}`}
+            >
+              Email
+            </button>
+          </div>
+
+          {method === "google" ? (
+            <button
+              data-testid="login-google-btn"
+              onClick={handleGoogleLogin}
+              className="pill-btn mt-4 text-base px-6 py-3.5"
+            >
+              <Sparkles size={16} /> Accedi con Google
+              <ArrowRight size={18} />
+            </button>
+          ) : (
+            <EmailPasswordForm />
+          )}
 
           {authError && (
             <div data-testid="login-auth-error" className="mt-4 flex items-center gap-2 text-sm text-amber-400">
