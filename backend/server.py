@@ -283,8 +283,13 @@ async def google_login():
     if not gi.is_configured():
         raise HTTPException(status_code=400, detail="Google OAuth non configurato (GOOGLE_CLIENT_ID/SECRET mancanti)")
     state = secrets.token_urlsafe(24)
-    await db.google_login_states.insert_one({"state": state, "created_at": datetime.now(timezone.utc)})
-    return RedirectResponse(gi.build_login_authorization_url(state))
+    url, code_verifier = gi.build_login_authorization_url(state)
+    await db.google_login_states.insert_one({
+        "state": state,
+        "code_verifier": code_verifier,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return RedirectResponse(url)
 
 
 @api_router.get("/auth/google/callback")
@@ -305,7 +310,7 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
         return RedirectResponse(f"{base}/?auth_error=invalid_state")
 
     try:
-        info = gi.exchange_login_code(code)
+        info = gi.exchange_login_code(code, st["code_verifier"])
     except Exception:
         logger.exception("Google login exchange failed")
         return RedirectResponse(f"{base}/?auth_error=oauth_failed")
@@ -1773,12 +1778,13 @@ async def google_authorize(current: User = Depends(get_current_user)):
     if not gi.is_configured():
         raise HTTPException(status_code=400, detail="Google OAuth non configurato (GOOGLE_CLIENT_ID/SECRET mancanti)")
     state = f"{current.user_id}:{secrets.token_urlsafe(16)}"
+    url, code_verifier = gi.build_authorization_url(state)
     await db.google_oauth_states.insert_one({
         "state": state,
         "user_id": current.user_id,
+        "code_verifier": code_verifier,
         "created_at": datetime.now(timezone.utc),
     })
-    url = gi.build_authorization_url(state)
     return {"authorization_url": url}
 
 
@@ -1791,7 +1797,7 @@ async def google_callback(code: str, state: str):
     await db.google_oauth_states.delete_one({"state": state})
 
     try:
-        creds_dict = gi.exchange_code(code)
+        creds_dict = gi.exchange_code(code, st["code_verifier"])
     except Exception as e:
         logger.exception("Google exchange failed")
         return RedirectResponse(f"{os.environ['APP_BASE_URL']}/dashboard/settings?google=error")

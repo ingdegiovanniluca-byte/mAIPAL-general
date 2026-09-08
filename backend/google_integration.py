@@ -50,20 +50,25 @@ def _client_config():
     }
 
 
-def build_authorization_url(state: str) -> str:
+def build_authorization_url(state: str) -> tuple[str, str]:
+    """Returns (authorization_url, code_verifier) — see build_login_authorization_url
+    for why the verifier must be persisted (keyed by state) and passed to exchange_code."""
+    verifier, challenge = _generate_pkce_pair()
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES, redirect_uri=redirect_uri())
     url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
         state=state,
+        code_challenge=challenge,
+        code_challenge_method="S256",
     )
-    return url
+    return url, verifier
 
 
-def exchange_code(code: str) -> dict:
+def exchange_code(code: str, code_verifier: str) -> dict:
     flow = Flow.from_client_config(_client_config(), scopes=None, redirect_uri=redirect_uri())
-    flow.fetch_token(code=code)
+    flow.fetch_token(code=code, code_verifier=code_verifier)
     c = flow.credentials
     return {
         "access_token": c.token,
@@ -103,21 +108,35 @@ def _login_client_config():
     }
 
 
-def build_login_authorization_url(state: str) -> str:
+def _generate_pkce_pair() -> tuple[str, str]:
+    import base64
+    import hashlib
+    verifier = base64.urlsafe_b64encode(os.urandom(64)).rstrip(b"=").decode("ascii")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def build_login_authorization_url(state: str) -> tuple[str, str]:
+    """Returns (authorization_url, code_verifier). The verifier must be persisted
+    (keyed by state) and passed back into exchange_login_code — Google's client
+    requires PKCE, and the code_verifier can't be recovered from the callback alone."""
+    verifier, challenge = _generate_pkce_pair()
     flow = Flow.from_client_config(_login_client_config(), scopes=LOGIN_SCOPES, redirect_uri=login_redirect_uri())
     url, _ = flow.authorization_url(
         access_type="online",
         include_granted_scopes="true",
         prompt="select_account",
         state=state,
+        code_challenge=challenge,
+        code_challenge_method="S256",
     )
-    return url
+    return url, verifier
 
 
-def exchange_login_code(code: str) -> dict:
+def exchange_login_code(code: str, code_verifier: str) -> dict:
     """Exchange a login-flow auth code for the user's email/name/picture."""
     flow = Flow.from_client_config(_login_client_config(), scopes=LOGIN_SCOPES, redirect_uri=login_redirect_uri())
-    flow.fetch_token(code=code)
+    flow.fetch_token(code=code, code_verifier=code_verifier)
     r = requests.get(
         "https://www.googleapis.com/oauth2/v3/userinfo",
         headers={"Authorization": f"Bearer {flow.credentials.token}"},
