@@ -110,26 +110,29 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen w-full flex flex-col md:flex-row">
-      <div className="flex-1 flex flex-col justify-between p-10 md:p-16">
+    <div className="h-screen w-full flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col justify-between p-6 md:p-10 xl:p-14 overflow-hidden">
         <div>
           <div className="kicker" data-testid="brand-kicker">mAIPAL · segretario digitale</div>
         </div>
 
         <div className="max-w-xl">
-          <div className="kicker mb-4">Cosa vuoi fare oggi?</div>
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tight leading-[1.02]">
+          <div className="kicker mb-2">Cosa vuoi fare oggi?</div>
+          <h1
+            className="font-bold tracking-tight leading-[1.05]"
+            style={{ fontSize: "clamp(1.75rem, 4vh, 4.5rem)" }}
+          >
             Fai fare a{" "}
             <span className="gradient-word">mAIPAL</span>
             <br />
             quello che non hai tempo di fare.
           </h1>
-          <p className="mt-6 text-lg text-white/70 max-w-lg">
+          <p className="mt-3 text-base md:text-lg text-white/70 max-w-lg">
             Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do,
             e risponde con la tua knowledge base. Chatta, salva, organizza.
           </p>
 
-          <div className="mt-10 flex gap-2 text-sm">
+          <div className="mt-5 flex gap-2 text-sm">
             <button
               data-testid="login-method-google"
               onClick={() => setMethod("google")}
@@ -146,7 +149,7 @@ export default function LoginPage() {
             </button>
           </div>
 
-          <div className="mt-4 min-h-[300px]">
+          <div className="mt-3 min-h-[260px]">
             {method === "google" ? (
               <button
                 data-testid="login-google-btn"
@@ -162,13 +165,13 @@ export default function LoginPage() {
           </div>
 
           {authError && (
-            <div data-testid="login-auth-error" className="mt-4 flex items-center gap-2 text-sm text-amber-400">
+            <div data-testid="login-auth-error" className="mt-3 flex items-center gap-2 text-sm text-amber-400">
               <ShieldAlert size={16} />
               {AUTH_ERROR_MESSAGES[authError] || "Accesso non riuscito, riprova."}
             </div>
           )}
 
-          <div className="mt-4 kicker">powered by claude sonnet 5</div>
+          <div className="mt-3 kicker">powered by claude sonnet 5</div>
         </div>
 
         <div className="flex items-center gap-6 kicker">
