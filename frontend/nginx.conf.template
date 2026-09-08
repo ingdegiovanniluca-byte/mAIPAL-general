@@ -14,8 +14,14 @@ server {
         proxy_buffering off;
     }
 
+    location ${PUBLIC_URL}/static/ {
+        alias /usr/share/nginx/html${PUBLIC_URL}/static/;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
     location ${PUBLIC_URL}/ {
         alias /usr/share/nginx/html${PUBLIC_URL}/;
+        add_header Cache-Control "no-cache";
         try_files $uri $uri/ ${PUBLIC_URL}/index.html;
     }
 }
