@@ -11,6 +11,11 @@ from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
+# Google's token response can reorder/add scopes (e.g. implicit "openid") vs what
+# we requested. oauthlib treats that as an error unless this is set — without it,
+# Flow.fetch_token() raises "Scope has changed" on an otherwise successful exchange.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/calendar.events",
