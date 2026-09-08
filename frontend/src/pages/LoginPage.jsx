@@ -40,7 +40,7 @@ function EmailPasswordForm() {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="mt-6 max-w-sm">
+    <form onSubmit={handleSubmit} className="max-w-sm">
       {mode === "register" && (
         <input
           data-testid="register-name-input"
@@ -146,18 +146,20 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {method === "google" ? (
-            <button
-              data-testid="login-google-btn"
-              onClick={handleGoogleLogin}
-              className="pill-btn mt-4 text-base px-6 py-3.5"
-            >
-              <Sparkles size={16} /> Accedi con Google
-              <ArrowRight size={18} />
-            </button>
-          ) : (
-            <EmailPasswordForm />
-          )}
+          <div className="mt-4 min-h-[300px]">
+            {method === "google" ? (
+              <button
+                data-testid="login-google-btn"
+                onClick={handleGoogleLogin}
+                className="pill-btn text-base px-6 py-3.5"
+              >
+                <Sparkles size={16} /> Accedi con Google
+                <ArrowRight size={18} />
+              </button>
+            ) : (
+              <EmailPasswordForm />
+            )}
+          </div>
 
           {authError && (
             <div data-testid="login-auth-error" className="mt-4 flex items-center gap-2 text-sm text-amber-400">
