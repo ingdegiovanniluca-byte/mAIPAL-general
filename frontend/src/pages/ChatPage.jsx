@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { api, streamChat, API } from "@/lib/api";
@@ -52,6 +52,8 @@ export default function ChatPage() {
   const [transcribing, setTranscribing] = useState(false);
   const [pendingVoice, setPendingVoice] = useState(null);
   const [attachments, setAttachments] = useState([]);
+  const [saveToDrive, setSaveToDrive] = useState(false);
+  const [pendingDriveUpload, setPendingDriveUpload] = useState(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const recStartRef = useRef(0);
@@ -85,7 +87,7 @@ export default function ChatPage() {
     setThread({ conv_id: conv.conv_id, action: conv.action, messages, liveAnswer: "" });
     setActive(conv.action);
   };
-  const closeThread = () => { setThread(null); setFocusMode(false); };
+  const closeThread = () => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); };
 
   const startRec = async () => {
     try {
@@ -122,8 +124,30 @@ export default function ChatPage() {
     return (j.text || "").trim();
   };
 
+  const resolveDrivePending = async (folderText) => {
+    try {
+      const res = await api.post("/drive/resolve-pending", { pending_id: pendingDriveUpload.pendingId, text: folderText });
+      const j = res.data;
+      if (j.status === "saved") {
+        toast.success(`${pendingDriveUpload.fileName} → Drive/${j.folder}`);
+        setPendingDriveUpload(null);
+        return true;
+      }
+      setPendingDriveUpload((p) => (p ? { ...p, suggestions: j.suggestions || [] } : p));
+      toast.error('Non ho capito la cartella — scrivi un nome (es. "Viaggi") o scegline una qui sotto.');
+      return false;
+    } catch (err) {
+      toast.error("Errore Drive: " + (err?.response?.data?.detail || err.message));
+      return false;
+    }
+  };
+
   const send = async () => {
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
+      const resolved = await resolveDrivePending(text.trim());
+      if (resolved) { setText(""); return; }
+    }
     if (!text.trim() && attachments.length === 0 && !pendingVoice) return;
     if (streaming || transcribing) return;
 
@@ -204,6 +228,7 @@ export default function ChatPage() {
           } else {
             toast.success(`${f.name} → Knowledge Base (${j.chunks} chunk)`);
           }
+          if (saveToDrive) await smartUploadToDrive(f);
         } else {
           setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
           toast.success(`${f.name} → Drive`);
@@ -212,6 +237,25 @@ export default function ChatPage() {
     }
   };
   const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
+
+  const smartUploadToDrive = async (file) => {
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      fd.append("text", text || "");
+      const res = await fetch(`${API}/drive/smart-upload`, { method: "POST", body: fd, credentials: "include" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);
+      if (j.status === "saved") {
+        toast.success(`${file.name} → Drive/${j.folder}`);
+      } else {
+        setPendingDriveUpload({ pendingId: j.pending_id, fileName: file.name, suggestions: j.suggestions || [] });
+        toast.message(`In quale cartella salvo "${file.name}"? Scrivilo nel messaggio o scegli qui sotto.`);
+      }
+    } catch (err) {
+      toast.error(`Drive: ${err.message}`);
+    }
+  };
 
   const filtered = history.filter((h) => {
     if (filter === "fav") { if (!h.favorite) return false; }
@@ -316,9 +360,33 @@ export default function ChatPage() {
               placeholder={thread ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
               className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
             />
+            {pendingDriveUpload && (
+              <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">
+                <span className="kicker text-white/70">cartella per "{pendingDriveUpload.fileName}":</span>
+                {pendingDriveUpload.suggestions.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => resolveDrivePending(s)}
+                    className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white hover:bg-white/30"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex items-center justify-between pt-2 border-t ">
               <div className="flex items-center gap-1.5 text-white/85 flex-wrap">
                 <button data-testid="attach-btn" onClick={onAttachClick} className="p-2 rounded-full hover:bg-white/15"><Paperclip size={16} /></button>
+                {active === "info_upload" && (
+                  <button
+                    data-testid="drive-save-toggle"
+                    onClick={() => setSaveToDrive((v) => !v)}
+                    title="Salva anche su Google Drive (cartella mAIPAL)"
+                    className={`p-2 rounded-full transition-colors duration-150 ${saveToDrive ? "bg-white/30 text-white" : "hover:bg-white/15"}`}
+                  >
+                    <HardDrive size={16} />
+                  </button>
+                )}
                 <button
                   data-testid="mic-btn"
                   onClick={recording ? stopRec : startRec}
@@ -409,7 +477,7 @@ export default function ChatPage() {
                   <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
                     {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {focusMode ? "esci focus" : "focus"}
                   </button>
-                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); }} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1">
+                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); }} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1">
                     <MessageSquarePlus size={12} /> nuova
                   </button>
                   <button data-testid="close-thread-btn" onClick={closeThread} className="p-1.5 rounded-full hover:bg-white/10 text-white"><X size={14} /></button>

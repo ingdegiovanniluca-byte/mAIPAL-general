@@ -23,11 +23,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
 ]
 
-LOGIN_SCOPES = [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-]
+# Login now requests the same scopes as the Drive/Calendar integration, so signing in
+# with Google also connects Workspace and auto-creates the mAIPAL folder in one step.
+LOGIN_SCOPES = SCOPES + ["https://www.googleapis.com/auth/userinfo.profile"]
 
 
 def redirect_uri() -> str:
@@ -123,9 +121,11 @@ def build_login_authorization_url(state: str) -> tuple[str, str]:
     verifier, challenge = _generate_pkce_pair()
     flow = Flow.from_client_config(_login_client_config(), scopes=LOGIN_SCOPES, redirect_uri=login_redirect_uri())
     url, _ = flow.authorization_url(
-        access_type="online",
+        # offline + consent so we reliably get a refresh_token to use Drive/Calendar
+        # later, not just at the moment of login.
+        access_type="offline",
         include_granted_scopes="true",
-        prompt="select_account",
+        prompt="select_account consent",
         state=state,
         code_challenge=challenge,
         code_challenge_method="S256",
@@ -134,17 +134,32 @@ def build_login_authorization_url(state: str) -> tuple[str, str]:
 
 
 def exchange_login_code(code: str, code_verifier: str) -> dict:
-    """Exchange a login-flow auth code for the user's email/name/picture."""
+    """Exchange a login-flow auth code for the user's profile info AND Drive/Calendar
+    credentials (login requests the same scopes as the Workspace integration)."""
     flow = Flow.from_client_config(_login_client_config(), scopes=LOGIN_SCOPES, redirect_uri=login_redirect_uri())
     flow.fetch_token(code=code, code_verifier=code_verifier)
+    c = flow.credentials
     r = requests.get(
         "https://www.googleapis.com/oauth2/v3/userinfo",
-        headers={"Authorization": f"Bearer {flow.credentials.token}"},
+        headers={"Authorization": f"Bearer {c.token}"},
         timeout=10,
     )
     r.raise_for_status()
     data = r.json()
-    return {"email": data.get("email"), "name": data.get("name"), "picture": data.get("picture")}
+    return {
+        "email": data.get("email"),
+        "name": data.get("name"),
+        "picture": data.get("picture"),
+        "credentials": {
+            "access_token": c.token,
+            "refresh_token": c.refresh_token,
+            "token_uri": c.token_uri,
+            "client_id": c.client_id,
+            "client_secret": c.client_secret,
+            "scopes": list(c.scopes or []),
+            "expiry": c.expiry.isoformat() if c.expiry else None,
+        } if c.refresh_token else None,
+    }
 
 
 async def get_credentials(db, user_id: str) -> Optional[Credentials]:
@@ -185,6 +200,39 @@ async def ensure_maipal_folder(db, user_id: str, creds: Credentials) -> str:
         {"$set": {"drive_folder_id": folder_id}},
     )
     return folder_id
+
+
+async def list_subfolders(db, user_id: str, creds: Credentials) -> list:
+    """First-level subfolders directly inside the user's mAIPAL folder."""
+    parent_id = await ensure_maipal_folder(db, user_id, creds)
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    q = f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    res = service.files().list(q=q, spaces="drive", fields="files(id, name)").execute()
+    return res.get("files", [])
+
+
+async def find_or_create_subfolder(db, user_id: str, creds: Credentials, name: str) -> str:
+    """Find (or create) a subfolder by name directly inside mAIPAL. Returns its Drive file id."""
+    parent_id = await ensure_maipal_folder(db, user_id, creds)
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    safe_name = name.replace("'", "\\'")
+    q = f"name='{safe_name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    res = service.files().list(q=q, spaces="drive", fields="files(id, name)").execute()
+    files = res.get("files", [])
+    if files:
+        return files[0]["id"]
+    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
+    folder = service.files().create(body=meta, fields="id").execute()
+    return folder["id"]
+
+
+def upload_file_to_folder(creds: Credentials, folder_id: str, tmp_path: str, filename: str, content_type: Optional[str]) -> dict:
+    from googleapiclient.http import MediaFileUpload
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+    media = MediaFileUpload(tmp_path, mimetype=content_type or "application/octet-stream")
+    meta = {"name": filename or "file", "parents": [folder_id]}
+    created = service.files().create(body=meta, media_body=media, fields="id, webViewLink, name").execute()
+    return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": created["name"]}
 
 
 async def create_calendar_event(creds: Credentials, title: str, description: str = "", due_date: Optional[str] = None) -> str:

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Cookie, Header, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Cookie, Header, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, RedirectResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -350,6 +350,26 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.users.insert_one(user_doc)
+
+    # Best-effort: persist Drive/Calendar credentials and auto-create the mAIPAL folder.
+    # Never blocks login — Workspace setup failing here just means the user connects
+    # manually later from Impostazioni.
+    creds_info = info.get("credentials")
+    if creds_info and creds_info.get("refresh_token"):
+        try:
+            integration_doc = {
+                **creds_info, "provider": "google", "user_id": user_id, "email": email,
+                "connected_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.integrations.update_one(
+                {"user_id": user_id, "provider": "google"},
+                {"$set": integration_doc}, upsert=True,
+            )
+            creds = await gi.get_credentials(db, user_id)
+            if creds:
+                await gi.ensure_maipal_folder(db, user_id, creds)
+        except Exception:
+            logger.exception("Drive auto-setup at login failed")
 
     session_token = await _create_session(user_id)
 
@@ -1420,6 +1440,103 @@ async def upload_attachment(file: UploadFile = File(...), current: User = Depend
     except Exception as e:
         logger.exception("drive upload failed")
         raise HTTPException(status_code=500, detail=f"Upload Drive fallito: {e}")
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
+
+
+async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> Optional[str]:
+    """Ask the LLM whether the user's message names a target Drive folder (existing or
+    new). Returns the folder name, or None if the message doesn't specify one."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    folders_list = ", ".join(existing_folders) if existing_folders else "(nessuna)"
+    system = (
+        "L'utente sta caricando un file su Google Drive, dentro la cartella mAIPAL. "
+        f"Cartelle già esistenti dentro mAIPAL: {folders_list}. "
+        "Analizza il messaggio dell'utente: se indica chiaramente in quale cartella salvare il file "
+        "(sia una cartella esistente sia una nuova da creare), rispondi SOLO con il nome esatto di quella cartella, "
+        "senza virgolette né altro testo. Se non lo specifica, rispondi SOLO con la parola: NESSUNA."
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"drivehint_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-5")
+        raw = (await chat.send_message(UserMessage(text=text))).strip().strip('"').strip()
+        if not raw or raw.upper() == "NESSUNA":
+            return None
+        return raw
+    except Exception:
+        logger.exception("drive folder hint resolution failed")
+        return None
+
+
+@api_router.post("/drive/smart-upload")
+async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), current: User = Depends(get_current_user)):
+    """Upload a file into the mAIPAL Drive tree, picking the subfolder from the user's
+    message when possible. If no folder can be determined, stashes the file and returns
+    suggestions so the conversation can ask the user (see /drive/resolve-pending)."""
+    creds = await gi.get_credentials(db, current.user_id)
+    if not creds:
+        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
+
+    contents = await file.read()
+    subfolders = await gi.list_subfolders(db, current.user_id, creds)
+    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders])
+
+    if folder_name:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file.filename.rsplit('.',1)[-1] if '.' in (file.filename or '') else 'bin'}") as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+        try:
+            folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
+            result = gi.upload_file_to_folder(creds, folder_id, tmp_path, file.filename, file.content_type)
+            return {"status": "saved", "folder": folder_name, **result}
+        finally:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+
+    import base64 as _b64
+    pending_id = f"pdu_{uuid.uuid4().hex[:12]}"
+    await db.pending_drive_uploads.insert_one({
+        "pending_id": pending_id,
+        "user_id": current.user_id,
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "data_b64": _b64.b64encode(contents).decode("ascii"),
+        "created_at": datetime.now(timezone.utc),
+    })
+    return {"status": "needs_folder", "pending_id": pending_id, "suggestions": [f["name"] for f in subfolders]}
+
+
+@api_router.post("/drive/resolve-pending")
+async def drive_resolve_pending(payload: dict, current: User = Depends(get_current_user)):
+    """Second turn of the smart-upload flow: the user's follow-up message may now name
+    the folder. Resolves it and finally uploads the stashed file."""
+    pending_id = payload.get("pending_id")
+    text = payload.get("text", "")
+    doc = await db.pending_drive_uploads.find_one({"pending_id": pending_id, "user_id": current.user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Nessun upload in attesa trovato")
+
+    creds = await gi.get_credentials(db, current.user_id)
+    if not creds:
+        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
+
+    subfolders = await gi.list_subfolders(db, current.user_id, creds)
+    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders])
+    if not folder_name:
+        return {"status": "needs_folder", "pending_id": pending_id, "suggestions": [f["name"] for f in subfolders]}
+
+    import base64 as _b64
+    contents = _b64.b64decode(doc["data_b64"])
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{doc['filename'].rsplit('.',1)[-1] if '.' in (doc['filename'] or '') else 'bin'}") as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
+        result = gi.upload_file_to_folder(creds, folder_id, tmp_path, doc["filename"], doc["content_type"])
+        await db.pending_drive_uploads.delete_one({"pending_id": pending_id})
+        return {"status": "saved", "folder": folder_name, **result}
     finally:
         try: os.unlink(tmp_path)
         except Exception: pass
