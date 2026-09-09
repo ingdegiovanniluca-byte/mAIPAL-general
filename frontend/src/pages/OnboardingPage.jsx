@@ -43,7 +43,7 @@ export default function OnboardingPage() {
 
   const steps = [
     {
-      title: "Come ti chiami di lavoro?",
+      title: "Raccontami qualcosa sul tuo lavoro",
       body: (
         <div className="space-y-4">
           <div>
