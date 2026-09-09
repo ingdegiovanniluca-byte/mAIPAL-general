@@ -237,16 +237,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     .card-enter { animation: none; opacity: 1; }
 }
 
-/* Chat input: "diary page" look — same card gradient, plus faint ruled lines. */
+/* Chat input: "diary page" look — same card gradient as before. */
 .chat-input-card {
-    background:
-        repeating-linear-gradient(
-            to bottom,
-            transparent 0,
-            transparent 27px,
-            rgba(255, 255, 255, 0.14) 28px,
-            transparent 29px
-        ),
-        linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%);
+    background: linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%);
 }
-.diary-lines { background-attachment: local; }
+
+/* Faint ruled lines, applied to the writing area only (starts below the header row). */
+.diary-lines {
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent 27px,
+        rgba(255, 255, 255, 0.14) 28px,
+        transparent 29px
+    );
+    background-attachment: local;
+}
