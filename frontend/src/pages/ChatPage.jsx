@@ -173,8 +173,11 @@ export default function ChatPage() {
       if (driveLine) parts.push(`Allegati caricati su Drive:\n${driveLine}`);
       currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
     }
+    const driveFiles = attachments.filter((a) => a.driveFile);
+    const driveHintText = text.trim();
     setText("");
     setAttachments([]);
+    driveFiles.forEach((a) => smartUploadToDrive(a.driveFile, driveHintText));
 
     if (thread) {
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: currentQuestion }], liveAnswer: "" }));
@@ -222,13 +225,13 @@ export default function ChatPage() {
         }
         const j = await res.json();
         if (useKb) {
-          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview, ocr: j.source_type === "image_ocr" }]);
+          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview, ocr: j.source_type === "image_ocr", driveFile: saveToDrive ? f : undefined }]);
           if (j.source_type === "image_ocr") {
             toast.success(`${f.name} → OCR + Knowledge Base (${j.chars} caratteri)`);
           } else {
             toast.success(`${f.name} → Knowledge Base (${j.chunks} chunk)`);
           }
-          if (saveToDrive) await smartUploadToDrive(f);
+          if (saveToDrive) toast.message(`"${f.name}" verrà salvato anche su Drive quando invii il messaggio — scrivi la cartella se vuoi sceglierla tu.`);
         } else {
           setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
           toast.success(`${f.name} → Drive`);
@@ -238,11 +241,11 @@ export default function ChatPage() {
   };
   const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
 
-  const smartUploadToDrive = async (file) => {
+  const smartUploadToDrive = async (file, hintText) => {
     try {
       const fd = new FormData();
       fd.append("file", file, file.name);
-      fd.append("text", text || "");
+      fd.append("text", hintText || "");
       const res = await fetch(`${API}/drive/smart-upload`, { method: "POST", body: fd, credentials: "include" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { Calendar, Tag, MessageSquare, Star, Trash2, CircleCheck, Archive } from "lucide-react";
+import { Calendar, CalendarCheck, Tag, MessageSquare, Star, Trash2, CircleCheck, Archive, AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -44,6 +44,17 @@ export default function TaskBoardPage() {
       await api.post(`/tasks/${id}/complete`);
       toast.success(cur ? "Riaperto" : "Task completato ✓");
     } catch { toast.error("Errore"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: cur } : t))); }
+  };
+
+  const toggleCal = async (id, cur) => {
+    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, calendar_synced: !cur } : t)));
+    try {
+      await api.patch(`/tasks/${id}`, { calendar_synced: !cur });
+      toast.success(cur ? "Rimosso da Calendar" : "Aggiunto a Calendar");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore");
+      setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, calendar_synced: cur } : t)));
+    }
   };
 
   const del = async (id) => {
@@ -91,7 +102,7 @@ export default function TaskBoardPage() {
               <div className="mt-5 space-y-3 min-h-[240px]">
                 {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
                 {c.items.map((t) => (
-                  <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onToggleDone={() => toggleDone(t.id, !!t.completed)} onDelete={() => del(t.id)} />
+                  <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onToggleDone={() => toggleDone(t.id, !!t.completed)} onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)} onDelete={() => del(t.id)} />
                 ))}
               </div>
             </div>
@@ -106,14 +117,17 @@ export default function TaskBoardPage() {
   );
 }
 
-function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggleDone, onDelete }) {
+function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggleDone, onToggleCal, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   const isFav = !!task.favorite;
   const isDone = !!task.completed;
+  const isCal = !!task.calendar_synced;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isOverdue = !!task.due_date && !isDone && task.due_date < todayStr;
   return (
     <div
       data-testid={`task-${task.id}`}
-      className={`relative w-full text-left card-soft ${sideClass} p-4 card-hover ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""}`}
+      className={`relative w-full text-left card-soft ${sideClass} p-4 card-hover ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""} ${isOverdue ? "bg-red-500/10 ring-1 ring-red-500/30" : ""}`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
         <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-white/40 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
@@ -122,15 +136,18 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
         <button data-testid="task-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
           <Star size={14} className={isFav ? "fill-current" : ""} />
         </button>
+        <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-blue-500 hover:bg-blue-50" : "text-white/40 hover:bg-white/10 hover:text-blue-500"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+          <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
+        </button>
         <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
       </div>
-      <button onClick={onClick} className="w-full text-left pr-20">
+      <button onClick={onClick} className="w-full text-left pr-28">
         <div className={`font-semibold ${isDone ? "line-through" : ""}`}>{task.title}</div>
         {task.description && <div className="text-sm text-white/60 mt-1">{task.description}</div>}
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           {task.due_date && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white/10 ">
-              <Calendar size={10} /> {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}{task.due_time ? ` · ${task.due_time}` : ""}
+            <span className={`inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md ${isOverdue ? "bg-red-500/20 text-red-300 border border-red-500/40" : "bg-white/10"}`}>
+              {isOverdue ? <AlertTriangle size={10} /> : <Calendar size={10} />} {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}{task.due_time ? ` · ${task.due_time}` : ""}{isOverdue ? " · scaduto" : ""}
             </span>
           )}
           {(task.tags || []).map((tag, i) => (
