@@ -59,6 +59,7 @@ export default function ChatPage() {
 
   const [thread, setThread] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false);
   const threadEndRef = useRef(null);
 
   const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
@@ -284,7 +285,11 @@ export default function ChatPage() {
             <div className="text-xs font-bold uppercase tracking-wider text-white">nuovo messaggio</div>
             <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
           </div>
-          <div className="p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col" style={{ background: "linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%)" }} data-testid="chat-input-card">
+          <div
+            className={`diary-frame ${inputFocused ? "is-typing" : ""}`}
+            data-testid="chat-input-frame"
+          >
+          <div className="chat-input-card diary-lines p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col" data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
@@ -313,6 +318,8 @@ export default function ChatPage() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send(); }}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
               placeholder={thread ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
               className="border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
             />
@@ -347,6 +354,7 @@ export default function ChatPage() {
               </button>
             </div>
             <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : undefined} data-testid="file-input" />
+          </div>
           </div>
         </aside>
 

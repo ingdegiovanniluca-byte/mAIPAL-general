@@ -236,3 +236,60 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (prefers-reduced-motion: reduce) {
     .card-enter { animation: none; opacity: 1; }
 }
+
+/* Chat input: "diary page" look — same card gradient, plus faint ruled lines. */
+.chat-input-card {
+    background:
+        repeating-linear-gradient(
+            to bottom,
+            transparent 0,
+            transparent 27px,
+            rgba(255, 255, 255, 0.14) 28px,
+            transparent 29px
+        ),
+        linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%);
+}
+.diary-lines { background-attachment: local; }
+
+/* Animated frame that sweeps clockwise around the chat input card while idle,
+   and settles down while the user is actively typing. */
+.diary-frame {
+    position: relative;
+    border-radius: 1rem;
+    isolation: isolate;
+}
+.diary-frame::before {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    padding: 3px;
+    background: conic-gradient(
+        from 0deg,
+        transparent 0%,
+        transparent 76%,
+        #FFC896 87%,
+        #DD772F 92%,
+        #FFC896 97%,
+        transparent 100%
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: diary-frame-spin 5s linear infinite;
+    opacity: 0.9;
+    transition: opacity 400ms ease;
+    pointer-events: none;
+    z-index: 0;
+}
+.diary-frame > * { position: relative; z-index: 1; }
+.diary-frame.is-typing::before {
+    opacity: 0;
+    animation-play-state: paused;
+}
+@keyframes diary-frame-spin {
+    to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .diary-frame::before { animation: none; opacity: 0.5; }
+}
