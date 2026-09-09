@@ -509,10 +509,10 @@ function HistoryCard({ conv, index = 0, onOpen, onToggleFav, onDelete }) {
       </div>
 
       <button onClick={onOpen} className="w-full text-left mt-3" data-testid="open-thread-btn">
-        {title && <div className="text-sm font-semibold mb-1" style={{ color: TITLE_COLOR[conv.action] || "#482B94" }} data-testid="conv-title">{title}</div>}
+        {title && <div className="text-sm font-semibold mb-1 pl-3" style={{ color: TITLE_COLOR[conv.action] || "#482B94" }} data-testid="conv-title">{title}</div>}
         <div className="bg-white/5 rounded-xl p-3 text-sm text-white/90 line-clamp-2">{preview}</div>
         {summary && (
-          <div className="mt-2 text-xs text-white/60 line-clamp-2 leading-relaxed" data-testid="conv-summary">
+          <div className="mt-2 text-xs text-white/60 line-clamp-2 leading-relaxed pl-3" data-testid="conv-summary">
             {summary}
           </div>
         )}
