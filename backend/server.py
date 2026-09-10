@@ -953,6 +953,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     "conv_id": conv_id,
                 })
             elif action == "task_todo":
+                logger.info(f"[task_todo] meta={meta!r}")
                 if meta:
                     await _create_task_or_todo(current.user_id, meta, conv_id)
             elif action == "journal":
