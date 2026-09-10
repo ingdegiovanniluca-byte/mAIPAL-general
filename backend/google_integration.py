@@ -2,7 +2,7 @@
 import os
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -235,10 +235,30 @@ def upload_file_to_folder(creds: Credentials, folder_id: str, tmp_path: str, fil
     return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": created["name"]}
 
 
-async def create_calendar_event(creds: Credentials, title: str, description: str = "", due_date: Optional[str] = None) -> str:
+EVENT_TIMEZONE = "Europe/Rome"
+
+
+async def create_calendar_event(
+    creds: Credentials,
+    title: str,
+    description: str = "",
+    due_date: Optional[str] = None,
+    due_time: Optional[str] = None,
+    duration_minutes: Optional[int] = None,
+) -> str:
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    if due_date:
-        # All-day event on due_date
+    duration = duration_minutes or 30
+    if due_date and due_time:
+        start_dt = datetime.strptime(f"{due_date} {due_time}", "%Y-%m-%d %H:%M")
+        end_dt = start_dt + timedelta(minutes=duration)
+        event = {
+            "summary": title,
+            "description": description or "",
+            "start": {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": EVENT_TIMEZONE},
+            "end": {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": EVENT_TIMEZONE},
+        }
+    elif due_date:
+        # No specific time: all-day event on due_date
         event = {
             "summary": title,
             "description": description or "",
@@ -246,12 +266,13 @@ async def create_calendar_event(creds: Credentials, title: str, description: str
             "end": {"date": due_date},
         }
     else:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        end = now + timedelta(minutes=duration)
         event = {
             "summary": title,
             "description": description or "",
-            "start": {"dateTime": now},
-            "end": {"dateTime": now},
+            "start": {"dateTime": now.isoformat()},
+            "end": {"dateTime": end.isoformat()},
         }
     created = service.events().insert(calendarId="primary", body=event).execute()
     return created["id"]

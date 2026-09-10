@@ -594,10 +594,12 @@ def build_system_prompt(user: User, action: str) -> str:
             "'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"breve titolo del task/todo\", \"summary\": \"riassunto in 1 riga max 140 caratteri\", \"description\": \"\", "
-            "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", "
+            "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", \"duration_minutes\": \"numero di minuti o null\", "
             "\"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}<<<END>>>. "
             "REGOLA: se rilevi una data (anche implicita: 'domani', 'lunedì', 'tra 3 giorni'), imposta due_date. "
-            "Se rilevi un'ora, imposta due_time. Il sistema salva come TASK se due_date è presente, altrimenti come TO-DO."
+            "Se rilevi un'ora, imposta due_time. Se rilevi anche una durata (es. 'per un'ora', 'di 45 minuti', "
+            "'dalle 15 alle 16'), imposta duration_minutes; altrimenti lascialo null (il sistema userà 30 minuti di default "
+            "quando l'evento viene sincronizzato su Calendar). Il sistema salva come TASK se due_date è presente, altrimenti come TO-DO."
         )
     elif action == "journal":
         base += (
@@ -997,6 +999,10 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
     # RULE: if due_date is present → TASK, otherwise → TODO (regardless of any 'type' field the LLM returned)
     due_date = parsed.get("due_date")
     due_time = parsed.get("due_time")
+    try:
+        duration_minutes = int(parsed.get("duration_minutes")) if parsed.get("duration_minutes") else None
+    except (TypeError, ValueError):
+        duration_minutes = None
     if due_date:
         doc = {
             "id": f"task_{uuid.uuid4().hex[:12]}",
@@ -1005,6 +1011,7 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
             "description": parsed.get("description", ""),
             "due_date": due_date,
             "due_time": due_time,
+            "duration_minutes": duration_minutes,
             "priority": parsed.get("priority", "media"),
             "tags": parsed.get("tags", []),
             "notes": parsed.get("notes", ""),
@@ -1112,6 +1119,8 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
                     title=existing.get("title","Task mAIPAL"),
                     description=existing.get("description","") or "",
                     due_date=existing.get("due_date"),
+                    due_time=existing.get("due_time"),
+                    duration_minutes=existing.get("duration_minutes"),
                 )
                 payload["calendar_event_id"] = event_id
             else:
