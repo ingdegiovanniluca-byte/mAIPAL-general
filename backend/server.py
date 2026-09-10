@@ -542,6 +542,16 @@ async def update_profile(payload: ProfilePatch, current: User = Depends(get_curr
 
 
 # ============ LLM / CHAT ============
+_IT_WEEKDAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+_IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+              "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+
+
+def _today_it_string() -> str:
+    now = datetime.now(timezone.utc)
+    return f"{_IT_WEEKDAYS[now.weekday()]} {now.day} {_IT_MONTHS[now.month - 1]} {now.year} (ISO: {now.date().isoformat()})"
+
+
 def build_system_prompt(user: User, action: str) -> str:
     verticals = ", ".join(user.verticals) if user.verticals else "generico"
     interests = ", ".join(user.interests) if user.interests else "n/d"
@@ -551,6 +561,8 @@ def build_system_prompt(user: User, action: str) -> str:
     if user.work_address: addr_parts.append(f"indirizzo lavoro: {user.work_address}")
     addr = "; ".join(addr_parts)
     base = (
+        f"Oggi è {_today_it_string()}. Usa SEMPRE questa data come riferimento per calcolare qualunque data "
+        "relativa menzionata dall'utente (es. 'domani', 'dopodomani', 'lunedì prossimo', 'tra 3 giorni'). "
         f"Sei mAIPAL, un assistente personale AI (segretario digitale) per {user_name}. "
         f"Profilo: professione '{user.profession or 'n/d'}', settore '{user.sector or 'n/d'}', "
         f"verticali d'uso: {verticals}, interessi: {interests}. "
