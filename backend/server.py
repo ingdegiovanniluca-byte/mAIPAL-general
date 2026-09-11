@@ -541,6 +541,20 @@ async def update_profile(payload: ProfilePatch, current: User = Depends(get_curr
     return User(**user_doc)
 
 
+@api_router.post("/profile/avatar")
+async def upload_avatar(file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=400, detail="Il file deve essere un'immagine")
+    contents = await file.read()
+    if len(contents) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Immagine troppo grande (max 2MB)")
+    import base64 as _b64
+    data_uri = f"data:{file.content_type};base64,{_b64.b64encode(contents).decode('ascii')}"
+    await db.users.update_one({"user_id": current.user_id}, {"$set": {"picture": data_uri}})
+    user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
+    return User(**user_doc)
+
+
 # ============ LLM / CHAT ============
 _IT_WEEKDAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 _IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",

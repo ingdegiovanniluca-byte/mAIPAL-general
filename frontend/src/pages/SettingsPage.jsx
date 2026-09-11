@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase } from "lucide-react";
+import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 
@@ -23,6 +23,8 @@ export default function SettingsPage() {
   const [homeAddress, setHomeAddress] = useState("");
   const [workAddress, setWorkAddress] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarInputRef = useRef(null);
 
   useEffect(() => {
     if (!user) return;
@@ -61,6 +63,22 @@ export default function SettingsPage() {
     } catch (e) {
       toast.error("Errore salvataggio profilo");
     } finally { setSavingProfile(false); }
+  };
+
+  const onAvatarPicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingAvatar(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const r = await api.post("/profile/avatar", fd);
+      setUser(r.data);
+      toast.success("Foto profilo aggiornata");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore caricamento immagine");
+    } finally { setUploadingAvatar(false); }
   };
 
   const connectGoogle = async () => {
@@ -103,8 +121,24 @@ export default function SettingsPage() {
       <p className="text-white/60 mt-2">Modifica il profilo con cui mAIPAL ti conosce e collega i servizi esterni.</p>
 
       <div className="card-soft p-6 mt-8" data-testid="profile-card">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center"><UserIcon size={18} /></div>
+        <div className="flex items-center gap-4 mb-4">
+          <button
+            data-testid="avatar-upload-btn"
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={uploadingAvatar}
+            title="Cambia foto profilo"
+            className="relative group w-14 h-14 rounded-full overflow-hidden bg-white/10 border border-white/20 flex items-center justify-center shrink-0"
+          >
+            {user?.picture ? (
+              <img src={user.picture} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <UserIcon size={22} />
+            )}
+            <span className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <Camera size={16} className="text-white" />
+            </span>
+          </button>
+          <input ref={avatarInputRef} type="file" accept="image/*" hidden onChange={onAvatarPicked} data-testid="avatar-input" />
           <div>
             <div className="text-lg font-semibold">Il tuo profilo</div>
             <div className="text-sm text-white/60">Queste informazioni personalizzano ogni risposta di mAIPAL</div>
