@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { Calendar, CalendarCheck, Tag, MessageSquare, Star, Trash2, CircleCheck, Archive, AlertTriangle } from "lucide-react";
+import { CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -11,12 +11,19 @@ const COLS = [
   { key: "bassa", label: "Bassa priorità", tint: "column-tint-low", dot: "bg-[color:var(--low)]", side: "priority-low" },
 ];
 
-const formatDDMMYYYY = (iso) => {
+const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+
+const formatDayMonth = (iso, time) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}/${d.getFullYear()}`;
+  const day = d.getDate();
+  const month = IT_MONTHS_LONG[d.getMonth()];
+  return time ? `${time}, ${day} ${month}` : `${day} ${month}`;
+};
+
+const isTaskOverdue = (t) => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  return !!t.due_date && !t.completed && t.due_date < todayStr;
 };
 
 export default function TaskBoardPage() {
@@ -24,6 +31,7 @@ export default function TaskBoardPage() {
   const [selected, setSelected] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
   const [dragOverCol, setDragOverCol] = useState(null);
+  const [filters, setFilters] = useState({});
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -39,7 +47,26 @@ export default function TaskBoardPage() {
   });
 
   const visible = tasks.filter((t) => showCompleted ? !!t.completed : !t.completed);
-  const grouped = COLS.map((c) => ({ ...c, items: sortTasks(visible.filter((t) => t.priority === c.key)) }));
+
+  const toggleFilter = (colKey, kind) => {
+    setFilters((f) => {
+      const cur = f[colKey] || { fav: false, overdue: false };
+      return { ...f, [colKey]: { ...cur, [kind]: !cur[kind] } };
+    });
+  };
+
+  const grouped = COLS.map((c) => {
+    const colTasks = visible.filter((t) => t.priority === c.key);
+    const totalCount = colTasks.length;
+    const overdueCount = colTasks.filter(isTaskOverdue).length;
+    const favCount = colTasks.filter((t) => !!t.favorite).length;
+    const f = filters[c.key] || { fav: false, overdue: false };
+    let filtered = colTasks;
+    if (f.fav && f.overdue) filtered = colTasks.filter((t) => !!t.favorite && isTaskOverdue(t));
+    else if (f.fav) filtered = colTasks.filter((t) => !!t.favorite);
+    else if (f.overdue) filtered = colTasks.filter(isTaskOverdue);
+    return { ...c, items: sortTasks(filtered), totalCount, overdueCount, favCount, filterState: f };
+  });
 
   const toggleFav = async (id, cur) => {
     setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: !cur } : t)));
@@ -63,6 +90,17 @@ export default function TaskBoardPage() {
     } catch (e) {
       toast.error(e.response?.data?.detail || "Errore");
       setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, calendar_synced: cur } : t)));
+    }
+  };
+
+  const toggleReminder = async (id, cur) => {
+    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, reminder_enabled: !cur } : t)));
+    try {
+      await api.patch(`/tasks/${id}`, { reminder_enabled: !cur });
+      toast.success(cur ? "Promemoria disattivato" : "Promemoria attivato");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore");
+      setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, reminder_enabled: cur } : t)));
     }
   };
 
@@ -92,11 +130,6 @@ export default function TaskBoardPage() {
       toast.error("Errore nello spostamento");
       setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, priority: prevPriority } : t)));
     }
-  };
-
-  const mostImminent = (items) => {
-    const dated = items.filter((t) => t.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date));
-    return dated[0]?.id;
   };
 
   const activeCount = tasks.filter((t) => !t.completed).length;
@@ -145,38 +178,62 @@ export default function TaskBoardPage() {
         </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4 flex-1 min-h-0">
-        {grouped.map((c) => {
-          const imm = mostImminent(c.items);
-          return (
-            <div
-              key={c.key}
-              className={`rounded-2xl p-5 ${c.tint} transition-shadow flex flex-col min-h-0 ${dragOverCol === c.key ? "ring-2 ring-white/50" : ""}`}
-              data-testid={`col-${c.key}`}
-              onDragOver={(e) => { e.preventDefault(); setDragOverCol(c.key); }}
-              onDragLeave={() => setDragOverCol((v) => (v === c.key ? null : v))}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOverCol(null);
-                const id = e.dataTransfer.getData("text/plain");
-                if (id) changePriority(id, c.key);
-              }}
-            >
-              <div className="flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full ${c.dot}`} />
-                  <div className="kicker">{c.label}</div>
-                </div>
-                <div className="h-7 w-7 rounded-full bg-white/15 flex items-center justify-center text-sm font-bold">{c.items.length}</div>
+        {grouped.map((c) => (
+          <div
+            key={c.key}
+            className={`rounded-2xl p-5 ${c.tint} transition-[filter] flex flex-col min-h-0 ${dragOverCol === c.key ? "brightness-125" : ""}`}
+            data-testid={`col-${c.key}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOverCol(c.key); }}
+            onDragLeave={() => setDragOverCol((v) => (v === c.key ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOverCol(null);
+              const id = e.dataTransfer.getData("text/plain");
+              if (id) changePriority(id, c.key);
+            }}
+          >
+            <div className="flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+                <div className="kicker">{c.label}</div>
               </div>
-              <div className="mt-5 space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
-                {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
-                {c.items.map((t) => (
-                  <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onToggleDone={() => toggleDone(t.id, !!t.completed)} onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)} onDelete={() => del(t.id)} />
-                ))}
+              <div className="flex items-center gap-2">
+                <button
+                  data-testid={`filter-overdue-${c.key}`}
+                  onClick={() => toggleFilter(c.key, "overdue")}
+                  title="Filtra scaduti"
+                  className={`h-7 px-2 rounded-full flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.overdue ? "bg-[#76280E] text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                >
+                  <Hourglass size={12} /> {c.overdueCount}
+                </button>
+                <button
+                  data-testid={`filter-fav-${c.key}`}
+                  onClick={() => toggleFilter(c.key, "fav")}
+                  title="Filtra preferiti"
+                  className={`h-7 px-2 rounded-full flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.fav ? "bg-amber-400 text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                >
+                  <Star size={12} className={c.filterState.fav ? "fill-current" : ""} /> {c.favCount}
+                </button>
+                <div className="h-7 w-7 rounded-full bg-white/15 flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
               </div>
             </div>
-          );
-        })}
+            <div className="mt-5 space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
+              {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
+              {c.items.map((t) => (
+                <TaskCard
+                  key={t.id}
+                  task={t}
+                  onClick={() => setSelected(t)}
+                  onToggleFav={() => toggleFav(t.id, !!t.favorite)}
+                  onToggleDone={() => toggleDone(t.id, !!t.completed)}
+                  onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
+                  onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
+                  onDelete={() => del(t.id)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
 
       {selected && (
@@ -186,61 +243,53 @@ export default function TaskBoardPage() {
   );
 }
 
-function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggleDone, onToggleCal, onDelete }) {
+function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onToggleReminder, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   const isFav = !!task.favorite;
   const isDone = !!task.completed;
   const isCal = !!task.calendar_synced;
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const isOverdue = !!task.due_date && !isDone && task.due_date < todayStr;
+  const isReminder = !!task.reminder_enabled;
+  const overdue = isTaskOverdue(task);
+  const bg = overdue ? "rgba(118, 40, 14, 0.3)" : "rgba(131, 108, 96, 0.3)";
+
   return (
     <div
       data-testid={`task-${task.id}`}
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", task.id)}
-      className={`relative w-full text-left card-soft ${sideClass} p-4 card-hover cursor-grab active:cursor-grabbing ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""} ${isOverdue ? "bg-red-500/10 ring-1 ring-red-500/30" : ""}`}
+      className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}
+      style={{ background: bg }}
     >
-      <div className="absolute top-2 right-2 flex items-center gap-1">
-        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-white/40 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
-          <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
+      <button
+        data-testid="task-fav"
+        onClick={stop(onToggleFav)}
+        className={`shrink-0 w-12 flex items-center justify-center transition-colors ${isFav ? "bg-amber-400" : "bg-white/10 hover:bg-white/15"}`}
+        title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+      >
+        <Star size={18} className={isFav ? "text-white fill-white" : "text-white/50"} />
+      </button>
+
+      <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
+        <div className={`font-semibold text-sm truncate ${isDone ? "line-through" : ""}`}>{task.title}</div>
+        {task.due_date && (
+          <div className="text-[11px] text-white/60 mt-1">{formatDayMonth(task.due_date, task.due_time)}</div>
+        )}
+      </button>
+
+      <div className="shrink-0 flex items-center gap-1 pr-3">
+        <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
+          {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
         </button>
-        <button data-testid="task-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
-          <Star size={14} className={isFav ? "fill-current" : ""} />
-        </button>
-        <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-blue-500 hover:bg-blue-50" : "text-white/40 hover:bg-white/10 hover:text-blue-500"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+        <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-blue-300" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
           <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
         </button>
-        <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
+        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-300" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+          <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
+        </button>
+        <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
+          <Trash2 size={14} />
+        </button>
       </div>
-      <button onClick={onClick} className="w-full text-left pr-28">
-        <div className={`font-semibold ${isDone ? "line-through" : ""}`}>{task.title}</div>
-        {task.created_at && (
-          <div className="text-[9px] text-white/45 mt-0.5">data creazione: {formatDDMMYYYY(task.created_at)}</div>
-        )}
-        {task.description && <div className="text-sm text-white/60 mt-1">{task.description}</div>}
-        <div className="mt-3 flex flex-wrap gap-2 items-center">
-          {task.due_date && (
-            <span className={`inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md ${isOverdue ? "bg-red-500/20 text-red-300 border border-red-500/40" : "bg-white/10"}`}>
-              {isOverdue ? <AlertTriangle size={10} /> : <Calendar size={10} />} {new Date(task.due_date).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" })}{task.due_time ? ` · ${task.due_time}` : ""}{isOverdue ? " · scaduto" : ""}
-            </span>
-          )}
-          {(task.tags || []).map((tag, i) => (
-            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white/10  text-white/60">
-              <Tag size={10} /> {tag}
-            </span>
-          ))}
-          {task.notes && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
-              📝 note
-            </span>
-          )}
-          {isDone && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 border border-green-200 text-green-700">
-              ✓ fatto
-            </span>
-          )}
-        </div>
-      </button>
     </div>
   );
 }
@@ -283,6 +332,14 @@ function TaskDialog({ task, onClose, onUpdated }) {
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
+  const toggleReminder = async () => {
+    try {
+      await api.patch(`/tasks/${task.id}`, { reminder_enabled: !task.reminder_enabled });
+      onUpdated();
+      toast.success(task.reminder_enabled ? "Promemoria disattivato" : "Promemoria attivato");
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+
   const del = async () => {
     toast("Eliminare questo task?", {
       action: {
@@ -306,18 +363,21 @@ function TaskDialog({ task, onClose, onUpdated }) {
         </DialogHeader>
         <div className="text-white/70 text-sm">{task.description}</div>
         <div className="flex flex-wrap gap-2">
-          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white/10 border">📅 {task.due_date}{task.due_time ? ` · ${task.due_time}` : ""}</span>}
-          <span className={`text-xs px-2 py-1 rounded-md border ${task.priority === "alta" ? "bg-red-50 text-red-700" : task.priority === "media" ? "bg-orange-50 text-orange-700" : "bg-white/10"}`}>priorità {task.priority}</span>
-          {(task.tags || []).map((t, i) => <span key={i} className="text-xs px-2 py-1 rounded-md bg-white/10 border">#{t}</span>)}
-          {task.calendar_synced && <span className="text-xs px-2 py-1 rounded-md bg-blue-50 text-blue-700 border border-blue-200">✓ Calendar</span>}
-          {task.reminder_sent && <span className="text-xs px-2 py-1 rounded-md bg-purple-50 text-purple-700 border border-purple-200">⏰ promemoria inviato</span>}
+          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white/10">📅 {task.due_date}{task.due_time ? ` · ${task.due_time}` : ""}</span>}
+          <span className={`text-xs px-2 py-1 rounded-md ${task.priority === "alta" ? "bg-red-50 text-red-700" : task.priority === "media" ? "bg-orange-50 text-orange-700" : "bg-white/10"}`}>priorità {task.priority}</span>
+          {(task.tags || []).map((t, i) => <span key={i} className="text-xs px-2 py-1 rounded-md bg-white/10">#{t}</span>)}
+          {task.calendar_synced && <span className="text-xs px-2 py-1 rounded-md bg-blue-50 text-blue-700">✓ Calendar</span>}
+          {task.reminder_enabled && <span className="text-xs px-2 py-1 rounded-md bg-purple-50 text-purple-700">🔔 promemoria attivo</span>}
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          <button data-testid="toggle-calendar" onClick={toggleCal} className="px-3 py-1.5 rounded-full text-xs bg-white/10 border">
+          <button data-testid="toggle-calendar" onClick={toggleCal} className="px-3 py-1.5 rounded-full text-xs bg-white/10">
             {task.calendar_synced ? "✓ In Calendar" : "+ Aggiungi a Calendar"}
           </button>
-          <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 border text-red-600">Elimina</button>
+          <button data-testid="toggle-reminder" onClick={toggleReminder} className="px-3 py-1.5 rounded-full text-xs bg-white/10">
+            {task.reminder_enabled ? "🔔 Promemoria attivo" : "+ Attiva promemoria"}
+          </button>
+          <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 text-red-400">Elimina</button>
         </div>
 
         {/* NOTES */}

@@ -609,11 +609,16 @@ def build_system_prompt(user: User, action: str) -> str:
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"breve titolo del task/todo\", \"summary\": \"riassunto in 1 riga max 140 caratteri\", \"description\": \"\", "
             "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", \"duration_minutes\": \"numero di minuti o null\", "
+            "\"reminder_minutes_before\": \"numero di minuti o null\", "
             "\"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}<<<END>>>. "
             "REGOLA: se rilevi una data (anche implicita: 'domani', 'lunedì', 'tra 3 giorni'), imposta due_date. "
             "Se rilevi un'ora, imposta due_time. Se rilevi anche una durata (es. 'per un'ora', 'di 45 minuti', "
             "'dalle 15 alle 16'), imposta duration_minutes; altrimenti lascialo null (il sistema userà 30 minuti di default "
-            "quando l'evento viene sincronizzato su Calendar). Il sistema salva come TASK se due_date è presente, altrimenti come TO-DO."
+            "quando l'evento viene sincronizzato su Calendar). Se l'utente chiede ESPLICITAMENTE un promemoria "
+            "(es. 'avvisami un'ora prima', 'ricordamelo 10 minuti prima'), imposta reminder_minutes_before con i minuti "
+            "richiesti; altrimenti lascialo null (il promemoria resta disattivato finché l'utente non lo attiva a mano; "
+            "se poi lo attiva senza aver specificato nulla, il sistema userà 15 minuti prima come default). "
+            "Il sistema salva come TASK se due_date è presente, altrimenti come TO-DO."
         )
     elif action == "journal":
         base += (
@@ -1051,6 +1056,10 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
         duration_minutes = int(parsed.get("duration_minutes")) if parsed.get("duration_minutes") else None
     except (TypeError, ValueError):
         duration_minutes = None
+    try:
+        reminder_offset_minutes = int(parsed.get("reminder_minutes_before")) if parsed.get("reminder_minutes_before") else None
+    except (TypeError, ValueError):
+        reminder_offset_minutes = None
     if due_date:
         doc = {
             "id": f"task_{uuid.uuid4().hex[:12]}",
@@ -1065,6 +1074,9 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
             "notes": parsed.get("notes", ""),
             "calendar_synced": False,
             "reminder_sent": False,
+            "reminder_enabled": reminder_offset_minutes is not None,
+            "reminder_offset_minutes": reminder_offset_minutes,
+            "reminder_msg_sent": False,
             "created_at": now,
             "source_conv": conv_id,
         }
@@ -1180,6 +1192,15 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
         except Exception as e:
             logger.exception("calendar sync failed")
             raise HTTPException(status_code=500, detail=f"Sync calendar fallita: {e}")
+
+    # Re-enabling the reminder (or changing when it's due) should allow it to fire again.
+    if payload.get("reminder_enabled") and not existing.get("reminder_enabled"):
+        payload["reminder_msg_sent"] = False
+    if ("due_date" in payload or "due_time" in payload) and (
+        payload.get("due_date", existing.get("due_date")) != existing.get("due_date")
+        or payload.get("due_time", existing.get("due_time")) != existing.get("due_time")
+    ):
+        payload["reminder_msg_sent"] = False
 
     await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": payload})
     doc = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
@@ -2119,6 +2140,10 @@ async def start_services():
     except Exception:
         logger.exception("failed to start reminders loop")
     try:
+        asyncio.create_task(_exact_reminders_loop())
+    except Exception:
+        logger.exception("failed to start exact reminders loop")
+    try:
         asyncio.create_task(_daily_summary_loop())
     except Exception:
         logger.exception("failed to start daily summary loop")
@@ -2161,6 +2186,58 @@ async def _reminders_loop():
         except Exception:
             logger.exception("reminders loop iteration failed")
         await asyncio.sleep(30 * 60)
+
+
+async def _exact_reminders_loop():
+    """Every minute: for tasks with reminder_enabled=True and reminder_msg_sent!=True,
+    fire a Telegram message at (due_date + due_time - reminder_offset_minutes); offset
+    defaults to 15 minutes when the user hasn't specified one. Same UTC ≈ user-local
+    MVP assumption as _reminders_loop."""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            today_iso = now.date().isoformat()
+            tomorrow_iso = (now.date() + timedelta(days=1)).isoformat()
+            cursor = db.tasks.find(
+                {
+                    "reminder_enabled": True,
+                    "$or": [{"reminder_msg_sent": {"$exists": False}}, {"reminder_msg_sent": False}],
+                    "due_date": {"$in": [today_iso, tomorrow_iso]},
+                },
+                {"_id": 0},
+            )
+            async for t in cursor:
+                due_time = t.get("due_time") or "09:00"
+                try:
+                    due_dt = datetime.strptime(f"{t.get('due_date')} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                offset = t.get("reminder_offset_minutes") or 15
+                fire_at = due_dt - timedelta(minutes=offset)
+                if now < fire_at:
+                    continue
+                user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
+                if not user or not user.get("telegram_chat_id"):
+                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True}})
+                    continue
+                try:
+                    from telegram import Bot
+                    bot = Bot(token=tg.bot_token())
+                    minutes_left = max(0, round((due_dt - now).total_seconds() / 60))
+                    text = (
+                        f"🔔 Promemoria mAIPAL\n\n"
+                        f"Tra {minutes_left} minuti ({due_time}) hai in programma:\n"
+                        f"📌 *{t.get('title','(senza titolo)')}*\n"
+                        f"{t.get('description','') or ''}"
+                    )
+                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown")
+                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
+                    logger.info(f"exact reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
+                except Exception:
+                    logger.exception("failed to send exact reminder")
+        except Exception:
+            logger.exception("exact reminders loop iteration failed")
+        await asyncio.sleep(60)
 
 
 async def _daily_summary_loop():
