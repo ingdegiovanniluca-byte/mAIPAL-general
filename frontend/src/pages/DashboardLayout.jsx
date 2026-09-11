@@ -1,7 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
-import { MessageSquare, LayoutGrid, ListChecks, LogOut, Settings, BookOpen, FolderOpen, Shield } from "lucide-react";
+import { LogOut } from "lucide-react";
+
+const NAV_ITEMS = [
+  { to: "/dashboard/chat", label: "Chat", testid: "tab-chat" },
+  { to: "/dashboard/tasks", label: "Task", testid: "tab-tasks" },
+  { to: "/dashboard/todos", label: "To-Do", testid: "tab-todos" },
+  { to: "/dashboard/journal", label: "Diario", testid: "tab-journal" },
+  { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents" },
+  { to: "/dashboard/admin", label: "Admin", testid: "tab-admin", adminOnly: true },
+  { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings" },
+];
 
 function LogoMark({ size = 20 }) {
   return (
@@ -33,26 +43,22 @@ export default function DashboardLayout() {
 
   return (
     <div className="min-h-screen">
-      <header className="px-8 md:px-14 pt-8">
+      <header className="px-8 md:px-14 pt-8 pb-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-full border border-white/20 bg-white/10 flex items-center justify-center shadow-sm shrink-0">
-              <LogoMark size={20} />
-            </div>
-            <nav className="flex items-center gap-5">
-              <TabLink to="/dashboard/chat" icon={<MessageSquare size={15} />} label="Chat" testid="tab-chat" />
-              <TabLink to="/dashboard/tasks" icon={<LayoutGrid size={15} />} label="Task" testid="tab-tasks" />
-              <TabLink to="/dashboard/todos" icon={<ListChecks size={15} />} label="To-Do" testid="tab-todos" />
-              <TabLink to="/dashboard/journal" icon={<BookOpen size={15} />} label="Diario" testid="tab-journal" />
-              <TabLink to="/dashboard/documents" icon={<FolderOpen size={15} />} label="Documenti" testid="tab-documents" />
-              {user?.role === "admin" && (
-                <TabLink to="/dashboard/admin" icon={<Shield size={15} />} label="Admin" testid="tab-admin" />
-              )}
-              <TabLink to="/dashboard/settings" icon={<Settings size={15} />} label="Impostazioni" testid="tab-settings" />
-            </nav>
+          <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+            <LogoMark size={30} />
           </div>
 
-          <div className="relative" ref={menuRef}>
+          <nav className="flex-1 flex items-center justify-center gap-2.5 md:gap-3 flex-wrap">
+            {NAV_ITEMS.filter((item) => !item.adminOnly || user?.role === "admin").map((item, i) => (
+              <React.Fragment key={item.to}>
+                {i > 0 && <span className="text-white/25 text-xs select-none">•</span>}
+                <TabLink to={item.to} label={item.label} testid={item.testid} />
+              </React.Fragment>
+            ))}
+          </nav>
+
+          <div className="relative shrink-0" ref={menuRef}>
             <button
               data-testid="user-menu-btn"
               onClick={() => setMenuOpen((v) => !v)}
@@ -86,25 +92,25 @@ export default function DashboardLayout() {
         </div>
       </header>
 
-      <main className="px-8 md:px-14 py-8 w-full">
+      <main className="px-8 md:px-14 pt-6 pb-8 w-full">
         <Outlet />
       </main>
     </div>
   );
 }
 
-function TabLink({ to, icon, label, testid }) {
+function TabLink({ to, label, testid }) {
   return (
     <NavLink
       to={to}
       data-testid={testid}
       className={({ isActive }) =>
-        `inline-flex items-center gap-1.5 text-sm transition-colors duration-150 ${
-          isActive ? "text-white font-semibold" : "text-white/50 hover:text-white/80"
+        `text-sm transition-colors duration-150 ${
+          isActive ? "text-white font-semibold" : "text-white/55 hover:text-white/80"
         }`
       }
     >
-      {icon} {label}
+      {label}
     </NavLink>
   );
 }
