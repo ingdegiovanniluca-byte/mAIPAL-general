@@ -782,6 +782,40 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                 if cid: seen_chunk_ids.add(cid)
     top = expanded
 
+    # Date-aware forcing: temporal questions about tasks ("oggi", "domani", "questa
+    # settimana", "scaduti") get exact date-matched tasks injected regardless of semantic
+    # score — a due_date carries no signal a text embedding model can pick up on, so
+    # "dimmi i task di oggi" could otherwise score every task as equally (ir)relevant.
+    if scope == "all":
+        from datetime import date as _date, timedelta as _td
+        low_q = query.lower()
+        today = _date.today()
+        lo = hi = None
+        if "oggi" in low_q:
+            lo = hi = today.isoformat()
+        elif "domani" in low_q:
+            lo = hi = (today + _td(days=1)).isoformat()
+        elif "settiman" in low_q:
+            lo, hi = today.isoformat(), (today + _td(days=7)).isoformat()
+        elif "scad" in low_q or "ritardo" in low_q:
+            hi = (today - _td(days=1)).isoformat()
+
+        if lo or hi:
+            date_q = {"user_id": user_id}
+            if lo and hi: date_q["due_date"] = {"$gte": lo, "$lte": hi}
+            elif hi: date_q["due_date"] = {"$lte": hi}
+            elif lo: date_q["due_date"] = {"$gte": lo}
+            date_tasks = await db.tasks.find(date_q, {"_id": 0}).sort("due_date", 1).to_list(200)
+            existing_ids = {(c.get("meta") or {}).get("id") for c in top if c.get("source") == "task"}
+            forced = []
+            for t in date_tasks:
+                if t.get("id") in existing_ids:
+                    continue
+                when = t.get("due_date", "") + (f" {t.get('due_time','')}" if t.get("due_time") else "")
+                display = f"[Task] {t.get('title','')} — {when} · priorità {t.get('priority','media')}. {t.get('description','') or ''}".strip()
+                forced.append({"text": t.get("title", ""), "display": display, "source": "task", "meta": {"id": t.get("id")}})
+            top = forced + top
+
     # Fallback: if nothing passed filters but we have keyword terms, do a raw substring scan
     if not top and terms:
         for c in candidates:
