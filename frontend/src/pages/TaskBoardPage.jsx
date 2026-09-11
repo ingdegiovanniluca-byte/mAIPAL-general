@@ -103,8 +103,8 @@ export default function TaskBoardPage() {
   const completedCount = tasks.filter((t) => !!t.completed).length;
 
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-4">
+    <div className="flex flex-col h-[calc(100vh-17rem)]">
+      <div className="flex items-center gap-2 mb-4 shrink-0">
         <button
           data-testid="filter-active"
           onClick={() => setShowCompleted(false)}
@@ -144,13 +144,13 @@ export default function TaskBoardPage() {
           )}
         </button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4 flex-1 min-h-0">
         {grouped.map((c) => {
           const imm = mostImminent(c.items);
           return (
             <div
               key={c.key}
-              className={`rounded-2xl p-5 ${c.tint} transition-shadow ${dragOverCol === c.key ? "ring-2 ring-white/50" : ""}`}
+              className={`rounded-2xl p-5 ${c.tint} transition-shadow flex flex-col min-h-0 ${dragOverCol === c.key ? "ring-2 ring-white/50" : ""}`}
               data-testid={`col-${c.key}`}
               onDragOver={(e) => { e.preventDefault(); setDragOverCol(c.key); }}
               onDragLeave={() => setDragOverCol((v) => (v === c.key ? null : v))}
@@ -161,14 +161,14 @@ export default function TaskBoardPage() {
                 if (id) changePriority(id, c.key);
               }}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${c.dot}`} />
                   <div className="kicker">{c.label}</div>
                 </div>
                 <div className="h-7 w-7 rounded-full bg-white/15 flex items-center justify-center text-sm font-bold">{c.items.length}</div>
               </div>
-              <div className="mt-5 space-y-3 min-h-[240px]">
+              <div className="mt-5 space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
                 {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
                 {c.items.map((t) => (
                   <TaskCard key={t.id} task={t} highlighted={t.id === imm} sideClass={c.side} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onToggleDone={() => toggleDone(t.id, !!t.completed)} onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)} onDelete={() => del(t.id)} />
