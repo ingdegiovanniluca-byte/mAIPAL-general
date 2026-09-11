@@ -11,10 +11,19 @@ const COLS = [
   { key: "bassa", label: "Bassa priorità", tint: "column-tint-low", dot: "bg-[color:var(--low)]", side: "priority-low" },
 ];
 
+const formatDDMMYYYY = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear()}`;
+};
+
 export default function TaskBoardPage() {
   const [tasks, setTasks] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [dragOverCol, setDragOverCol] = useState(null);
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -73,31 +82,91 @@ export default function TaskBoardPage() {
     });
   };
 
+  const changePriority = async (id, newPriority) => {
+    const cur = tasks.find((t) => t.id === id);
+    if (!cur || cur.priority === newPriority) return;
+    const prevPriority = cur.priority;
+    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, priority: newPriority } : t)));
+    try { await api.patch(`/tasks/${id}`, { priority: newPriority }); }
+    catch {
+      toast.error("Errore nello spostamento");
+      setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, priority: prevPriority } : t)));
+    }
+  };
+
   const mostImminent = (items) => {
     const dated = items.filter((t) => t.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date));
     return dated[0]?.id;
   };
 
+  const activeCount = tasks.filter((t) => !t.completed).length;
+  const completedCount = tasks.filter((t) => !!t.completed).length;
+
   return (
     <div>
-      <div className="flex items-center justify-end gap-2 mb-3">
-        <button data-testid="toggle-completed" onClick={() => setShowCompleted((v) => !v)}
-                style={showCompleted ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`px-4 py-2 rounded-full text-xs font-mono-tight uppercase tracking-widest inline-flex items-center gap-1.5 ${showCompleted ? "" : "bg-white/10  text-white/60 hover:"}`}>
-          <Archive size={12} /> {showCompleted ? "attivi" : "completati"}
+      <div className="flex items-center gap-2 mb-4">
+        <button
+          data-testid="filter-active"
+          onClick={() => setShowCompleted(false)}
+          title="Attivi"
+          className={`rounded-full inline-flex items-center transition-all duration-200 ${!showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
+        >
+          {!showCompleted ? (
+            <>
+              <CircleCheck size={14} />
+              <span className="text-xs font-mono-tight uppercase tracking-widest">attivi</span>
+              <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{activeCount}</span>
+            </>
+          ) : (
+            <>
+              <span className="w-1.5 h-1.5 rounded-full bg-current" />
+              <CircleCheck size={13} />
+            </>
+          )}
+        </button>
+        <button
+          data-testid="filter-completed"
+          onClick={() => setShowCompleted(true)}
+          title="Completati"
+          className={`rounded-full inline-flex items-center transition-all duration-200 ${showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
+        >
+          {showCompleted ? (
+            <>
+              <Archive size={14} />
+              <span className="text-xs font-mono-tight uppercase tracking-widest">completati</span>
+              <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{completedCount}</span>
+            </>
+          ) : (
+            <>
+              <span className="w-1.5 h-1.5 rounded-full bg-current" />
+              <Archive size={13} />
+            </>
+          )}
         </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
         {grouped.map((c) => {
           const imm = mostImminent(c.items);
           return (
-            <div key={c.key} className={`rounded-2xl p-5 ${c.tint} `} data-testid={`col-${c.key}`}>
+            <div
+              key={c.key}
+              className={`rounded-2xl p-5 ${c.tint} transition-shadow ${dragOverCol === c.key ? "ring-2 ring-white/50" : ""}`}
+              data-testid={`col-${c.key}`}
+              onDragOver={(e) => { e.preventDefault(); setDragOverCol(c.key); }}
+              onDragLeave={() => setDragOverCol((v) => (v === c.key ? null : v))}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverCol(null);
+                const id = e.dataTransfer.getData("text/plain");
+                if (id) changePriority(id, c.key);
+              }}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${c.dot}`} />
                   <div className="kicker">{c.label}</div>
                 </div>
-                <div className="kicker">{c.items.length}</div>
+                <div className="h-7 w-7 rounded-full bg-white/15 flex items-center justify-center text-sm font-bold">{c.items.length}</div>
               </div>
               <div className="mt-5 space-y-3 min-h-[240px]">
                 {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
@@ -127,7 +196,9 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
   return (
     <div
       data-testid={`task-${task.id}`}
-      className={`relative w-full text-left card-soft ${sideClass} p-4 card-hover ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""} ${isOverdue ? "bg-red-500/10 ring-1 ring-red-500/30" : ""}`}
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData("text/plain", task.id)}
+      className={`relative w-full text-left card-soft ${sideClass} p-4 card-hover cursor-grab active:cursor-grabbing ${highlighted ? "ring-2 ring-black/10 shadow-md" : ""} ${isDone ? "opacity-60" : ""} ${isOverdue ? "bg-red-500/10 ring-1 ring-red-500/30" : ""}`}
     >
       <div className="absolute top-2 right-2 flex items-center gap-1">
         <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-600 bg-green-50" : "text-white/40 hover:bg-green-50 hover:text-green-600"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
@@ -143,6 +214,9 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
       </div>
       <button onClick={onClick} className="w-full text-left pr-28">
         <div className={`font-semibold ${isDone ? "line-through" : ""}`}>{task.title}</div>
+        {task.created_at && (
+          <div className="text-[9px] text-white/45 mt-0.5">data creazione: {formatDDMMYYYY(task.created_at)}</div>
+        )}
         {task.description && <div className="text-sm text-white/60 mt-1">{task.description}</div>}
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           {task.due_date && (
@@ -165,9 +239,6 @@ function TaskCard({ task, highlighted, sideClass, onClick, onToggleFav, onToggle
               ✓ fatto
             </span>
           )}
-        </div>
-        <div className="mt-3 kicker">
-          {task.created_at ? new Date(task.created_at).toLocaleDateString("it-IT") : ""}
         </div>
       </button>
     </div>
