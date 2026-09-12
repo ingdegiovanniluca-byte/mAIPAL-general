@@ -21,6 +21,7 @@ from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageC
 import google_integration as gi
 import telegram_bot as tg
 import embeddings as emb
+import news_service
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -2101,6 +2102,28 @@ async def voice_transcribe(file: UploadFile = File(...), current: User = Depends
         except Exception: pass
 
 
+# ============ NEWS ============
+@api_router.get("/news")
+async def list_news(current: User = Depends(get_current_user)):
+    items = await db.news_items.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return items
+
+
+@api_router.post("/news/refresh")
+async def refresh_news(current: User = Depends(get_current_user)):
+    user = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        await _run_daily_news_for_user(user, today)
+    except Exception as e:
+        logger.exception("manual news refresh failed")
+        raise HTTPException(status_code=500, detail=f"Ricerca notizie fallita: {e}")
+    items = await db.news_items.find({"user_id": current.user_id, "date": today}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return items
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -2147,6 +2170,10 @@ async def start_services():
         asyncio.create_task(_daily_summary_loop())
     except Exception:
         logger.exception("failed to start daily summary loop")
+    try:
+        asyncio.create_task(_daily_news_loop())
+    except Exception:
+        logger.exception("failed to start daily news loop")
 
 
 async def _reminders_loop():
@@ -2342,6 +2369,68 @@ async def _daily_summary_loop():
                         logger.exception("daily summary send failed")
         except Exception:
             logger.exception("daily/weekly loop iteration failed")
+        await asyncio.sleep(20 * 60)
+
+
+async def _run_daily_news_for_user(user: dict, today: str):
+    """Generates today's news digest for one user, stores it, and pushes it via Telegram
+    if the user has a linked chat. Marks news_date=today regardless of result so the
+    background loop doesn't retry a user with zero relevant news every 20 minutes."""
+    items = await news_service.generate_news_for_user(user)
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"news_date": today}})
+    if not items:
+        return []
+
+    docs = []
+    for it in items:
+        docs.append({
+            "id": str(uuid.uuid4()),
+            "user_id": user["user_id"],
+            "title": it["title"],
+            "summary": it["summary"],
+            "url": it["url"],
+            "source": it.get("source") or "",
+            "date": today,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    await db.news_items.insert_many(docs)
+
+    if user.get("telegram_chat_id"):
+        try:
+            from telegram import Bot
+            bot = Bot(token=tg.bot_token())
+            lines = ["🗞️ *Le tue news di oggi*", ""]
+            for it in docs[:6]:
+                lines.append(f"• *{it['title']}*")
+                if it["summary"]:
+                    lines.append(it["summary"])
+                lines.append(it["url"])
+                lines.append("")
+            await bot.send_message(chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown")
+            logger.info(f"daily news sent to {user['telegram_chat_id']} ({len(docs)} items)")
+        except Exception:
+            logger.exception("failed to send daily news via telegram")
+
+    return docs
+
+
+async def _daily_news_loop():
+    """Once a day (08:00-08:19 UTC window), searches the web for news matching each
+    user's profile (profession/sector/interests) and stores + sends them."""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            today = now.date().isoformat()
+            if now.hour == 8:
+                async for user in db.users.find({}, {"_id": 0}):
+                    if user.get("news_date") == today:
+                        continue
+                    try:
+                        await _run_daily_news_for_user(user, today)
+                    except Exception:
+                        logger.exception(f"daily news generation failed for {user.get('user_id')}")
+        except Exception:
+            logger.exception("daily news loop iteration failed")
         await asyncio.sleep(20 * 60)
 
 

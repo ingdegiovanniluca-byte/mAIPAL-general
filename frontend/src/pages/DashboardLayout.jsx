@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: "/dashboard/tasks", label: "Task", testid: "tab-tasks" },
   { to: "/dashboard/todos", label: "To-Do", testid: "tab-todos" },
   { to: "/dashboard/journal", label: "Diario", testid: "tab-journal" },
+  { to: "/dashboard/news", label: "News", testid: "tab-news" },
   { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents" },
   { to: "/dashboard/admin", label: "Admin", testid: "tab-admin", adminOnly: true },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings" },

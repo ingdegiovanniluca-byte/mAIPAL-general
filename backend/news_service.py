@@ -1,0 +1,86 @@
+"""Generates a personalized daily news digest for a user via Claude's web search tool,
+based on their profession/sector/verticals/interests (already collected at onboarding)."""
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+
+import anthropic
+
+logger = logging.getLogger(__name__)
+
+MODEL = "claude-sonnet-5"
+MAX_ROUNDS = 4  # bounded retries on stop_reason == "pause_turn"
+
+
+def _profile_description(user: dict) -> str:
+    bits = []
+    if user.get("profession"):
+        bits.append(f"professione: {user['profession']}")
+    if user.get("sector"):
+        bits.append(f"settore: {user['sector']}")
+    if user.get("verticals"):
+        bits.append(f"ambiti di lavoro: {', '.join(user['verticals'])}")
+    if user.get("interests"):
+        bits.append(f"interessi personali: {', '.join(user['interests'])}")
+    return "; ".join(bits) or "nessun profilo specifico indicato: cerca notizie generali di attualità italiana"
+
+
+async def generate_news_for_user(user: dict) -> list[dict]:
+    """Returns a list of {title, summary, url, source} dicts, or [] on failure/no results."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    profile_desc = _profile_description(user)
+
+    prompt = (
+        f"Oggi è {today}. Cerca sul web 4-6 notizie pubblicate nelle ultime 24-48 ore rilevanti per "
+        f"questa persona ({profile_desc}). Dai priorità a notizie di lavoro/settore, poi agli interessi "
+        "personali. Per ognuna scrivi un riassunto breve (2-3 frasi) in italiano e includi il link diretto "
+        "alla fonte originale. Evita più notizie sullo stesso identico fatto. "
+        "Rispondi SOLO con una lista JSON valida, senza alcun testo prima o dopo, in questo formato esatto: "
+        '[{"title": "...", "summary": "...", "url": "https://...", "source": "nome testata"}, ...]'
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    messages = [{"role": "user", "content": prompt}]
+    resp = None
+    for _ in range(MAX_ROUNDS):
+        resp = await client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            tools=[{"type": "web_search_20260209", "name": "web_search"}],
+            messages=messages,
+        )
+        if resp.stop_reason != "pause_turn":
+            break
+        messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": resp.content}]
+
+    if resp is None:
+        return []
+
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if not match:
+        logger.warning(f"news generation: no JSON list found in response: {text[:300]!r}")
+        return []
+    try:
+        items = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        logger.warning(f"news generation: failed to parse JSON: {text[:300]!r}")
+        return []
+
+    cleaned = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        title = (it.get("title") or "").strip()
+        url = (it.get("url") or "").strip()
+        if not title or not url:
+            continue
+        cleaned.append({
+            "title": title[:200],
+            "summary": (it.get("summary") or "").strip()[:600],
+            "url": url,
+            "source": (it.get("source") or "").strip()[:100],
+        })
+    return cleaned

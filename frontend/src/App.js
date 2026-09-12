@@ -12,6 +12,7 @@ import DocumentsPage from "@/pages/DocumentsPage";
 import AdminPage from "@/pages/AdminPage";
 import SettingsPage from "@/pages/SettingsPage";
 import TodoBoardPage from "@/pages/TodoBoardPage";
+import NewsPage from "@/pages/NewsPage";
 
 function Protected({ children, requireOnboard = true }) {
   const { user, loading } = useAuth();
@@ -32,6 +33,7 @@ function AppRouter() {
         <Route path="tasks" element={<TaskBoardPage />} />
         <Route path="todos" element={<TodoBoardPage />} />
         <Route path="journal" element={<JournalPage />} />
+        <Route path="news" element={<NewsPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="settings" element={<SettingsPage />} />
