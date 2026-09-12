@@ -159,7 +159,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="mb-4 shrink-0">
+      <div className="mb-8 shrink-0">
         <div className="flex items-center gap-3 mb-2 flex-wrap">
           <button
             data-testid="calendar-toggle"
@@ -170,7 +170,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
             <CalendarDays size={16} />
           </button>
           {!collapsed && (
-            <div className="flex items-center gap-3 flex-wrap text-[11px] text-white/60">
+            <div className="flex items-center gap-3 flex-wrap text-[11px] text-white/60 ml-6">
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_FAV }} />preferiti</span>
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_OVERDUE }} />scaduti</span>
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_DONE }} />tutti conclusi</span>
@@ -242,7 +242,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                               style={{ background: isSelected ? "rgba(0, 176, 240, 0.22)" : "transparent" }}
                             >
                               <div className="relative h-6 w-6 flex items-center justify-center">
-                                {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: DOT_SIZE, width: DOT_SIZE }} />}
+                                {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, opacity: 0.3, height: DOT_SIZE, width: DOT_SIZE }} />}
                                 <span className={`relative text-[12px] ${isToday ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
                               </div>
                             </div>

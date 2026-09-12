@@ -36,7 +36,7 @@ export default function TaskBoardPage() {
   const [filters, setFilters] = useState({});
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
   const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
-  const [tagFilter, setTagFilter] = useState(null);
+  const [tagFilters, setTagFilters] = useState([]);
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -74,7 +74,7 @@ export default function TaskBoardPage() {
     else if (f.overdue) filtered = colTasks.filter(isTaskOverdue);
     if (calendarFilter?.type === "day") filtered = filtered.filter((t) => t.due_date === calendarFilter.date);
     else if (calendarFilter?.type === "week") filtered = filtered.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
-    if (tagFilter) filtered = filtered.filter((t) => (t.tags || []).includes(tagFilter));
+    if (tagFilters.length > 0) filtered = filtered.filter((t) => (t.tags || []).some((tag) => tagFilters.includes(tag)));
     return { ...c, items: sortTasks(filtered), totalCount, overdueCount, favCount, filterState: f };
   });
 
@@ -165,7 +165,7 @@ export default function TaskBoardPage() {
           });
         }}
       />
-      <div className="flex items-center gap-2 mb-4 shrink-0 flex-wrap">
+      <div className="flex items-center gap-2 mb-2 shrink-0 flex-wrap">
         {calendarFilter && (
           <button
             data-testid="calendar-filter-pill"
@@ -221,8 +221,8 @@ export default function TaskBoardPage() {
               <button
                 key={tag}
                 data-testid={`tag-filter-${tag}`}
-                onClick={() => setTagFilter((v) => (v === tag ? null : tag))}
-                className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilter === tag ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
+                onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
+                className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
               >
                 #{tag}
               </button>
@@ -230,7 +230,7 @@ export default function TaskBoardPage() {
           </div>
         )}
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4 flex-1 min-h-0">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-2 flex-1 min-h-0">
         {grouped.map((c) => (
           <div
             key={c.key}
