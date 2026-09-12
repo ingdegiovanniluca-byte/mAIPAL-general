@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useRef, useEffect } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { CalendarDays } from "lucide-react";
 
@@ -7,19 +7,19 @@ const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giu
 const WEEKS_BEFORE = 26;
 const WEEKS_AFTER = 26;
 
-const DAY_LABEL_COL_WIDTH = 36; // px, kept in sync between header spacer and the day-label column
+const DAY_LABEL_COL_WIDTH = 36; // px
 const COL_WIDTH = 44; // px, per-week column
 const COL_GAP = 20; // px
 const COL_STRIDE = COL_WIDTH + COL_GAP;
+const MONTH_ROW_HEIGHT = 18; // px
 
-const CURRENT_TEXT = "#F2F2F2";
+const NOW_ACCENT = "#00B0F0"; // today's number + current week label
+const SOFT_HIGHLIGHT = "#F2F2F2"; // rest of the current week's days + month-boundary week label
 const MUTED_TEXT = "#ACA6A3";
 const DOT_HAS = "#7F6D69";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#85B98A";
-const TODAY_RING = "var(--accent-orange)";
-const MONTH_CHANGE = "var(--accent-purple)";
 
 function startOfWeek(d) {
   const date = new Date(d);
@@ -44,12 +44,12 @@ function isoWeekNumber(d) {
   return 1 + Math.round(diff / (7 * 24 * 3600 * 1000));
 }
 
-// A week "belongs" to the month/year containing its Thursday (same convention as ISO week numbers),
-// so a week spanning two months resolves unambiguously.
-function weekMonthYear(monday) {
+// A week "belongs" to the month/year containing its Thursday (same convention as ISO week
+// numbers), so a week spanning two months resolves unambiguously to one month group.
+function weekMonthKey(monday) {
   const thu = new Date(monday);
   thu.setDate(thu.getDate() + 3);
-  return `${IT_MONTHS_LONG[thu.getMonth()]} ${thu.getFullYear()}`;
+  return { month: thu.getMonth(), year: thu.getFullYear() };
 }
 
 export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
@@ -59,7 +59,6 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
   const dragStartScrollRef = useRef(0);
   const todayStr = isoDate(new Date());
   const thisMonday = useMemo(() => startOfWeek(new Date()), []);
-  const [centerIdx, setCenterIdx] = useState(WEEKS_BEFORE);
 
   const weeks = useMemo(() => {
     const arr = [];
@@ -70,6 +69,22 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
     }
     return arr;
   }, [thisMonday]);
+
+  // First week of each month group -> label to draw above it (spans visually over the
+  // following weeks of the same month, like a section header on a horizontal timeline).
+  const monthLabels = useMemo(() => {
+    const out = [];
+    let prevKey = null;
+    weeks.forEach((monday, wi) => {
+      const { month, year } = weekMonthKey(monday);
+      const key = `${year}-${month}`;
+      if (key !== prevKey) {
+        out.push({ wi, label: `${IT_MONTHS_LONG[month]} ${year}` });
+        prevKey = key;
+      }
+    });
+    return out;
+  }, [weeks]);
 
   const dayStats = useMemo(() => {
     const map = {};
@@ -85,33 +100,18 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
     return map;
   }, [tasks, todayStr]);
 
-  const updateCenterFromScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const contentX = el.scrollLeft + el.clientWidth / 2;
-    const idx = Math.min(weeks.length - 1, Math.max(0, Math.floor(contentX / COL_STRIDE)));
-    setCenterIdx(idx);
-  };
-
   useEffect(() => {
     if (!collapsed && scrollRef.current) {
       const el = scrollRef.current.querySelector('[data-current-week="true"]');
       if (el) el.scrollIntoView({ inline: "center", block: "nearest" });
-      requestAnimationFrame(updateCenterFromScroll);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapsed]);
 
   const onWheel = (e) => {
     if (scrollRef.current && e.deltaY !== 0) {
       e.preventDefault();
       scrollRef.current.scrollLeft += e.deltaY;
-      updateCenterFromScroll();
     }
-  };
-
-  const onScroll = () => {
-    requestAnimationFrame(updateCenterFromScroll);
   };
 
   const onMouseDown = (e) => {
@@ -126,7 +126,6 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
       if (!draggingRef.current || !scrollRef.current) return;
       const dx = e.pageX - dragStartXRef.current;
       scrollRef.current.scrollLeft = dragStartScrollRef.current - dx;
-      updateCenterFromScroll();
     };
     const onMouseUp = () => { draggingRef.current = false; };
     window.addEventListener("mousemove", onMouseMove);
@@ -135,10 +134,9 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weeks]);
+  }, []);
 
-  const monthYearLabel = weeks[centerIdx] ? weekMonthYear(weeks[centerIdx]) : "";
+  const totalWidth = weeks.length * COL_STRIDE - COL_GAP;
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -152,16 +150,11 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
           >
             <CalendarDays size={16} />
           </button>
-          {!collapsed && (
-            <div style={{ marginLeft: DAY_LABEL_COL_WIDTH }} className="text-sm font-medium text-white/70 capitalize">
-              {monthYearLabel}
-            </div>
-          )}
         </div>
 
         {!collapsed && (
           <div className="flex">
-            <div className="flex flex-col shrink-0 pr-2.5 pt-6" style={{ width: DAY_LABEL_COL_WIDTH }}>
+            <div className="flex flex-col shrink-0 pr-2.5" style={{ width: DAY_LABEL_COL_WIDTH, paddingTop: MONTH_ROW_HEIGHT + 24 }}>
               {IT_DAYS_SHORT.map((d) => (
                 <div key={d} className="h-8 flex items-center text-[10px] uppercase tracking-wide" style={{ color: MUTED_TEXT }}>{d}</div>
               ))}
@@ -169,59 +162,70 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
             <div
               ref={scrollRef}
               onWheel={onWheel}
-              onScroll={onScroll}
               onMouseDown={onMouseDown}
               className="flex-1 overflow-x-auto no-scrollbar select-none cursor-grab active:cursor-grabbing"
             >
-              <div className="flex" style={{ gap: COL_GAP }}>
-                {weeks.map((monday, wi) => {
-                  const isCurrentWeek = isoDate(monday) === isoDate(thisMonday);
-                  const sunday = new Date(monday);
-                  sunday.setDate(sunday.getDate() + 6);
-                  const isMonthChangeWeek = monday.getMonth() !== sunday.getMonth();
-                  const headerColor = isCurrentWeek ? CURRENT_TEXT : isMonthChangeWeek ? MONTH_CHANGE : MUTED_TEXT;
-                  return (
-                    <div key={wi} data-current-week={isCurrentWeek ? "true" : undefined} className="flex flex-col items-center shrink-0" style={{ width: COL_WIDTH }}>
-                      <div className="h-6 flex items-center justify-center text-[10px] font-medium" style={{ color: headerColor }}>
-                        W{isoWeekNumber(monday)}
-                      </div>
-                      {Array.from({ length: 7 }).map((_, di) => {
-                        const day = new Date(monday);
-                        day.setDate(day.getDate() + di);
-                        const key = isoDate(day);
-                        const isToday = key === todayStr;
-                        const stats = dayStats[key];
-                        let dotColor = null;
-                        if (stats) {
-                          if (stats.overdue > 0) dotColor = DOT_OVERDUE;
-                          else if (stats.fav > 0) dotColor = DOT_FAV;
-                          else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
-                          else dotColor = DOT_HAS;
-                        }
-                        const textColor = isCurrentWeek ? CURRENT_TEXT : MUTED_TEXT;
-                        const cell = (
-                          <div className="h-8 w-full flex items-center justify-center">
-                            <div className="relative h-7 w-7 flex items-center justify-center">
-                              {isToday && <span className="absolute inset-0 rounded-full" style={{ boxShadow: `0 0 0 1.5px ${TODAY_RING}` }} />}
-                              {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: 20, width: 20 }} />}
-                              <span className="relative text-[12px]" style={{ color: textColor }}>{day.getDate()}</span>
-                            </div>
-                          </div>
-                        );
-                        if (!stats) return <div key={di}>{cell}</div>;
-                        const parts = [`${stats.count} task`];
-                        if (stats.fav) parts.push(`${stats.fav} preferit${stats.fav !== 1 ? "i" : "o"}`);
-                        if (stats.overdue) parts.push(`${stats.overdue} scadut${stats.overdue !== 1 ? "i" : "o"}`);
-                        return (
-                          <Tooltip key={di}>
-                            <TooltipTrigger asChild>{cell}</TooltipTrigger>
-                            <TooltipContent side="top">{parts.join(" · ")}</TooltipContent>
-                          </Tooltip>
-                        );
-                      })}
+              <div style={{ position: "relative", width: totalWidth }}>
+                <div style={{ position: "relative", height: MONTH_ROW_HEIGHT }}>
+                  {monthLabels.map(({ wi, label }) => (
+                    <div
+                      key={wi}
+                      style={{ position: "absolute", left: wi * COL_STRIDE, whiteSpace: "nowrap", color: "rgba(255,255,255,0.7)" }}
+                      className="text-[11px] font-medium capitalize"
+                    >
+                      {label}
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
+                <div className="flex" style={{ gap: COL_GAP }}>
+                  {weeks.map((monday, wi) => {
+                    const isCurrentWeek = isoDate(monday) === isoDate(thisMonday);
+                    const sunday = new Date(monday);
+                    sunday.setDate(sunday.getDate() + 6);
+                    const isMonthChangeWeek = monday.getMonth() !== sunday.getMonth();
+                    const headerColor = isCurrentWeek ? NOW_ACCENT : isMonthChangeWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
+                    return (
+                      <div key={wi} data-current-week={isCurrentWeek ? "true" : undefined} className="flex flex-col items-center shrink-0" style={{ width: COL_WIDTH }}>
+                        <div className="h-6 flex items-center justify-center text-[10px] font-medium" style={{ color: headerColor }}>
+                          W{isoWeekNumber(monday)}
+                        </div>
+                        {Array.from({ length: 7 }).map((_, di) => {
+                          const day = new Date(monday);
+                          day.setDate(day.getDate() + di);
+                          const key = isoDate(day);
+                          const isToday = key === todayStr;
+                          const stats = dayStats[key];
+                          let dotColor = null;
+                          if (stats) {
+                            if (stats.overdue > 0) dotColor = DOT_OVERDUE;
+                            else if (stats.fav > 0) dotColor = DOT_FAV;
+                            else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
+                            else dotColor = DOT_HAS;
+                          }
+                          const textColor = isToday ? NOW_ACCENT : isCurrentWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
+                          const cell = (
+                            <div className="h-8 w-full flex items-center justify-center">
+                              <div className="relative h-6 w-6 flex items-center justify-center">
+                                {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: 18, width: 18 }} />}
+                                <span className="relative text-[12px] font-medium" style={{ color: textColor }}>{day.getDate()}</span>
+                              </div>
+                            </div>
+                          );
+                          if (!stats) return <div key={di}>{cell}</div>;
+                          const parts = [`${stats.count} task`];
+                          if (stats.fav) parts.push(`${stats.fav} preferit${stats.fav !== 1 ? "i" : "o"}`);
+                          if (stats.overdue) parts.push(`${stats.overdue} scadut${stats.overdue !== 1 ? "i" : "o"}`);
+                          return (
+                            <Tooltip key={di}>
+                              <TooltipTrigger asChild>{cell}</TooltipTrigger>
+                              <TooltipContent side="top">{parts.join(" · ")}</TooltipContent>
+                            </Tooltip>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
