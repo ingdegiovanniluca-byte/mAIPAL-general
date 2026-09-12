@@ -45,6 +45,11 @@ export default function TaskBoardPage() {
   useEffect(() => { load(); }, []);
 
   const sortTasks = (arr) => [...arr].sort((a, b) => {
+    if (showCompleted) {
+      const ca = a.completed_at || a.created_at || "";
+      const cb = b.completed_at || b.created_at || "";
+      return cb.localeCompare(ca);
+    }
     const da = a.due_date || "9999-12-31";
     const db_ = b.due_date || "9999-12-31";
     if (da !== db_) return da.localeCompare(db_);
