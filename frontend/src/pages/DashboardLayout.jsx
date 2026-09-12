@@ -9,7 +9,9 @@ const NAV_ITEMS = [
   { to: "/dashboard/todos", label: "To-Do", testid: "tab-todos" },
   { to: "/dashboard/journal", label: "Diario", testid: "tab-journal" },
   { to: "/dashboard/news", label: "News", testid: "tab-news" },
+  { to: "/dashboard/liste", label: "Liste", testid: "tab-liste" },
   { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents" },
+  { to: "/dashboard/team", label: "Team", testid: "tab-team" },
   { to: "/dashboard/admin", label: "Admin", testid: "tab-admin", adminOnly: true },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings" },
 ];

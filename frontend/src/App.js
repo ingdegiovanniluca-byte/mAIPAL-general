@@ -13,6 +13,8 @@ import AdminPage from "@/pages/AdminPage";
 import SettingsPage from "@/pages/SettingsPage";
 import TodoBoardPage from "@/pages/TodoBoardPage";
 import NewsPage from "@/pages/NewsPage";
+import CollectionsPage from "@/pages/CollectionsPage";
+import OrganizationPage from "@/pages/OrganizationPage";
 
 function Protected({ children, requireOnboard = true }) {
   const { user, loading } = useAuth();
@@ -34,6 +36,8 @@ function AppRouter() {
         <Route path="todos" element={<TodoBoardPage />} />
         <Route path="journal" element={<JournalPage />} />
         <Route path="news" element={<NewsPage />} />
+        <Route path="liste" element={<CollectionsPage />} />
+        <Route path="team" element={<OrganizationPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="settings" element={<SettingsPage />} />

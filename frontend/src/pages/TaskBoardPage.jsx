@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass } from "lucide-react";
+import { useAuth } from "@/auth/AuthContext";
+import { CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Lock } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -270,7 +271,10 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
       </button>
 
       <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
-        <div className={`font-semibold text-sm truncate ${isDone ? "line-through" : ""}`}>{task.title}</div>
+        <div className={`font-semibold text-sm truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
+          {task.title}
+          {task.visibility === "org" && <Users size={11} className="text-white/45 shrink-0" title="Condiviso col team" />}
+        </div>
         {task.due_date && (
           <div className="text-[11px] text-white/60 mt-1">{formatDayMonth(task.due_date, task.due_time)}</div>
         )}
@@ -295,6 +299,7 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
 }
 
 function TaskDialog({ task, onClose, onUpdated }) {
+  const { user } = useAuth();
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [thread, setThread] = useState([]);
@@ -340,6 +345,15 @@ function TaskDialog({ task, onClose, onUpdated }) {
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
+  const toggleVisibility = async () => {
+    const next = task.visibility === "org" ? "private" : "org";
+    try {
+      await api.patch(`/tasks/${task.id}`, { visibility: next });
+      onUpdated();
+      toast.success(next === "org" ? "Condiviso con il team" : "Reso privato");
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+
   const del = async () => {
     toast("Eliminare questo task?", {
       action: {
@@ -377,6 +391,11 @@ function TaskDialog({ task, onClose, onUpdated }) {
           <button data-testid="toggle-reminder" onClick={toggleReminder} className="px-3 py-1.5 rounded-full text-xs bg-white/10">
             {task.reminder_enabled ? "🔔 Promemoria attivo" : "+ Attiva promemoria"}
           </button>
+          {user?.org_id && (
+            <button data-testid="toggle-visibility" onClick={toggleVisibility} className="px-3 py-1.5 rounded-full text-xs bg-white/10 flex items-center gap-1.5">
+              {task.visibility === "org" ? <><Users size={12} /> Condiviso col team</> : <><Lock size={12} /> Privato</>}
+            </button>
+          )}
           <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 text-red-400">Elimina</button>
         </div>
 

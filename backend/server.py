@@ -69,6 +69,8 @@ class User(BaseModel):
     created_at: Optional[str] = None
     telegram_chat_id: Optional[int] = None
     role: Optional[str] = "user"
+    org_id: Optional[str] = None
+    org_role: Optional[Literal["owner", "member"]] = None
 
 
 class RegisterRequest(BaseModel):
@@ -112,6 +114,8 @@ class ChatRequest(BaseModel):
 class Task(BaseModel):
     id: str
     user_id: str
+    org_id: Optional[str] = None
+    visibility: Literal["private", "org"] = "private"
     title: str
     description: Optional[str] = ""
     due_date: Optional[str] = None
@@ -129,6 +133,7 @@ class TaskUpsert(BaseModel):
     priority: Literal["alta", "media", "bassa"] = "media"
     tags: List[str] = []
     notes: Optional[str] = ""
+    visibility: Literal["private", "org"] = "private"
 
 
 class Todo(BaseModel):
@@ -152,6 +157,47 @@ class TodoUpsert(BaseModel):
     priority: Optional[Literal["alta", "media", "bassa"]] = None
     tags: List[str] = []
     notes: Optional[str] = ""
+
+
+# ---- Organizzazione ----
+class OrgCreatePayload(BaseModel):
+    name: str
+
+
+class OrgRenamePayload(BaseModel):
+    name: str
+
+
+class OrgJoinPayload(BaseModel):
+    code: str
+
+
+# ---- Collezioni (liste personalizzate: clienti, esercizi, commesse, ecc.) ----
+class CollectionFieldDef(BaseModel):
+    key: str
+    label: str
+    type: Literal["text", "textarea", "number", "date", "select", "phone", "email", "reference"] = "text"
+    options: Optional[List[str]] = None
+    ref_collection_id: Optional[str] = None
+
+
+class CollectionCreatePayload(BaseModel):
+    name: str
+    icon: Optional[str] = None
+    fields: List[CollectionFieldDef]
+    visibility: Literal["private", "org"] = "private"
+
+
+class CollectionUpdatePayload(BaseModel):
+    name: Optional[str] = None
+    icon: Optional[str] = None
+    fields: Optional[List[CollectionFieldDef]] = None
+    visibility: Optional[Literal["private", "org"]] = None
+
+
+class CollectionItemPayload(BaseModel):
+    data: dict
+    visibility: Optional[Literal["private", "org"]] = None
 
 
 # ============ AUTH HELPERS ============
@@ -181,6 +227,27 @@ async def get_current_user(
     if not user_doc:
         raise HTTPException(status_code=401, detail="User not found")
     return User(**user_doc)
+
+
+def _visible_query(current: User) -> dict:
+    """Mongo filter matching a user's own documents plus anything shared with their
+    organization. Used for tasks and collections (the two resource types with sharing)."""
+    if current.org_id:
+        return {"$or": [{"user_id": current.user_id}, {"org_id": current.org_id, "visibility": "org"}]}
+    return {"user_id": current.user_id}
+
+
+def _editable_query(current: User) -> dict:
+    """Same as _visible_query but meant for mutating endpoints: any org-mate can edit/
+    complete/delete a document shared with the org, not just its creator."""
+    return _visible_query(current)
+
+
+def _stamp_owner_fields(doc: dict, current: User):
+    doc["user_id"] = current.user_id
+    doc["org_id"] = current.org_id
+    if doc.get("visibility") == "org" and not current.org_id:
+        doc["visibility"] = "private"
 
 
 # ============ AUTH ROUTES ============
@@ -554,6 +621,104 @@ async def upload_avatar(file: UploadFile = File(...), current: User = Depends(ge
     await db.users.update_one({"user_id": current.user_id}, {"$set": {"picture": data_uri}})
     user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     return User(**user_doc)
+
+
+# ============ ORGANIZZAZIONE ============
+def _gen_org_code() -> str:
+    return secrets.token_hex(3).upper()  # es. "A1B2C3"
+
+
+@api_router.post("/org")
+async def create_org(payload: OrgCreatePayload, current: User = Depends(get_current_user)):
+    if current.org_id:
+        raise HTTPException(status_code=400, detail="Fai già parte di un'organizzazione. Esci prima di crearne una nuova.")
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome obbligatorio")
+    org_id = f"org_{uuid.uuid4().hex[:12]}"
+    org_doc = {
+        "id": org_id,
+        "name": name,
+        "join_code": _gen_org_code(),
+        "created_by": current.user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.organizations.insert_one(org_doc)
+    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org_id, "org_role": "owner"}})
+    org_doc.pop("_id", None)
+    return org_doc
+
+
+@api_router.get("/org")
+async def get_org(current: User = Depends(get_current_user)):
+    if not current.org_id:
+        return None
+    org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0})
+    if not org:
+        return None
+    members = await db.users.find(
+        {"org_id": current.org_id}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1, "org_role": 1}
+    ).to_list(200)
+    org["members"] = members
+    return org
+
+
+@api_router.patch("/org")
+async def rename_org(payload: OrgRenamePayload, current: User = Depends(get_current_user)):
+    if not current.org_id or current.org_role != "owner":
+        raise HTTPException(status_code=403, detail="Solo il proprietario dell'organizzazione può rinominarla")
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome obbligatorio")
+    await db.organizations.update_one({"id": current.org_id}, {"$set": {"name": name}})
+    return await db.organizations.find_one({"id": current.org_id}, {"_id": 0})
+
+
+@api_router.post("/org/regenerate-code")
+async def regenerate_org_code(current: User = Depends(get_current_user)):
+    if not current.org_id or current.org_role != "owner":
+        raise HTTPException(status_code=403, detail="Solo il proprietario può rigenerare il codice")
+    new_code = _gen_org_code()
+    await db.organizations.update_one({"id": current.org_id}, {"$set": {"join_code": new_code}})
+    return {"join_code": new_code}
+
+
+@api_router.post("/org/join")
+async def join_org(payload: OrgJoinPayload, current: User = Depends(get_current_user)):
+    if current.org_id:
+        raise HTTPException(status_code=400, detail="Fai già parte di un'organizzazione. Esci prima di unirti a un'altra.")
+    code = (payload.code or "").strip().upper()
+    org = await db.organizations.find_one({"join_code": code}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Codice non valido")
+    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org["id"], "org_role": "member"}})
+    return org
+
+
+@api_router.post("/org/leave")
+async def leave_org(current: User = Depends(get_current_user)):
+    if not current.org_id:
+        raise HTTPException(status_code=400, detail="Non fai parte di un'organizzazione")
+    if current.org_role == "owner":
+        other_members = await db.users.count_documents({"org_id": current.org_id, "user_id": {"$ne": current.user_id}})
+        if other_members > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Non puoi uscire finché ci sono altri membri: rimuovili prima dalle impostazioni dell'organizzazione.",
+            )
+        await db.organizations.delete_one({"id": current.org_id})
+    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": None, "org_role": None}})
+    return {"ok": True}
+
+
+@api_router.delete("/org/members/{member_user_id}")
+async def remove_org_member(member_user_id: str, current: User = Depends(get_current_user)):
+    if not current.org_id or current.org_role != "owner":
+        raise HTTPException(status_code=403, detail="Solo il proprietario può rimuovere membri")
+    if member_user_id == current.user_id:
+        raise HTTPException(status_code=400, detail="Non puoi rimuovere te stesso: usa 'esci dall'organizzazione'")
+    await db.users.update_one({"user_id": member_user_id, "org_id": current.org_id}, {"$set": {"org_id": None, "org_role": None}})
+    return {"ok": True}
 
 
 # ============ LLM / CHAT ============
@@ -1143,7 +1308,7 @@ async def delete_conversation(conv_id: str, current: User = Depends(get_current_
 # ============ TASKS ============
 @api_router.get("/tasks")
 async def list_tasks(current: User = Depends(get_current_user)):
-    cursor = db.tasks.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1)
+    cursor = db.tasks.find(_visible_query(current), {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(500)
 
 
@@ -1151,11 +1316,11 @@ async def list_tasks(current: User = Depends(get_current_user)):
 async def create_task(payload: TaskUpsert, current: User = Depends(get_current_user)):
     doc = {
         "id": f"task_{uuid.uuid4().hex[:12]}",
-        "user_id": current.user_id,
         **payload.model_dump(),
         "calendar_synced": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    _stamp_owner_fields(doc, current)
     await db.tasks.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -1163,8 +1328,14 @@ async def create_task(payload: TaskUpsert, current: User = Depends(get_current_u
 
 @api_router.patch("/tasks/{task_id}")
 async def update_task(task_id: str, payload: dict, current: User = Depends(get_current_user)):
-    payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None)
-    existing = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None); payload.pop("org_id", None)
+    if "visibility" in payload:
+        if payload["visibility"] == "org" and current.org_id:
+            payload["org_id"] = current.org_id
+        else:
+            payload["visibility"] = "private"
+            payload["org_id"] = None
+    existing = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1203,14 +1374,14 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
     ):
         payload["reminder_msg_sent"] = False
 
-    await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": payload})
-    doc = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": payload})
+    doc = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     return doc
 
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, current: User = Depends(get_current_user)):
-    existing = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    existing = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Task not found")
     if existing.get("calendar_event_id"):
@@ -1220,7 +1391,7 @@ async def delete_task(task_id: str, current: User = Depends(get_current_user)):
                 await gi.delete_calendar_event(creds, existing["calendar_event_id"])
         except Exception:
             logger.exception("failed removing calendar event on delete")
-    await db.tasks.delete_one({"id": task_id, "user_id": current.user_id})
+    await db.tasks.delete_one({"id": task_id, **_editable_query(current)})
     return {"ok": True}
 
 
@@ -1260,23 +1431,24 @@ async def delete_todo(todo_id: str, current: User = Depends(get_current_user)):
 
 @api_router.post("/tasks/{task_id}/complete")
 async def toggle_task_complete(task_id: str, current: User = Depends(get_current_user)):
-    task = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    q = {"id": task_id, **_editable_query(current)}
     if task.get("completed"):
-        await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": {"completed": False, "completed_at": None}})
+        await db.tasks.update_one(q, {"$set": {"completed": False, "completed_at": None}})
         return {"id": task_id, "completed": False}
-    await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": {"completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}})
+    await db.tasks.update_one(q, {"$set": {"completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}})
     return {"id": task_id, "completed": True}
 
 
 @api_router.post("/tasks/{task_id}/favorite")
 async def toggle_task_favorite(task_id: str, current: User = Depends(get_current_user)):
-    task = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     new_val = not task.get("favorite", False)
-    await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": {"favorite": new_val}})
+    await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": {"favorite": new_val}})
     return {"id": task_id, "favorite": new_val}
 
 
@@ -1288,6 +1460,136 @@ async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current
     new_val = not todo.get("favorite", False)
     await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": {"favorite": new_val}})
     return {"id": todo_id, "favorite": new_val}
+
+
+# ============ COLLEZIONI (liste personalizzate: clienti, esercizi, commesse, ecc.) ============
+@api_router.get("/collections")
+async def list_collections(current: User = Depends(get_current_user)):
+    cursor = db.collections.find(_visible_query(current), {"_id": 0}).sort("created_at", 1)
+    collections = await cursor.to_list(200)
+    ids = [c["id"] for c in collections]
+    if ids:
+        counts = await db.collection_items.aggregate([
+            {"$match": {"collection_id": {"$in": ids}}},
+            {"$group": {"_id": "$collection_id", "n": {"$sum": 1}}},
+        ]).to_list(len(ids))
+        count_map = {c["_id"]: c["n"] for c in counts}
+        for c in collections:
+            c["item_count"] = count_map.get(c["id"], 0)
+    return collections
+
+
+@api_router.post("/collections")
+async def create_collection(payload: CollectionCreatePayload, current: User = Depends(get_current_user)):
+    if not payload.fields:
+        raise HTTPException(status_code=400, detail="Definisci almeno un campo per la lista")
+    doc = {
+        "id": f"coll_{uuid.uuid4().hex[:12]}",
+        "name": payload.name.strip() or "Nuova lista",
+        "icon": payload.icon,
+        "fields": [f.model_dump() for f in payload.fields],
+        "visibility": payload.visibility,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.collections.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/collections/{collection_id}")
+async def get_collection(collection_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    return coll
+
+
+@api_router.patch("/collections/{collection_id}")
+async def update_collection(collection_id: str, payload: CollectionUpdatePayload, current: User = Depends(get_current_user)):
+    existing = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    updates = {}
+    if payload.name is not None:
+        updates["name"] = payload.name.strip() or existing["name"]
+    if payload.icon is not None:
+        updates["icon"] = payload.icon
+    if payload.fields is not None:
+        updates["fields"] = [f.model_dump() for f in payload.fields]
+    if payload.visibility is not None:
+        if payload.visibility == "org" and current.org_id:
+            updates["visibility"] = "org"
+            updates["org_id"] = current.org_id
+        else:
+            updates["visibility"] = "private"
+            updates["org_id"] = None
+    if updates:
+        await db.collections.update_one({"id": collection_id}, {"$set": updates})
+    return await db.collections.find_one({"id": collection_id}, {"_id": 0})
+
+
+@api_router.delete("/collections/{collection_id}")
+async def delete_collection(collection_id: str, current: User = Depends(get_current_user)):
+    existing = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    await db.collections.delete_one({"id": collection_id})
+    await db.collection_items.delete_many({"collection_id": collection_id})
+    return {"ok": True}
+
+
+@api_router.get("/collections/{collection_id}/items")
+async def list_collection_items(collection_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    cursor = db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).sort("created_at", -1)
+    return await cursor.to_list(1000)
+
+
+@api_router.post("/collections/{collection_id}/items")
+async def create_collection_item(collection_id: str, payload: CollectionItemPayload, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    doc = {
+        "id": f"item_{uuid.uuid4().hex[:12]}",
+        "collection_id": collection_id,
+        "data": payload.data,
+        "visibility": payload.visibility or coll.get("visibility", "private"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.collection_items.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/collections/{collection_id}/items/{item_id}")
+async def update_collection_item(collection_id: str, item_id: str, payload: CollectionItemPayload, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    updates = {"data": payload.data}
+    if payload.visibility is not None:
+        if payload.visibility == "org" and current.org_id:
+            updates["visibility"] = "org"
+            updates["org_id"] = current.org_id
+        else:
+            updates["visibility"] = "private"
+            updates["org_id"] = None
+    await db.collection_items.update_one({"id": item_id, "collection_id": collection_id}, {"$set": updates})
+    return await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
+
+
+@api_router.delete("/collections/{collection_id}/items/{item_id}")
+async def delete_collection_item(collection_id: str, item_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
+    return {"ok": True}
 
 
 # ============ JOURNAL ============
@@ -1460,7 +1762,7 @@ class ContextChatRequest(BaseModel):
 
 @api_router.post("/tasks/{task_id}/chat")
 async def task_chat(task_id: str, payload: ContextChatRequest, current: User = Depends(get_current_user)):
-    task = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+    task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1474,9 +1776,10 @@ async def task_chat(task_id: str, payload: ContextChatRequest, current: User = D
     raw = await chat.send_message(UserMessage(text=payload.message))
     visible, meta = _extract_meta(raw)
     visible = visible.replace("```json", "").replace("```", "").strip()
+    q = {"id": task_id, **_editable_query(current)}
     if meta:
-        await db.tasks.update_one({"id": task_id, "user_id": current.user_id}, {"$set": meta})
-    updated = await db.tasks.find_one({"id": task_id, "user_id": current.user_id}, {"_id": 0})
+        await db.tasks.update_one(q, {"$set": meta})
+    updated = await db.tasks.find_one(q, {"_id": 0})
     return {"answer": visible, "task": updated}
 
 
