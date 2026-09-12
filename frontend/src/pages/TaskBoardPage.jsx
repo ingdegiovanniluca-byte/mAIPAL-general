@@ -317,10 +317,10 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
         <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
           {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
         </button>
-        <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-blue-300" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+        <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
           <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
         </button>
-        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-green-300" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
           <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
         </button>
         <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
@@ -469,10 +469,10 @@ function TaskDialog({ task, onClose, onUpdated }) {
             <button data-testid="task-reminder" onClick={toggleReminder} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
               {isReminder ? <BellRing size={16} /> : <Bell size={16} />}
             </button>
-            <button data-testid="toggle-calendar" onClick={toggleCal} className={`p-1.5 rounded-full ${isCal ? "text-blue-300" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+            <button data-testid="toggle-calendar" onClick={toggleCal} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
               <CalendarCheck size={16} className={isCal ? "fill-current" : ""} />
             </button>
-            <button data-testid="task-complete" onClick={toggleDone} className={`p-1.5 rounded-full ${isDone ? "text-green-300" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+            <button data-testid="task-complete" onClick={toggleDone} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
               <CircleCheck size={16} className={isDone ? "fill-current" : ""} />
             </button>
             <button data-testid="delete-task" onClick={del} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
