@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users } from "lucide-react";
+import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -140,6 +140,7 @@ export default function TaskBoardPage() {
 
   const activeCount = tasks.filter((t) => !t.completed).length;
   const completedCount = tasks.filter((t) => !!t.completed).length;
+  const selectedTask = tasks.find((t) => t.id === selected) || null;
 
   return (
     <div className="flex flex-col h-[calc(100vh-17rem)]">
@@ -257,7 +258,7 @@ export default function TaskBoardPage() {
                 <TaskCard
                   key={t.id}
                   task={t}
-                  onClick={() => setSelected(t)}
+                  onClick={() => setSelected(t.id)}
                   onToggleFav={() => toggleFav(t.id, !!t.favorite)}
                   onToggleDone={() => toggleDone(t.id, !!t.completed)}
                   onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
@@ -270,8 +271,8 @@ export default function TaskBoardPage() {
         ))}
       </div>
 
-      {selected && (
-        <TaskDialog task={selected} onClose={() => setSelected(null)} onUpdated={async () => { await load(); }} />
+      {selectedTask && (
+        <TaskDialog task={selectedTask} onClose={() => setSelected(null)} onUpdated={async () => { await load(); }} />
       )}
     </div>
   );
@@ -453,7 +454,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <DialogHeader>
-              <DialogTitle className="text-3xl font-bold text-white truncate">{task.title}</DialogTitle>
+              <DialogTitle className="text-xl font-bold text-white truncate">{task.title}</DialogTitle>
             </DialogHeader>
             {task.due_date && (
               <div className="flex items-center gap-1.5 mt-1.5 text-sm" style={{ color: "#D9D9D9" }}>
@@ -489,7 +490,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-4 pt-1">
+        <div className="grid grid-cols-3 gap-4 mt-6">
           <div>
             <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Data Creazione</div>
             <div className="text-sm text-white mt-1">{formatCreatedAt(task.created_at)}</div>
@@ -509,23 +510,29 @@ function TaskDialog({ task, onClose, onUpdated }) {
         </div>
 
         {/* NOTES */}
-        <div className="pt-2">
-          <Textarea
-            data-testid="task-notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Note"
-            className="border-0 rounded-2xl min-h-[80px] text-white placeholder:text-white/50"
-            style={{ background: TAG_BG }}
-          />
-          <div className="flex justify-end mt-2">
-            <button data-testid="task-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (task.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
-              {savingNotes ? "…" : "Salva note"}
+        <div className="mt-7">
+          <div className="relative">
+            <Textarea
+              data-testid="task-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Note"
+              className="border-0 rounded-2xl min-h-[80px] pr-12 text-white placeholder:text-white/50"
+              style={{ background: TAG_BG }}
+            />
+            <button
+              data-testid="task-notes-save"
+              onClick={saveNotes}
+              disabled={savingNotes || notes === (task.notes || "")}
+              className="absolute bottom-2.5 right-2.5 p-2 rounded-full bg-white/15 text-white hover:bg-white/25 disabled:opacity-30"
+              title="Salva note"
+            >
+              <Send size={14} />
             </button>
           </div>
         </div>
 
-        <div className="space-y-3 max-h-60 overflow-y-auto">
+        <div className="mt-6 space-y-3 max-h-60 overflow-y-auto">
           {thread.map((t, i) => (
             <div key={i} className="space-y-2">
               <div className="rounded-xl p-3 text-sm text-white" style={{ background: TAG_BG }}>{t.user}</div>
@@ -534,17 +541,25 @@ function TaskDialog({ task, onClose, onUpdated }) {
           ))}
         </div>
 
-        <div>
-          <Textarea
-            data-testid="task-chat-input"
-            value={msg}
-            onChange={(e) => setMsg(e.target.value)}
-            placeholder="Modifica il task scrivendo in linguaggio naturale"
-            className="border-0 rounded-2xl min-h-[80px] text-white placeholder:text-white/50"
-            style={{ background: TAG_BG }}
-          />
-          <div className="flex justify-end mt-2">
-            <button data-testid="task-chat-send" onClick={send} disabled={busy} className="pill-btn">{busy ? "…" : "Invia a mAIPAL"}</button>
+        <div className="mt-6">
+          <div className="relative">
+            <Textarea
+              data-testid="task-chat-input"
+              value={msg}
+              onChange={(e) => setMsg(e.target.value)}
+              placeholder="Modifica il task scrivendo in linguaggio naturale"
+              className="border-0 rounded-2xl min-h-[80px] pr-12 text-white placeholder:text-white/50"
+              style={{ background: TAG_BG }}
+            />
+            <button
+              data-testid="task-chat-send"
+              onClick={send}
+              disabled={busy}
+              className="absolute bottom-2.5 right-2.5 p-2 rounded-full bg-white/15 text-white hover:bg-white/25 disabled:opacity-30"
+              title="Invia a mAIPAL"
+            >
+              <Send size={14} />
+            </button>
           </div>
         </div>
       </DialogContent>
