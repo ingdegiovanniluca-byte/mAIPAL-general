@@ -14,7 +14,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import bcrypt
+
+LOCAL_TZ = ZoneInfo("Europe/Rome")
 
 from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent, OpenAISpeechToText
 
@@ -2590,13 +2593,15 @@ async def _reminders_loop():
 async def _exact_reminders_loop():
     """Every minute: for tasks with reminder_enabled=True and reminder_msg_sent!=True,
     fire a Telegram message at (due_date + due_time - reminder_offset_minutes); offset
-    defaults to 15 minutes when the user hasn't specified one. Same UTC ≈ user-local
-    MVP assumption as _reminders_loop."""
+    defaults to 15 minutes when the user hasn't specified one. due_date/due_time are the
+    wall-clock values the user typed, in Europe/Rome local time - converted to UTC here
+    before comparing to now(), otherwise the reminder fires 1-2h later than intended."""
     while True:
         try:
             now = datetime.now(timezone.utc)
-            today_iso = now.date().isoformat()
-            tomorrow_iso = (now.date() + timedelta(days=1)).isoformat()
+            now_local = now.astimezone(LOCAL_TZ)
+            today_iso = now_local.date().isoformat()
+            tomorrow_iso = (now_local.date() + timedelta(days=1)).isoformat()
             cursor = db.tasks.find(
                 {
                     "reminder_enabled": True,
@@ -2608,9 +2613,10 @@ async def _exact_reminders_loop():
             async for t in cursor:
                 due_time = t.get("due_time") or "09:00"
                 try:
-                    due_dt = datetime.strptime(f"{t.get('due_date')} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                    due_dt_local = datetime.strptime(f"{t.get('due_date')} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
                 except ValueError:
                     continue
+                due_dt = due_dt_local.astimezone(timezone.utc)
                 offset = t.get("reminder_offset_minutes") or 15
                 fire_at = due_dt - timedelta(minutes=offset)
                 if now < fire_at:

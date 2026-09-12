@@ -13,7 +13,7 @@ const COL_GAP = 20; // px
 const COL_STRIDE = COL_WIDTH + COL_GAP;
 const MONTH_ROW_HEIGHT = 18; // px
 
-const NOW_ACCENT = "#00B0F0"; // today's number + current week label
+const NOW_ACCENT = "#FEA969"; // today's number + current week label
 const SOFT_HIGHLIGHT = "#F2F2F2"; // rest of the current week's days + month-boundary week label
 const MUTED_TEXT = "#ACA6A3";
 const DOT_HAS = "#7F6D69";
