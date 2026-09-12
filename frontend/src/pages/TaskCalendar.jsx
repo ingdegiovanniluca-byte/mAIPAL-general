@@ -13,13 +13,14 @@ const COL_GAP = 20; // px
 const COL_STRIDE = COL_WIDTH + COL_GAP;
 const MONTH_ROW_HEIGHT = 18; // px
 
-const NOW_ACCENT = "#FEA969"; // today's number + current week label
+const NOW_ACCENT = "#FA386E"; // today's number + current week label
 const SOFT_HIGHLIGHT = "#F2F2F2"; // rest of the current week's days + month-boundary week label
 const MUTED_TEXT = "#ACA6A3";
-const DOT_HAS = "#C3B0A5";
+const DOT_HAS = "#826556";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
-const DOT_DONE = "#92D050";
+const DOT_DONE = "#00B050";
+const DOT_SIZE = 20; // px
 
 function startOfWeek(d) {
   const date = new Date(d);
@@ -159,7 +160,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   return (
     <TooltipProvider delayDuration={150}>
       <div className="mb-4 shrink-0">
-        <div className="flex items-center gap-3 mb-2">
+        <div className="flex items-center gap-3 mb-2 flex-wrap">
           <button
             data-testid="calendar-toggle"
             onClick={onToggleCollapse}
@@ -168,6 +169,14 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
           >
             <CalendarDays size={16} />
           </button>
+          {!collapsed && (
+            <div className="flex items-center gap-3 flex-wrap text-[11px] text-white/60">
+              <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_FAV }} />preferiti</span>
+              <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_OVERDUE }} />scaduti</span>
+              <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_DONE }} />tutti conclusi</span>
+              <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_HAS }} />task presenti</span>
+            </div>
+          )}
         </div>
 
         {!collapsed && (
@@ -206,7 +215,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                       <div key={wi} data-current-week={isCurrentWeek ? "true" : undefined} className="flex flex-col items-center shrink-0" style={{ width: COL_WIDTH }}>
                         <div
                           onClick={() => onSelectWeek && onSelectWeek(weekKey)}
-                          className="h-6 flex items-center justify-center text-[10px] font-medium rounded-md cursor-pointer w-full"
+                          className={`h-6 flex items-center justify-center text-[10px] rounded-md cursor-pointer w-full ${isCurrentWeek ? "font-bold" : "font-medium"}`}
                           style={{ color: headerColor, background: isWeekSelected ? "rgba(0, 176, 240, 0.22)" : "transparent" }}
                         >
                           W{isoWeekNumber(monday)}
@@ -233,8 +242,8 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                               style={{ background: isSelected ? "rgba(0, 176, 240, 0.22)" : "transparent" }}
                             >
                               <div className="relative h-6 w-6 flex items-center justify-center">
-                                {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: 18, width: 18 }} />}
-                                <span className="relative text-[12px] font-medium" style={{ color: textColor }}>{day.getDate()}</span>
+                                {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: DOT_SIZE, width: DOT_SIZE }} />}
+                                <span className={`relative text-[12px] ${isToday ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
                               </div>
                             </div>
                           );

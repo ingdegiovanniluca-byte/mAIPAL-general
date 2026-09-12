@@ -36,6 +36,7 @@ export default function TaskBoardPage() {
   const [filters, setFilters] = useState({});
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
   const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
+  const [tagFilter, setTagFilter] = useState(null);
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -51,6 +52,8 @@ export default function TaskBoardPage() {
   });
 
   const visible = tasks.filter((t) => showCompleted ? !!t.completed : !t.completed);
+
+  const allTags = Array.from(new Set(tasks.flatMap((t) => t.tags || []))).sort((a, b) => a.localeCompare(b));
 
   const toggleFilter = (colKey, kind) => {
     setFilters((f) => {
@@ -71,6 +74,7 @@ export default function TaskBoardPage() {
     else if (f.overdue) filtered = colTasks.filter(isTaskOverdue);
     if (calendarFilter?.type === "day") filtered = filtered.filter((t) => t.due_date === calendarFilter.date);
     else if (calendarFilter?.type === "week") filtered = filtered.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
+    if (tagFilter) filtered = filtered.filter((t) => (t.tags || []).includes(tagFilter));
     return { ...c, items: sortTasks(filtered), totalCount, overdueCount, favCount, filterState: f };
   });
 
@@ -211,6 +215,20 @@ export default function TaskBoardPage() {
             </>
           )}
         </button>
+        {allTags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {allTags.map((tag) => (
+              <button
+                key={tag}
+                data-testid={`tag-filter-${tag}`}
+                onClick={() => setTagFilter((v) => (v === tag ? null : tag))}
+                className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilter === tag ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
+              >
+                #{tag}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4 flex-1 min-h-0">
         {grouped.map((c) => (
@@ -532,7 +550,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
           </div>
         </div>
 
-        <div className="mt-6 space-y-3 max-h-60 overflow-y-auto">
+        <div className="mt-2 space-y-3 max-h-60 overflow-y-auto">
           {thread.map((t, i) => (
             <div key={i} className="space-y-2">
               <div className="rounded-xl p-3 text-sm text-white" style={{ background: TAG_BG }}>{t.user}</div>
@@ -541,7 +559,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
           ))}
         </div>
 
-        <div className="mt-6">
+        <div className="mt-3">
           <div className="relative">
             <Textarea
               data-testid="task-chat-input"
