@@ -27,8 +27,26 @@ def _profile_description(user: dict) -> str:
     return "; ".join(bits) or "nessun profilo specifico indicato: cerca notizie generali di attualità italiana"
 
 
-async def generate_news_for_user(user: dict) -> list[dict]:
-    """Returns a list of {title, summary, url, source} dicts, or [] on failure/no results."""
+def _preference_block(prefs: dict | None) -> str:
+    prefs = prefs or {}
+    lines = []
+    if prefs.get("liked_sources"):
+        lines.append(
+            "L'utente ha apprezzato in passato notizie provenienti da queste fonti: "
+            f"{', '.join(prefs['liked_sources'])}. Se trovi contenuti recenti e pertinenti da queste fonti, dai loro priorità."
+        )
+    if prefs.get("disliked_sources"):
+        lines.append(
+            "L'utente ha segnalato come poco interessanti notizie provenienti da queste fonti: "
+            f"{', '.join(prefs['disliked_sources'])}. Evitale, a meno che non ci sia nulla di meglio sull'argomento."
+        )
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
+async def generate_news_for_user(user: dict, prefs: dict | None = None) -> list[dict]:
+    """Returns a list of {title, summary, url, source} dicts, or [] on failure/no results.
+    `prefs` (optional) is {"liked_sources": [...], "disliked_sources": [...]} learned from
+    the user's past like/dislike feedback, used to steer source selection."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     profile_desc = _profile_description(user)
 
@@ -36,7 +54,8 @@ async def generate_news_for_user(user: dict) -> list[dict]:
         f"Oggi è {today}. Cerca sul web 4-6 notizie pubblicate nelle ultime 24-48 ore rilevanti per "
         f"questa persona ({profile_desc}). Dai priorità a notizie di lavoro/settore, poi agli interessi "
         "personali. Per ognuna scrivi un riassunto breve (2-3 frasi) in italiano e includi il link diretto "
-        "alla fonte originale. Evita più notizie sullo stesso identico fatto. "
+        "alla fonte originale. Evita più notizie sullo stesso identico fatto."
+        f"{_preference_block(prefs)}\n"
         "Rispondi SOLO con una lista JSON valida, senza alcun testo prima o dopo, in questo formato esatto: "
         '[{"title": "...", "summary": "...", "url": "https://...", "source": "nome testata"}, ...]'
     )

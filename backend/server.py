@@ -200,6 +200,10 @@ class CollectionItemPayload(BaseModel):
     visibility: Optional[Literal["private", "org"]] = None
 
 
+class NewsFeedbackPayload(BaseModel):
+    value: Optional[Literal["like", "dislike"]] = None
+
+
 # ============ AUTH HELPERS ============
 async def get_current_user(
     request: Request,
@@ -2427,6 +2431,71 @@ async def refresh_news(current: User = Depends(get_current_user)):
     return items
 
 
+@api_router.post("/news/{item_id}/feedback")
+async def set_news_feedback(item_id: str, payload: NewsFeedbackPayload, current: User = Depends(get_current_user)):
+    existing = await db.news_items.find_one({"id": item_id, "user_id": current.user_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="News non trovata")
+    await db.news_items.update_one({"id": item_id, "user_id": current.user_id}, {"$set": {"feedback": payload.value}})
+    return {"id": item_id, "feedback": payload.value}
+
+
+@api_router.delete("/news/{item_id}")
+async def delete_news(item_id: str, current: User = Depends(get_current_user)):
+    res = await db.news_items.delete_one({"id": item_id, "user_id": current.user_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="News non trovata")
+    return {"ok": True}
+
+
+@api_router.post("/news/{item_id}/save-to-kb")
+async def save_news_to_kb(item_id: str, current: User = Depends(get_current_user)):
+    item = await db.news_items.find_one({"id": item_id, "user_id": current.user_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="News non trovata")
+    if item.get("kb_doc_id"):
+        return {"doc_id": item["kb_doc_id"], "already_saved": True}
+
+    content = f"{item['title']}\n\n{item.get('summary','')}\n\nFonte: {item.get('source','')} — {item['url']}"
+    try:
+        e = await emb.embed_texts([content])
+        embedding = e[0] if e else None
+    except Exception:
+        embedding = None
+
+    doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+    await db.kb_chunks.insert_one({
+        "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
+        "user_id": current.user_id,
+        "text": content,
+        "title": item["title"],
+        "tags": ["news"],
+        "summary": item.get("summary", ""),
+        "embedding": embedding,
+        "doc_id": doc_id,
+        "source_type": "news",
+        "chunk_index": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await db.kb_documents.insert_one({
+        "doc_id": doc_id,
+        "user_id": current.user_id,
+        "name": item["title"],
+        "ext": "news",
+        "source_type": "news",
+        "category": "note",
+        "keywords": ["news", item.get("source", "")] if item.get("source") else ["news"],
+        "chunks_count": 1,
+        "chars": len(content),
+        "size_bytes": len(content.encode("utf-8")),
+        "preview": (item.get("summary") or item["title"])[:280],
+        "drive_link": item["url"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await db.news_items.update_one({"id": item_id, "user_id": current.user_id}, {"$set": {"kb_doc_id": doc_id}})
+    return {"doc_id": doc_id, "already_saved": False}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -2675,11 +2744,29 @@ async def _daily_summary_loop():
         await asyncio.sleep(20 * 60)
 
 
+async def _news_source_preferences(user_id: str) -> dict:
+    """Learns which news sources the user tends to like/dislike from past feedback, so
+    future searches can be steered toward (or away from) them."""
+    scores = {}
+    cursor = db.news_items.aggregate([
+        {"$match": {"user_id": user_id, "source": {"$nin": [None, ""]}, "feedback": {"$in": ["like", "dislike"]}}},
+        {"$group": {"_id": {"source": "$source", "feedback": "$feedback"}, "n": {"$sum": 1}}},
+    ])
+    async for row in cursor:
+        src = row["_id"]["source"]
+        delta = row["n"] if row["_id"]["feedback"] == "like" else -row["n"]
+        scores[src] = scores.get(src, 0) + delta
+    liked = sorted([s for s, v in scores.items() if v > 0], key=lambda s: -scores[s])[:8]
+    disliked = sorted([s for s, v in scores.items() if v < 0], key=lambda s: scores[s])[:8]
+    return {"liked_sources": liked, "disliked_sources": disliked}
+
+
 async def _run_daily_news_for_user(user: dict, today: str):
     """Generates today's news digest for one user, stores it, and pushes it via Telegram
     if the user has a linked chat. Marks news_date=today regardless of result so the
     background loop doesn't retry a user with zero relevant news every 20 minutes."""
-    items = await news_service.generate_news_for_user(user)
+    prefs = await _news_source_preferences(user["user_id"])
+    items = await news_service.generate_news_for_user(user, prefs)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"news_date": today}})
     if not items:
         return []
