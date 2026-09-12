@@ -35,6 +35,7 @@ export default function TaskBoardPage() {
   const [dragOverCol, setDragOverCol] = useState(null);
   const [filters, setFilters] = useState({});
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
+  const [calendarDateFilter, setCalendarDateFilter] = useState(null);
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -68,6 +69,7 @@ export default function TaskBoardPage() {
     if (f.fav && f.overdue) filtered = colTasks.filter((t) => !!t.favorite && isTaskOverdue(t));
     else if (f.fav) filtered = colTasks.filter((t) => !!t.favorite);
     else if (f.overdue) filtered = colTasks.filter(isTaskOverdue);
+    if (calendarDateFilter) filtered = filtered.filter((t) => t.due_date === calendarDateFilter);
     return { ...c, items: sortTasks(filtered), totalCount, overdueCount, favCount, filterState: f };
   });
 
@@ -140,8 +142,23 @@ export default function TaskBoardPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-17rem)]">
-      <TaskCalendar tasks={tasks} collapsed={calendarCollapsed} onToggleCollapse={() => setCalendarCollapsed((v) => !v)} />
-      <div className="flex items-center gap-2 mb-4 shrink-0">
+      <TaskCalendar
+        tasks={tasks}
+        collapsed={calendarCollapsed}
+        onToggleCollapse={() => setCalendarCollapsed((v) => !v)}
+        selectedDate={calendarDateFilter}
+        onSelectDate={(d) => setCalendarDateFilter((v) => (v === d ? null : d))}
+      />
+      <div className="flex items-center gap-2 mb-4 shrink-0 flex-wrap">
+        {calendarDateFilter && (
+          <button
+            data-testid="calendar-filter-pill"
+            onClick={() => setCalendarDateFilter(null)}
+            className="rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
+          >
+            {formatDayMonth(calendarDateFilter)} ✕
+          </button>
+        )}
         <button
           data-testid="filter-active"
           onClick={() => setShowCompleted(false)}

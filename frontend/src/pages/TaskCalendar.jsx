@@ -52,7 +52,7 @@ function weekMonthKey(monday) {
   return { month: thu.getMonth(), year: thu.getFullYear() };
 }
 
-export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
+export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate }) {
   const scrollRef = useRef(null);
   const draggingRef = useRef(false);
   const dragStartXRef = useRef(0);
@@ -70,21 +70,31 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
     return arr;
   }, [thisMonday]);
 
-  // First week of each month group -> label to draw above it (spans visually over the
-  // following weeks of the same month, like a section header on a horizontal timeline).
-  const monthLabels = useMemo(() => {
+  // Every week where the month group changes (first week of a new month) -> used to color
+  // that week's header, regardless of whether its label is actually drawn (see below).
+  const monthBoundaries = useMemo(() => {
     const out = [];
     let prevKey = null;
     weeks.forEach((monday, wi) => {
       const { month, year } = weekMonthKey(monday);
       const key = `${year}-${month}`;
       if (key !== prevKey) {
-        out.push({ wi, label: `${IT_MONTHS_LONG[month]} ${year}` });
+        out.push({ wi, month, year });
         prevKey = key;
       }
     });
     return out;
   }, [weeks]);
+
+  const monthBoundarySet = useMemo(() => new Set(monthBoundaries.map((b) => b.wi)), [monthBoundaries]);
+
+  // Only every other month boundary gets a visible text label, to avoid crowding.
+  const monthLabels = useMemo(
+    () => monthBoundaries
+      .filter((_, idx) => idx % 2 === 0)
+      .map((b) => ({ wi: b.wi, label: `${IT_MONTHS_LONG[b.month]} ${b.year}` })),
+    [monthBoundaries]
+  );
 
   const dayStats = useMemo(() => {
     const map = {};
@@ -180,9 +190,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
                 <div className="flex" style={{ gap: COL_GAP }}>
                   {weeks.map((monday, wi) => {
                     const isCurrentWeek = isoDate(monday) === isoDate(thisMonday);
-                    const sunday = new Date(monday);
-                    sunday.setDate(sunday.getDate() + 6);
-                    const isMonthChangeWeek = monday.getMonth() !== sunday.getMonth();
+                    const isMonthChangeWeek = monthBoundarySet.has(wi);
                     const headerColor = isCurrentWeek ? NOW_ACCENT : isMonthChangeWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
                     return (
                       <div key={wi} data-current-week={isCurrentWeek ? "true" : undefined} className="flex flex-col items-center shrink-0" style={{ width: COL_WIDTH }}>
@@ -194,6 +202,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
                           day.setDate(day.getDate() + di);
                           const key = isoDate(day);
                           const isToday = key === todayStr;
+                          const isSelected = selectedDate === key;
                           const stats = dayStats[key];
                           let dotColor = null;
                           if (stats) {
@@ -204,7 +213,11 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
                           }
                           const textColor = isToday ? NOW_ACCENT : isCurrentWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
                           const cell = (
-                            <div className="h-8 w-full flex items-center justify-center">
+                            <div
+                              onClick={() => onSelectDate && onSelectDate(key)}
+                              className="h-8 w-full flex items-center justify-center rounded-md cursor-pointer"
+                              style={{ background: isSelected ? "rgba(0, 176, 240, 0.22)" : "transparent" }}
+                            >
                               <div className="relative h-6 w-6 flex items-center justify-center">
                                 {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: 18, width: 18 }} />}
                                 <span className="relative text-[12px] font-medium" style={{ color: textColor }}>{day.getDate()}</span>
