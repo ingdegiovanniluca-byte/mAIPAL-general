@@ -52,9 +52,12 @@ function weekMonthKey(monday) {
   return { month: thu.getMonth(), year: thu.getFullYear() };
 }
 
+const DRAG_THRESHOLD = 4; // px of movement before a mousedown counts as a drag, not a click
+
 export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek }) {
   const scrollRef = useRef(null);
   const draggingRef = useRef(false);
+  const dragMovedRef = useRef(false);
   const dragStartXRef = useRef(0);
   const dragStartScrollRef = useRef(0);
   const todayStr = isoDate(new Date());
@@ -125,8 +128,8 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   };
 
   const onMouseDown = (e) => {
-    e.preventDefault();
     draggingRef.current = true;
+    dragMovedRef.current = false;
     dragStartXRef.current = e.pageX;
     dragStartScrollRef.current = scrollRef.current.scrollLeft;
   };
@@ -135,6 +138,11 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
     const onMouseMove = (e) => {
       if (!draggingRef.current || !scrollRef.current) return;
       const dx = e.pageX - dragStartXRef.current;
+      // Below the threshold, treat it as a click in progress and don't touch scroll at
+      // all - otherwise the tiny hand-tremor movement in every real click can make the
+      // browser cancel the click event once we start mutating scrollLeft mid-gesture.
+      if (!dragMovedRef.current && Math.abs(dx) < DRAG_THRESHOLD) return;
+      dragMovedRef.current = true;
       scrollRef.current.scrollLeft = dragStartScrollRef.current - dx;
     };
     const onMouseUp = () => { draggingRef.current = false; };

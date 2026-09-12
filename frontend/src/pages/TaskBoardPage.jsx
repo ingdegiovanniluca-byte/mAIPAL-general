@@ -153,9 +153,10 @@ export default function TaskBoardPage() {
         onSelectWeek={(mondayIso) => {
           setCalendarFilter((v) => {
             if (v?.type === "week" && v.start === mondayIso) return null;
-            const end = new Date(mondayIso);
-            end.setDate(end.getDate() + 6);
-            return { type: "week", start: mondayIso, end: end.toISOString().slice(0, 10) };
+            const [y, m, d] = mondayIso.split("-").map(Number);
+            const end = new Date(y, m - 1, d + 6);
+            const endIso = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+            return { type: "week", start: mondayIso, end: endIso };
           });
         }}
       />
