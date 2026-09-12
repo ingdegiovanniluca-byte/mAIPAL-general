@@ -43,10 +43,33 @@ def _preference_block(prefs: dict | None) -> str:
     return ("\n" + "\n".join(lines)) if lines else ""
 
 
-async def generate_news_for_user(user: dict, prefs: dict | None = None) -> list[dict]:
+def _context_block(context: dict | None) -> str:
+    context = context or {}
+    lines = []
+    tasks = context.get("tasks") or []
+    if tasks:
+        items = "; ".join(f"\"{t['title']}\" ({t['when']})" for t in tasks[:15])
+        lines.append(
+            f"Impegni pianificati dall'utente per oggi/questa settimana: {items}. "
+            "Se uno di questi riguarda un argomento su cui ci sono notizie recenti utili (es. una scadenza, "
+            "un adempimento, un evento di settore), includi anche quella notizia."
+        )
+    todos = context.get("todos") or []
+    if todos:
+        items = "; ".join(f"\"{t}\"" for t in todos[:15])
+        lines.append(
+            f"Attività aperte nella lista to-do dell'utente: {items}. "
+            "Se pertinenti, considera anche queste come indizio di cosa può interessargli in questo momento."
+        )
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
+async def generate_news_for_user(user: dict, prefs: dict | None = None, context: dict | None = None) -> list[dict]:
     """Returns a list of {title, summary, url, source} dicts, or [] on failure/no results.
     `prefs` (optional) is {"liked_sources": [...], "disliked_sources": [...]} learned from
-    the user's past like/dislike feedback, used to steer source selection."""
+    the user's past like/dislike feedback, used to steer source selection.
+    `context` (optional) is {"tasks": [{"title","when"}], "todos": [...]} - the user's open
+    tasks for today/this week and open to-dos, used as an extra relevance signal."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     profile_desc = _profile_description(user)
 
@@ -55,7 +78,8 @@ async def generate_news_for_user(user: dict, prefs: dict | None = None) -> list[
         f"questa persona ({profile_desc}). Dai priorità a notizie di lavoro/settore, poi agli interessi "
         "personali. Per ognuna scrivi un riassunto breve (2-3 frasi) in italiano e includi il link diretto "
         "alla fonte originale. Evita più notizie sullo stesso identico fatto."
-        f"{_preference_block(prefs)}\n"
+        f"{_preference_block(prefs)}"
+        f"{_context_block(context)}\n"
         "Rispondi SOLO con una lista JSON valida, senza alcun testo prima o dopo, in questo formato esatto: "
         '[{"title": "...", "summary": "...", "url": "https://...", "source": "nome testata"}, ...]'
     )

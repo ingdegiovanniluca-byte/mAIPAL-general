@@ -2761,12 +2761,42 @@ async def _news_source_preferences(user_id: str) -> dict:
     return {"liked_sources": liked, "disliked_sources": disliked}
 
 
+async def _news_current_context(user_id: str) -> dict:
+    """Open tasks due this calendar week (today included) and open to-dos, so the news
+    search can also surface content relevant to what the user is actively dealing with
+    (e.g. a task about a tax deadline -> news about that deadline)."""
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    tasks = await db.tasks.find(
+        {
+            "user_id": user_id,
+            "due_date": {"$gte": week_start.isoformat(), "$lte": week_end.isoformat()},
+            "$or": [{"completed": {"$exists": False}}, {"completed": False}],
+        },
+        {"_id": 0, "title": 1, "due_date": 1, "tags": 1},
+    ).to_list(50)
+    todos = await db.todos.find(
+        {"user_id": user_id, "status": {"$in": ["da_fare", "in_corso"]}},
+        {"_id": 0, "title": 1, "tags": 1},
+    ).to_list(50)
+    today_iso = today.isoformat()
+    return {
+        "tasks": [
+            {"title": t.get("title", ""), "when": "oggi" if t.get("due_date") == today_iso else "questa settimana"}
+            for t in tasks if t.get("title")
+        ],
+        "todos": [t.get("title", "") for t in todos if t.get("title")],
+    }
+
+
 async def _run_daily_news_for_user(user: dict, today: str):
     """Generates today's news digest for one user, stores it, and pushes it via Telegram
     if the user has a linked chat. Marks news_date=today regardless of result so the
     background loop doesn't retry a user with zero relevant news every 20 minutes."""
     prefs = await _news_source_preferences(user["user_id"])
-    items = await news_service.generate_news_for_user(user, prefs)
+    context = await _news_current_context(user["user_id"])
+    items = await news_service.generate_news_for_user(user, prefs, context)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"news_date": today}})
     if not items:
         return []
