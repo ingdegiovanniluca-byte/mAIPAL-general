@@ -5,6 +5,7 @@ import { CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hour
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import TaskCalendar from "@/pages/TaskCalendar";
 
 const COLS = [
   { key: "alta", label: "Alta priorità", tint: "column-tint-high", dot: "bg-[color:var(--high)]", side: "priority-high" },
@@ -33,6 +34,7 @@ export default function TaskBoardPage() {
   const [showCompleted, setShowCompleted] = useState(false);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [filters, setFilters] = useState({});
+  const [calendarCollapsed, setCalendarCollapsed] = useState(false);
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -138,6 +140,7 @@ export default function TaskBoardPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-17rem)]">
+      <TaskCalendar tasks={tasks} collapsed={calendarCollapsed} onToggleCollapse={() => setCalendarCollapsed((v) => !v)} />
       <div className="flex items-center gap-2 mb-4 shrink-0">
         <button
           data-testid="filter-active"
