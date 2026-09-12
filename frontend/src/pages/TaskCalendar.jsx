@@ -18,6 +18,8 @@ const DOT_HAS = "#7F6D69";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#85B98A";
+const TODAY_RING = "var(--accent-orange)";
+const MONTH_CHANGE = "var(--accent-purple)";
 
 function startOfWeek(d) {
   const date = new Date(d);
@@ -174,7 +176,10 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
               <div className="flex" style={{ gap: COL_GAP }}>
                 {weeks.map((monday, wi) => {
                   const isCurrentWeek = isoDate(monday) === isoDate(thisMonday);
-                  const headerColor = isCurrentWeek ? CURRENT_TEXT : MUTED_TEXT;
+                  const sunday = new Date(monday);
+                  sunday.setDate(sunday.getDate() + 6);
+                  const isMonthChangeWeek = monday.getMonth() !== sunday.getMonth();
+                  const headerColor = isCurrentWeek ? CURRENT_TEXT : isMonthChangeWeek ? MONTH_CHANGE : MUTED_TEXT;
                   return (
                     <div key={wi} data-current-week={isCurrentWeek ? "true" : undefined} className="flex flex-col items-center shrink-0" style={{ width: COL_WIDTH }}>
                       <div className="h-6 flex items-center justify-center text-[10px] font-medium" style={{ color: headerColor }}>
@@ -184,6 +189,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
                         const day = new Date(monday);
                         day.setDate(day.getDate() + di);
                         const key = isoDate(day);
+                        const isToday = key === todayStr;
                         const stats = dayStats[key];
                         let dotColor = null;
                         if (stats) {
@@ -196,7 +202,8 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse }) {
                         const cell = (
                           <div className="h-8 w-full flex items-center justify-center">
                             <div className="relative h-7 w-7 flex items-center justify-center">
-                              {dotColor && <span className="absolute inset-0 rounded-full" style={{ background: dotColor }} />}
+                              {isToday && <span className="absolute inset-0 rounded-full" style={{ boxShadow: `0 0 0 1.5px ${TODAY_RING}` }} />}
+                              {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, height: 20, width: 20 }} />}
                               <span className="relative text-[12px]" style={{ color: textColor }}>{day.getDate()}</span>
                             </div>
                           </div>
