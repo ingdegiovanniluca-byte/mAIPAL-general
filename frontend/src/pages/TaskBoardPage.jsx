@@ -216,7 +216,7 @@ export default function TaskBoardPage() {
           )}
         </button>
         {allTags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap ml-4">
             {allTags.map((tag) => (
               <button
                 key={tag}
