@@ -35,7 +35,7 @@ export default function TaskBoardPage() {
   const [dragOverCol, setDragOverCol] = useState(null);
   const [filters, setFilters] = useState({});
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
-  const [calendarDateFilter, setCalendarDateFilter] = useState(null);
+  const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -69,7 +69,8 @@ export default function TaskBoardPage() {
     if (f.fav && f.overdue) filtered = colTasks.filter((t) => !!t.favorite && isTaskOverdue(t));
     else if (f.fav) filtered = colTasks.filter((t) => !!t.favorite);
     else if (f.overdue) filtered = colTasks.filter(isTaskOverdue);
-    if (calendarDateFilter) filtered = filtered.filter((t) => t.due_date === calendarDateFilter);
+    if (calendarFilter?.type === "day") filtered = filtered.filter((t) => t.due_date === calendarFilter.date);
+    else if (calendarFilter?.type === "week") filtered = filtered.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
     return { ...c, items: sortTasks(filtered), totalCount, overdueCount, favCount, filterState: f };
   });
 
@@ -146,17 +147,28 @@ export default function TaskBoardPage() {
         tasks={tasks}
         collapsed={calendarCollapsed}
         onToggleCollapse={() => setCalendarCollapsed((v) => !v)}
-        selectedDate={calendarDateFilter}
-        onSelectDate={(d) => setCalendarDateFilter((v) => (v === d ? null : d))}
+        selectedDate={calendarFilter?.type === "day" ? calendarFilter.date : null}
+        onSelectDate={(d) => setCalendarFilter((v) => (v?.type === "day" && v.date === d ? null : { type: "day", date: d }))}
+        selectedWeekStart={calendarFilter?.type === "week" ? calendarFilter.start : null}
+        onSelectWeek={(mondayIso) => {
+          setCalendarFilter((v) => {
+            if (v?.type === "week" && v.start === mondayIso) return null;
+            const end = new Date(mondayIso);
+            end.setDate(end.getDate() + 6);
+            return { type: "week", start: mondayIso, end: end.toISOString().slice(0, 10) };
+          });
+        }}
       />
       <div className="flex items-center gap-2 mb-4 shrink-0 flex-wrap">
-        {calendarDateFilter && (
+        {calendarFilter && (
           <button
             data-testid="calendar-filter-pill"
-            onClick={() => setCalendarDateFilter(null)}
+            onClick={() => setCalendarFilter(null)}
             className="rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
           >
-            {formatDayMonth(calendarDateFilter)} ✕
+            {calendarFilter.type === "day"
+              ? formatDayMonth(calendarFilter.date)
+              : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
           </button>
         )}
         <button

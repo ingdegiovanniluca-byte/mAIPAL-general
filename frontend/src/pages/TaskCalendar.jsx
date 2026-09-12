@@ -52,7 +52,7 @@ function weekMonthKey(monday) {
   return { month: thu.getMonth(), year: thu.getFullYear() };
 }
 
-export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate }) {
+export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek }) {
   const scrollRef = useRef(null);
   const draggingRef = useRef(false);
   const dragStartXRef = useRef(0);
@@ -192,9 +192,15 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                     const isCurrentWeek = isoDate(monday) === isoDate(thisMonday);
                     const isMonthChangeWeek = monthBoundarySet.has(wi);
                     const headerColor = isCurrentWeek ? NOW_ACCENT : isMonthChangeWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
+                    const weekKey = isoDate(monday);
+                    const isWeekSelected = selectedWeekStart === weekKey;
                     return (
                       <div key={wi} data-current-week={isCurrentWeek ? "true" : undefined} className="flex flex-col items-center shrink-0" style={{ width: COL_WIDTH }}>
-                        <div className="h-6 flex items-center justify-center text-[10px] font-medium" style={{ color: headerColor }}>
+                        <div
+                          onClick={() => onSelectWeek && onSelectWeek(weekKey)}
+                          className="h-6 flex items-center justify-center text-[10px] font-medium rounded-md cursor-pointer w-full"
+                          style={{ color: headerColor, background: isWeekSelected ? "rgba(0, 176, 240, 0.22)" : "transparent" }}
+                        >
                           W{isoWeekNumber(monday)}
                         </div>
                         {Array.from({ length: 7 }).map((_, di) => {
