@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Lock } from "lucide-react";
+import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -331,6 +331,16 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
   );
 }
 
+const TAG_BG = "rgba(131, 108, 96, 0.3)";
+
+const formatCreatedAt = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${d.getDate()} ${IT_MONTHS_LONG[d.getMonth()]}, ${hh}:${mm}`;
+};
+
 function TaskDialog({ task, onClose, onUpdated }) {
   const { user } = useAuth();
   const [msg, setMsg] = useState("");
@@ -338,6 +348,13 @@ function TaskDialog({ task, onClose, onUpdated }) {
   const [thread, setThread] = useState([]);
   const [notes, setNotes] = useState(task.notes || "");
   const [savingNotes, setSavingNotes] = useState(false);
+  const [orgMembers, setOrgMembers] = useState([]);
+
+  useEffect(() => {
+    if (user?.org_id) {
+      api.get("/org").then((r) => setOrgMembers(r.data?.members || [])).catch(() => {});
+    }
+  }, [user?.org_id]);
 
   const send = async () => {
     if (!msg.trim()) return;
@@ -360,6 +377,21 @@ function TaskDialog({ task, onClose, onUpdated }) {
       toast.success("Note salvate");
     } catch (e) { toast.error("Errore salvataggio note"); }
     finally { setSavingNotes(false); }
+  };
+
+  const toggleFav = async () => {
+    try {
+      await api.post(`/tasks/${task.id}/favorite`);
+      onUpdated();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+
+  const toggleDone = async () => {
+    try {
+      await api.post(`/tasks/${task.id}/complete`);
+      onUpdated();
+      toast.success(task.completed ? "Riaperto" : "Task completato ✓");
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
   const toggleCal = async () => {
@@ -402,45 +434,89 @@ function TaskDialog({ task, onClose, onUpdated }) {
     });
   };
 
+  const isFav = !!task.favorite;
+  const isDone = !!task.completed;
+  const isCal = !!task.calendar_synced;
+  const isReminder = !!task.reminder_enabled;
+
+  const owner = task.user_id === user?.user_id
+    ? (user?.name || "Tu")
+    : (orgMembers.find((m) => m.user_id === task.user_id)?.name || "Team");
+  const sharedWith = task.visibility === "org" ? "Organizzazione" : "Solo io";
+
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="task-dialog">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold">{task.title}</DialogTitle>
-        </DialogHeader>
-        <div className="text-white/70 text-sm">{task.description}</div>
-        <div className="flex flex-wrap gap-2">
-          {task.due_date && <span className="text-xs px-2 py-1 rounded-md bg-white/10">📅 {task.due_date}{task.due_time ? ` · ${task.due_time}` : ""}</span>}
-          <span className={`text-xs px-2 py-1 rounded-md ${task.priority === "alta" ? "bg-red-50 text-red-700" : task.priority === "media" ? "bg-orange-50 text-orange-700" : "bg-white/10"}`}>priorità {task.priority}</span>
-          {(task.tags || []).map((t, i) => <span key={i} className="text-xs px-2 py-1 rounded-md bg-white/10">#{t}</span>)}
-          {task.calendar_synced && <span className="text-xs px-2 py-1 rounded-md bg-blue-50 text-blue-700">✓ Calendar</span>}
-          {task.reminder_enabled && <span className="text-xs px-2 py-1 rounded-md bg-purple-50 text-purple-700">🔔 promemoria attivo</span>}
+      <DialogContent
+        className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 rounded-2xl bg-gradient-to-r from-[#575155] via-[#6A5D59] to-[#887166]"
+        data-testid="task-dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <DialogHeader>
+              <DialogTitle className="text-3xl font-bold text-white truncate">{task.title}</DialogTitle>
+            </DialogHeader>
+            {task.due_date && (
+              <div className="flex items-center gap-1.5 mt-1.5 text-sm" style={{ color: "#D9D9D9" }}>
+                <Calendar size={14} />
+                {formatDayMonth(task.due_date, task.due_time)}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0 pt-1">
+            <button data-testid="task-fav" onClick={toggleFav} className={`p-1.5 rounded-full ${isFav ? "text-amber-400" : "text-white/40 hover:text-white/70"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
+              <Star size={16} className={isFav ? "fill-current" : ""} />
+            </button>
+            <button data-testid="task-reminder" onClick={toggleReminder} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
+              {isReminder ? <BellRing size={16} /> : <Bell size={16} />}
+            </button>
+            <button data-testid="toggle-calendar" onClick={toggleCal} className={`p-1.5 rounded-full ${isCal ? "text-blue-300" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+              <CalendarCheck size={16} className={isCal ? "fill-current" : ""} />
+            </button>
+            <button data-testid="task-complete" onClick={toggleDone} className={`p-1.5 rounded-full ${isDone ? "text-green-300" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+              <CircleCheck size={16} className={isDone ? "fill-current" : ""} />
+            </button>
+            <button data-testid="delete-task" onClick={del} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
+              <Trash2 size={16} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex gap-2 flex-wrap">
-          <button data-testid="toggle-calendar" onClick={toggleCal} className="px-3 py-1.5 rounded-full text-xs bg-white/10">
-            {task.calendar_synced ? "✓ In Calendar" : "+ Aggiungi a Calendar"}
-          </button>
-          <button data-testid="toggle-reminder" onClick={toggleReminder} className="px-3 py-1.5 rounded-full text-xs bg-white/10">
-            {task.reminder_enabled ? "🔔 Promemoria attivo" : "+ Attiva promemoria"}
-          </button>
-          {user?.org_id && (
-            <button data-testid="toggle-visibility" onClick={toggleVisibility} className="px-3 py-1.5 rounded-full text-xs bg-white/10 flex items-center gap-1.5">
-              {task.visibility === "org" ? <><Users size={12} /> Condiviso col team</> : <><Lock size={12} /> Privato</>}
-            </button>
-          )}
-          <button data-testid="delete-task" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 text-red-400">Elimina</button>
+        {(task.tags || []).length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {task.tags.map((t, i) => (
+              <span key={i} className="text-xs px-2.5 py-1 rounded-md text-white/90" style={{ background: TAG_BG }}>#{t}</span>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-3 gap-4 pt-1">
+          <div>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Data Creazione</div>
+            <div className="text-sm text-white mt-1">{formatCreatedAt(task.created_at)}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Owner</div>
+            <div className="text-sm text-white mt-1">{owner}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Shared With</div>
+            {user?.org_id ? (
+              <button data-testid="toggle-visibility" onClick={toggleVisibility} className="text-sm text-white mt-1 hover:underline">{sharedWith}</button>
+            ) : (
+              <div className="text-sm text-white mt-1">{sharedWith}</div>
+            )}
+          </div>
         </div>
 
         {/* NOTES */}
         <div className="pt-2">
-          <div className="kicker mb-2">· note</div>
           <Textarea
             data-testid="task-notes"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Aggiungi note libere sul task…"
-            className="bg-white/10 rounded-2xl min-h-[80px]"
+            placeholder="Note"
+            className="border-0 rounded-2xl min-h-[80px] text-white placeholder:text-white/50"
+            style={{ background: TAG_BG }}
           />
           <div className="flex justify-end mt-2">
             <button data-testid="task-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (task.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
@@ -449,17 +525,24 @@ function TaskDialog({ task, onClose, onUpdated }) {
           </div>
         </div>
 
-        <div className="mt-3 space-y-3 max-h-60 overflow-y-auto">
+        <div className="space-y-3 max-h-60 overflow-y-auto">
           {thread.map((t, i) => (
             <div key={i} className="space-y-2">
-              <div className="bg-white/10 rounded-xl p-3 text-sm">{t.user}</div>
+              <div className="rounded-xl p-3 text-sm text-white" style={{ background: TAG_BG }}>{t.user}</div>
               <div className="prose-answer text-sm whitespace-pre-wrap">{t.agent}</div>
             </div>
           ))}
         </div>
 
-        <div className="mt-3">
-          <Textarea data-testid="task-chat-input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Modifica titolo, scadenza, priorità, tag… (parla in linguaggio naturale)" className="bg-white/10 rounded-2xl min-h-[80px]" />
+        <div>
+          <Textarea
+            data-testid="task-chat-input"
+            value={msg}
+            onChange={(e) => setMsg(e.target.value)}
+            placeholder="Modifica il task scrivendo in linguaggio naturale"
+            className="border-0 rounded-2xl min-h-[80px] text-white placeholder:text-white/50"
+            style={{ background: TAG_BG }}
+          />
           <div className="flex justify-end mt-2">
             <button data-testid="task-chat-send" onClick={send} disabled={busy} className="pill-btn">{busy ? "…" : "Invia a mAIPAL"}</button>
           </div>
