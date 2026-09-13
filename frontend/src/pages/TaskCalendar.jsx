@@ -20,7 +20,14 @@ const DOT_HAS = "#826556";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#00B050";
-const DOT_SIZE = 20; // px
+
+function withAlpha(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 function startOfWeek(d) {
   const date = new Date(d);
@@ -235,16 +242,14 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                             else dotColor = DOT_HAS;
                           }
                           const textColor = isToday ? NOW_ACCENT : isCurrentWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
+                          const cellBg = isSelected ? "rgba(0, 176, 240, 0.22)" : dotColor ? withAlpha(dotColor, 0.3) : "transparent";
                           const cell = (
                             <div
                               onClick={() => onSelectDate && onSelectDate(key)}
                               className="h-8 w-full flex items-center justify-center rounded-md cursor-pointer"
-                              style={{ background: isSelected ? "rgba(0, 176, 240, 0.22)" : "transparent" }}
+                              style={{ background: cellBg }}
                             >
-                              <div className="relative h-6 w-6 flex items-center justify-center">
-                                {dotColor && <span className="absolute rounded-full" style={{ background: dotColor, opacity: 0.3, height: DOT_SIZE, width: DOT_SIZE }} />}
-                                <span className={`relative text-[12px] ${isToday ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
-                              </div>
+                              <span className={`text-[12px] ${isToday ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
                             </div>
                           );
                           if (!stats) return <div key={di}>{cell}</div>;
