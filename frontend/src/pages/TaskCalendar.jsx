@@ -243,19 +243,18 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                           }
                           const textColor = isToday ? NOW_ACCENT : isCurrentWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
                           const hasBg = isSelected || !!dotColor;
-                          const cellBg = isSelected ? "rgba(0, 176, 240, 0.28)" : dotColor ? withAlpha(dotColor, 0.32) : "transparent";
+                          const cellBg = isSelected ? "rgba(0, 176, 240, 0.3)" : dotColor ? withAlpha(dotColor, 0.3) : "transparent";
                           const cell = (
                             <div
                               onClick={() => onSelectDate && onSelectDate(key)}
                               className="h-8 w-full flex items-center justify-center cursor-pointer"
                             >
                               <div
-                                className="h-6 w-full flex items-center justify-center rounded-md"
+                                className={`h-6 w-full flex items-center justify-center rounded-md ${hasBg ? "calendar-day-glass" : ""}`}
                                 style={{
                                   background: cellBg,
                                   backdropFilter: hasBg ? "blur(6px) saturate(160%)" : "none",
                                   WebkitBackdropFilter: hasBg ? "blur(6px) saturate(160%)" : "none",
-                                  border: hasBg ? "1px solid rgba(255, 255, 255, 0.22)" : "1px solid transparent",
                                   boxShadow: hasBg ? "inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 2px 6px rgba(0, 0, 0, 0.15)" : "none",
                                 }}
                               >

@@ -243,13 +243,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     font-family: 'Poppins', sans-serif;
 }
 
-/* Chat input: liquid glass frosted box. */
+/* Chat input: liquid glass frosted box, with a soft colored wave underneath that
+   tints itself to the currently selected action (set via the --chat-action-color
+   custom property from ChatPage.jsx). */
 .chat-input-card {
+    position: relative;
+    isolation: isolate;
     background: rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(24px) saturate(160%);
     -webkit-backdrop-filter: blur(24px) saturate(160%);
     border: none;
     box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+.chat-input-card::before {
+    content: "";
+    position: absolute;
+    inset: -25%;
+    z-index: -1;
+    background: radial-gradient(closest-side, var(--chat-action-color, #6D6181), transparent 70%);
+    filter: blur(50px);
+    opacity: 0.55;
+    animation: chat-card-wave 10s ease-in-out infinite;
+    transition: background 400ms ease;
+}
+@keyframes chat-card-wave {
+    0%, 100% { transform: translate(-8%, -6%) scale(1); }
+    50% { transform: translate(8%, 6%) scale(1.2); }
 }
 
 /* Faint ruled lines, applied to the writing area only (starts below the header row). */
@@ -307,6 +326,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .liquid-glass-btn {
     position: relative;
+    overflow: hidden;
+    isolation: isolate;
     background: rgba(255, 255, 255, 0.10);
     backdrop-filter: blur(18px) saturate(180%);
     -webkit-backdrop-filter: blur(18px) saturate(180%);
@@ -317,6 +338,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         inset 0 -8px 14px rgba(255, 255, 255, 0.08),
         0 8px 24px rgba(0, 0, 0, 0.25);
     transition: transform 150ms ease, box-shadow 150ms ease;
+}
+/* Moving color wave inside the button itself, so the liquid glass motion is
+   visible even where the full-page blobs behind it barely shift. */
+.liquid-glass-btn::before {
+    content: "";
+    position: absolute;
+    inset: -60%;
+    z-index: -1;
+    background: linear-gradient(120deg, #6D28D9, #2563EB, #DB2777, #06B6D4, #F59E0B, #6D28D9);
+    background-size: 300% 300%;
+    filter: blur(14px);
+    opacity: 0.55;
+    animation: liquid-wave-shift 8s ease-in-out infinite;
+}
+@keyframes liquid-wave-shift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
 }
 .liquid-glass-btn:hover {
     transform: translateY(-1px);
@@ -335,4 +373,36 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     box-shadow:
         inset 0 1px 1px rgba(255, 255, 255, 0.3),
         0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+/* Gradient text using the same wave colors as the page background, in place of a
+   plain blur, for the "mAIPAL" word in the login hero title. */
+.gradient-text-wave {
+    background: linear-gradient(90deg, #6D28D9, #2563EB, #DB2777, #06B6D4, #F59E0B, #6D28D9);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: liquid-wave-shift 8s ease-in-out infinite;
+}
+
+/* Subtle traveling highlight sweep for the task-calendar "day has tasks" chips,
+   to read as liquid glass rather than a flat tinted box. */
+.calendar-day-glass {
+    position: relative;
+    overflow: hidden;
+}
+.calendar-day-glass::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, transparent 30%, rgba(255, 255, 255, 0.4) 50%, transparent 70%);
+    background-size: 250% 100%;
+    animation: calendar-glass-shimmer 5s ease-in-out infinite;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+}
+@keyframes calendar-glass-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
 }
