@@ -76,7 +76,7 @@ function EmailPasswordForm() {
         data-testid="email-submit-btn"
         type="submit"
         disabled={loading}
-        className="pill-btn text-base px-6 py-3.5 disabled:opacity-50"
+        className="pill-btn liquid-glass-btn text-base px-6 py-3.5 disabled:opacity-50"
       >
         <Mail size={16} /> {mode === "login" ? "Accedi" : "Registrati"}
         <ArrowRight size={18} />
@@ -154,7 +154,7 @@ export default function LoginPage() {
               <button
                 data-testid="login-google-btn"
                 onClick={handleGoogleLogin}
-                className="pill-btn text-base px-6 py-3.5"
+                className="pill-btn liquid-glass-btn text-base px-6 py-3.5"
               >
                 <Sparkles size={16} /> Accedi con Google
                 <ArrowRight size={18} />
