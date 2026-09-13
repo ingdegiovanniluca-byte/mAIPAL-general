@@ -471,9 +471,10 @@ function TaskDialog({ task, onClose, onUpdated }) {
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent
-        className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 rounded-2xl liquid-glass-panel wobble-glass text-white"
+        className="max-w-2xl max-h-[90vh] overflow-hidden border-0 rounded-2xl liquid-glass-panel wobble-glass text-white"
         data-testid="task-dialog"
       >
+        <div className="max-h-full overflow-y-auto pr-1">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <DialogHeader>
@@ -506,7 +507,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
         </div>
 
         {(task.tags || []).length > 0 && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 mt-4">
             {task.tags.map((t, i) => (
               <span key={i} className="text-xs px-2.5 py-1 rounded-md text-white/90" style={{ background: TAG_BG }}>#{t}</span>
             ))}
@@ -584,6 +585,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
               <Send size={14} />
             </button>
           </div>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

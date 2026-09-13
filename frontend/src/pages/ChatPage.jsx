@@ -331,11 +331,7 @@ export default function ChatPage() {
             <div className="text-xs font-bold uppercase tracking-wider text-white">nuovo messaggio</div>
             <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
           </div>
-          <div
-            className="chat-input-card p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col"
-            data-testid="chat-input-card"
-            style={{ "--chat-action-color": ACTION_COLOR[active] }}
-          >
+          <div className="chat-input-card p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col" data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
