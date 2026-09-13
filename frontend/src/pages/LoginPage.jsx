@@ -273,13 +273,13 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="mt-8 md:mt-12 max-w-xl">
+        <div className="mt-8 md:mt-12 max-w-2xl">
           <p className="text-[10px] uppercase tracking-widest text-white/45 mb-2">cosa vuoi fare oggi?</p>
           <h1 className="text-xl md:text-3xl font-bold text-white leading-tight">
             Fai fare a <span className="gradient-text-wave">mAIPAL</span> quello che non hai tempo di fare.
           </h1>
-          <p className="mt-3 text-white/70 text-sm md:text-base max-w-md">
-            Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do, e risponde con la tua knowledge base. Chatta, salva, organizza.
+          <p className="mt-3 text-white/70 text-sm md:text-base">
+            Un segretario AI pensato apposta per piccole imprese, privati e liberi professionisti: puoi scegliere il verticale ottimizzato per il tuo specifico lavoro in base alla tua attività. Gestisce task e to-do e risponde con la tua knowledge base. Chatta, salva, organizza.
           </p>
         </div>
 

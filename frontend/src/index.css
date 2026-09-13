@@ -249,6 +249,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .chat-input-card {
     position: relative;
     isolation: isolate;
+    overflow: hidden;
     background: rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(24px) saturate(160%);
     -webkit-backdrop-filter: blur(24px) saturate(160%);

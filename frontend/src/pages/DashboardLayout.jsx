@@ -35,59 +35,69 @@ export default function DashboardLayout() {
   const initial = (user?.name || user?.email || "?").trim().charAt(0).toUpperCase();
 
   return (
-    <div className="min-h-screen">
-      <header className="px-8 md:px-14 pt-8 pb-8">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
-            <img src={logo3} alt="mAIPAL" className="h-8 w-auto" />
-          </div>
+    <div className="min-h-screen relative">
+      <div className="liquid-page-bg" aria-hidden="true">
+        <span className="liquid-blob liquid-blob-1" />
+        <span className="liquid-blob liquid-blob-2" />
+        <span className="liquid-blob liquid-blob-3" />
+        <span className="liquid-blob liquid-blob-4" />
+        <span className="liquid-blob liquid-blob-5" />
+      </div>
 
-          <nav className="flex-1 flex items-center justify-center gap-2.5 md:gap-3 flex-wrap">
-            {NAV_ITEMS.filter((item) => !item.adminOnly || user?.role === "admin").map((item, i) => (
-              <React.Fragment key={item.to}>
-                {i > 0 && <span className="text-white/25 text-xs select-none">•</span>}
-                <TabLink to={item.to} label={item.label} testid={item.testid} />
-              </React.Fragment>
-            ))}
-          </nav>
+      <div className="relative z-10">
+        <header className="px-8 md:px-14 pt-8 pb-8">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
+              <img src={logo3} alt="mAIPAL" className="h-8 w-auto" />
+            </div>
 
-          <div className="relative shrink-0" ref={menuRef}>
-            <button
-              data-testid="user-menu-btn"
-              onClick={() => setMenuOpen((v) => !v)}
-              className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
-            >
-              {user?.picture ? (
-                <img src={user.picture} alt={user?.name || "utente"} className="h-9 w-9 rounded-full object-cover border border-white/20 shrink-0" />
-              ) : (
-                <div className="h-9 w-9 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-sm font-semibold shrink-0">
-                  {initial}
+            <nav className="flex-1 flex items-center justify-center gap-2.5 md:gap-3 flex-wrap">
+              {NAV_ITEMS.filter((item) => !item.adminOnly || user?.role === "admin").map((item, i) => (
+                <React.Fragment key={item.to}>
+                  {i > 0 && <span className="text-white/25 text-xs select-none">•</span>}
+                  <TabLink to={item.to} label={item.label} testid={item.testid} />
+                </React.Fragment>
+              ))}
+            </nav>
+
+            <div className="relative shrink-0" ref={menuRef}>
+              <button
+                data-testid="user-menu-btn"
+                onClick={() => setMenuOpen((v) => !v)}
+                className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
+              >
+                {user?.picture ? (
+                  <img src={user.picture} alt={user?.name || "utente"} className="h-9 w-9 rounded-full object-cover border border-white/20 shrink-0" />
+                ) : (
+                  <div className="h-9 w-9 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-sm font-semibold shrink-0">
+                    {initial}
+                  </div>
+                )}
+                <div className="text-left hidden sm:block">
+                  <div className="text-sm font-medium leading-tight">{firstName || user?.email}</div>
+                  {user?.profession && <div className="text-[11px] text-white/50 leading-tight">{user.profession}</div>}
+                </div>
+              </button>
+
+              {menuOpen && (
+                <div className="absolute right-0 top-full mt-2 w-44 rounded-xl bg-[#403A3C] shadow-lg border border-white/10 py-1.5 z-40">
+                  <button
+                    data-testid="logout-btn"
+                    onClick={() => { setMenuOpen(false); logout(); }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+                  >
+                    <LogOut size={14} /> Esci
+                  </button>
                 </div>
               )}
-              <div className="text-left hidden sm:block">
-                <div className="text-sm font-medium leading-tight">{firstName || user?.email}</div>
-                {user?.profession && <div className="text-[11px] text-white/50 leading-tight">{user.profession}</div>}
-              </div>
-            </button>
-
-            {menuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-44 rounded-xl bg-[#403A3C] shadow-lg border border-white/10 py-1.5 z-40">
-                <button
-                  data-testid="logout-btn"
-                  onClick={() => { setMenuOpen(false); logout(); }}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
-                >
-                  <LogOut size={14} /> Esci
-                </button>
-              </div>
-            )}
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="px-8 md:px-14 pt-6 pb-8 w-full">
-        <Outlet />
-      </main>
+        <main className="px-8 md:px-14 pt-6 pb-8 w-full">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }
