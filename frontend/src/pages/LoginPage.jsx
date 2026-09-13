@@ -92,18 +92,18 @@ function TypewriterDemo() {
   }, []);
 
   return (
-    <div className="liquid-glass-panel rounded-2xl p-5 md:p-7 max-w-lg" data-testid="login-typing-demo">
+    <div className="liquid-glass-panel rounded-2xl p-5 md:p-6 max-w-md w-full" data-testid="login-typing-demo">
       <div className="flex items-start gap-2.5">
-        <span className="text-[10px] uppercase tracking-widest text-white/45 shrink-0 mt-2">tu</span>
-        <div className="text-lg md:text-2xl font-medium leading-snug min-h-[1.4em]">
+        <span className="text-[10px] uppercase tracking-widest text-white/45 shrink-0 mt-1.5">tu</span>
+        <div className="text-sm md:text-base font-medium leading-snug min-h-[1.4em]">
           {userText}
           {phase === "user" && <span className="inline-block w-[2px] h-[1em] bg-white/70 align-middle ml-0.5 animate-pulse" />}
         </div>
       </div>
       {(phase === "reply" || phase === "hold") && (
-        <div className="flex items-start gap-2.5 mt-4 pt-4 border-t border-white/10">
-          <span className="text-[10px] uppercase tracking-widest text-white/45 shrink-0 mt-2">mAIPAL</span>
-          <div className="text-lg md:text-2xl font-medium text-white/90 leading-snug min-h-[1.4em]">
+        <div className="flex items-start gap-2.5 mt-3 pt-3 border-t border-white/10">
+          <span className="text-[10px] uppercase tracking-widest text-white/45 shrink-0 mt-1.5">mAIPAL</span>
+          <div className="text-sm md:text-base font-medium text-white/90 leading-snug min-h-[1.4em]">
             {replyText}
             {phase === "reply" && <span className="inline-block w-[2px] h-[1em] bg-white/70 align-middle ml-0.5 animate-pulse" />}
           </div>
@@ -293,7 +293,19 @@ export default function LoginPage() {
         </div>
 
         <div className="flex-1 flex items-center">
-          <TypewriterDemo />
+          <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center">
+            <div>
+              <h1 className="text-3xl md:text-5xl font-bold text-white leading-tight">
+                Fai fare a <span style={{ color: "#FF8A00" }}>mAIPAL</span> quello che non hai tempo di fare.
+              </h1>
+              <p className="mt-4 text-white/70 text-base md:text-lg max-w-md">
+                Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do, e risponde con la tua knowledge base. Chatta, salva, organizza.
+              </p>
+            </div>
+            <div className="flex justify-center lg:justify-end">
+              <TypewriterDemo />
+            </div>
+          </div>
         </div>
       </div>
 
