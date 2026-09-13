@@ -120,29 +120,39 @@ export default function OnboardingPage() {
   const isLast = step === steps.length - 1;
 
   return (
-    <div className="min-h-screen p-10 md:p-16 max-w-3xl mx-auto flex flex-col">
-      <div className="kicker">onboarding · {step + 1} / {steps.length}</div>
-      <h1 className="mt-3 text-4xl md:text-5xl font-bold tracking-tight">
-        Ciao {user?.name?.split(" ")[0] || ""}, <span className="gradient-word">personalizziamoci</span>.
-      </h1>
-      <p className="mt-3 text-white/70 text-lg">{current.title}</p>
+    <div className="min-h-screen relative">
+      <div className="liquid-page-bg" aria-hidden="true">
+        <span className="liquid-blob liquid-blob-1" />
+        <span className="liquid-blob liquid-blob-2" />
+        <span className="liquid-blob liquid-blob-3" />
+        <span className="liquid-blob liquid-blob-4" />
+        <span className="liquid-blob liquid-blob-5" />
+      </div>
 
-      <div className="mt-10 flex-1">{current.body}</div>
+      <div className="relative z-10 p-10 md:p-16 max-w-3xl mx-auto flex flex-col min-h-screen">
+        <div className="kicker">onboarding · {step + 1} / {steps.length}</div>
+        <h1 className="mt-3 text-4xl md:text-5xl font-bold tracking-tight">
+          Ciao {user?.name?.split(" ")[0] || ""}, <span className="gradient-word">personalizziamoci</span>.
+        </h1>
+        <p className="mt-3 text-white/70 text-lg">{current.title}</p>
 
-      <div className="mt-10 flex items-center justify-between">
-        <button
-          data-testid="ob-back"
-          disabled={step === 0}
-          onClick={() => setStep((s) => Math.max(0, s - 1))}
-          className="text-white/60 hover:text-black disabled:opacity-30"
-        >← indietro</button>
-        {!isLast ? (
-          <button data-testid="ob-next" onClick={() => setStep((s) => s + 1)} className="pill-btn">Avanti →</button>
-        ) : (
-          <button data-testid="ob-save" onClick={save} disabled={saving} className="pill-btn">
-            {saving ? "Salvo…" : "Fatto, avvia mAIPAL →"}
-          </button>
-        )}
+        <div className="mt-10 flex-1">{current.body}</div>
+
+        <div className="mt-10 flex items-center justify-between">
+          <button
+            data-testid="ob-back"
+            disabled={step === 0}
+            onClick={() => setStep((s) => Math.max(0, s - 1))}
+            className="text-white/60 hover:text-black disabled:opacity-30"
+          >← indietro</button>
+          {!isLast ? (
+            <button data-testid="ob-next" onClick={() => setStep((s) => s + 1)} className="pill-btn">Avanti →</button>
+          ) : (
+            <button data-testid="ob-save" onClick={save} disabled={saving} className="pill-btn">
+              {saving ? "Salvo…" : "Fatto, avvia mAIPAL →"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
