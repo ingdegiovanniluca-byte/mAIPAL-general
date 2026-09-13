@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { LogOut } from "lucide-react";
+import logo3 from "@/assets/logo3.png";
 
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat" },
@@ -15,17 +16,6 @@ const NAV_ITEMS = [
   { to: "/dashboard/admin", label: "Admin", testid: "tab-admin", adminOnly: true },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings" },
 ];
-
-function LogoMark({ size = 20 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="20" cy="12" rx="14" ry="10" fill="#FF8A00" />
-      <ellipse cx="15" cy="18" rx="13" ry="10" fill="#FF3D77" opacity="0.9" />
-      <ellipse cx="22" cy="23" rx="12" ry="10" fill="#E4007C" opacity="0.85" />
-      <ellipse cx="17" cy="29" rx="11" ry="9" fill="#00707A" />
-    </svg>
-  );
-}
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -48,8 +38,8 @@ export default function DashboardLayout() {
     <div className="min-h-screen">
       <header className="px-8 md:px-14 pt-8 pb-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0">
-            <LogoMark size={30} />
+          <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
+            <img src={logo3} alt="mAIPAL" className="h-8 w-auto" />
           </div>
 
           <nav className="flex-1 flex items-center justify-center gap-2.5 md:gap-3 flex-wrap">

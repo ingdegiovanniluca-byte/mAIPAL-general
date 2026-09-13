@@ -4,6 +4,7 @@ import { ArrowRight, ShieldAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import logo3 from "@/assets/logo3.png";
 
 const AUTH_ERROR_MESSAGES = {
   not_whitelisted: "Il tuo account non è ancora abilitato. Contatta l'amministratore per essere aggiunto alla whitelist.",
@@ -15,26 +16,6 @@ const AUTH_ERROR_MESSAGES = {
 
 const DEMO_USER_LINE = "Ricordami di chiamare il fornitore martedì alle 15";
 const DEMO_REPLY_LINE = "✅ Fatto — task creato con scadenza, tag e priorità.";
-
-function LogoMark({ size = 40 }) {
-  const w = 40, h = 62;
-  return (
-    <svg width={size} height={size * (h / w)} viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <clipPath id="loginLogoPill">
-          <rect x="0" y="0" width={w} height={h} rx={w / 2} ry={w / 2} />
-        </clipPath>
-      </defs>
-      <g clipPath="url(#loginLogoPill)">
-        <rect x="0" y="0" width={w} height={h} fill="#0E7490" />
-        <circle cx={w / 2} cy={6} r={27} fill="#FF8A00" />
-        <circle cx={w / 2} cy={12} r={25} fill="#FFB238" />
-        <circle cx={w / 2} cy={19} r={23} fill="#FF2D78" />
-        <circle cx={w / 2} cy={26} r={21} fill="#B3186E" />
-      </g>
-    </svg>
-  );
-}
 
 function GoogleGIcon({ size = 18 }) {
   return (
@@ -216,7 +197,7 @@ function AuthModal({ initialMode, authError, onClose }) {
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent
-        className="max-w-sm border-0 rounded-3xl liquid-glass-panel text-white [&>button]:text-white/70 [&>button]:hover:text-white"
+        className="font-poppins max-w-sm border-0 rounded-3xl liquid-glass-panel text-white [&>button:last-child]:text-white/70 [&>button:last-child]:hover:text-white"
         data-testid="auth-modal"
       >
         <DialogHeader>
@@ -262,7 +243,7 @@ export default function LoginPage() {
   }, [authError]);
 
   return (
-    <div className="h-screen w-full relative overflow-hidden">
+    <div className="font-poppins h-screen w-full relative overflow-hidden">
       <div className="liquid-page-bg" aria-hidden="true">
         <span className="liquid-blob liquid-blob-1" />
         <span className="liquid-blob liquid-blob-2" />
@@ -273,7 +254,7 @@ export default function LoginPage() {
 
       <div className="relative z-10 h-full w-full flex flex-col p-6 md:p-10 xl:p-14">
         <div className="flex items-center justify-between shrink-0">
-          <LogoMark size={38} />
+          <img src={logo3} alt="mAIPAL" className="h-10 md:h-12 w-auto" />
           <div className="flex items-center gap-2">
             <button
               data-testid="open-login-btn"
@@ -292,20 +273,20 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="flex-1 flex items-center">
-          <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center">
-            <div>
-              <h1 className="text-3xl md:text-5xl font-bold text-white leading-tight">
-                Fai fare a <span style={{ color: "#FF8A00" }}>mAIPAL</span> quello che non hai tempo di fare.
-              </h1>
-              <p className="mt-4 text-white/70 text-base md:text-lg max-w-md">
-                Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do, e risponde con la tua knowledge base. Chatta, salva, organizza.
-              </p>
-            </div>
-            <div className="flex justify-center lg:justify-end">
-              <TypewriterDemo />
-            </div>
-          </div>
+        <div className="mt-8 md:mt-12 max-w-xl">
+          <p className="text-[10px] uppercase tracking-widest text-white/45 mb-2">cosa vuoi fare oggi?</p>
+          <h1 className="text-xl md:text-3xl font-bold text-white leading-tight">
+            Fai fare a <span className="blur-[1.5px] opacity-90" style={{ color: "#FF8A00" }}>mAIPAL</span> quello che non hai tempo di fare.
+          </h1>
+          <p className="mt-3 text-white/70 text-sm md:text-base max-w-md">
+            Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do, e risponde con la tua knowledge base. Chatta, salva, organizza.
+          </p>
+        </div>
+
+        <div className="flex-1" />
+
+        <div className="flex justify-center lg:justify-end pb-4 md:pb-8">
+          <TypewriterDemo />
         </div>
       </div>
 
