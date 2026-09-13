@@ -250,7 +250,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                               className="h-8 w-full flex items-center justify-center cursor-pointer"
                             >
                               <div
-                                className={`h-6 w-full flex items-center justify-center rounded-md ${hasBg ? "calendar-day-glass" : ""}`}
+                                className="h-6 w-full flex items-center justify-center rounded-md"
                                 style={{
                                   background: cellBg,
                                   backdropFilter: hasBg ? "blur(6px) saturate(160%)" : "none",

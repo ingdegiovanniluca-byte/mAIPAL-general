@@ -280,7 +280,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     content: "";
     position: absolute;
     inset: 0;
-    background: rgba(10, 8, 30, 0.28);
+    background: rgba(255, 255, 255, 0.3);
 }
 .liquid-blob {
     position: absolute;
@@ -356,6 +356,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         0 8px 30px rgba(0, 0, 0, 0.25);
 }
 
+/* The panel's own static border is made transparent wherever the wobble effect
+   is used, so only the moving ::after outline below is visible - no straight
+   fixed border showing through underneath it. */
+.liquid-glass-panel.wobble-glass {
+    border-color: transparent;
+}
+
 /* "Wobble" bubble-like border for dialogs/popups. The panel itself (background,
    blur, box-shadow, border-radius) stays completely static - animating
    border-radius directly on a backdrop-filter surface is what caused the whole
@@ -390,23 +397,3 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     animation: liquid-wave-shift 8s ease-in-out infinite;
 }
 
-/* Subtle traveling highlight sweep for the task-calendar "day has tasks" chips,
-   to read as liquid glass rather than a flat tinted box. */
-.calendar-day-glass {
-    position: relative;
-    overflow: hidden;
-}
-.calendar-day-glass::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(120deg, transparent 30%, rgba(255, 255, 255, 0.4) 50%, transparent 70%);
-    background-size: 250% 100%;
-    animation: calendar-glass-shimmer 5s ease-in-out infinite;
-    mix-blend-mode: overlay;
-    pointer-events: none;
-}
-@keyframes calendar-glass-shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
