@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Clock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
+import { applyTheme, getStoredTheme } from "@/lib/theme";
 
 const VERTICALS = ["Lavoro", "Gestione tempo libero", "Vita privata"];
 const TONES = ["formale", "informale", "sintetico", "dettagliato"];
@@ -27,6 +28,12 @@ export default function SettingsPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef(null);
+  const [theme, setTheme] = useState(getStoredTheme());
+
+  const chooseTheme = (t) => {
+    setTheme(t);
+    applyTheme(t);
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -124,6 +131,29 @@ export default function SettingsPage() {
       <div className="kicker mb-2">· impostazioni</div>
       <h2 className="text-3xl font-bold tracking-tight">Profilo & integrazioni</h2>
       <p className="text-white/60 mt-2">Modifica il profilo con cui mAIPAL ti conosce e collega i servizi esterni.</p>
+
+      <div className="card-soft p-6 mt-8" data-testid="appearance-card">
+        <div className="text-lg font-semibold">Aspetto</div>
+        <div className="text-sm text-white/60 mt-1">Scegli il tema dell'app.</div>
+        <div className="flex items-center gap-2 mt-4">
+          <button
+            data-testid="theme-dark-btn"
+            onClick={() => chooseTheme("dark")}
+            className="liquid-glass-btn text-sm px-5 py-2 rounded-full"
+            style={theme === "dark" ? { borderColor: "#FFFFFF" } : undefined}
+          >
+            Scuro
+          </button>
+          <button
+            data-testid="theme-light-btn"
+            onClick={() => chooseTheme("light")}
+            className="liquid-glass-btn text-sm px-5 py-2 rounded-full"
+            style={theme === "light" ? { borderColor: "#FFFFFF" } : undefined}
+          >
+            Chiaro
+          </button>
+        </div>
+      </div>
 
       <div className="card-soft p-6 mt-8" data-testid="profile-card">
         <div className="flex items-center gap-4 mb-4">

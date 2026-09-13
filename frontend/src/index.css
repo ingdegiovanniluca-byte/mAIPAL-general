@@ -380,6 +380,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
 }
 
+/* The panel's fill itself also moves (same wave used elsewhere), instead of
+   only revealing whatever happens to be behind it - the dialog's own dark
+   overlay mostly blocks the page's blobs, which made the panel's background
+   read as flat/static. Drawn as a ::before behind the real content, so it
+   never fights the entrance/exit animation on the panel element itself. */
+.wobble-glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(120deg, #6D28D9, #2563EB, #DB2777, #06B6D4, #F59E0B, #6D28D9);
+    background-size: 300% 300%;
+    opacity: 0.35;
+    animation: liquid-wave-shift 8s ease-in-out infinite;
+}
+
 /* "Wobble" bubble-like border for dialogs/popups. The panel itself (background,
    blur, box-shadow, border-radius) stays completely static - animating
    border-radius directly on a backdrop-filter surface is what caused the whole
@@ -413,4 +429,57 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     color: transparent;
     animation: liquid-wave-shift 8s ease-in-out infinite;
 }
+
+/* ============ Light theme ============
+   Toggled via [data-theme="light"] on <html> (see src/lib/theme.js). The
+   liquid-glass surfaces (.liquid-glass-btn/.liquid-glass-panel/.wobble-glass/
+   .chat-input-card/.logo-wave) are left untouched on purpose - they keep the
+   same frosted, semi-dark look and animated wave in both themes. This block
+   only re-themes the page-level surfaces: the base background, and the
+   generic white-tinted text/surface utilities used across the app's cards,
+   menus and panels. */
+[data-theme="light"] html,
+[data-theme="light"] body,
+[data-theme="light"] #root {
+    background: linear-gradient(to right, #F1EDF6 0%, #F5ECE8 50%, #FBF1E6 100%) !important;
+    color: #211D28 !important;
+}
+[data-theme="light"] { color-scheme: light; }
+
+[data-theme="light"] .liquid-page-bg { background: #EFEAF7; }
+[data-theme="light"] .liquid-page-bg::after { background: rgba(33, 29, 40, 0.12); }
+
+[data-theme="light"] .card-soft,
+[data-theme="light"] .prose-answer,
+[data-theme="light"] .prose-answer code { color: #211D28; }
+
+[data-theme="light"] .text-white { color: #211D28 !important; }
+[data-theme="light"] .text-white\/90 { color: rgba(33, 29, 40, 0.90) !important; }
+[data-theme="light"] .text-white\/85 { color: rgba(33, 29, 40, 0.85) !important; }
+[data-theme="light"] .text-white\/80 { color: rgba(33, 29, 40, 0.80) !important; }
+[data-theme="light"] .text-white\/70 { color: rgba(33, 29, 40, 0.70) !important; }
+[data-theme="light"] .text-white\/65 { color: rgba(33, 29, 40, 0.65) !important; }
+[data-theme="light"] .text-white\/60 { color: rgba(33, 29, 40, 0.60) !important; }
+[data-theme="light"] .text-white\/55 { color: rgba(33, 29, 40, 0.55) !important; }
+[data-theme="light"] .text-white\/50 { color: rgba(33, 29, 40, 0.50) !important; }
+[data-theme="light"] .text-white\/45 { color: rgba(33, 29, 40, 0.45) !important; }
+[data-theme="light"] .text-white\/40 { color: rgba(33, 29, 40, 0.40) !important; }
+[data-theme="light"] .text-white\/35 { color: rgba(33, 29, 40, 0.35) !important; }
+[data-theme="light"] .text-white\/30 { color: rgba(33, 29, 40, 0.30) !important; }
+[data-theme="light"] .text-white\/25 { color: rgba(33, 29, 40, 0.25) !important; }
+[data-theme="light"] .placeholder\:text-white\/70::placeholder { color: rgba(33, 29, 40, 0.70) !important; }
+[data-theme="light"] .placeholder\:text-white\/60::placeholder { color: rgba(33, 29, 40, 0.60) !important; }
+[data-theme="light"] .placeholder\:text-white\/50::placeholder { color: rgba(33, 29, 40, 0.50) !important; }
+
+[data-theme="light"] .bg-white\/5 { background-color: rgba(33, 29, 40, 0.04) !important; }
+[data-theme="light"] .bg-white\/10 { background-color: rgba(33, 29, 40, 0.06) !important; }
+[data-theme="light"] .bg-white\/15 { background-color: rgba(33, 29, 40, 0.08) !important; }
+[data-theme="light"] .bg-white\/20 { background-color: rgba(33, 29, 40, 0.10) !important; }
+[data-theme="light"] .bg-white\/25 { background-color: rgba(33, 29, 40, 0.12) !important; }
+[data-theme="light"] .bg-white\/30 { background-color: rgba(33, 29, 40, 0.14) !important; }
+
+[data-theme="light"] .border-white\/10 { border-color: rgba(33, 29, 40, 0.10) !important; }
+[data-theme="light"] .border-white\/15 { border-color: rgba(33, 29, 40, 0.15) !important; }
+[data-theme="light"] .border-white\/20 { border-color: rgba(33, 29, 40, 0.20) !important; }
+[data-theme="light"] .border-white\/35 { border-color: rgba(33, 29, 40, 0.35) !important; }
 
