@@ -14,8 +14,8 @@ const COL_STRIDE = COL_WIDTH + COL_GAP;
 const MONTH_ROW_HEIGHT = 18; // px
 
 const NOW_ACCENT = "#FA386E"; // today's number + current week label
-const SOFT_HIGHLIGHT = "#F2F2F2"; // rest of the current week's days + month-boundary week label
-const MUTED_TEXT = "#ACA6A3";
+const SOFT_HIGHLIGHT = "#241F29"; // rest of the current week's days + month-boundary week label
+const MUTED_TEXT = "#5B5560";
 const DOT_HAS = "#826556";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";

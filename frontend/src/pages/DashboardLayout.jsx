@@ -48,7 +48,12 @@ export default function DashboardLayout() {
         <header className="px-8 md:px-14 pt-8 pb-8">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
-              <img src={logo3} alt="mAIPAL" className="h-8 w-auto" />
+              <div
+                className="logo-wave h-8 aspect-[345/539] shrink-0"
+                style={{ WebkitMaskImage: `url(${logo3})`, maskImage: `url(${logo3})` }}
+                role="img"
+                aria-label="mAIPAL"
+              />
             </div>
 
             <nav className="flex-1 flex items-center justify-center gap-2.5 md:gap-3 flex-wrap">

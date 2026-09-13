@@ -254,7 +254,12 @@ export default function LoginPage() {
 
       <div className="relative z-10 h-full w-full flex flex-col p-6 md:p-10 xl:p-14">
         <div className="flex items-center justify-between shrink-0">
-          <img src={logo3} alt="mAIPAL" className="h-10 md:h-12 w-auto" />
+          <div
+            className="logo-wave h-10 md:h-12 aspect-[345/539] shrink-0"
+            style={{ WebkitMaskImage: `url(${logo3})`, maskImage: `url(${logo3})` }}
+            role="img"
+            aria-label="mAIPAL"
+          />
           <div className="flex items-center gap-2">
             <button
               data-testid="open-login-btn"
