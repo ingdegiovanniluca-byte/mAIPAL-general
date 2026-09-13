@@ -254,14 +254,49 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     background-attachment: local;
 }
 
-/* Liquid Glass — frosted pill with a slowly spinning color bleed showing through,
-   inspired by Apple's Liquid Glass material. The outer backdrop-filter blur picks up
-   whatever is behind the button on the page; the inner conic-gradient blob supplies the
-   shifting hue. Used on the login page's primary buttons. */
+/* Liquid Glass — full-page animated color wave (.liquid-page-bg) + frosted glass
+   surfaces (.liquid-glass-btn, .liquid-glass-panel) that reveal it through
+   backdrop-filter blur, inspired by Apple's Liquid Glass material. Used on the login
+   page: the blobs drift slowly behind everything, and every glass button/panel on top
+   is translucent enough to show the moving color through the blur. */
+.liquid-page-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    background: #15132F;
+}
+.liquid-page-bg::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 8, 30, 0.28);
+}
+.liquid-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.75;
+    will-change: transform;
+}
+.liquid-blob-1 { width: 60vw; height: 60vw; left: -12vw; top: -18vw; background: #6D28D9; animation: liquid-drift-1 22s ease-in-out infinite; }
+.liquid-blob-2 { width: 55vw; height: 55vw; right: -16vw; top: -12vw; background: #2563EB; animation: liquid-drift-2 26s ease-in-out infinite; }
+.liquid-blob-3 { width: 50vw; height: 50vw; left: 8vw; bottom: -22vw; background: #DB2777; animation: liquid-drift-3 20s ease-in-out infinite; }
+.liquid-blob-4 { width: 45vw; height: 45vw; right: 4vw; bottom: -16vw; background: #06B6D4; animation: liquid-drift-4 24s ease-in-out infinite; }
+.liquid-blob-5 { width: 38vw; height: 38vw; left: 32vw; top: 18vh; background: #F59E0B; opacity: 0.45; animation: liquid-drift-5 28s ease-in-out infinite; }
+
+@keyframes liquid-drift-1 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(8vw, 6vh) scale(1.15); } }
+@keyframes liquid-drift-2 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-6vw, 8vh) scale(0.9); } }
+@keyframes liquid-drift-3 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(6vw, -6vh) scale(1.1); } }
+@keyframes liquid-drift-4 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-5vw, -8vh) scale(1.2); } }
+@keyframes liquid-drift-5 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(4vw, 5vh) scale(1.25); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .liquid-blob { animation: none; }
+}
+
 .liquid-glass-btn {
     position: relative;
-    isolation: isolate;
-    overflow: hidden;
     background: rgba(255, 255, 255, 0.10);
     backdrop-filter: blur(18px) saturate(180%);
     -webkit-backdrop-filter: blur(18px) saturate(180%);
@@ -273,16 +308,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         0 8px 24px rgba(0, 0, 0, 0.25);
     transition: transform 150ms ease, box-shadow 150ms ease;
 }
-.liquid-glass-btn::before {
-    content: "";
-    position: absolute;
-    inset: -60%;
-    z-index: -1;
-    background: conic-gradient(from 0deg, #FF5FAE, #7B5CFF, #35B6FF, #33E6C9, #FFCE54, #FF5FAE);
-    filter: blur(30px) saturate(160%);
-    opacity: 0.55;
-    animation: liquid-glass-spin 8s linear infinite;
-}
 .liquid-glass-btn:hover {
     transform: translateY(-1px);
     box-shadow:
@@ -291,9 +316,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         0 12px 30px rgba(0, 0, 0, 0.3);
 }
 .liquid-glass-btn:active { transform: translateY(0) scale(0.98); }
-@keyframes liquid-glass-spin {
-    to { transform: rotate(360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-    .liquid-glass-btn::before { animation: none; }
+
+.liquid-glass-panel {
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow:
+        inset 0 1px 1px rgba(255, 255, 255, 0.3),
+        0 8px 30px rgba(0, 0, 0, 0.25);
 }

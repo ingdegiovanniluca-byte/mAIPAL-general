@@ -110,89 +110,90 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="h-screen w-full flex flex-col md:flex-row overflow-hidden">
-      <div className="flex-1 min-h-0 flex flex-col justify-between p-6 md:p-10 xl:p-14 overflow-hidden">
-        <div>
-          <div className="kicker" data-testid="brand-kicker">mAIPAL · segretario digitale</div>
-        </div>
-
-        <div className="max-w-xl">
-          <div className="kicker mb-2">Cosa vuoi fare oggi?</div>
-          <h1
-            className="font-bold tracking-tight leading-[1.05]"
-            style={{ fontSize: "clamp(1.75rem, 4vh, 4.5rem)" }}
-          >
-            Fai fare a{" "}
-            <span className="gradient-word">mAIPAL</span>
-            <br />
-            quello che non hai tempo di fare.
-          </h1>
-          <p className="mt-3 text-base md:text-lg text-white/70 max-w-lg">
-            Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do,
-            e risponde con la tua knowledge base. Chatta, salva, organizza.
-          </p>
-
-          <div className="mt-5 flex gap-2 text-sm">
-            <button
-              data-testid="login-method-google"
-              onClick={() => setMethod("google")}
-              className={`px-4 py-1.5 rounded-full border ${method === "google" ? "bg-white/10 border-white/30" : "border-white/10 text-white/50"}`}
-            >
-              Google
-            </button>
-            <button
-              data-testid="login-method-email"
-              onClick={() => setMethod("email")}
-              className={`px-4 py-1.5 rounded-full border ${method === "email" ? "bg-white/10 border-white/30" : "border-white/10 text-white/50"}`}
-            >
-              Email
-            </button>
-          </div>
-
-          <div className="mt-3 min-h-[260px]">
-            {method === "google" ? (
-              <button
-                data-testid="login-google-btn"
-                onClick={handleGoogleLogin}
-                className="pill-btn liquid-glass-btn text-base px-6 py-3.5"
-              >
-                <Sparkles size={16} /> Accedi con Google
-                <ArrowRight size={18} />
-              </button>
-            ) : (
-              <EmailPasswordForm />
-            )}
-          </div>
-
-          {authError && (
-            <div data-testid="login-auth-error" className="mt-3 flex items-center gap-2 text-sm text-amber-400">
-              <ShieldAlert size={16} />
-              {AUTH_ERROR_MESSAGES[authError] || "Accesso non riuscito, riprova."}
-            </div>
-          )}
-
-          <div className="mt-3 kicker">powered by claude sonnet 5</div>
-        </div>
-
-        <div className="flex items-center gap-6 kicker">
-          <span>chat</span><span>·</span><span>task</span><span>·</span><span>to-do</span>
-        </div>
+    <div className="h-screen w-full relative overflow-hidden">
+      <div className="liquid-page-bg" aria-hidden="true">
+        <span className="liquid-blob liquid-blob-1" />
+        <span className="liquid-blob liquid-blob-2" />
+        <span className="liquid-blob liquid-blob-3" />
+        <span className="liquid-blob liquid-blob-4" />
+        <span className="liquid-blob liquid-blob-5" />
       </div>
 
-      <div
-        className="hidden md:block md:flex-1 relative overflow-hidden"
-        style={{
-          backgroundImage:
-            "url('https://images.unsplash.com/photo-1646038572822-432f8ccf2522?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGdyYWRpZW50JTIwYmx1ciUyMG9yYW5nZSUyMGJsdWV8ZW58MHx8fHwxNzg4Njk5Mzc4fDA&ixlib=rb-4.1.0&q=85')",
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-        }}
-      >
-        <div className="absolute inset-0 bg-black/5" />
-        <div className="absolute bottom-10 left-10 right-10 bg-white/5 backdrop-blur-md rounded-2xl p-6 ">
-          <div className="kicker">preview</div>
-          <div className="mt-2 text-lg font-medium">
-            &ldquo;Ricordami di chiamare il fornitore martedì alle 15&rdquo; → task creato con scadenza, tag e priorità.
+      <div className="relative z-10 h-full w-full flex flex-col md:flex-row">
+        <div className="flex-1 min-h-0 flex flex-col justify-between p-6 md:p-10 xl:p-14 overflow-hidden">
+          <div>
+            <div className="kicker" data-testid="brand-kicker">mAIPAL · segretario digitale</div>
+          </div>
+
+          <div className="max-w-xl">
+            <div className="kicker mb-2">Cosa vuoi fare oggi?</div>
+            <h1
+              className="font-bold tracking-tight leading-[1.05]"
+              style={{ fontSize: "clamp(1.75rem, 4vh, 4.5rem)" }}
+            >
+              Fai fare a{" "}
+              <span className="gradient-word">mAIPAL</span>
+              <br />
+              quello che non hai tempo di fare.
+            </h1>
+            <p className="mt-3 text-base md:text-lg text-white/70 max-w-lg">
+              Un assistente personale che apprende dalle tue informazioni, gestisce task e to-do,
+              e risponde con la tua knowledge base. Chatta, salva, organizza.
+            </p>
+
+            <div className="mt-5 flex gap-2 text-sm">
+              <button
+                data-testid="login-method-google"
+                onClick={() => setMethod("google")}
+                className={`px-4 py-1.5 rounded-full border ${method === "google" ? "bg-white/10 border-white/30" : "border-white/10 text-white/50"}`}
+              >
+                Google
+              </button>
+              <button
+                data-testid="login-method-email"
+                onClick={() => setMethod("email")}
+                className={`px-4 py-1.5 rounded-full border ${method === "email" ? "bg-white/10 border-white/30" : "border-white/10 text-white/50"}`}
+              >
+                Email
+              </button>
+            </div>
+
+            <div className="mt-3 min-h-[260px]">
+              {method === "google" ? (
+                <button
+                  data-testid="login-google-btn"
+                  onClick={handleGoogleLogin}
+                  className="pill-btn liquid-glass-btn text-base px-6 py-3.5"
+                >
+                  <Sparkles size={16} /> Accedi con Google
+                  <ArrowRight size={18} />
+                </button>
+              ) : (
+                <EmailPasswordForm />
+              )}
+            </div>
+
+            {authError && (
+              <div data-testid="login-auth-error" className="mt-3 flex items-center gap-2 text-sm text-amber-400">
+                <ShieldAlert size={16} />
+                {AUTH_ERROR_MESSAGES[authError] || "Accesso non riuscito, riprova."}
+              </div>
+            )}
+
+            <div className="mt-3 kicker">powered by claude sonnet 5</div>
+          </div>
+
+          <div className="flex items-center gap-6 kicker">
+            <span>chat</span><span>·</span><span>task</span><span>·</span><span>to-do</span>
+          </div>
+        </div>
+
+        <div className="hidden md:block md:flex-1 relative overflow-hidden">
+          <div className="liquid-glass-panel absolute bottom-10 left-10 right-10 rounded-2xl p-6">
+            <div className="kicker">preview</div>
+            <div className="mt-2 text-lg font-medium">
+              &ldquo;Ricordami di chiamare il fornitore martedì alle 15&rdquo; → task creato con scadenza, tag e priorità.
+            </div>
           </div>
         </div>
       </div>
