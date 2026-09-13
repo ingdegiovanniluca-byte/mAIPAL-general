@@ -272,7 +272,7 @@ export default function TaskBoardPage() {
                 >
                   <Star size={12} className={c.filterState.fav ? "fill-current" : ""} /> {c.favCount}
                 </button>
-                <div className="h-7 w-7 rounded-full bg-white/15 flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
+                <div className="liquid-glass-btn h-7 w-7 rounded-full flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
               </div>
             </div>
             <div className="mt-5 space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
@@ -471,7 +471,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent
-        className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 rounded-2xl bg-gradient-to-r from-[#575155] via-[#6A5D59] to-[#887166]"
+        className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 rounded-2xl liquid-glass-panel wobble-glass text-white"
         data-testid="task-dialog"
       >
         <div className="flex items-start justify-between gap-4">

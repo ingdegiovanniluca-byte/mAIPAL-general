@@ -197,7 +197,7 @@ function AuthModal({ initialMode, authError, onClose }) {
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent
-        className="font-poppins max-w-sm border-0 rounded-3xl liquid-glass-panel text-white [&>button:last-child]:text-white/70 [&>button:last-child]:hover:text-white"
+        className="font-poppins max-w-sm border-0 rounded-3xl liquid-glass-panel wobble-glass text-white [&>button:last-child]:text-white/70 [&>button:last-child]:hover:text-white"
         data-testid="auth-modal"
       >
         <DialogHeader>
@@ -279,7 +279,7 @@ export default function LoginPage() {
             Fai fare a <span className="gradient-text-wave">mAIPAL</span> quello che non hai tempo di fare.
           </h1>
           <p className="mt-3 text-white/70 text-sm md:text-base">
-            Un segretario AI pensato apposta per piccole imprese, privati e liberi professionisti: puoi scegliere il verticale ottimizzato per il tuo specifico lavoro in base alla tua attività. Gestisce task e to-do e risponde con la tua knowledge base. Chatta, salva, organizza.
+            Un segretario AI pensato apposta per piccole imprese, privati e liberi professionisti: puoi scegliere il verticale ottimizzato per il tuo specifico lavoro in base alla tua attività. Gestisce task e to-do, genera report, registra informazioni e gestisce i tuoi clienti. Parlaci in chat o con messaggi vocali, anche su Telegram, senza dover imparare una nuova app: proprio come se ti interfacciassi con un vero segretario.
           </p>
         </div>
 

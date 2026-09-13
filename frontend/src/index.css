@@ -256,20 +256,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     border: none;
     box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 8px 30px rgba(0, 0, 0, 0.25);
 }
+/* Same moving wave technique as .liquid-glass-btn, tinted with the selected
+   chat action's color so the animation is unmistakably the same as "Accedi". */
 .chat-input-card::before {
     content: "";
     position: absolute;
-    inset: -25%;
+    inset: -20%;
     z-index: -1;
-    background: radial-gradient(closest-side, var(--chat-action-color, #6D6181), transparent 70%);
-    filter: blur(50px);
-    opacity: 0.55;
-    animation: chat-card-wave 10s ease-in-out infinite;
+    background: linear-gradient(120deg, var(--chat-action-color, #6D6181), rgba(255, 255, 255, 0.35), var(--chat-action-color, #6D6181));
+    background-size: 300% 300%;
+    filter: blur(18px);
+    opacity: 0.6;
+    animation: liquid-wave-shift 8s ease-in-out infinite;
     transition: background 400ms ease;
-}
-@keyframes chat-card-wave {
-    0%, 100% { transform: translate(-8%, -6%) scale(1); }
-    50% { transform: translate(8%, 6%) scale(1.2); }
 }
 
 /* Faint ruled lines, applied to the writing area only (starts below the header row). */
@@ -374,6 +373,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     box-shadow:
         inset 0 1px 1px rgba(255, 255, 255, 0.3),
         0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+/* "Wobble" bubble-like border for dialogs/popups: a near-transparent border plus a
+   slow, subtle border-radius animation so the edges breathe like a soft bubble
+   instead of sitting as a rigid rounded rectangle. */
+.wobble-glass {
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    animation: wobble-border 9s ease-in-out infinite;
+}
+@keyframes wobble-border {
+    0%, 100% { border-radius: 18px 52px 24px 48px / 46px 20px 54px 22px; }
+    25% { border-radius: 52px 20px 48px 22px / 22px 50px 20px 46px; }
+    50% { border-radius: 24px 48px 18px 52px / 54px 24px 22px 48px; }
+    75% { border-radius: 48px 24px 52px 18px / 20px 46px 46px 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .wobble-glass { animation: none; }
 }
 
 /* Gradient text using the same wave colors as the page background, in place of a
