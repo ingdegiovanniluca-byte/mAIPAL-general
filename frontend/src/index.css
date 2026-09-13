@@ -237,9 +237,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     .card-enter { animation: none; opacity: 1; }
 }
 
-/* Chat input: "diary page" look — same card gradient as before. */
+/* Chat input: liquid glass frosted box. */
 .chat-input-card {
-    background: linear-gradient(to right, #D97B48 0%, #8B636B 50%, #302F4A 100%);
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 8px 30px rgba(0, 0, 0, 0.25);
 }
 
 /* Faint ruled lines, applied to the writing area only (starts below the header row). */
