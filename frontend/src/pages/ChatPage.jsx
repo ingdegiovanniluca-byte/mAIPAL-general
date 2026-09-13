@@ -312,12 +312,12 @@ export default function ChatPage() {
                     title={a.title}
                     aria-label={a.title}
                     style={{
-                      backgroundColor: selected ? a.color : "transparent",
+                      backgroundColor: selected ? `${a.color}66` : undefined,
                       color: "#CECAD0",
                       opacity: selected ? 1 : 0.5,
                       borderColor: selected ? a.color : "rgba(206,202,208,0.25)",
                     }}
-                    className={`group relative h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:shadow-md`}
+                    className="liquid-glass-btn group relative h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:shadow-md"
                   >
                     {React.cloneElement(a.icon, { size: 15 })}
                     <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#403A3C] text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">

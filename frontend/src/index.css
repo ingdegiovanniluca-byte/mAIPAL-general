@@ -371,11 +371,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         0 8px 30px rgba(0, 0, 0, 0.25);
 }
 
-/* The panel's own static border is made transparent wherever the wobble effect
-   is used, so only the moving ::after outline below is visible - no straight
-   fixed border showing through underneath it. */
+/* The panel's own static border AND its inset highlight (which traces the
+   panel's fixed, non-wobbling corner radius) are removed wherever the wobble
+   effect is used - otherwise that straight/fixed edge stays visible
+   (especially at the corners) alongside the moving ::after outline below. */
 .liquid-glass-panel.wobble-glass {
     border-color: transparent;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
 }
 
 /* "Wobble" bubble-like border for dialogs/popups. The panel itself (background,
