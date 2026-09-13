@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera } from "lucide-react";
+import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Clock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 
@@ -22,6 +22,8 @@ export default function SettingsPage() {
   const [tone, setTone] = useState("informale");
   const [homeAddress, setHomeAddress] = useState("");
   const [workAddress, setWorkAddress] = useState("");
+  const [newsTime, setNewsTime] = useState("08:00");
+  const [summaryTime, setSummaryTime] = useState("07:00");
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef(null);
@@ -35,6 +37,8 @@ export default function SettingsPage() {
     setTone(user.tone || "informale");
     setHomeAddress(user.home_address || "");
     setWorkAddress(user.work_address || "");
+    setNewsTime(user.news_time || "08:00");
+    setSummaryTime(user.summary_time || "07:00");
   }, [user]);
 
   const load = async () => {
@@ -57,6 +61,7 @@ export default function SettingsPage() {
         profession, sector, verticals,
         interests: interests.split(",").map((s) => s.trim()).filter(Boolean),
         tone, home_address: homeAddress, work_address: workAddress,
+        news_time: newsTime, summary_time: summaryTime,
       });
       setUser(r.data);
       toast.success("Profilo aggiornato");
@@ -189,6 +194,14 @@ export default function SettingsPage() {
           <div>
             <div className="kicker mb-1 flex items-center gap-1"><Briefcase size={11} /> indirizzo lavoro</div>
             <Input data-testid="prof-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
+          </div>
+          <div>
+            <div className="kicker mb-1 flex items-center gap-1"><Clock size={11} /> orario invio news</div>
+            <Input data-testid="prof-news-time" type="time" value={newsTime} onChange={(e) => setNewsTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
+          </div>
+          <div>
+            <div className="kicker mb-1 flex items-center gap-1"><Clock size={11} /> orario riepilogo mattutino</div>
+            <Input data-testid="prof-summary-time" type="time" value={summaryTime} onChange={(e) => setSummaryTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
           </div>
         </div>
 

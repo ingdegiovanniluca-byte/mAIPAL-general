@@ -19,6 +19,17 @@ import bcrypt
 
 LOCAL_TZ = ZoneInfo("Europe/Rome")
 
+
+def _time_str_to_today_utc(time_str: Optional[str], local_date) -> datetime:
+    """Resolves a user-configured 'HH:MM' (Europe/Rome local time) to a UTC datetime on
+    the given local calendar date. Falls back to 08:00 on anything malformed."""
+    try:
+        hh, mm = map(int, (time_str or "08:00").split(":"))
+    except (ValueError, AttributeError):
+        hh, mm = 8, 0
+    local_dt = datetime(local_date.year, local_date.month, local_date.day, hh, mm, tzinfo=LOCAL_TZ)
+    return local_dt.astimezone(timezone.utc)
+
 from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent, OpenAISpeechToText
 
 import google_integration as gi
@@ -74,6 +85,8 @@ class User(BaseModel):
     role: Optional[str] = "user"
     org_id: Optional[str] = None
     org_role: Optional[Literal["owner", "member"]] = None
+    news_time: Optional[str] = "08:00"
+    summary_time: Optional[str] = "07:00"
 
 
 class RegisterRequest(BaseModel):
@@ -105,6 +118,8 @@ class ProfilePatch(BaseModel):
     tone: Optional[str] = None
     home_address: Optional[str] = None
     work_address: Optional[str] = None
+    news_time: Optional[str] = None
+    summary_time: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -2424,7 +2439,7 @@ async def refresh_news(current: User = Depends(get_current_user)):
     user = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="Utente non trovato")
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(timezone.utc).astimezone(LOCAL_TZ).date().isoformat()
     try:
         await _run_daily_news_for_user(user, today)
     except Exception as e:
@@ -2646,108 +2661,111 @@ async def _exact_reminders_loop():
 
 
 async def _daily_summary_loop():
-    """Every 20 min: 07:00-07:59 UTC morning summary + Sunday 19:00-19:59 weekly recap."""
+    """Every 5 min: per-user morning summary at their configured summary_time (default
+    07:00, editable in Impostazioni) + Sunday 19:00 UTC weekly recap (fixed for now)."""
     from datetime import date as _date
     PRIORITY_ORDER = {"alta": 0, "media": 1, "bassa": 2, None: 3}
     while True:
         try:
             now = datetime.now(timezone.utc)
-            today = _date.today().isoformat()
+            local_date = now.astimezone(LOCAL_TZ).date()
+            today = local_date.isoformat()
             is_sunday_evening = (now.weekday() == 6 and now.hour == 19)
-            is_morning = (now.hour == 7)
 
-            if is_morning or is_sunday_evening:
-                async for user in db.users.find({"telegram_chat_id": {"$exists": True}}, {"_id": 0}):
-                    if is_sunday_evening:
-                        week_key = f"weekly_{now.strftime('%Y-W%V')}"
-                        if user.get("weekly_recap_key") == week_key:
-                            continue
-                        # Weekly recap: completed tasks this week + open tasks/todos
-                        seven_days_ago = (now - timedelta(days=7)).isoformat()
-                        done = await db.tasks.find(
-                            {"user_id": user["user_id"], "completed": True, "completed_at": {"$gte": seven_days_ago}},
-                            {"_id": 0},
-                        ).to_list(200)
-                        open_tasks = await db.tasks.find(
-                            {"user_id": user["user_id"], "$or": [{"completed": {"$exists": False}}, {"completed": False}]},
-                            {"_id": 0},
-                        ).to_list(200)
-                        open_todos = await db.todos.find(
-                            {"user_id": user["user_id"], "status": {"$in": ["da_fare", "in_corso"]}},
-                            {"_id": 0},
-                        ).to_list(200)
-                        lines = [f"📅 *Weekly Recap mAIPAL* — {user.get('name','').split(' ')[0]}", ""]
-                        lines.append(f"✅ *Completati questa settimana* ({len(done)})")
-                        for t in done[:10]:
-                            lines.append(f"  ✓ {t.get('title','(senza titolo)')}")
-                        if not done: lines.append("  _nessuno_")
-                        lines.append("")
-                        lines.append(f"📌 *Task aperti* ({len(open_tasks)})")
-                        for t in sorted(open_tasks, key=lambda x: PRIORITY_ORDER.get(x.get('priority'), 3))[:10]:
-                            e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get('priority','media'),"⚪️")
-                            lines.append(f"  {e} {t.get('title','(senza titolo)')} · {t.get('due_date','')}")
-                        lines.append("")
-                        lines.append(f"📝 *To-Do aperti* ({len(open_todos)})")
-                        for t in sorted(open_todos, key=lambda x: PRIORITY_ORDER.get(x.get('priority'), 3))[:10]:
-                            lines.append(f"  • {t.get('title','(senza titolo)')}")
-                        lines.append("")
-                        lines.append("Buona settimana! 🌟")
-                        try:
-                            from telegram import Bot
-                            await Bot(token=tg.bot_token()).send_message(
-                                chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown"
-                            )
-                            await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"weekly_recap_key": week_key}})
-                            logger.info(f"weekly recap sent to {user['telegram_chat_id']}")
-                        except Exception:
-                            logger.exception("weekly recap send failed")
+            async for user in db.users.find({"telegram_chat_id": {"$exists": True}}, {"_id": 0}):
+                if is_sunday_evening:
+                    week_key = f"weekly_{now.strftime('%Y-W%V')}"
+                    if user.get("weekly_recap_key") == week_key:
                         continue
-
-                    # Morning daily summary
-                    if user.get("daily_summary_date") == today:
-                        continue
-                    tasks_today = await db.tasks.find(
-                        {"user_id": user["user_id"], "due_date": {"$lte": today}, "$or": [{"completed": {"$exists": False}}, {"completed": False}]},
+                    # Weekly recap: completed tasks this week + open tasks/todos
+                    seven_days_ago = (now - timedelta(days=7)).isoformat()
+                    done = await db.tasks.find(
+                        {"user_id": user["user_id"], "completed": True, "completed_at": {"$gte": seven_days_ago}},
                         {"_id": 0},
                     ).to_list(200)
-                    tasks_today.sort(key=lambda t: (PRIORITY_ORDER.get(t.get("priority"), 3), t.get("due_date", "")))
+                    open_tasks = await db.tasks.find(
+                        {"user_id": user["user_id"], "$or": [{"completed": {"$exists": False}}, {"completed": False}]},
+                        {"_id": 0},
+                    ).to_list(200)
                     open_todos = await db.todos.find(
                         {"user_id": user["user_id"], "status": {"$in": ["da_fare", "in_corso"]}},
                         {"_id": 0},
                     ).to_list(200)
-                    open_todos.sort(key=lambda t: PRIORITY_ORDER.get(t.get("priority"), 3))
-                    if not tasks_today and not open_todos:
-                        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
-                        continue
-                    lines = [f"☀️ *Buongiorno {user.get('name','').split(' ')[0]}!* Riassunto di oggi:", ""]
-                    if tasks_today:
-                        lines.append(f"📌 *Task* ({len(tasks_today)})")
-                        for t in tasks_today[:10]:
-                            e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get("priority","media"),"⚪️")
-                            when = t.get("due_date", "")
-                            if t.get("due_time"): when += f" · {t['due_time']}"
-                            lines.append(f"{e} {t.get('title','(senza titolo)')} — _{when}_")
-                        lines.append("")
-                    if open_todos:
-                        lines.append(f"✅ *To-Do aperti* ({len(open_todos)})")
-                        for t in open_todos[:10]:
-                            e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get("priority"),"⚪️")
-                            pct = f" · {t.get('completion_percent',0)}%" if t.get("status") == "in_corso" else ""
-                            lines.append(f"{e} {t.get('title','(senza titolo)')}{pct}")
-                        lines.append("")
-                    lines.append("Buon lavoro! 🚀")
+                    lines = [f"📅 *Weekly Recap mAIPAL* — {user.get('name','').split(' ')[0]}", ""]
+                    lines.append(f"✅ *Completati questa settimana* ({len(done)})")
+                    for t in done[:10]:
+                        lines.append(f"  ✓ {t.get('title','(senza titolo)')}")
+                    if not done: lines.append("  _nessuno_")
+                    lines.append("")
+                    lines.append(f"📌 *Task aperti* ({len(open_tasks)})")
+                    for t in sorted(open_tasks, key=lambda x: PRIORITY_ORDER.get(x.get('priority'), 3))[:10]:
+                        e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get('priority','media'),"⚪️")
+                        lines.append(f"  {e} {t.get('title','(senza titolo)')} · {t.get('due_date','')}")
+                    lines.append("")
+                    lines.append(f"📝 *To-Do aperti* ({len(open_todos)})")
+                    for t in sorted(open_todos, key=lambda x: PRIORITY_ORDER.get(x.get('priority'), 3))[:10]:
+                        lines.append(f"  • {t.get('title','(senza titolo)')}")
+                    lines.append("")
+                    lines.append("Buona settimana! 🌟")
                     try:
                         from telegram import Bot
                         await Bot(token=tg.bot_token()).send_message(
                             chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown"
                         )
-                        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
-                        logger.info(f"daily summary sent to {user['telegram_chat_id']}")
+                        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"weekly_recap_key": week_key}})
+                        logger.info(f"weekly recap sent to {user['telegram_chat_id']}")
                     except Exception:
-                        logger.exception("daily summary send failed")
+                        logger.exception("weekly recap send failed")
+                    continue
+
+                # Morning daily summary
+                if user.get("daily_summary_date") == today:
+                    continue
+                target_utc = _time_str_to_today_utc(user.get("summary_time") or "07:00", local_date)
+                if now < target_utc:
+                    continue
+                tasks_today = await db.tasks.find(
+                    {"user_id": user["user_id"], "due_date": {"$lte": today}, "$or": [{"completed": {"$exists": False}}, {"completed": False}]},
+                    {"_id": 0},
+                ).to_list(200)
+                tasks_today.sort(key=lambda t: (PRIORITY_ORDER.get(t.get("priority"), 3), t.get("due_date", "")))
+                open_todos = await db.todos.find(
+                    {"user_id": user["user_id"], "status": {"$in": ["da_fare", "in_corso"]}},
+                    {"_id": 0},
+                ).to_list(200)
+                open_todos.sort(key=lambda t: PRIORITY_ORDER.get(t.get("priority"), 3))
+                if not tasks_today and not open_todos:
+                    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
+                    continue
+                lines = [f"☀️ *Buongiorno {user.get('name','').split(' ')[0]}!* Riassunto di oggi:", ""]
+                if tasks_today:
+                    lines.append(f"📌 *Task* ({len(tasks_today)})")
+                    for t in tasks_today[:10]:
+                        e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get("priority","media"),"⚪️")
+                        when = t.get("due_date", "")
+                        if t.get("due_time"): when += f" · {t['due_time']}"
+                        lines.append(f"{e} {t.get('title','(senza titolo)')} — _{when}_")
+                    lines.append("")
+                if open_todos:
+                    lines.append(f"✅ *To-Do aperti* ({len(open_todos)})")
+                    for t in open_todos[:10]:
+                        e = {"alta":"🔴","media":"🟠","bassa":"⚪️"}.get(t.get("priority"),"⚪️")
+                        pct = f" · {t.get('completion_percent',0)}%" if t.get("status") == "in_corso" else ""
+                        lines.append(f"{e} {t.get('title','(senza titolo)')}{pct}")
+                    lines.append("")
+                lines.append("Buon lavoro! 🚀")
+                try:
+                    from telegram import Bot
+                    await Bot(token=tg.bot_token()).send_message(
+                        chat_id=user["telegram_chat_id"], text="\n".join(lines), parse_mode="Markdown"
+                    )
+                    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
+                    logger.info(f"daily summary sent to {user['telegram_chat_id']}")
+                except Exception:
+                    logger.exception("daily summary send failed")
         except Exception:
             logger.exception("daily/weekly loop iteration failed")
-        await asyncio.sleep(20 * 60)
+        await asyncio.sleep(5 * 60)
 
 
 async def _news_source_preferences(user_id: str) -> dict:
@@ -2841,23 +2859,27 @@ async def _run_daily_news_for_user(user: dict, today: str):
 
 
 async def _daily_news_loop():
-    """Once a day (08:00-08:19 UTC window), searches the web for news matching each
-    user's profile (profession/sector/interests) and stores + sends them."""
+    """Every 5 min: for each user, once local time reaches their configured news_time
+    (default 08:00, editable in Impostazioni) and today's news haven't gone out yet,
+    searches the web for news matching their profile and stores + sends them."""
     while True:
         try:
             now = datetime.now(timezone.utc)
-            today = now.date().isoformat()
-            if now.hour == 8:
-                async for user in db.users.find({}, {"_id": 0}):
-                    if user.get("news_date") == today:
-                        continue
-                    try:
-                        await _run_daily_news_for_user(user, today)
-                    except Exception:
-                        logger.exception(f"daily news generation failed for {user.get('user_id')}")
+            local_date = now.astimezone(LOCAL_TZ).date()
+            today = local_date.isoformat()
+            async for user in db.users.find({}, {"_id": 0}):
+                if user.get("news_date") == today:
+                    continue
+                target_utc = _time_str_to_today_utc(user.get("news_time"), local_date)
+                if now < target_utc:
+                    continue
+                try:
+                    await _run_daily_news_for_user(user, today)
+                except Exception:
+                    logger.exception(f"daily news generation failed for {user.get('user_id')}")
         except Exception:
             logger.exception("daily news loop iteration failed")
-        await asyncio.sleep(20 * 60)
+        await asyncio.sleep(5 * 60)
 
 
 @app.on_event("shutdown")
