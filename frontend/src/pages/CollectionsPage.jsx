@@ -225,6 +225,7 @@ function CollectionDetail({ collection, onBack }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // item being edited, or {} for new
+  const [managingFields, setManagingFields] = useState(false);
 
   const load = async () => {
     try {
@@ -268,9 +269,14 @@ function CollectionDetail({ collection, onBack }) {
 
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="font-semibold text-xl">{coll.name}</div>
-        <button data-testid="new-item" onClick={() => setEditing({})} className="pill-btn text-sm">
-          <Plus size={14} /> Nuovo elemento
-        </button>
+        <div className="flex items-center gap-2">
+          <button data-testid="manage-fields" onClick={() => setManagingFields(true)} className="pill-btn text-sm bg-white/10 text-white">
+            <Pencil size={14} /> Gestisci campi
+          </button>
+          <button data-testid="new-item" onClick={() => setEditing({})} className="pill-btn text-sm">
+            <Plus size={14} /> Nuovo elemento
+          </button>
+        </div>
       </div>
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
@@ -305,7 +311,105 @@ function CollectionDetail({ collection, onBack }) {
           onSaved={async () => { setEditing(null); await load(); }}
         />
       )}
+
+      {managingFields && (
+        <ManageFieldsDialog
+          collection={coll}
+          onClose={() => setManagingFields(false)}
+          onSaved={async () => { setManagingFields(false); await load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function ManageFieldsDialog({ collection, onClose, onSaved }) {
+  const [fields, setFields] = useState(
+    (collection.fields || []).map((f) => ({ ...f, optionsText: (f.options || []).join(", ") }))
+  );
+  const [allCollections, setAllCollections] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get("/collections").then((r) => setAllCollections(r.data)).catch(() => {});
+  }, []);
+
+  const addField = () => setFields((f) => [...f, { key: "", label: "", type: "text" }]);
+  const removeField = (i) => setFields((f) => f.filter((_, idx) => idx !== i));
+  const updateField = (i, patch) => setFields((f) => f.map((fl, idx) => {
+    if (idx !== i) return fl;
+    const next = { ...fl, ...patch };
+    // Keep the original key stable when editing an existing field's label, so it
+    // stays linked to the values already saved on items - only auto-derive the key
+    // for brand new fields that don't have one yet.
+    if (patch.label !== undefined && !fl.key) next.key = slugify(patch.label);
+    return next;
+  }));
+
+  const save = async () => {
+    const cleanFields = fields.filter((f) => f.label.trim());
+    if (cleanFields.length === 0) { toast.error("Serve almeno un campo"); return; }
+    setSaving(true);
+    try {
+      await api.patch(`/collections/${collection.id}`, {
+        fields: cleanFields.map((f) => ({
+          key: f.key || slugify(f.label),
+          label: f.label.trim(),
+          type: f.type,
+          options: f.type === "select" ? (f.optionsText || "").split(",").map((s) => s.trim()).filter(Boolean) : null,
+          ref_collection_id: f.type === "reference" ? (f.ref_collection_id || null) : null,
+        })),
+      });
+      toast.success("Campi aggiornati");
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="manage-fields-dialog">
+        <DialogHeader><DialogTitle>Gestisci campi — {collection.name}</DialogTitle></DialogHeader>
+
+        <div className="space-y-2">
+          {fields.map((f, i) => (
+            <div key={i} className="flex gap-2 items-start bg-white/5 rounded-xl p-2.5">
+              <div className="flex-1 space-y-2">
+                <Input value={f.label} onChange={(e) => updateField(i, { label: e.target.value })} placeholder="Nome campo (es. Telefono)" className="h-9 rounded-lg bg-white/10 text-sm" />
+                <div className="flex gap-2">
+                  <select
+                    value={f.type}
+                    onChange={(e) => updateField(i, { type: e.target.value })}
+                    className="h-9 rounded-lg bg-white/10 text-sm px-2 flex-1 text-white"
+                  >
+                    {FIELD_TYPES.map((t) => <option key={t.value} value={t.value} className="text-black">{t.label}</option>)}
+                  </select>
+                </div>
+                {f.type === "select" && (
+                  <Input value={f.optionsText || ""} onChange={(e) => updateField(i, { optionsText: e.target.value })} placeholder="opzioni separate da virgola" className="h-9 rounded-lg bg-white/10 text-sm" />
+                )}
+                {f.type === "reference" && (
+                  <select
+                    value={f.ref_collection_id || ""}
+                    onChange={(e) => updateField(i, { ref_collection_id: e.target.value })}
+                    className="w-full h-9 rounded-lg bg-white/10 text-sm px-2 text-white"
+                  >
+                    <option value="" className="text-black">scegli la lista collegata…</option>
+                    {allCollections.map((c) => <option key={c.id} value={c.id} className="text-black">{c.name}</option>)}
+                  </select>
+                )}
+              </div>
+              <button onClick={() => removeField(i)} className="p-1.5 rounded-full text-white/40 hover:bg-red-500/10 hover:text-red-400 shrink-0"><X size={14} /></button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addField} className="mt-2 text-sm text-white/60 hover:text-white flex items-center gap-1"><Plus size={13} /> Aggiungi campo</button>
+
+        <div className="flex justify-end mt-4">
+          <button onClick={save} disabled={saving} className="pill-btn">{saving ? "…" : "Salva campi"}</button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
