@@ -390,6 +390,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     position: absolute;
     inset: 0;
     z-index: -1;
+    border-radius: inherit;
+    overflow: hidden;
     background: linear-gradient(120deg, #6D28D9, #2563EB, #DB2777, #06B6D4, #F59E0B, #6D28D9);
     background-size: 300% 300%;
     opacity: 0.35;
@@ -441,15 +443,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 [data-theme="light"] html,
 [data-theme="light"] body,
 [data-theme="light"] #root {
-    background: linear-gradient(to right, #F1EDF6 0%, #F5ECE8 50%, #FBF1E6 100%) !important;
+    background: #FFFFFF !important;
     color: #211D28 !important;
 }
 [data-theme="light"] { color-scheme: light; }
 
-[data-theme="light"] .liquid-page-bg { background: #EFEAF7; }
-[data-theme="light"] .liquid-page-bg::after { background: rgba(33, 29, 40, 0.12); }
+/* Light theme is a flat white page, not the colorful animated blobs - those
+   stay exclusive to the dark theme, unchanged. */
+[data-theme="light"] .liquid-page-bg { background: #FFFFFF; }
+[data-theme="light"] .liquid-page-bg::after { background: transparent; }
+[data-theme="light"] .liquid-blob { display: none; }
 
-[data-theme="light"] .card-soft,
+[data-theme="light"] .card-soft {
+    background: #F5F4F8;
+    border-color: rgba(33, 29, 40, 0.10);
+    color: #211D28;
+}
 [data-theme="light"] .prose-answer,
 [data-theme="light"] .prose-answer code { color: #211D28; }
 
