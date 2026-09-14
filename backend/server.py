@@ -1779,7 +1779,7 @@ async def create_journal(payload: JournalCreate, current: User = Depends(get_cur
         "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", \"mood\": \"parola singola: felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
         "\"highlights\": [\"1-3 momenti chiave estratti dal testo\"]}<<<END>>>"
     )
-    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-5")
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-haiku-4-5")  # text cleanup + metadata, not open-ended reasoning
     raw = await chat.send_message(UserMessage(text=payload.content))
     cleaned, meta = _extract_meta(raw)
     cleaned = cleaned.replace("```json", "").replace("```", "").strip()
@@ -1907,7 +1907,7 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> 
         "senza virgolette né altro testo. Se non lo specifica, rispondi SOLO con la parola: NESSUNA."
     )
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"drivehint_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-5")
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"drivehint_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-haiku-4-5")  # single-word folder-name extraction
         raw = (await chat.send_message(UserMessage(text=text))).strip().strip('"').strip()
         if not raw or raw.upper() == "NESSUNA":
             return None
@@ -2008,7 +2008,7 @@ async def _ocr_image_bytes(contents: bytes, filename: str) -> str:
         api_key=EMERGENT_LLM_KEY,
         session_id=f"ocr_{uuid.uuid4().hex[:8]}",
         system_message=system,
-    ).with_model("anthropic", "claude-sonnet-5")
+    ).with_model("anthropic", "claude-haiku-4-5")  # OCR transcription, not reasoning
     msg = UserMessage(text="Estrai tutto il testo dall'immagine.", file_contents=[ImageContent(image_base64=b64)])
     result = await chat.send_message(msg)
     text = (result or "").strip()
@@ -2085,7 +2085,7 @@ async def _classify_document(text: str) -> dict:
         "Rispondi con SOLO il JSON, senza commenti né markdown."
     )
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cls_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-5")
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cls_{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-haiku-4-5")  # simple category+keywords classification
         raw = await chat.send_message(UserMessage(text=sample))
         import json as _json, re as _re
         raw = (raw or "").strip()

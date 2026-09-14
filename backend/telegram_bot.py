@@ -77,7 +77,7 @@ async def _classify_intent(text: str, last_context: dict | None) -> dict:
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
             session_id=f"tg_cls_{uuid.uuid4().hex[:8]}",
             system_message=system,
-        ).with_model("anthropic", "claude-sonnet-5")
+        ).with_model("anthropic", "claude-haiku-4-5")  # cheap classification, runs on every message
         raw = await chat.send_message(UserMessage(text=text))
         m = _re.search(r"\{[\s\S]*\}", raw or "")
         data = _json.loads(m.group(0)) if m else {}
