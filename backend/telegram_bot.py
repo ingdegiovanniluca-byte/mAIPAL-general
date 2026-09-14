@@ -155,7 +155,10 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
 
     system = build_system_prompt(_to_user_pydantic(user_doc), action)
     user_text = content
-    if action == "info_request" and not prior_messages:
+    # Retrieve on every turn (not just the first) so follow-up questions in the same
+    # thread ("e domani?") also get fresh, relevant context - a message reusing an
+    # older conv_id via the "continue" classifier must not silently skip retrieval.
+    if action == "info_request":
         kb = await retrieve_kb(user_doc["user_id"], content, scope="all")
         if kb:
             def _fmt(c): return c.get("display") or c.get("text","")[:400]
@@ -244,10 +247,10 @@ def _reply_keyboard(active_action: str | None) -> InlineKeyboardMarkup:
         InlineKeyboardButton("✅ Termina", callback_data="ctrl:end"),
     ]
     row2 = [
-        kb("💾", "act:info_upload", active_action == "info_upload"),
-        kb("🔍", "act:info_request", active_action == "info_request"),
-        kb("📝", "act:task_todo", active_action == "task_todo"),
-        kb("📔", "act:journal", active_action == "journal"),
+        kb("💾 Salva", "act:info_upload", active_action == "info_upload"),
+        kb("🔍 Cerca", "act:info_request", active_action == "info_request"),
+        kb("📝 Task", "act:task_todo", active_action == "task_todo"),
+        kb("📔 Diario", "act:journal", active_action == "journal"),
     ]
     return InlineKeyboardMarkup([row1, row2])
 

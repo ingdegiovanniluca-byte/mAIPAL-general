@@ -910,6 +910,19 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
             if not txt: continue
             display = f"[Diario · {j.get('date','')}] {j.get('title','')} · mood: {j.get('mood','')}. {txt[:400]}".strip()
             candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": None})
+        colls = await db.collections.find({"user_id": user_id}, {"_id": 0}).to_list(200)
+        if colls:
+            coll_map = {c["id"]: c for c in colls}
+            coll_items = await db.collection_items.find({"collection_id": {"$in": list(coll_map.keys())}}, {"_id": 0}).to_list(2000)
+            for it in coll_items:
+                coll = coll_map.get(it.get("collection_id"))
+                if not coll: continue
+                field_labels = {f["key"]: f["label"] for f in (coll.get("fields") or [])}
+                parts = [f"{field_labels.get(k, k)}: {v}" for k, v in (it.get("data") or {}).items() if v not in (None, "")]
+                if not parts: continue
+                txt = " · ".join(parts)
+                display = f"[Lista: {coll.get('name', '')}] {txt}"
+                candidates.append({"text": txt, "display": display, "source": "collection_item", "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": None})
 
     # Compute embeddings for all candidates (semantic scoring)
     if q_emb is not None:
