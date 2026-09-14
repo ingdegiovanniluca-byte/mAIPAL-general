@@ -166,7 +166,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="mb-8 shrink-0 liquid-glass-panel rounded-2xl p-4">
+      <div className="mb-8 shrink-0">
         <div className="flex items-center gap-3 mb-2 flex-wrap">
           <button
             data-testid="calendar-toggle"
