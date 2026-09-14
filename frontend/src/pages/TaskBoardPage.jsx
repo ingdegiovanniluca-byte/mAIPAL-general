@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send } from "lucide-react";
+import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -338,6 +338,11 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
       </button>
 
       <div className="shrink-0 flex items-center gap-1 pr-3">
+        {!!task.notes && (
+          <span className="p-1.5 text-white/40" title="Questo task ha delle note">
+            <StickyNote size={14} />
+          </span>
+        )}
         <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
           {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
         </button>
@@ -535,6 +540,12 @@ function TaskDialog({ task, onClose, onUpdated }) {
 
         {/* NOTES */}
         <div className="mt-7">
+          <div
+            className="flex items-center gap-1.5 mb-1.5 text-[11px] uppercase tracking-widest text-white/50"
+            title="Appunti liberi su questo task: non vengono interpretati da mAIPAL, restano solo un promemoria per te"
+          >
+            <StickyNote size={13} /> Note
+          </div>
           <div className="relative">
             <Textarea
               data-testid="task-notes"
@@ -566,6 +577,12 @@ function TaskDialog({ task, onClose, onUpdated }) {
         </div>
 
         <div className="mt-3">
+          <div
+            className="flex items-center gap-1.5 mb-1.5 text-[11px] uppercase tracking-widest text-white/50"
+            title="Scrivi in linguaggio naturale per far modificare il task a mAIPAL: data, priorità, titolo e altro"
+          >
+            <Wand2 size={13} /> Modifica con mAIPAL
+          </div>
           <div className="relative">
             <Textarea
               data-testid="task-chat-input"

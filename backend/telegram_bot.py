@@ -216,6 +216,13 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
             "channel": "telegram",
             "created_at": now_iso,
         })
+        # Same "auto task from an embedded reminder" behavior as the web chat - only
+        # when the model attached a task with a certain due_date.
+        if meta and meta.get("task") and isinstance(meta["task"], dict) and meta["task"].get("due_date"):
+            try:
+                await _create_task_or_todo(user_doc["user_id"], meta["task"], conv_id)
+            except Exception:
+                logger.exception("auto task creation from info_upload failed")
     elif action == "task_todo":
         parsed = _parse_task_json(answer) or meta
         if parsed:
@@ -408,6 +415,36 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         # Re-run the last message with the forced action, in a NEW conv
         await _run_and_reply(q, ctx, db, user, forced, last, force_new=True)
+    elif data.startswith("snooze:"):
+        from server import LOCAL_TZ
+        _, task_id, minutes_str = data.split(":", 2)
+        minutes = int(minutes_str)
+        task = await db.tasks.find_one({"id": task_id, "user_id": user["user_id"]}, {"_id": 0})
+        if not task:
+            await ctx.bot.send_message(chat_id=chat_id, text="Non trovo più questo task.")
+            return
+        due_time = task.get("due_time") or "09:00"
+        try:
+            due_dt_local = datetime.strptime(f"{task.get('due_date')} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
+        except ValueError:
+            await ctx.bot.send_message(chat_id=chat_id, text="Impossibile posticipare: data del task non valida.")
+            return
+        new_dt_local = due_dt_local + timedelta(minutes=minutes)
+        await db.tasks.update_one(
+            {"id": task_id},
+            {"$set": {
+                "due_date": new_dt_local.date().isoformat(),
+                "due_time": new_dt_local.strftime("%H:%M"),
+                "reminder_sent": False,
+                "reminder_msg_sent": False,
+            }},
+        )
+        label = {15: "15 minuti", 60: "1 ora", 1440: "domani"}.get(minutes, f"{minutes} minuti")
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=f"🔁 *{task.get('title', '(senza titolo)')}* posticipato di {label}.\nNuovo orario: {new_dt_local.strftime('%d/%m alle %H:%M')}.",
+            parse_mode="Markdown",
+        )
 
 
 async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

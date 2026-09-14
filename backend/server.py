@@ -779,8 +779,17 @@ def build_system_prompt(user: User, action: str) -> str:
     if action == "info_upload":
         base += (
             " L'utente sta caricando un'informazione. Conferma cosa hai memorizzato in modo naturale (1-3 frasi). "
+            "Se nel testo è chiaramente presente ANCHE un impegno futuro da ricordare (una richiesta esplicita tipo "
+            "'ricordami di...', o un'azione futura con una data/intervallo di tempo esplicito o facilmente calcolabile "
+            "dalla data odierna, es. 'tra 10 giorni', 'lunedì prossimo'), crea ANCHE un task: aggiungi il campo 'task' "
+            "nei metadati con la data calcolata. REGOLA CRITICA: aggiungi il campo 'task' SOLO se sei certo della data "
+            "e dell'azione da ricordare — se la data è ambigua, implicita in modo incerto, o non c'è nessuna azione "
+            "futura da ricordare, ometti del tutto il campo 'task' (non inventare o indovinare una data). "
             "Poi in coda, solo per il sistema, aggiungi: "
-            "<<<META>>>{\"title\": \"...\", \"summary\": \"riassunto in 1 riga, max 140 caratteri\", \"tags\": [\"...\"]}<<<END>>>"
+            "<<<META>>>{\"title\": \"...\", \"summary\": \"riassunto in 1 riga, max 140 caratteri\", \"tags\": [\"...\"], "
+            "\"task\": {\"title\": \"breve titolo del task\", \"due_date\": \"YYYY-MM-DD\", \"due_time\": \"HH:MM o null\", "
+            "\"priority\": \"alta|media|bassa\", \"notes\": \"\"} oppure ometti del tutto la chiave 'task' se non applicabile}"
+            "<<<END>>>"
         )
     elif action == "info_request":
         base += (
@@ -1208,6 +1217,14 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "conv_id": conv_id,
                 })
+                # If a clearly-dated follow-up action was embedded in the uploaded info
+                # (e.g. "ricordami di chiedere come sta tra 10 giorni"), the model attaches
+                # a 'task' field to the meta - only when it's certain of the date.
+                if meta and meta.get("task") and isinstance(meta["task"], dict) and meta["task"].get("due_date"):
+                    try:
+                        await _create_task_or_todo(current.user_id, meta["task"], conv_id)
+                    except Exception:
+                        logger.exception("auto task creation from info_upload failed")
             elif action == "task_todo":
                 logger.info(f"[task_todo] meta={meta!r}")
                 if meta:
@@ -2579,6 +2596,15 @@ async def start_services():
         logger.exception("failed to start daily news loop")
 
 
+def _snooze_keyboard(task_id: str):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔁 +15 min", callback_data=f"snooze:{task_id}:15"),
+        InlineKeyboardButton("🔁 +1h", callback_data=f"snooze:{task_id}:60"),
+        InlineKeyboardButton("🔁 Domani", callback_data=f"snooze:{task_id}:1440"),
+    ]])
+
+
 async def _reminders_loop():
     """Every 30 min: for each task with due_date == tomorrow (user local ≈ UTC ok for MVP) and reminder_sent!=True,
     send a Telegram message to the connected user (if any) and mark reminder_sent."""
@@ -2601,14 +2627,16 @@ async def _reminders_loop():
                     from telegram import Bot
                     bot = Bot(token=tg.bot_token())
                     time_part = f" alle {t.get('due_time')}" if t.get("due_time") else ""
+                    notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
                     text = (
                         f"⏰ Promemoria mAIPAL\n\n"
                         f"Domani ({tomorrow}{time_part}) hai in scadenza:\n"
                         f"📌 *{t.get('title','(senza titolo)')}*\n"
-                        f"{t.get('description','') or ''}\n\n"
+                        f"{t.get('description','') or ''}"
+                        f"{notes_line}\n\n"
                         f"Priorità: {t.get('priority','media')}"
                     )
-                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown")
+                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
                     await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True, "reminder_sent_at": datetime.now(timezone.utc).isoformat()}})
                     logger.info(f"reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
                 except Exception:
@@ -2657,13 +2685,15 @@ async def _exact_reminders_loop():
                     from telegram import Bot
                     bot = Bot(token=tg.bot_token())
                     minutes_left = max(0, round((due_dt - now).total_seconds() / 60))
+                    notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
                     text = (
                         f"🔔 Promemoria mAIPAL\n\n"
                         f"Tra {minutes_left} minuti ({due_time}) hai in programma:\n"
                         f"📌 *{t.get('title','(senza titolo)')}*\n"
                         f"{t.get('description','') or ''}"
+                        f"{notes_line}"
                     )
-                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown")
+                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
                     await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
                     logger.info(f"exact reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
                 except Exception:
