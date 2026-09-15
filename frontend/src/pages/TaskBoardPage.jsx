@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2 } from "lucide-react";
+import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -29,6 +29,7 @@ const isTaskOverdue = (t) => {
 };
 
 export default function TaskBoardPage() {
+  const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
@@ -37,12 +38,17 @@ export default function TaskBoardPage() {
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
   const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
   const [tagFilters, setTagFilters] = useState([]);
+  const [orgMembers, setOrgMembers] = useState([]);
 
   const load = async () => {
     const r = await api.get("/tasks");
     setTasks(r.data);
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (user?.org_id) api.get("/org").then((r) => setOrgMembers(r.data?.members || [])).catch(() => {});
+    else setOrgMembers([]);
+  }, [user?.org_id]);
 
   const sortTasks = (arr) => [...arr].sort((a, b) => {
     if (showCompleted) {
@@ -281,6 +287,7 @@ export default function TaskBoardPage() {
                 <TaskCard
                   key={t.id}
                   task={t}
+                  orgMembers={orgMembers}
                   onClick={() => setSelected(t.id)}
                   onToggleFav={() => toggleFav(t.id, !!t.favorite)}
                   onToggleDone={() => toggleDone(t.id, !!t.completed)}
@@ -295,13 +302,13 @@ export default function TaskBoardPage() {
       </div>
 
       {selectedTask && (
-        <TaskDialog task={selectedTask} onClose={() => setSelected(null)} onUpdated={async () => { await load(); }} />
+        <TaskDialog task={selectedTask} orgMembers={orgMembers} onClose={() => setSelected(null)} onUpdated={async () => { await load(); }} />
       )}
     </div>
   );
 }
 
-function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onToggleReminder, onDelete }) {
+function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onToggleCal, onToggleReminder, onDelete }) {
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   const isFav = !!task.favorite;
   const isDone = !!task.completed;
@@ -309,6 +316,7 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
   const isReminder = !!task.reminder_enabled;
   const overdue = isTaskOverdue(task);
   const bg = overdue ? "rgba(118, 40, 14, 0.3)" : "rgba(131, 108, 96, 0.3)";
+  const assigneeName = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to)?.name : null;
 
   return (
     <div
@@ -331,9 +339,13 @@ function TaskCard({ task, onClick, onToggleFav, onToggleDone, onToggleCal, onTog
         <div className={`font-semibold text-sm truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
           {task.title}
           {task.visibility === "org" && <Users size={11} className="text-white/45 shrink-0" title="Condiviso col team" />}
+          {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
         </div>
         {task.due_date && (
           <div className="text-[11px] text-white/60 mt-1">{formatDayMonth(task.due_date, task.due_time)}</div>
+        )}
+        {assigneeName && (
+          <div className="text-[11px] text-[#4E95D9]/80 mt-0.5 truncate">→ {assigneeName}</div>
         )}
       </button>
 
@@ -370,20 +382,14 @@ const formatCreatedAt = (iso) => {
   return `${d.getDate()} ${IT_MONTHS_LONG[d.getMonth()]}, ${hh}:${mm}`;
 };
 
-function TaskDialog({ task, onClose, onUpdated }) {
+function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
   const { user } = useAuth();
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [thread, setThread] = useState([]);
   const [notes, setNotes] = useState(task.notes || "");
   const [savingNotes, setSavingNotes] = useState(false);
-  const [orgMembers, setOrgMembers] = useState([]);
-
-  useEffect(() => {
-    if (user?.org_id) {
-      api.get("/org").then((r) => setOrgMembers(r.data?.members || [])).catch(() => {});
-    }
-  }, [user?.org_id]);
+  const [assigning, setAssigning] = useState(false);
 
   const send = async () => {
     if (!msg.trim()) return;
@@ -446,6 +452,26 @@ function TaskDialog({ task, onClose, onUpdated }) {
       onUpdated();
       toast.success(next === "org" ? "Condiviso con il team" : "Reso privato");
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+
+  const assignTo = async (memberId) => {
+    setAssigning(true);
+    try {
+      const r = await api.post(`/tasks/${task.id}/assign`, { assigned_to: memberId || null });
+      onUpdated();
+      if (memberId) {
+        const member = orgMembers.find((m) => m.user_id === memberId);
+        toast.success(
+          member?.has_telegram
+            ? `Assegnato a ${member?.name || "membro"} · notifica inviata su Telegram`
+            : `Assegnato a ${member?.name || "membro"}`
+        );
+      } else {
+        toast.success("Assegnazione rimossa");
+      }
+      return r.data;
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore assegnazione"); }
+    finally { setAssigning(false); }
   };
 
   const del = async () => {
@@ -519,7 +545,7 @@ function TaskDialog({ task, onClose, onUpdated }) {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-4 mt-6">
+        <div className={`grid gap-4 mt-6 ${user?.org_id ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"}`}>
           <div>
             <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Data Creazione</div>
             <div className="text-sm text-white mt-1">{formatCreatedAt(task.created_at)}</div>
@@ -536,6 +562,26 @@ function TaskDialog({ task, onClose, onUpdated }) {
               <div className="text-sm text-white mt-1">{sharedWith}</div>
             )}
           </div>
+          {user?.org_id && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Assegnato a</div>
+              <select
+                data-testid="task-assign-select"
+                value={task.assigned_to || ""}
+                disabled={assigning}
+                onChange={(e) => assignTo(e.target.value)}
+                className="text-sm text-white mt-1 bg-transparent border-0 outline-none disabled:opacity-50 cursor-pointer"
+                style={{ colorScheme: "dark" }}
+              >
+                <option value="" className="text-black">Nessuno</option>
+                {orgMembers.map((m) => (
+                  <option key={m.user_id} value={m.user_id} className="text-black">
+                    {m.name}{m.user_id === user?.user_id ? " (io)" : ""}{m.has_telegram ? "" : " · no Telegram"}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* NOTES */}

@@ -141,7 +141,13 @@ class Task(BaseModel):
     tags: List[str] = []
     notes: Optional[str] = ""
     calendar_synced: bool = False
+    assigned_to: Optional[str] = None
     created_at: str
+
+
+class TaskAssignPayload(BaseModel):
+    assigned_to: Optional[str] = None
+    notify: bool = True
 
 
 class TaskUpsert(BaseModel):
@@ -679,8 +685,11 @@ async def get_org(current: User = Depends(get_current_user)):
     if not org:
         return None
     members = await db.users.find(
-        {"org_id": current.org_id}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1, "org_role": 1}
+        {"org_id": current.org_id},
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1, "org_role": 1, "telegram_chat_id": 1},
     ).to_list(200)
+    for m in members:
+        m["has_telegram"] = bool(m.pop("telegram_chat_id", None))
     org["members"] = members
     return org
 
@@ -1502,6 +1511,46 @@ async def toggle_task_favorite(task_id: str, current: User = Depends(get_current
     new_val = not task.get("favorite", False)
     await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": {"favorite": new_val}})
     return {"id": task_id, "favorite": new_val}
+
+
+@api_router.post("/tasks/{task_id}/assign")
+async def assign_task(task_id: str, payload: TaskAssignPayload, current: User = Depends(get_current_user)):
+    if not current.org_id:
+        raise HTTPException(status_code=400, detail="Serve un'organizzazione per assegnare i task")
+    task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    update = {"assigned_to": payload.assigned_to}
+    assignee = None
+    if payload.assigned_to:
+        assignee = await db.users.find_one({"user_id": payload.assigned_to, "org_id": current.org_id}, {"_id": 0})
+        if not assignee:
+            raise HTTPException(status_code=404, detail="Membro non trovato nell'organizzazione")
+        # assigning shares the task with the team, so the assignee can actually see it
+        update["visibility"] = "org"
+        update["org_id"] = current.org_id
+
+    await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": update})
+    doc = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
+
+    if payload.assigned_to and payload.notify and assignee and assignee.get("telegram_chat_id") and assignee["user_id"] != current.user_id:
+        try:
+            from telegram import Bot
+            bot = Bot(token=tg.bot_token())
+            due_part = f"\n📅 Scadenza: {doc.get('due_date')}" if doc.get("due_date") else ""
+            notes_line = f"\n📝 {doc['notes']}" if doc.get("notes") else ""
+            text = (
+                f"📋 {current.name} ti ha assegnato un task\n\n"
+                f"📌 *{doc.get('title','(senza titolo)')}*"
+                f"{due_part}"
+                f"{notes_line}"
+            )
+            await bot.send_message(chat_id=assignee["telegram_chat_id"], text=text, parse_mode="Markdown")
+        except Exception:
+            logger.exception("failed to send assignment notification")
+
+    return doc
 
 
 @api_router.post("/todos/{todo_id}/favorite")
