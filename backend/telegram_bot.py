@@ -1,7 +1,7 @@
 """Telegram bot v2: LLM-driven intent classifier + per-chat conversation state.
 
 Behavior:
-- Every free text (and every transcribed voice note) is classified by Claude Sonnet 5 into
+- Every free text (and every transcribed voice note) is classified by an LLM into
   {action: info_upload|info_request|task_todo|journal, continuation: continue|new, confidence}.
 - If continuation=='continue' AND the last chat activity is recent (<15 min) we reuse the
   active conv_id + action, appending to the same conversation on the backend.
@@ -77,7 +77,7 @@ async def _classify_intent(text: str, last_context: dict | None) -> dict:
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
             session_id=f"tg_cls_{uuid.uuid4().hex[:8]}",
             system_message=system,
-        ).with_model("anthropic", "claude-haiku-4-5")  # cheap classification, runs on every message
+        ).with_model("openai", "gpt-4o-mini")  # cheap classification, runs on every message
         raw = await chat.send_message(UserMessage(text=text))
         m = _re.search(r"\{[\s\S]*\}", raw or "")
         data = _json.loads(m.group(0)) if m else {}
@@ -168,7 +168,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         api_key=os.environ.get("ANTHROPIC_API_KEY"),
         session_id=conv_id,
         system_message=system,
-    ).with_model("anthropic", "claude-sonnet-5")
+    ).with_model("openai", "gpt-4o")
 
     # Rebuild history so Claude "remembers" what was said in this thread
     for m in prior_messages[-8:]:  # last 4 turns
