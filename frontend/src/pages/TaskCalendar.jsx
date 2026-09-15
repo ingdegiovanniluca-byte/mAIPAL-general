@@ -13,9 +13,6 @@ const COL_GAP = 20; // px
 const COL_STRIDE = COL_WIDTH + COL_GAP;
 const MONTH_ROW_HEIGHT = 18; // px
 
-const NOW_ACCENT = "#FA386E"; // today's number + current week label
-const SOFT_HIGHLIGHT = "#241F29"; // rest of the current week's days + month-boundary week label
-const MUTED_TEXT = "#5B5560";
 const DOT_HAS = "#826556";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
@@ -81,8 +78,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
     return arr;
   }, [thisMonday]);
 
-  // Every week where the month group changes (first week of a new month) -> used to color
-  // that week's header, regardless of whether its label is actually drawn (see below).
+  // Every week where the month group changes (first week of a new month).
   const monthBoundaries = useMemo(() => {
     const out = [];
     let prevKey = null;
@@ -96,8 +92,6 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
     });
     return out;
   }, [weeks]);
-
-  const monthBoundarySet = useMemo(() => new Set(monthBoundaries.map((b) => b.wi)), [monthBoundaries]);
 
   // Only every other month boundary gets a visible text label, to avoid crowding.
   const monthLabels = useMemo(
@@ -190,7 +184,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
           <div className="flex">
             <div className="flex flex-col shrink-0 pr-2.5" style={{ width: DAY_LABEL_COL_WIDTH, paddingTop: MONTH_ROW_HEIGHT + 24 }}>
               {IT_DAYS_SHORT.map((d) => (
-                <div key={d} className="h-8 flex items-center text-[10px] uppercase tracking-wide" style={{ color: MUTED_TEXT }}>{d}</div>
+                <div key={d} className="h-8 flex items-center text-[10px] uppercase tracking-wide text-white">{d}</div>
               ))}
             </div>
             <div
@@ -214,8 +208,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                 <div className="flex" style={{ gap: COL_GAP }}>
                   {weeks.map((monday, wi) => {
                     const isCurrentWeek = isoDate(monday) === isoDate(thisMonday);
-                    const isMonthChangeWeek = monthBoundarySet.has(wi);
-                    const headerColor = isCurrentWeek ? NOW_ACCENT : isMonthChangeWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
+                    const headerColor = "#FFFFFF";
                     const weekKey = isoDate(monday);
                     const isWeekSelected = selectedWeekStart === weekKey;
                     return (
@@ -241,7 +234,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                             else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
                             else dotColor = DOT_HAS;
                           }
-                          const textColor = isToday ? NOW_ACCENT : isCurrentWeek ? SOFT_HIGHLIGHT : MUTED_TEXT;
+                          const textColor = "#FFFFFF";
                           const hasBg = isSelected || !!dotColor;
                           const cellBg = isSelected ? "rgba(0, 176, 240, 0.3)" : dotColor ? withAlpha(dotColor, 0.3) : "transparent";
                           const cell = (
