@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck } from "lucide-react";
+import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import TaskCalendar from "@/pages/TaskCalendar";
@@ -497,7 +498,10 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
   const owner = task.user_id === user?.user_id
     ? (user?.name || "Tu")
     : (orgMembers.find((m) => m.user_id === task.user_id)?.name || "Team");
-  const sharedWith = task.visibility === "org" ? "Organizzazione" : "Solo io";
+  const assignee = task.assigned_to ? orgMembers.find((m) => m.user_id === task.assigned_to) : null;
+  const sharedWith = assignee
+    ? `Assegnato a ${assignee.name}${assignee.user_id === user?.user_id ? " (io)" : ""}`
+    : task.visibility === "org" ? "Organizzazione" : "Solo io";
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
@@ -545,7 +549,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
           </div>
         )}
 
-        <div className={`grid gap-4 mt-6 ${user?.org_id ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"}`}>
+        <div className="grid grid-cols-3 gap-4 mt-6">
           <div>
             <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Data Creazione</div>
             <div className="text-sm text-white mt-1">{formatCreatedAt(task.created_at)}</div>
@@ -555,33 +559,60 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
             <div className="text-sm text-white mt-1">{owner}</div>
           </div>
           <div>
-            <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Shared With</div>
-            {user?.org_id ? (
-              <button data-testid="toggle-visibility" onClick={toggleVisibility} className="text-sm text-white mt-1 hover:underline">{sharedWith}</button>
-            ) : (
-              <div className="text-sm text-white mt-1">{sharedWith}</div>
-            )}
-          </div>
-          {user?.org_id && (
-            <div>
-              <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Assegnato a</div>
-              <select
-                data-testid="task-assign-select"
-                value={task.assigned_to || ""}
-                disabled={assigning}
-                onChange={(e) => assignTo(e.target.value)}
-                className="text-sm text-white mt-1 bg-transparent border-0 outline-none disabled:opacity-50 cursor-pointer"
-                style={{ colorScheme: "dark" }}
-              >
-                <option value="" className="text-black">Nessuno</option>
-                {orgMembers.map((m) => (
-                  <option key={m.user_id} value={m.user_id} className="text-black">
-                    {m.name}{m.user_id === user?.user_id ? " (io)" : ""}{m.has_telegram ? "" : " · no Telegram"}
-                  </option>
-                ))}
-              </select>
+            <div className="text-[11px] uppercase tracking-wide flex items-center gap-1" style={{ color: "#ACA6A3" }}>
+              Shared With
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    data-testid="share-assign-btn"
+                    className="p-0.5 rounded-full text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                    title="Condividi o assegna questo task"
+                  >
+                    <Share2 size={12} />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-72 bg-[#2A2429] border-white/10 text-white rounded-2xl shadow-xl">
+                  {user?.org_id ? (
+                    <div className="space-y-4">
+                      <div>
+                        <div className="text-[11px] uppercase tracking-widest text-white/50 mb-2">Condividi</div>
+                        <button
+                          data-testid="toggle-visibility"
+                          onClick={toggleVisibility}
+                          className={`w-full text-left text-sm px-3 py-2 rounded-xl transition-colors ${task.visibility === "org" ? "bg-[#00B0F0]/20 text-[#00B0F0]" : "bg-white/10 text-white hover:bg-white/15"}`}
+                        >
+                          {task.visibility === "org" ? "✓ Condiviso con il team" : "Condividi con il team"}
+                        </button>
+                      </div>
+                      <div>
+                        <div className="text-[11px] uppercase tracking-widest text-white/50 mb-2">Assegna a</div>
+                        <select
+                          data-testid="task-assign-select"
+                          value={task.assigned_to || ""}
+                          disabled={assigning}
+                          onChange={(e) => assignTo(e.target.value)}
+                          className="w-full text-sm text-white bg-white/10 rounded-xl px-3 py-2 outline-none disabled:opacity-50 cursor-pointer"
+                          style={{ colorScheme: "dark" }}
+                        >
+                          <option value="" className="text-black">Nessuno</option>
+                          {orgMembers.map((m) => (
+                            <option key={m.user_id} value={m.user_id} className="text-black">
+                              {m.name}{m.user_id === user?.user_id ? " (io)" : ""}{m.has_telegram ? "" : " · no Telegram"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-white/60">
+                      Non fai ancora parte di un team: vai in <span className="text-white font-medium">Impostazioni → Team</span> per unirti, poi qui potrai condividere o assegnare questo task.
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
             </div>
-          )}
+            <div className="text-sm text-white mt-1">{sharedWith}</div>
+          </div>
         </div>
 
         {/* NOTES */}
