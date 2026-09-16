@@ -12,8 +12,6 @@ const NAV_ITEMS = [
   { to: "/dashboard/news", label: "News", testid: "tab-news" },
   { to: "/dashboard/liste", label: "Liste", testid: "tab-liste" },
   { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents" },
-  { to: "/dashboard/team", label: "Team", testid: "tab-team" },
-  { to: "/dashboard/admin", label: "Admin", testid: "tab-admin", adminOnly: true },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings" },
 ];
 

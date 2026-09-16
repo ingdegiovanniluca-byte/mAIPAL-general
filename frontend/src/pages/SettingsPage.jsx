@@ -2,10 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Clock } from "lucide-react";
+import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Clock, Users, Shield } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 import { applyTheme, getStoredTheme } from "@/lib/theme";
+import OrganizationPage from "@/pages/OrganizationPage";
+import AdminPage from "@/pages/AdminPage";
 
 const VERTICALS = ["Lavoro", "Gestione tempo libero", "Vita privata"];
 const TONES = ["formale", "informale", "sintetico", "dettagliato"];
@@ -340,6 +342,38 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        <div className="card-soft p-6" data-testid="team-card-settings">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0">
+              <Users size={20} />
+            </div>
+            <div>
+              <div className="text-lg font-semibold">Team</div>
+              <div className="text-sm text-white/60">Condividi task e liste con le persone del tuo team.</div>
+            </div>
+          </div>
+          <div className="mt-4">
+            <OrganizationPage />
+          </div>
+        </div>
+
+        {user?.role === "admin" && (
+          <div className="card-soft p-6" data-testid="admin-card-settings">
+            <div className="flex items-center gap-3 mb-1">
+              <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0">
+                <Shield size={20} />
+              </div>
+              <div>
+                <div className="text-lg font-semibold">Amministrazione</div>
+                <div className="text-sm text-white/60">Whitelist accessi, utenti e team.</div>
+              </div>
+            </div>
+            <div className="mt-5">
+              <AdminPage />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

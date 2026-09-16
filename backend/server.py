@@ -651,34 +651,18 @@ async def upload_avatar(file: UploadFile = File(...), current: User = Depends(ge
     return User(**user_doc)
 
 
-# ============ ORGANIZZAZIONE ============
+# ============ TEAM (org condivisa, gestita dall'amministratore) ============
 def _gen_org_code() -> str:
     return secrets.token_hex(3).upper()  # es. "A1B2C3"
 
 
-@api_router.post("/org")
-async def create_org(payload: OrgCreatePayload, current: User = Depends(get_current_user)):
-    if current.org_id:
-        raise HTTPException(status_code=400, detail="Fai già parte di un'organizzazione. Esci prima di crearne una nuova.")
-    name = (payload.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Nome obbligatorio")
-    org_id = f"org_{uuid.uuid4().hex[:12]}"
-    org_doc = {
-        "id": org_id,
-        "name": name,
-        "join_code": _gen_org_code(),
-        "created_by": current.user_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.organizations.insert_one(org_doc)
-    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org_id, "org_role": "owner"}})
-    org_doc.pop("_id", None)
-    return org_doc
+class TeamInviteCreate(BaseModel):
+    email: str
 
 
 @api_router.get("/org")
 async def get_org(current: User = Depends(get_current_user)):
+    """Vista di sola lettura del team a cui appartiene l'utente corrente."""
     if not current.org_id:
         return None
     org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0})
@@ -694,61 +678,130 @@ async def get_org(current: User = Depends(get_current_user)):
     return org
 
 
-@api_router.patch("/org")
-async def rename_org(payload: OrgRenamePayload, current: User = Depends(get_current_user)):
-    if not current.org_id or current.org_role != "owner":
-        raise HTTPException(status_code=403, detail="Solo il proprietario dell'organizzazione può rinominarla")
-    name = (payload.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Nome obbligatorio")
-    await db.organizations.update_one({"id": current.org_id}, {"$set": {"name": name}})
-    return await db.organizations.find_one({"id": current.org_id}, {"_id": 0})
-
-
-@api_router.post("/org/regenerate-code")
-async def regenerate_org_code(current: User = Depends(get_current_user)):
-    if not current.org_id or current.org_role != "owner":
-        raise HTTPException(status_code=403, detail="Solo il proprietario può rigenerare il codice")
-    new_code = _gen_org_code()
-    await db.organizations.update_one({"id": current.org_id}, {"$set": {"join_code": new_code}})
-    return {"join_code": new_code}
-
-
 @api_router.post("/org/join")
 async def join_org(payload: OrgJoinPayload, current: User = Depends(get_current_user)):
     if current.org_id:
-        raise HTTPException(status_code=400, detail="Fai già parte di un'organizzazione. Esci prima di unirti a un'altra.")
+        raise HTTPException(status_code=400, detail="Fai già parte di un team. Esci prima di unirti a un altro.")
     code = (payload.code or "").strip().upper()
     org = await db.organizations.find_one({"join_code": code}, {"_id": 0})
     if not org:
         raise HTTPException(status_code=404, detail="Codice non valido")
+    invite = await db.team_invites.find_one({"org_id": org["id"], "email": current.email.lower()}, {"_id": 0})
+    if not invite:
+        raise HTTPException(status_code=403, detail="Il tuo indirizzo email non è stato invitato a questo team. Contatta l'amministratore.")
     await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org["id"], "org_role": "member"}})
+    await db.team_invites.delete_one({"org_id": org["id"], "email": current.email.lower()})
     return org
 
 
 @api_router.post("/org/leave")
 async def leave_org(current: User = Depends(get_current_user)):
     if not current.org_id:
-        raise HTTPException(status_code=400, detail="Non fai parte di un'organizzazione")
-    if current.org_role == "owner":
-        other_members = await db.users.count_documents({"org_id": current.org_id, "user_id": {"$ne": current.user_id}})
-        if other_members > 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Non puoi uscire finché ci sono altri membri: rimuovili prima dalle impostazioni dell'organizzazione.",
-            )
-        await db.organizations.delete_one({"id": current.org_id})
+        raise HTTPException(status_code=400, detail="Non fai parte di un team")
     await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": None, "org_role": None}})
     return {"ok": True}
 
 
-@api_router.delete("/org/members/{member_user_id}")
-async def remove_org_member(member_user_id: str, current: User = Depends(get_current_user)):
-    if not current.org_id or current.org_role != "owner":
-        raise HTTPException(status_code=403, detail="Solo il proprietario può rimuovere membri")
-    if member_user_id == current.user_id:
-        raise HTTPException(status_code=400, detail="Non puoi rimuovere te stesso: usa 'esci dall'organizzazione'")
-    await db.users.update_one({"user_id": member_user_id, "org_id": current.org_id}, {"$set": {"org_id": None, "org_role": None}})
+# ---- Gestione team (solo amministratore): crea più team, invita per email, fornisce
+# il codice d'invito, rimuove membri. La creazione/appartenenza non è più self-service:
+# un utente può unirsi solo a un team a cui è stato esplicitamente invitato.
+async def _team_with_details(org: dict) -> dict:
+    members = await db.users.find(
+        {"org_id": org["id"]}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1}
+    ).to_list(200)
+    invites = await db.team_invites.find({"org_id": org["id"]}, {"_id": 0}).sort("invited_at", -1).to_list(200)
+    return {**org, "members": members, "invites": invites}
+
+
+@api_router.get("/admin/teams")
+async def admin_list_teams(current: User = Depends(require_admin)):
+    orgs = await db.organizations.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    return [await _team_with_details(o) for o in orgs]
+
+
+@api_router.post("/admin/teams")
+async def admin_create_team(payload: OrgCreatePayload, current: User = Depends(require_admin)):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome obbligatorio")
+    org_doc = {
+        "id": f"org_{uuid.uuid4().hex[:12]}",
+        "name": name,
+        "join_code": _gen_org_code(),
+        "created_by": current.user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.organizations.insert_one(org_doc)
+    org_doc.pop("_id", None)
+    return {**org_doc, "members": [], "invites": []}
+
+
+@api_router.patch("/admin/teams/{team_id}")
+async def admin_rename_team(team_id: str, payload: OrgRenamePayload, current: User = Depends(require_admin)):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome obbligatorio")
+    r = await db.organizations.update_one({"id": team_id}, {"$set": {"name": name}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
+    return await _team_with_details(org)
+
+
+@api_router.post("/admin/teams/{team_id}/regenerate-code")
+async def admin_regenerate_team_code(team_id: str, current: User = Depends(require_admin)):
+    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    new_code = _gen_org_code()
+    await db.organizations.update_one({"id": team_id}, {"$set": {"join_code": new_code}})
+    return {"join_code": new_code}
+
+
+@api_router.delete("/admin/teams/{team_id}")
+async def admin_delete_team(team_id: str, current: User = Depends(require_admin)):
+    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    await db.users.update_many({"org_id": team_id}, {"$set": {"org_id": None, "org_role": None}})
+    await db.team_invites.delete_many({"org_id": team_id})
+    await db.organizations.delete_one({"id": team_id})
+    return {"ok": True}
+
+
+@api_router.post("/admin/teams/{team_id}/invites")
+async def admin_invite_to_team(team_id: str, payload: TeamInviteCreate, current: User = Depends(require_admin)):
+    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email non valida")
+    already_member = await db.users.find_one({"email": email, "org_id": team_id}, {"_id": 0})
+    if already_member:
+        raise HTTPException(status_code=400, detail="Questa persona fa già parte del team")
+    await db.team_invites.update_one(
+        {"org_id": team_id, "email": email},
+        {
+            "$set": {"org_id": team_id, "email": email},
+            "$setOnInsert": {"id": f"inv_{uuid.uuid4().hex[:12]}", "invited_by": current.email, "invited_at": datetime.now(timezone.utc).isoformat()},
+        },
+        upsert=True,
+    )
+    return await db.team_invites.find_one({"org_id": team_id, "email": email}, {"_id": 0})
+
+
+@api_router.delete("/admin/teams/{team_id}/invites/{email}")
+async def admin_remove_team_invite(team_id: str, email: str, current: User = Depends(require_admin)):
+    await db.team_invites.delete_one({"org_id": team_id, "email": (email or "").strip().lower()})
+    return {"ok": True}
+
+
+@api_router.delete("/admin/teams/{team_id}/members/{member_user_id}")
+async def admin_remove_team_member(team_id: str, member_user_id: str, current: User = Depends(require_admin)):
+    r = await db.users.update_one({"user_id": member_user_id, "org_id": team_id}, {"$set": {"org_id": None, "org_role": None}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Membro non trovato in questo team")
     return {"ok": True}
 
 
