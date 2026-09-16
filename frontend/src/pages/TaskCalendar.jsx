@@ -17,6 +17,15 @@ const DOT_HAS = "#826556";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#00B050";
+const MUTED_TEXT = "#D9D9D9";
+
+function withAlpha(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 function startOfWeek(d) {
   const date = new Date(d);
@@ -225,9 +234,9 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                             else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
                             else dotColor = DOT_HAS;
                           }
-                          const textColor = "#FFFFFF";
+                          const textColor = isCurrentWeek ? "#FFFFFF" : MUTED_TEXT;
                           const hasBg = isSelected || !!dotColor;
-                          const cellBg = isSelected ? "#00B0F0" : dotColor ? dotColor : "transparent";
+                          const cellBg = isSelected ? withAlpha("#00B0F0", 0.9) : dotColor ? withAlpha(dotColor, 0.9) : "transparent";
                           const cell = (
                             <div
                               onClick={() => onSelectDate && onSelectDate(key)}
@@ -242,7 +251,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                                   boxShadow: hasBg ? "inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 2px 6px rgba(0, 0, 0, 0.15)" : "none",
                                 }}
                               >
-                                <span className={`text-[12px] ${isCurrentWeek ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
+                                <span className="text-[12px] font-medium" style={{ color: textColor }}>{day.getDate()}</span>
                               </div>
                             </div>
                           );
