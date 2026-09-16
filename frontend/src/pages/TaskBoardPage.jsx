@@ -315,7 +315,7 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
   const isCal = !!task.calendar_synced;
   const isReminder = !!task.reminder_enabled;
   const overdue = isTaskOverdue(task);
-  const bg = overdue ? "rgb(118, 40, 14)" : "rgb(131, 108, 96)";
+  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "rgba(131, 108, 96, 0.9)";
   const assigneeName = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to)?.name : null;
 
   return (
