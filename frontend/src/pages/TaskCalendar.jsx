@@ -18,14 +18,6 @@ const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#00B050";
 
-function withAlpha(hex, alpha) {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 function startOfWeek(d) {
   const date = new Date(d);
   const day = date.getDay(); // 0 = domenica
@@ -224,7 +216,6 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                           const day = new Date(monday);
                           day.setDate(day.getDate() + di);
                           const key = isoDate(day);
-                          const isToday = key === todayStr;
                           const isSelected = selectedDate === key;
                           const stats = dayStats[key];
                           let dotColor = null;
@@ -236,7 +227,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                           }
                           const textColor = "#FFFFFF";
                           const hasBg = isSelected || !!dotColor;
-                          const cellBg = isSelected ? "rgba(0, 176, 240, 0.3)" : dotColor ? withAlpha(dotColor, 0.3) : "transparent";
+                          const cellBg = isSelected ? "#00B0F0" : dotColor ? dotColor : "transparent";
                           const cell = (
                             <div
                               onClick={() => onSelectDate && onSelectDate(key)}
@@ -251,7 +242,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                                   boxShadow: hasBg ? "inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 2px 6px rgba(0, 0, 0, 0.15)" : "none",
                                 }}
                               >
-                                <span className={`text-[12px] ${isToday ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
+                                <span className={`text-[12px] ${isCurrentWeek ? "font-bold" : "font-medium"}`} style={{ color: textColor }}>{day.getDate()}</span>
                               </div>
                             </div>
                           );
