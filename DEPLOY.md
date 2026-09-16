@@ -18,9 +18,10 @@ Cloudflare con un altro sito attivo sulla root. L'obiettivo è esporre mAIPAL so
 
 ## 2. Chiavi LLM
 
-- `ANTHROPIC_API_KEY`: da https://console.anthropic.com/settings/keys
-- `OPENAI_API_KEY`: da https://platform.openai.com/api-keys (usata solo per la
-  trascrizione vocale Whisper)
+- `OPENAI_API_KEY`: da https://platform.openai.com/api-keys — usata per tutte le
+  funzioni AI (chat, task, diario, news, OCR, trascrizione vocale). Verifica che
+  l'account abbia credito disponibile.
+- `ANTHROPIC_API_KEY`: non più necessaria, può restare vuota/assente.
 
 ## 3. Configura l'ambiente
 

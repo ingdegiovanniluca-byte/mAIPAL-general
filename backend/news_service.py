@@ -1,4 +1,4 @@
-"""Generates a personalized daily news digest for a user via Claude's web search tool,
+"""Generates a personalized daily news digest for a user via OpenAI's web search tool,
 based on their profession/sector/verticals/interests (already collected at onboarding)."""
 import json
 import logging
@@ -6,12 +6,11 @@ import os
 import re
 from datetime import datetime, timezone
 
-import anthropic
+import openai
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-5"
-MAX_ROUNDS = 4  # bounded retries on stop_reason == "pause_turn"
+MODEL = "gpt-4o"
 
 
 def _profile_description(user: dict) -> str:
@@ -84,24 +83,15 @@ async def generate_news_for_user(user: dict, prefs: dict | None = None, context:
         '[{"title": "...", "summary": "...", "url": "https://...", "source": "nome testata"}, ...]'
     )
 
-    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    messages = [{"role": "user", "content": prompt}]
-    resp = None
-    for _ in range(MAX_ROUNDS):
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            tools=[{"type": "web_search_20260209", "name": "web_search"}],
-            messages=messages,
-        )
-        if resp.stop_reason != "pause_turn":
-            break
-        messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": resp.content}]
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    resp = await client.responses.create(
+        model=MODEL,
+        max_output_tokens=4096,
+        tools=[{"type": "web_search_preview"}],
+        input=prompt,
+    )
 
-    if resp is None:
-        return []
-
-    text = "".join(b.text for b in resp.content if b.type == "text")
+    text = resp.output_text or ""
     match = re.search(r"\[.*\]", text, re.DOTALL)
     if not match:
         logger.warning(f"news generation: no JSON list found in response: {text[:300]!r}")
