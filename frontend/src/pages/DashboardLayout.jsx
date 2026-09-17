@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { to: "/dashboard/news", label: "News", testid: "tab-news" },
   { to: "/dashboard/liste", label: "Liste", testid: "tab-liste" },
   { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents" },
+  { to: "/dashboard/fitness", label: "Fitness", testid: "tab-fitness", vertical: "fitness" },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings" },
 ];
 
@@ -55,7 +56,7 @@ export default function DashboardLayout() {
             </div>
 
             <nav className="flex-1 flex items-center justify-center gap-2.5 md:gap-3 flex-wrap">
-              {NAV_ITEMS.filter((item) => !item.adminOnly || user?.role === "admin").map((item, i) => (
+              {NAV_ITEMS.filter((item) => (!item.adminOnly || user?.role === "admin") && (!item.vertical || user?.business_vertical === item.vertical)).map((item, i) => (
                 <React.Fragment key={item.to}>
                   {i > 0 && <span className="text-white/25 text-xs select-none">•</span>}
                   <TabLink to={item.to} label={item.label} testid={item.testid} />

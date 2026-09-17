@@ -230,6 +230,43 @@ class NewsFeedbackPayload(BaseModel):
     value: Optional[Literal["like", "dislike"]] = None
 
 
+# ---- Verticale fitness (scuole di danza/pilates): esercizi, lezioni, clienti ----
+class ExerciseUpsert(BaseModel):
+    name: str
+    discipline: Literal["danza", "pilates", "altro"] = "altro"
+    category: Optional[str] = ""
+    level: Optional[Literal["base", "intermedio", "avanzato"]] = None
+    equipment: Optional[str] = ""
+    duration_minutes: Optional[int] = None
+    notes: Optional[str] = ""
+    visibility: Literal["private", "org"] = "private"
+
+
+class LessonExerciseItem(BaseModel):
+    exercise_id: str
+    notes: Optional[str] = ""
+
+
+class LessonTemplateUpsert(BaseModel):
+    name: str
+    discipline: Literal["danza", "pilates", "altro"] = "altro"
+    level: Optional[Literal["base", "intermedio", "avanzato"]] = None
+    exercises: List[LessonExerciseItem] = []
+    notes: Optional[str] = ""
+    visibility: Literal["private", "org"] = "private"
+
+
+class ClientUpsert(BaseModel):
+    name: str
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    enrollment_date: Optional[str] = None
+    subscription_type: Optional[str] = ""
+    medical_certificate_expiry: Optional[str] = None
+    notes: Optional[str] = ""
+    visibility: Literal["private", "org"] = "private"
+
+
 # ============ AUTH HELPERS ============
 async def get_current_user(
     request: Request,
@@ -1745,6 +1782,136 @@ async def delete_collection_item(collection_id: str, item_id: str, current: User
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
+    return {"ok": True}
+
+
+# ============ FITNESS: ESERCIZI / LEZIONI / CLIENTI ============
+@api_router.get("/exercises")
+async def list_exercises(current: User = Depends(get_current_user)):
+    cursor = db.exercises.find(_visible_query(current), {"_id": 0}).sort("name", 1)
+    return await cursor.to_list(500)
+
+
+@api_router.post("/exercises")
+async def create_exercise(payload: ExerciseUpsert, current: User = Depends(get_current_user)):
+    doc = {
+        "id": f"ex_{uuid.uuid4().hex[:12]}",
+        **payload.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.exercises.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/exercises/{exercise_id}")
+async def update_exercise(exercise_id: str, payload: dict, current: User = Depends(get_current_user)):
+    payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None); payload.pop("org_id", None)
+    if "visibility" in payload:
+        if payload["visibility"] == "org" and current.org_id:
+            payload["org_id"] = current.org_id
+        else:
+            payload["visibility"] = "private"
+            payload["org_id"] = None
+    await db.exercises.update_one({"id": exercise_id, **_editable_query(current)}, {"$set": payload})
+    doc = await db.exercises.find_one({"id": exercise_id, **_editable_query(current)}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Esercizio non trovato")
+    return doc
+
+
+@api_router.delete("/exercises/{exercise_id}")
+async def delete_exercise(exercise_id: str, current: User = Depends(get_current_user)):
+    r = await db.exercises.delete_one({"id": exercise_id, **_editable_query(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Esercizio non trovato")
+    return {"ok": True}
+
+
+@api_router.get("/lesson-templates")
+async def list_lesson_templates(current: User = Depends(get_current_user)):
+    cursor = db.lesson_templates.find(_visible_query(current), {"_id": 0}).sort("name", 1)
+    return await cursor.to_list(500)
+
+
+@api_router.post("/lesson-templates")
+async def create_lesson_template(payload: LessonTemplateUpsert, current: User = Depends(get_current_user)):
+    doc = {
+        "id": f"lsn_{uuid.uuid4().hex[:12]}",
+        **payload.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.lesson_templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/lesson-templates/{lesson_id}")
+async def update_lesson_template(lesson_id: str, payload: dict, current: User = Depends(get_current_user)):
+    payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None); payload.pop("org_id", None)
+    if "visibility" in payload:
+        if payload["visibility"] == "org" and current.org_id:
+            payload["org_id"] = current.org_id
+        else:
+            payload["visibility"] = "private"
+            payload["org_id"] = None
+    await db.lesson_templates.update_one({"id": lesson_id, **_editable_query(current)}, {"$set": payload})
+    doc = await db.lesson_templates.find_one({"id": lesson_id, **_editable_query(current)}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lezione non trovata")
+    return doc
+
+
+@api_router.delete("/lesson-templates/{lesson_id}")
+async def delete_lesson_template(lesson_id: str, current: User = Depends(get_current_user)):
+    r = await db.lesson_templates.delete_one({"id": lesson_id, **_editable_query(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Lezione non trovata")
+    return {"ok": True}
+
+
+@api_router.get("/clients")
+async def list_clients(current: User = Depends(get_current_user)):
+    cursor = db.clients.find(_visible_query(current), {"_id": 0}).sort("name", 1)
+    return await cursor.to_list(1000)
+
+
+@api_router.post("/clients")
+async def create_client(payload: ClientUpsert, current: User = Depends(get_current_user)):
+    doc = {
+        "id": f"cli_{uuid.uuid4().hex[:12]}",
+        **payload.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.clients.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/clients/{client_id}")
+async def update_client(client_id: str, payload: dict, current: User = Depends(get_current_user)):
+    payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None); payload.pop("org_id", None)
+    if "visibility" in payload:
+        if payload["visibility"] == "org" and current.org_id:
+            payload["org_id"] = current.org_id
+        else:
+            payload["visibility"] = "private"
+            payload["org_id"] = None
+    await db.clients.update_one({"id": client_id, **_editable_query(current)}, {"$set": payload})
+    doc = await db.clients.find_one({"id": client_id, **_editable_query(current)}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cliente non trovato")
+    return doc
+
+
+@api_router.delete("/clients/{client_id}")
+async def delete_client(client_id: str, current: User = Depends(get_current_user)):
+    r = await db.clients.delete_one({"id": client_id, **_editable_query(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Cliente non trovato")
     return {"ok": True}
 
 
