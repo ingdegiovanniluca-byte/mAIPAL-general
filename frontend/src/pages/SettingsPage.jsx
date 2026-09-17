@@ -11,6 +11,11 @@ import AdminPage from "@/pages/AdminPage";
 
 const VERTICALS = ["Lavoro", "Gestione tempo libero", "Vita privata"];
 const TONES = ["formale", "informale", "sintetico", "dettagliato"];
+const BUSINESS_VERTICALS = [
+  { key: "veterinario", label: "Veterinario" },
+  { key: "fitness", label: "Fitness" },
+  { key: "artigiano", label: "Artigiano" },
+];
 
 export default function SettingsPage() {
   const { user, setUser } = useAuth();
@@ -31,10 +36,27 @@ export default function SettingsPage() {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef(null);
   const [theme, setTheme] = useState(getStoredTheme());
+  const [businessVertical, setBusinessVertical] = useState(null);
+  const [savingVertical, setSavingVertical] = useState(false);
 
   const chooseTheme = (t) => {
     setTheme(t);
     applyTheme(t);
+  };
+
+  const chooseBusinessVertical = async (key) => {
+    if (key === businessVertical) return;
+    const prev = businessVertical;
+    setBusinessVertical(key);
+    setSavingVertical(true);
+    try {
+      const r = await api.patch("/profile", { business_vertical: key });
+      setUser(r.data);
+      toast.success("Verticale aggiornato");
+    } catch (e) {
+      setBusinessVertical(prev);
+      toast.error(e.response?.data?.detail || "Errore salvataggio verticale");
+    } finally { setSavingVertical(false); }
   };
 
   useEffect(() => {
@@ -48,6 +70,7 @@ export default function SettingsPage() {
     setWorkAddress(user.work_address || "");
     setNewsTime(user.news_time || "08:00");
     setSummaryTime(user.summary_time || "07:00");
+    setBusinessVertical(user.business_vertical || null);
   }, [user]);
 
   const load = async () => {
@@ -154,6 +177,27 @@ export default function SettingsPage() {
           >
             Chiaro
           </button>
+        </div>
+      </div>
+
+      <div className="card-soft p-6 mt-8" data-testid="vertical-card">
+        <div className="text-lg font-semibold">Verticale</div>
+        <div className="text-sm text-white/60 mt-1">
+          Il settore in cui operi: personalizza le funzionalità dedicate di mAIPAL. In futuro sarà legato al tuo abbonamento.
+        </div>
+        <div className="flex flex-wrap items-center gap-2 mt-4">
+          {BUSINESS_VERTICALS.map((v) => (
+            <button
+              key={v.key}
+              data-testid={`vertical-${v.key}`}
+              onClick={() => chooseBusinessVertical(v.key)}
+              disabled={savingVertical}
+              className="liquid-glass-btn text-sm px-5 py-2 rounded-full disabled:opacity-50"
+              style={businessVertical === v.key ? { borderColor: "#FFFFFF" } : undefined}
+            >
+              {v.label}
+            </button>
+          ))}
         </div>
       </div>
 

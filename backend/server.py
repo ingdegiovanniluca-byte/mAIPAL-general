@@ -87,6 +87,7 @@ class User(BaseModel):
     org_role: Optional[Literal["owner", "member"]] = None
     news_time: Optional[str] = "08:00"
     summary_time: Optional[str] = "07:00"
+    business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
 
 
 class RegisterRequest(BaseModel):
@@ -120,6 +121,7 @@ class ProfilePatch(BaseModel):
     work_address: Optional[str] = None
     news_time: Optional[str] = None
     summary_time: Optional[str] = None
+    business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
 
 
 class ChatRequest(BaseModel):
