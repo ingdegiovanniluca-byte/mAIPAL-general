@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { api, streamChat, API } from "@/lib/api";
@@ -52,6 +52,7 @@ export default function ChatPage() {
   const [transcribing, setTranscribing] = useState(false);
   const [pendingVoice, setPendingVoice] = useState(null);
   const [attachments, setAttachments] = useState([]);
+  const [uploadingFiles, setUploadingFiles] = useState([]); // filenames currently being caricati
   const [saveToDrive, setSaveToDrive] = useState(false);
   const [pendingDriveUpload, setPendingDriveUpload] = useState(null);
   const mediaRecorderRef = useRef(null);
@@ -214,6 +215,7 @@ export default function ChatPage() {
     // In other actions: keep the previous behaviour (upload to Drive as attachment)
     const useKb = active === "info_upload";
     for (const f of files) {
+      setUploadingFiles((u) => [...u, f.name]);
       try {
         const fd = new FormData();
         fd.append("file", f, f.name);
@@ -237,11 +239,13 @@ export default function ChatPage() {
           toast.success(`${f.name} → Drive`);
         }
       } catch (err) { toast.error(`Upload ${f.name}: ${err.message}`); }
+      finally { setUploadingFiles((u) => u.filter((n) => n !== f.name)); }
     }
   };
   const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
 
   const smartUploadToDrive = async (file, hintText) => {
+    setUploadingFiles((u) => [...u, file.name]);
     try {
       const fd = new FormData();
       fd.append("file", file, file.name);
@@ -257,6 +261,8 @@ export default function ChatPage() {
       }
     } catch (err) {
       toast.error(`Drive: ${err.message}`);
+    } finally {
+      setUploadingFiles((u) => u.filter((n) => n !== file.name));
     }
   };
 
@@ -410,11 +416,16 @@ export default function ChatPage() {
                     <button onClick={() => removeAttachment(i)}><X size={10} /></button>
                   </span>
                 ))}
+                {uploadingFiles.map((name, i) => (
+                  <span key={`up-${i}`} data-testid="file-uploading-chip" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/10 text-white/70 flex items-center gap-1.5" title={`Carico ${name}…`}>
+                    <Loader2 size={11} className="animate-spin" /> {name.slice(0,12)}{name.length > 12 ? "…" : ""} · carico…
+                  </span>
+                ))}
               </div>
               <button data-testid="send-btn" onClick={send}
-                disabled={streaming || transcribing || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording)}
+                disabled={streaming || transcribing || uploadingFiles.length > 0 || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#CECAD0] text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white text-sm">
-                <Send size={14} /> {streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : recording ? "Ferma & invia" : "Invia"}
+                <Send size={14} /> {streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : uploadingFiles.length > 0 ? "Carico…" : recording ? "Ferma & invia" : "Invia"}
               </button>
             </div>
             <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : undefined} data-testid="file-input" />
