@@ -211,6 +211,7 @@ class CollectionCreatePayload(BaseModel):
     name: str
     icon: Optional[str] = None
     fields: List[CollectionFieldDef]
+    sub_item_fields: List[CollectionFieldDef] = []  # schema per gli "elementi" annidati in ogni campo
     visibility: Literal["private", "org"] = "private"
 
 
@@ -218,12 +219,17 @@ class CollectionUpdatePayload(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = None
     fields: Optional[List[CollectionFieldDef]] = None
+    sub_item_fields: Optional[List[CollectionFieldDef]] = None
     visibility: Optional[Literal["private", "org"]] = None
 
 
 class CollectionItemPayload(BaseModel):
     data: dict
     visibility: Optional[Literal["private", "org"]] = None
+
+
+class CollectionSubItemPayload(BaseModel):
+    data: dict
 
 
 class NewsFeedbackPayload(BaseModel):
@@ -1689,6 +1695,7 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
         "name": payload.name.strip() or "Nuova lista",
         "icon": payload.icon,
         "fields": [f.model_dump() for f in payload.fields],
+        "sub_item_fields": [f.model_dump() for f in payload.sub_item_fields],
         "visibility": payload.visibility,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1718,6 +1725,8 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
         updates["icon"] = payload.icon
     if payload.fields is not None:
         updates["fields"] = [f.model_dump() for f in payload.fields]
+    if payload.sub_item_fields is not None:
+        updates["sub_item_fields"] = [f.model_dump() for f in payload.sub_item_fields]
     if payload.visibility is not None:
         if payload.visibility == "org" and current.org_id:
             updates["visibility"] = "org"
@@ -1737,6 +1746,7 @@ async def delete_collection(collection_id: str, current: User = Depends(get_curr
         raise HTTPException(status_code=404, detail="Lista non trovata")
     await db.collections.delete_one({"id": collection_id})
     await db.collection_items.delete_many({"collection_id": collection_id})
+    await db.collection_sub_items.delete_many({"collection_id": collection_id})
     return {"ok": True}
 
 
@@ -1746,7 +1756,17 @@ async def list_collection_items(collection_id: str, current: User = Depends(get_
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     cursor = db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).sort("created_at", -1)
-    return await cursor.to_list(1000)
+    items = await cursor.to_list(1000)
+    ids = [it["id"] for it in items]
+    if ids:
+        counts = await db.collection_sub_items.aggregate([
+            {"$match": {"collection_id": collection_id, "item_id": {"$in": ids}}},
+            {"$group": {"_id": "$item_id", "n": {"$sum": 1}}},
+        ]).to_list(len(ids))
+        count_map = {c["_id"]: c["n"] for c in counts}
+        for it in items:
+            it["sub_item_count"] = count_map.get(it["id"], 0)
+    return items
 
 
 @api_router.post("/collections/{collection_id}/items")
@@ -1790,6 +1810,61 @@ async def delete_collection_item(collection_id: str, item_id: str, current: User
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
+    await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item_id})
+    return {"ok": True}
+
+
+# ---- Elementi (livello 3): annidati dentro un campo/item specifico ----
+@api_router.get("/collections/{collection_id}/items/{item_id}/sub-items")
+async def list_sub_items(collection_id: str, item_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    cursor = db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0}).sort("created_at", -1)
+    return await cursor.to_list(1000)
+
+
+@api_router.post("/collections/{collection_id}/items/{item_id}/sub-items")
+async def create_sub_item(collection_id: str, item_id: str, payload: CollectionSubItemPayload, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    item = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Campo non trovato")
+    doc = {
+        "id": f"sub_{uuid.uuid4().hex[:12]}",
+        "collection_id": collection_id,
+        "item_id": item_id,
+        "data": payload.data,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.collection_sub_items.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/collections/{collection_id}/items/{item_id}/sub-items/{sub_id}")
+async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload: CollectionSubItemPayload, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    r = await db.collection_sub_items.update_one(
+        {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": payload.data}}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Elemento non trovato")
+    return await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id}, {"_id": 0})
+
+
+@api_router.delete("/collections/{collection_id}/items/{item_id}/sub-items/{sub_id}")
+async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    r = await db.collection_sub_items.delete_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Elemento non trovato")
     return {"ok": True}
 
 
