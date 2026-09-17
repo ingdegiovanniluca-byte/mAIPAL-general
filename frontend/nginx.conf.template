@@ -12,6 +12,13 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
+        # Alcune richieste incatenano più chiamate AI/Drive lente in sequenza
+        # (OCR, embeddings, classificazione, upload su Drive): il default di
+        # nginx (60s) le tronca con un 504 anche quando il backend sta ancora
+        # lavorando correttamente.
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
     }
 
     location ${PUBLIC_URL}/static/ {
