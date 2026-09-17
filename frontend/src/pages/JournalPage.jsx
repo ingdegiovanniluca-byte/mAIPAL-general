@@ -159,14 +159,16 @@ export default function JournalPage() {
       </div>
 
       {/* Composer */}
-      <div className="rounded-2xl p-5 shadow-md" style={{ background: "#403A3C" }}>
-        <div className="kicker text-white/85 mb-3">· oggi · {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</div>
+      <div className="chat-input-card p-5 rounded-2xl shadow-lg min-h-[340px] flex flex-col" data-testid="journal-input-card">
+        <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+          <div className="kicker-p text-white/85">· oggi · {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</div>
+        </div>
         <Textarea
           data-testid="journal-input"
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Come è andata oggi? Cosa hai fatto, com'era il tuo umore, cosa vuoi ricordare…"
-          className="border-0 focus-visible:ring-0 bg-transparent text-base min-h-[160px] px-0 resize-none text-white placeholder:text-white/70"
+          className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
         />
         <div className="flex items-center justify-between pt-2 border-t  gap-2 flex-wrap">
           <div className="flex items-center gap-1.5 text-white/85">
