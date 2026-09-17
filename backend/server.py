@@ -267,6 +267,14 @@ class ClientUpsert(BaseModel):
     visibility: Literal["private", "org"] = "private"
 
 
+class LessonGuidelinesPayload(BaseModel):
+    text: str
+
+
+class GenerateLessonPayload(BaseModel):
+    prompt: str
+
+
 # ============ AUTH HELPERS ============
 async def get_current_user(
     request: Request,
@@ -1913,6 +1921,153 @@ async def delete_client(client_id: str, current: User = Depends(get_current_user
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Cliente non trovato")
     return {"ok": True}
+
+
+def _fitness_owner_key(current: User) -> str:
+    """Lesson guidelines belong to the whole studio, not a single member - shared by org
+    if there is one, otherwise scoped to the solo user."""
+    return current.org_id or current.user_id
+
+
+@api_router.get("/fitness/guidelines")
+async def get_lesson_guidelines(current: User = Depends(get_current_user)):
+    doc = await db.lesson_guidelines.find_one({"owner_key": _fitness_owner_key(current)}, {"_id": 0})
+    return {"text": (doc or {}).get("text", "")}
+
+
+@api_router.put("/fitness/guidelines")
+async def set_lesson_guidelines(payload: LessonGuidelinesPayload, current: User = Depends(get_current_user)):
+    owner_key = _fitness_owner_key(current)
+    await db.lesson_guidelines.update_one(
+        {"owner_key": owner_key},
+        {"$set": {
+            "owner_key": owner_key,
+            "text": payload.text,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_by": current.email,
+        }},
+        upsert=True,
+    )
+    return {"text": payload.text}
+
+
+@api_router.post("/fitness/generate-lesson")
+async def generate_lesson(payload: GenerateLessonPayload, current: User = Depends(get_current_user)):
+    """Builds a lesson template from a free-text request (e.g. 'lezione funzionale per 10
+    persone, 40 minuti, livello medio, focus gambe'), reusing existing exercises where
+    possible and proposing new ones - which get added to the shared exercise database -
+    when nothing suitable already exists. Always follows the studio's saved guidelines
+    (e.g. 'sempre 5 minuti di stretching a inizio e fine')."""
+    import re as _re, json as _json
+
+    if not (payload.prompt or "").strip():
+        raise HTTPException(status_code=400, detail="Descrivi la lezione che vuoi creare")
+
+    exercises = await db.exercises.find(_visible_query(current), {"_id": 0}).to_list(500)
+    guidelines_doc = await db.lesson_guidelines.find_one({"owner_key": _fitness_owner_key(current)}, {"_id": 0})
+    guidelines_text = (guidelines_doc or {}).get("text", "").strip()
+
+    exercises_listing = "\n".join(
+        f"- id={e['id']} | {e['name']} | disciplina={e['discipline']} | categoria={e.get('category') or '—'} | "
+        f"livello={e.get('level') or '—'} | durata={e.get('duration_minutes') or '—'}min | attrezzatura={e.get('equipment') or '—'}"
+        for e in exercises
+    ) or "(nessun esercizio nel database ancora: proponi tu gli esercizi necessari come nuovi)"
+
+    guidelines_block = (
+        f"\nLinee guida fisse dello studio, da rispettare SEMPRE nella costruzione della lezione:\n{guidelines_text}\n"
+        if guidelines_text else ""
+    )
+
+    system = (
+        "Sei l'assistente di segreteria di una scuola di danza/pilates. Componi il piano di una lezione a partire "
+        "dalla richiesta in linguaggio naturale della titolare (numero di persone, durata, livello, focus/obiettivo). "
+        "Riusa quando possibile gli esercizi già presenti nel database sotto. Se per soddisfare la richiesta "
+        "servono esercizi che non esistono ancora, proponili come nuovi: verranno aggiunti automaticamente al "
+        "database condiviso."
+        f"{guidelines_block}\n"
+        "Database esercizi disponibili:\n"
+        f"{exercises_listing}\n\n"
+        "Rispondi SOLO con un JSON valido (nessun testo prima o dopo, nessun markdown), in questo formato esatto:\n"
+        '{"name": "nome breve della lezione", "discipline": "danza|pilates|altro", '
+        '"level": "base|intermedio|avanzato", "notes": "note generali sulla lezione (n. persone, obiettivo, ecc.)", '
+        '"sequence": [ '
+        '{"exercise_id": "id di un esercizio esistente dalla lista sopra", "item_notes": "nota opzionale per questo esercizio in questa lezione"} '
+        "OPPURE "
+        '{"new_exercise": {"name": "...", "discipline": "danza|pilates|altro", "category": "...", '
+        '"level": "base|intermedio|avanzato", "equipment": "...", "duration_minutes": 5, "notes": "..."}, "item_notes": "..."} '
+        "] }\n"
+        "La somma delle duration_minutes degli esercizi in sequence deve avvicinarsi alla durata totale richiesta."
+    )
+
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"lesson_gen_{uuid.uuid4().hex[:8]}",
+        system_message=system,
+    ).with_model("openai", "gpt-4o")
+    raw = await chat.send_message(UserMessage(text=payload.prompt))
+
+    match = _re.search(r"\{.*\}", raw or "", _re.DOTALL)
+    if not match:
+        raise HTTPException(status_code=500, detail="Non sono riuscito a generare la lezione, riprova.")
+    try:
+        parsed = _json.loads(match.group(0))
+    except _json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Risposta AI non valida, riprova.")
+
+    exercises_by_id = {e["id"]: e for e in exercises}
+    final_sequence = []
+    new_exercise_count = 0
+
+    for item in (parsed.get("sequence") or []):
+        if not isinstance(item, dict):
+            continue
+        item_notes = (item.get("item_notes") or "").strip()
+
+        ref_id = item.get("exercise_id")
+        if ref_id and ref_id in exercises_by_id:
+            final_sequence.append({"exercise_id": ref_id, "notes": item_notes})
+            continue
+
+        new_ex = item.get("new_exercise")
+        if isinstance(new_ex, dict) and (new_ex.get("name") or "").strip():
+            duration = new_ex.get("duration_minutes")
+            try:
+                duration = int(duration) if duration is not None else None
+            except (TypeError, ValueError):
+                duration = None
+            ex_doc = {
+                "id": f"ex_{uuid.uuid4().hex[:12]}",
+                "name": new_ex["name"].strip()[:200],
+                "discipline": new_ex.get("discipline") if new_ex.get("discipline") in ("danza", "pilates", "altro") else "altro",
+                "category": (new_ex.get("category") or "").strip(),
+                "level": new_ex.get("level") if new_ex.get("level") in ("base", "intermedio", "avanzato") else None,
+                "equipment": (new_ex.get("equipment") or "").strip(),
+                "duration_minutes": duration,
+                "notes": (new_ex.get("notes") or "").strip(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _stamp_owner_fields(ex_doc, current)
+            await db.exercises.insert_one(ex_doc)
+            ex_doc.pop("_id", None)
+            exercises_by_id[ex_doc["id"]] = ex_doc
+            final_sequence.append({"exercise_id": ex_doc["id"], "notes": item_notes})
+            new_exercise_count += 1
+
+    lesson_doc = {
+        "id": f"lsn_{uuid.uuid4().hex[:12]}",
+        "name": (parsed.get("name") or "Lezione generata").strip()[:200],
+        "discipline": parsed.get("discipline") if parsed.get("discipline") in ("danza", "pilates", "altro") else "altro",
+        "level": parsed.get("level") if parsed.get("level") in ("base", "intermedio", "avanzato") else None,
+        "notes": (parsed.get("notes") or "").strip(),
+        "exercises": final_sequence,
+        "visibility": "org" if current.org_id else "private",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(lesson_doc, current)
+    await db.lesson_templates.insert_one(lesson_doc)
+    lesson_doc.pop("_id", None)
+
+    return {"lesson": lesson_doc, "new_exercises_created": new_exercise_count}
 
 
 # ============ JOURNAL ============

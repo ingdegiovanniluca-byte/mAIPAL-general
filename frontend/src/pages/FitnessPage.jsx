@@ -4,7 +4,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Dumbbell, Plus, Trash2, Pencil, ChevronUp, ChevronDown, Lock, Users as UsersIcon, AlertTriangle } from "lucide-react";
+import { Dumbbell, Plus, Trash2, Pencil, ChevronUp, ChevronDown, Lock, Users as UsersIcon, AlertTriangle, Sparkles, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 
 const DISCIPLINES = [
@@ -237,6 +237,8 @@ function LessonsTab() {
   const [exercises, setExercises] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [showGuidelines, setShowGuidelines] = useState(false);
 
   const load = async () => {
     try {
@@ -266,15 +268,23 @@ function LessonsTab() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="text-sm text-white/60">Componi lezioni riutilizzabili a partire dal database esercizi.</div>
-        <button
-          data-testid="new-lesson"
-          onClick={() => exercises.length === 0 ? toast.error("Aggiungi prima qualche esercizio") : setEditing({})}
-          className="pill-btn text-sm"
-        >
-          <Plus size={14} /> Nuova lezione
-        </button>
+        <div className="flex items-center gap-2">
+          <button data-testid="lesson-guidelines-btn" onClick={() => setShowGuidelines(true)} className="p-2 rounded-full bg-white/10 hover:bg-white/15 text-white/70" title="Linee guida per la generazione AI">
+            <ListChecks size={15} />
+          </button>
+          <button data-testid="generate-lesson-btn" onClick={() => setShowGenerate(true)} className="pill-btn text-sm bg-white/10 text-white">
+            <Sparkles size={14} /> Genera con AI
+          </button>
+          <button
+            data-testid="new-lesson"
+            onClick={() => exercises.length === 0 ? toast.error("Aggiungi prima qualche esercizio") : setEditing({})}
+            className="pill-btn text-sm"
+          >
+            <Plus size={14} /> Nuova lezione
+          </button>
+        </div>
       </div>
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
@@ -313,7 +323,115 @@ function LessonsTab() {
           onSaved={async () => { setEditing(null); await load(); }}
         />
       )}
+
+      {showGenerate && (
+        <GenerateLessonDialog
+          onClose={() => setShowGenerate(false)}
+          onGenerated={async () => { setShowGenerate(false); await load(); }}
+        />
+      )}
+
+      {showGuidelines && <GuidelinesDialog onClose={() => setShowGuidelines(false)} />}
     </div>
+  );
+}
+
+function GenerateLessonDialog({ onClose, onGenerated }) {
+  const [prompt, setPrompt] = useState("");
+  const [generating, setGenerating] = useState(false);
+
+  const generate = async () => {
+    if (!prompt.trim()) { toast.error("Descrivi la lezione che vuoi creare"); return; }
+    setGenerating(true);
+    try {
+      const r = await api.post("/fitness/generate-lesson", { prompt: prompt.trim() });
+      const n = r.data?.new_exercises_created || 0;
+      toast.success(
+        n > 0
+          ? `Lezione "${r.data.lesson.name}" creata · ${n} nuov${n !== 1 ? "i" : "o"} esercizi${n !== 1 ? "" : "o"} aggiunt${n !== 1 ? "i" : "o"} al database`
+          : `Lezione "${r.data.lesson.name}" creata`
+      );
+      onGenerated();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore nella generazione"); }
+    finally { setGenerating(false); }
+  };
+
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg bg-[color:var(--app-bg)]" data-testid="generate-lesson-dialog">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Sparkles size={16} /> Genera lezione con AI</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="text-sm text-white/60">
+            Descrivi la lezione che vuoi: disciplina, numero di persone, durata, livello, obiettivo. L'AI componitrice
+            userà gli esercizi già nel database e ne proporrà di nuovi solo se necessario, seguendo le linee guida
+            dello studio.
+          </div>
+          <Textarea
+            data-testid="generate-lesson-prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder='es. "Fai una lezione di funzionale per 10 persone da 40 minuti livello medio, focus gambe"'
+            className="bg-white/10 rounded-xl min-h-[100px]"
+          />
+        </div>
+        <div className="flex justify-end mt-4">
+          <button data-testid="generate-lesson-submit" onClick={generate} disabled={generating} className="pill-btn">
+            {generating ? "Genero…" : "Genera"}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const DEFAULT_GUIDELINES = "Metti sempre 5 minuti di stretching all'inizio e alla fine di ogni lezione.";
+
+function GuidelinesDialog({ onClose }) {
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get("/fitness/guidelines")
+      .then((r) => setText(r.data?.text || DEFAULT_GUIDELINES))
+      .catch(() => setText(DEFAULT_GUIDELINES))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put("/fitness/guidelines", { text });
+      toast.success("Linee guida salvate");
+      onClose();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg bg-[color:var(--app-bg)]" data-testid="guidelines-dialog">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><ListChecks size={16} /> Linee guida per le lezioni</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="text-sm text-white/60">
+            Regole che l'AI deve rispettare sempre quando genera una lezione (una per riga). Valgono per tutto il team.
+          </div>
+          {loading ? (
+            <div className="text-sm text-white/40">caricamento…</div>
+          ) : (
+            <Textarea
+              data-testid="guidelines-text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              className="bg-white/10 rounded-xl min-h-[140px]"
+            />
+          )}
+        </div>
+        <div className="flex justify-end mt-4">
+          <button onClick={save} disabled={saving || loading} className="pill-btn">{saving ? "…" : "Salva"}</button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
