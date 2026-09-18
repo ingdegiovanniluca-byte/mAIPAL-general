@@ -36,6 +36,7 @@ import google_integration as gi
 import telegram_bot as tg
 import embeddings as emb
 import news_service
+import vet_reports
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -279,6 +280,12 @@ class LessonGuidelinesPayload(BaseModel):
 
 class GenerateLessonPayload(BaseModel):
     prompt: str
+
+
+# ---- Verticale veterinario: report visita ----
+class GenerateVetReportPayload(BaseModel):
+    text: str
+    visit_type: str  # "imaging" | "general" | id di un template personalizzato
 
 
 # ============ AUTH HELPERS ============
@@ -686,6 +693,8 @@ async def update_profile(payload: ProfilePatch, current: User = Depends(get_curr
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     if updates:
         await db.users.update_one({"user_id": current.user_id}, {"$set": updates})
+    if updates.get("business_vertical") == "veterinario":
+        await _ensure_vet_patients_list(current)
     user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     return User(**user_doc)
 
@@ -2143,6 +2152,210 @@ async def generate_lesson(payload: GenerateLessonPayload, current: User = Depend
     lesson_doc.pop("_id", None)
 
     return {"lesson": lesson_doc, "new_exercises_created": new_exercise_count}
+
+
+# ============ VETERINARIO: REPORT VISITA ============
+async def _ensure_vet_patients_list(current: User):
+    """Idempotent: creates the shared 'Pazienti' list (marked vet_patients=True so it
+    can be found reliably even if renamed) the first time a user sets their vertical
+    to veterinario. No-op if one already exists for them/their team."""
+    existing = await db.collections.find_one({**_visible_query(current), "vet_patients": True}, {"_id": 0})
+    if existing:
+        return existing
+    doc = {
+        "id": f"coll_{uuid.uuid4().hex[:12]}",
+        "name": vet_reports.PATIENT_LIST_NAME,
+        "icon": None,
+        "fields": vet_reports.PATIENT_FIELDS,
+        "sub_item_fields": [],
+        "vet_patients": True,
+        "visibility": "org" if current.org_id else "private",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.collections.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+async def _find_vet_patients(current: User) -> tuple[Optional[dict], list]:
+    coll = await db.collections.find_one({**_visible_query(current), "vet_patients": True}, {"_id": 0})
+    if not coll:
+        return None, []
+    patients = await db.collection_items.find({"collection_id": coll["id"]}, {"_id": 0}).to_list(1000)
+    return coll, patients
+
+
+@api_router.get("/vet/templates")
+async def list_vet_templates(current: User = Depends(get_current_user)):
+    cursor = db.vet_templates.find(_visible_query(current), {"_id": 0}).sort("created_at", -1)
+    custom = await cursor.to_list(200)
+    builtin = [{"key": k, "name": v["name"]} for k, v in vet_reports.BUILTIN_TEMPLATES.items()]
+    return {"builtin": builtin, "custom": custom}
+
+
+@api_router.post("/vet/templates")
+async def upload_vet_template(file: UploadFile = File(...), name: str = Form(...), current: User = Depends(get_current_user)):
+    contents = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        sections = vet_reports.extract_template_structure(tmp_path)
+    except Exception as e:
+        logger.exception("vet template parse failed")
+        raise HTTPException(status_code=400, detail=f"Impossibile leggere il template: {e}")
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
+
+    doc = {
+        "id": f"vtpl_{uuid.uuid4().hex[:12]}",
+        "name": name.strip() or (file.filename or "Template"),
+        "sections": sections,
+        "source_filename": file.filename,
+        "visibility": "org" if current.org_id else "private",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.vet_templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.delete("/vet/templates/{template_id}")
+async def delete_vet_template(template_id: str, current: User = Depends(get_current_user)):
+    r = await db.vet_templates.delete_one({"id": template_id, **_editable_query(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Template non trovato")
+    return {"ok": True}
+
+
+@api_router.post("/vet/generate-report")
+async def generate_vet_report(payload: GenerateVetReportPayload, current: User = Depends(get_current_user)):
+    return await _generate_vet_report(current, payload.text, payload.visit_type)
+
+
+async def _generate_vet_report(current: User, text: str, visit_type: str) -> dict:
+    """Shared by the web endpoint and the Telegram /report flow (telegram_bot.py calls
+    this directly - same process, no HTTP round-trip)."""
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Descrivi la visita")
+
+    if visit_type in vet_reports.BUILTIN_TEMPLATES:
+        template_name = vet_reports.BUILTIN_TEMPLATES[visit_type]["name"]
+        sections_skeleton = vet_reports.BUILTIN_TEMPLATES[visit_type]["sections"]
+    else:
+        tmpl = await db.vet_templates.find_one({"id": visit_type, **_visible_query(current)}, {"_id": 0})
+        if not tmpl:
+            raise HTTPException(status_code=404, detail="Template non trovato")
+        template_name = tmpl["name"]
+        sections_skeleton = tmpl["sections"]
+
+    _, patients = await _find_vet_patients(current)
+
+    try:
+        interpreted = await vet_reports.interpret_visit(text, sections_skeleton, patients)
+    except Exception as e:
+        logger.exception("vet report interpretation failed")
+        raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
+
+    patient = next((p for p in patients if p["id"] == interpreted["patient_item_id"]), None)
+    vet_reports.apply_patient_data(interpreted["sections"], patient)
+
+    patient_name = (patient.get("data", {}).get("nome") if patient else None) or None
+    docx_title = f"Referto - {template_name}"
+    docx_bytes = vet_reports.build_docx(docx_title, patient_name, interpreted["sections"])
+    fname = f"{docx_title} - {patient_name or 'generico'} - {datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.docx"
+
+    drive_link = None
+    drive_folder_name = None
+    try:
+        creds = await gi.get_credentials(db, current.user_id)
+        if creds:
+            folder_name = patient_name if patient_name else "Report generici"
+            folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(docx_bytes)
+                tmp_path = tmp.name
+            try:
+                result = gi.upload_file_to_folder(
+                    creds, folder_id, tmp_path, fname,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+                drive_link = result.get("web_view_link")
+                drive_folder_name = folder_name
+            finally:
+                try: os.unlink(tmp_path)
+                except Exception: pass
+    except Exception:
+        logger.exception("vet report drive save failed")
+
+    if patient:
+        await db.collection_items.update_one(
+            {"id": patient["id"]},
+            {"$set": {"data.data_ultima_visita": datetime.now(timezone.utc).date().isoformat()}},
+        )
+
+    telegram_sent = False
+    if current.telegram_chat_id:
+        try:
+            from telegram import Bot
+            import io as _io
+            bot = Bot(token=tg.bot_token())
+            await bot.send_document(
+                chat_id=current.telegram_chat_id,
+                document=_io.BytesIO(docx_bytes),
+                filename=fname,
+                caption=f"📄 {docx_title}" + (f" — {patient_name}" if patient_name else ""),
+            )
+            telegram_sent = True
+        except Exception:
+            logger.exception("vet report telegram send failed")
+
+    import base64 as _b64
+    report_doc = {
+        "id": f"vrep_{uuid.uuid4().hex[:12]}",
+        "user_id": current.user_id,
+        "org_id": current.org_id,
+        "patient_item_id": patient["id"] if patient else None,
+        "patient_name": patient_name,
+        "template_name": template_name,
+        "visit_type": visit_type,
+        "transcript": text,
+        "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
+        "docx_filename": fname,
+        "drive_link": drive_link,
+        "drive_folder": drive_folder_name,
+        "telegram_sent": telegram_sent,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.vet_reports.insert_one(report_doc)
+    report_doc.pop("_id", None)
+    report_doc.pop("docx_b64", None)
+    return report_doc
+
+
+@api_router.get("/vet/reports")
+async def list_vet_reports(current: User = Depends(get_current_user)):
+    cursor = db.vet_reports.find({"user_id": current.user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1)
+    return await cursor.to_list(200)
+
+
+@api_router.get("/vet/reports/{report_id}/download")
+async def download_vet_report(report_id: str, current: User = Depends(get_current_user)):
+    doc = await db.vet_reports.find_one({"id": report_id, "user_id": current.user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report non trovato")
+    import base64 as _b64
+    data = _b64.b64decode(doc["docx_b64"])
+    filename = doc.get("docx_filename") or "referto.docx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ============ JOURNAL ============

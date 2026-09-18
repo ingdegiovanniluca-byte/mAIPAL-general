@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2 } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -34,10 +35,17 @@ const ACTIONS = [
     placeholder: "Com'è andata oggi? Cosa vuoi ricordare…",
     color: "#8E2E11",
   },
+  {
+    id: "vet_report", key: "report", icon: <Stethoscope size={22} />,
+    title: "Report visita",
+    subtitle: "Detta o scrivi il resoconto: genero il referto strutturato",
+    placeholder: 'Descrivi la visita, es. "Ho visitato Fester, controllo ecografico di routine…"',
+    color: "#2E7D63",
+  },
 ];
 
-const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11" };
-const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11" };
+const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63" };
+const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63" };
 
 export default function ChatPage() {
   const [active, setActive] = useState("info_request");
@@ -63,6 +71,18 @@ export default function ChatPage() {
   const [thread, setThread] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
   const threadEndRef = useRef(null);
+
+  const [visitType, setVisitType] = useState("imaging"); // 'imaging' | 'general' | id template personalizzato
+  const [vetTemplates, setVetTemplates] = useState({ builtin: [], custom: [] });
+  const [showTemplateUpload, setShowTemplateUpload] = useState(false);
+
+  const loadVetTemplates = async () => {
+    try {
+      const r = await api.get("/vet/templates");
+      setVetTemplates(r.data);
+    } catch { /* silent: la sezione report resta usabile con i template built-in */ }
+  };
+  useEffect(() => { if (active === "vet_report") loadVetTemplates(); }, [active]);
 
   const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
 
@@ -143,7 +163,47 @@ export default function ChatPage() {
     }
   };
 
+  const sendVetReport = async () => {
+    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    let content = text.trim();
+    if (pendingVoice) {
+      setTranscribing(true);
+      try { content = (await transcribeBlob(pendingVoice.blob)) || content; }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    if (!content) { toast.error("Descrivi la visita"); return; }
+    if (streaming || transcribing) return;
+
+    setStreaming(true);
+    setThread((th) => th
+      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      : { conv_id: null, action: "vet_report", messages: [{ role: "user", content }], liveAnswer: "" });
+    setText("");
+
+    try {
+      const r = await api.post("/vet/generate-report", { text: content, visit_type: visitType });
+      const rep = r.data;
+      const lines = [
+        `✅ Report generato: ${rep.template_name}`,
+        rep.patient_name
+          ? `👤 Paziente: ${rep.patient_name} (data ultima visita aggiornata)`
+          : `👤 Paziente non riconosciuto — salvato tra i "Report generici"`,
+        rep.drive_link ? `📁 Salvato su Drive in "${rep.drive_folder}"` : "⚠️ Non salvato su Drive (collega Google Workspace in Impostazioni)",
+        rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
+      ].filter(Boolean).join("\n");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id }] }));
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
   const send = async () => {
+    if (active === "vet_report") { await sendVetReport(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
       const resolved = await resolveDrivePending(text.trim());
@@ -360,6 +420,40 @@ export default function ChatPage() {
                   </button>
                 </div>
               )}
+              {active === "vet_report" && !thread && (
+                <div className="flex items-center gap-1 flex-wrap" data-testid="visit-type-selector">
+                  <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
+                    {vetTemplates.builtin.map((t) => (
+                      <button
+                        key={t.key}
+                        data-testid={`visit-type-${t.key}`}
+                        onClick={() => setVisitType(t.key)}
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.key ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                      >
+                        {t.name}
+                      </button>
+                    ))}
+                    {vetTemplates.custom.map((t) => (
+                      <button
+                        key={t.id}
+                        data-testid={`visit-type-${t.id}`}
+                        onClick={() => setVisitType(t.id)}
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.id ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                      >
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    data-testid="upload-vet-template-btn"
+                    onClick={() => setShowTemplateUpload(true)}
+                    title="Carica un tuo template di report"
+                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white/80"
+                  >
+                    <UploadCloud size={13} />
+                  </button>
+                </div>
+              )}
             </div>
             <Textarea
               data-testid="chat-textarea"
@@ -504,6 +598,17 @@ export default function ChatPage() {
                     <div className={m.role === "user" ? "bg-white/10 rounded-2xl px-4 py-3 text-white" : "prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white"}>
                       {m.content}
                     </div>
+                    {m.reportId && (
+                      <a
+                        href={`${API}/vet/reports/${m.reportId}/download`}
+                        target="_blank"
+                        rel="noreferrer"
+                        data-testid="download-report-btn"
+                        className="ml-4 mt-1 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
+                      >
+                        <Download size={12} /> Scarica il referto (.docx)
+                      </a>
+                    )}
                   </div>
                 ))}
                 {streaming && thread.liveAnswer !== undefined && (
@@ -540,7 +645,68 @@ export default function ChatPage() {
           )}
         </section>
       </div>
+
+      {showTemplateUpload && (
+        <VetTemplateUploadDialog
+          onClose={() => setShowTemplateUpload(false)}
+          onUploaded={async (tpl) => { setShowTemplateUpload(false); await loadVetTemplates(); setVisitType(tpl.id); }}
+        />
+      )}
     </div>
+  );
+}
+
+function VetTemplateUploadDialog({ onClose, onUploaded }) {
+  const [name, setName] = useState("");
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!file) { toast.error("Scegli un file .docx"); return; }
+    setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      fd.append("name", name.trim() || file.name);
+      const res = await fetch(`${API}/vet/templates`, { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.detail || `HTTP ${res.status}`);
+      }
+      const tpl = await res.json();
+      toast.success(`Template "${tpl.name}" caricato`);
+      onUploaded(tpl);
+    } catch (e) { toast.error("Errore: " + e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-md bg-[color:var(--app-bg)]" data-testid="vet-template-upload-dialog">
+        <DialogHeader><DialogTitle>Carica un template di report</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="text-sm text-white/60">
+            Carica un .docx: ne analizzo la struttura (sezioni e campi) per usarlo come riferimento nella generazione dei referti.
+          </div>
+          <div>
+            <div className="kicker mb-1">nome template</div>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="es. Visita dermatologica" className="h-11 rounded-xl bg-white/10" />
+          </div>
+          <div>
+            <div className="kicker mb-1">file .docx</div>
+            <input
+              type="file"
+              accept=".docx"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="text-sm text-white/80 file:mr-3 file:py-2 file:px-3 file:rounded-full file:border-0 file:bg-white/10 file:text-white file:text-xs"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end mt-4">
+          <button onClick={save} disabled={saving} className="pill-btn">{saving ? "…" : "Carica"}</button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

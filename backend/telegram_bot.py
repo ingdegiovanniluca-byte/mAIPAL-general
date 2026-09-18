@@ -39,7 +39,8 @@ def bot_token() -> str:
 def _to_user_pydantic(doc):
     from server import User
     return User(**{k: doc.get(k) for k in [
-        "user_id","email","name","picture","onboarded","profession","sector","verticals","interests","tone","created_at","role"
+        "user_id","email","name","picture","onboarded","profession","sector","verticals","interests","tone","created_at","role",
+        "org_id","org_role","telegram_chat_id","business_vertical",
     ] if k in doc})
 
 
@@ -307,6 +308,7 @@ async def _cmd_help(update: Update, ctx):
         "  /save <info>\n"
         "  /task <task>\n"
         "  /journal <racconto>\n"
+        "  /report — genera un referto veterinario (scegli il tipo, poi detta la visita)\n"
         "  /end   — chiudi la conversazione in corso\n"
         "  /help"
     )
@@ -373,6 +375,9 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
     else:
         content = text
         state = await _get_state(db, user["user_id"], chat_id)
+        if state.get("pending_report_type"):
+            await _run_vet_report_flow(update, ctx, db, user, content, state["pending_report_type"])
+            return
         prev_ctx = state if _state_is_fresh(state) else None
         intent = await _classify_intent(content, prev_ctx)
         action = intent["action"]
@@ -386,6 +391,52 @@ async def _cmd_save(update, ctx):    await _cmd_generic(update, ctx, "info_uploa
 async def _cmd_task(update, ctx):    await _cmd_generic(update, ctx, "task_todo")
 async def _cmd_journal(update, ctx): await _cmd_generic(update, ctx, "journal")
 async def _msg_free(update, ctx):    await _cmd_generic(update, ctx, None)
+
+
+async def _cmd_report(update: Update, ctx):
+    """Verticale veterinario: avvia il flusso 'referto visita' - il prossimo messaggio
+    (testo o vocale) verrà interpretato come il resoconto della visita, non classificato
+    dal solito intent classifier."""
+    from server import db, _visible_query
+    import vet_reports as vr
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
+        return
+    buttons = [[InlineKeyboardButton(t["name"], callback_data=f"vetrep:{key}")] for key, t in vr.BUILTIN_TEMPLATES.items()]
+    current = _to_user_pydantic(user)
+    custom = await db.vet_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(20)
+    for t in custom:
+        buttons.append([InlineKeyboardButton(t["name"], callback_data=f"vetrep:{t['id']}")])
+    await update.message.reply_text(
+        "📋 Che tipo di visita? Scegli il template, poi mandami il resoconto (testo o vocale).",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_type):
+    from server import _generate_vet_report
+    chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    current = _to_user_pydantic(user)
+    try:
+        rep = await _generate_vet_report(current, content, visit_type)
+    except Exception as e:
+        logger.exception("tg vet report failed")
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Errore nella generazione del referto: {str(e)[:200]}")
+    else:
+        lines = [f"✅ Referto generato: {rep['template_name']}"]
+        if rep.get("patient_name"):
+            lines.append(f"👤 Paziente: {rep['patient_name']} (data ultima visita aggiornata)")
+        else:
+            lines.append('👤 Paziente non riconosciuto — salvato tra i "Report generici"')
+        if rep.get("drive_link"):
+            lines.append(f"📁 Salvato su Drive in \"{rep['drive_folder']}\"")
+        lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: nessun problema, resta salvato in app/Drive.")
+        await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    finally:
+        await _set_state(db, chat_id, user["user_id"], pending_report_type=None)
 
 
 async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -405,6 +456,10 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "ctrl:new":
         await _clear_state(db, chat_id, user["user_id"])
         await ctx.bot.send_message(chat_id=chat_id, text="🔄 Nuova conversazione. Scrivimi cosa vuoi fare.")
+    elif data.startswith("vetrep:"):
+        visit_type = data.split(":", 1)[1]
+        await _set_state(db, chat_id, user["user_id"], pending_report_type=visit_type)
+        await ctx.bot.send_message(chat_id=chat_id, text="🩺 Ok. Ora scrivi o manda un vocale con il resoconto della visita.")
     elif data.startswith("act:"):
         forced = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)
@@ -491,6 +546,9 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎙️ _{transcript}_", parse_mode="Markdown")
 
         state = await _get_state(db, user["user_id"], chat_id)
+        if state.get("pending_report_type"):
+            await _run_vet_report_flow(update, ctx, db, user, transcript, state["pending_report_type"])
+            return
         prev_ctx = state if _state_is_fresh(state) else None
         intent = await _classify_intent(transcript, prev_ctx)
         action = intent["action"]
@@ -510,6 +568,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("save", _cmd_save))
     app.add_handler(CommandHandler("task", _cmd_task))
     app.add_handler(CommandHandler("journal", _cmd_journal))
+    app.add_handler(CommandHandler("report", _cmd_report))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _msg_free))
