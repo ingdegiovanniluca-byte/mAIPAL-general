@@ -160,7 +160,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
     # thread ("e domani?") also get fresh, relevant context - a message reusing an
     # older conv_id via the "continue" classifier must not silently skip retrieval.
     if action == "info_request":
-        kb = await retrieve_kb(user_doc["user_id"], content, scope="all")
+        kb = await retrieve_kb(user_doc["user_id"], content, scope="all", org_id=user_doc.get("org_id"))
         if kb:
             def _fmt(c): return c.get("display") or c.get("text","")[:400]
             user_text = f"CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {_fmt(c)}" for c in kb) + f"\n\nDOMANDA:\n{content}"

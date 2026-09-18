@@ -978,7 +978,7 @@ def _extract_meta(text: str) -> tuple[str, Optional[dict]]:
     return visible, meta
 
 
-async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb") -> List[dict]:
+async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb", org_id: Optional[str] = None) -> List[dict]:
     """Hybrid semantic + keyword retrieval over kb_chunks (and tasks/todos/journal if scope='all').
     - Semantic scoring via multilingual MiniLM cosine similarity.
     - Keyword boost for exact term matches (proper nouns, place names, etc.) to help generic queries
@@ -1004,6 +1004,7 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
 
     # Build candidate pool: kb_chunks always, plus extras when scope=='all'
     candidates: List[dict] = []
+    forced_ids: set = set()  # candidate ids guaranteed into `top` regardless of score
     kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
     # Map: doc_id → list of sibling chunks (ordered by chunk_index) — used for doc expansion
     doc_siblings: dict = {}
@@ -1022,8 +1023,15 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
     for did in doc_siblings:
         doc_siblings[did].sort(key=lambda x: x["meta"].get("chunk_index", 0))
 
+    # Tasks and Liste can be shared with a team (visibility="org"), not just owned by
+    # this user - miss that and a colleague's shared patient list is invisible to search.
+    def _owned_or_shared(query_field: str = "user_id") -> dict:
+        if org_id:
+            return {"$or": [{query_field: user_id}, {"org_id": org_id, "visibility": "org"}]}
+        return {query_field: user_id}
+
     if scope == "all":
-        tasks = await db.tasks.find({"user_id": user_id}, {"_id": 0}).to_list(500)
+        tasks = await db.tasks.find(_owned_or_shared(), {"_id": 0}).to_list(500)
         for t in tasks:
             txt_parts = [t.get("title", ""), t.get("description", ""), t.get("notes", "")]
             txt = " · ".join([p for p in txt_parts if p])
@@ -1044,7 +1052,7 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
             if not txt: continue
             display = f"[Diario · {j.get('date','')}] {j.get('title','')} · mood: {j.get('mood','')}. {txt[:400]}".strip()
             candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": None})
-        colls = await db.collections.find({"user_id": user_id}, {"_id": 0}).to_list(200)
+        colls = await db.collections.find(_owned_or_shared(), {"_id": 0}).to_list(200)
         if colls:
             coll_map = {c["id"]: c for c in colls}
             coll_items = await db.collection_items.find({"collection_id": {"$in": list(coll_map.keys())}}, {"_id": 0}).to_list(2000)
@@ -1057,6 +1065,18 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                 txt = " · ".join(parts)
                 display = f"[Lista: {coll.get('name', '')}] {txt}"
                 candidates.append({"text": txt, "display": display, "source": "collection_item", "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": None})
+            # "Quali pazienti ho in lista?" style questions need the WHOLE list, not just
+            # the fragments that happen to score well against a generic question - no
+            # single item's text closely resembles "quali pazienti ho". If the query
+            # names one of the user's lists directly, force-include ALL of its items
+            # regardless of semantic/keyword score.
+            query_low = query.lower()
+            named_coll_ids = {c["id"] for c in colls if (c.get("name") or "").strip() and c["name"].strip().lower() in query_low}
+            if named_coll_ids:
+                forced_ids.update(
+                    c["meta"]["id"] for c in candidates
+                    if c.get("source") == "collection_item" and c["meta"].get("collection_id") in named_coll_ids
+                )
         vet_report_docs = await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(500)
         for vrp in vet_report_docs:
             txt = (vrp.get("transcript") or "").strip()
@@ -1108,10 +1128,18 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
         score = sem + kw_boost
         scored.append((score, sem, kh, c))
 
-    # Keep chunks that have EITHER decent semantic score OR at least one keyword match
-    scored = [s for s in scored if s[1] >= 0.20 or s[2] >= 1]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = [c for _s, _sem, _kh, c in scored[:limit]]
+    # Keep chunks that have EITHER decent semantic score OR at least one keyword match,
+    # OR are force-included (a named list's items - see forced_ids above).
+    def _is_forced(s) -> bool:
+        return (s[3].get("meta") or {}).get("id") in forced_ids
+
+    scored = [s for s in scored if s[1] >= 0.20 or s[2] >= 1 or _is_forced(s)]
+    forced_scored = [s for s in scored if _is_forced(s)]
+    rest_scored = [s for s in scored if not _is_forced(s)]
+    rest_scored.sort(key=lambda x: x[0], reverse=True)
+    # Forced items (e.g. every patient in a list the question names) always make it in,
+    # even past `limit` - otherwise a long list starves itself out of its own answer.
+    top = [c for _s, _sem, _kh, c in forced_scored] + [c for _s, _sem, _kh, c in rest_scored[:max(0, limit - len(forced_scored))]]
 
     # DOCUMENT EXPANSION: for each KB chunk in the top, pull in ALL sibling chunks from the same doc.
     # This preserves the full document context (e.g., all Rovigno chunks together) so the LLM sees
@@ -1222,7 +1250,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             scope = (conv.get("filters", {}) or {}).get("scope", "kb")
         else:
             scope = (payload.filters or {}).get("scope", "kb")
-        kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope)
+        kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope, org_id=current.org_id)
         logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={payload.content[:60]!r} chunks={len(kb_context)}")
 
     system = build_system_prompt(current, action)
