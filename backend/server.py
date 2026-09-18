@@ -979,6 +979,7 @@ def build_system_prompt(user: User, action: str) -> str:
             "\"summary\": \"riassunto in 1 riga max 140 caratteri\", "
             "\"mood\": \"parola singola dedotta dal testo, SOLO per uso interno (non va scritta nel diario): "
             "felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
+            "\"tags\": [\"1-3 parole chiave che riassumono gli argomenti della giornata, es. lavoro, famiglia, sport, salute\"], "
             "\"highlights\": [\"1-3 momenti chiave estratti letteralmente dal testo\"]}<<<END>>>"
         )
     return base
@@ -1452,6 +1453,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     "cleaned_text": visible_answer,
                     "title": (meta or {}).get("title", ""),
                     "mood": (meta or {}).get("mood", ""),
+                    "tags": (meta or {}).get("tags", []),
                     "highlights": (meta or {}).get("highlights", []),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "source_conv": conv_id,
@@ -2722,6 +2724,7 @@ async def list_journal(
             {"raw_text": {"$regex": safe, "$options": "i"}},
             {"title": {"$regex": safe, "$options": "i"}},
             {"highlights": {"$regex": safe, "$options": "i"}},
+            {"tags": {"$regex": safe, "$options": "i"}},
         ]
     limit = 2000 if (date_from or date_to) else 365
     cursor = db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(limit)
@@ -2839,6 +2842,7 @@ async def create_journal(payload: JournalCreate, current: User = Depends(get_cur
         "poi in coda solo per il sistema: "
         "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", \"mood\": \"parola singola dedotta dal testo, SOLO per uso interno "
         "(non va scritta nel diario): felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
+        "\"tags\": [\"1-3 parole chiave che riassumono gli argomenti della giornata, es. lavoro, famiglia, sport, salute\"], "
         "\"highlights\": [\"1-3 momenti chiave estratti letteralmente dal testo\"]}<<<END>>>"
     )
     # The journal must never be left unsaved because of a transient AI hiccup - if the
@@ -2861,6 +2865,7 @@ async def create_journal(payload: JournalCreate, current: User = Depends(get_cur
         "cleaned_text": cleaned,
         "title": (meta or {}).get("title", ""),
         "mood": (meta or {}).get("mood", ""),
+        "tags": (meta or {}).get("tags", []),
         "highlights": (meta or {}).get("highlights", []),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

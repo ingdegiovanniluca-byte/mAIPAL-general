@@ -3,7 +3,7 @@ import { api, API } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook, Eye, EyeOff, CalendarDays } from "lucide-react";
+import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook, Eye, EyeOff, CalendarDays, ChevronUp, ChevronDown, Tag } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 const MOODS = ["felice", "grato", "energico", "riflessivo", "neutro", "stanco", "stressato"];
@@ -26,6 +26,19 @@ const PERIODS = [
 
 const toISODate = (d) => d.toISOString().slice(0, 10);
 
+const IT_WEEKDAYS_LONG = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+// Parses the "YYYY-MM-DD" date components directly (no Date(iso) UTC parsing) so the
+// diary heading always shows the calendar date the entry was actually saved on.
+const formatDiaryDate = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const dt = new Date(y, m - 1, d);
+  return `${cap(IT_WEEKDAYS_LONG[dt.getDay()])} ${d} ${cap(IT_MONTHS_LONG[m - 1])} ${y}`;
+};
+
 export default function JournalPage() {
   const [entries, setEntries] = useState([]);
   const [text, setText] = useState("");
@@ -33,11 +46,13 @@ export default function JournalPage() {
 
   // Search & filter
   const [q, setQ] = useState("");
-  const [mood, setMood] = useState("all");
+  const [moodFilters, setMoodFilters] = useState([]);
+  const [topicFilters, setTopicFilters] = useState([]);
   const [favOnly, setFavOnly] = useState(false);
   const [period, setPeriod] = useState("all");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const [composerOpen, setComposerOpen] = useState(true);
 
   // Voice recording
   const [recording, setRecording] = useState(false);
@@ -67,7 +82,6 @@ export default function JournalPage() {
   const load = async () => {
     const params = {};
     if (q.trim()) params.q = q.trim();
-    if (mood && mood !== "all") params.mood = mood;
     if (favOnly) params.favorite = true;
     if (dateRange.date_from) params.date_from = dateRange.date_from;
     if (dateRange.date_to) params.date_to = dateRange.date_to;
@@ -84,9 +98,21 @@ export default function JournalPage() {
       setStats(r.data);
     } catch { /* silent */ }
   };
-  useEffect(() => { load(); }, [q, mood, favOnly, dateRange.date_from, dateRange.date_to]);
+  useEffect(() => { load(); }, [q, favOnly, dateRange.date_from, dateRange.date_to]);
   useEffect(() => { loadTrend(); }, [trendDays, entries.length]);
   useEffect(() => { loadStats(); }, [entries.length]);
+
+  // Mood and topic can each have several values selected at once (OR within a filter,
+  // AND across filters) - applied client-side since the full period-filtered set is
+  // already loaded, same approach as the tag filter on the Task board.
+  const toggleMoodFilter = (m) => setMoodFilters((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]));
+  const toggleTopicFilter = (t) => setTopicFilters((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+  const allTopics = useMemo(() => Array.from(new Set(entries.flatMap((e) => e.tags || []))).sort((a, b) => a.localeCompare(b)), [entries]);
+  const filteredEntries = useMemo(() => entries.filter((e) => {
+    if (moodFilters.length > 0 && !moodFilters.includes(e.mood)) return false;
+    if (topicFilters.length > 0 && !(e.tags || []).some((t) => topicFilters.includes(t))) return false;
+    return true;
+  }), [entries, moodFilters, topicFilters]);
 
   const save = async () => {
     if (!text.trim() || saving) return;
@@ -187,42 +213,225 @@ export default function JournalPage() {
       </div>
 
       {/* Composer */}
-      <div className="chat-input-card p-5 rounded-2xl shadow-lg min-h-[340px] flex flex-col" data-testid="journal-input-card">
+      <div className={`chat-input-card p-5 rounded-2xl shadow-lg flex flex-col ${composerOpen ? "min-h-[340px]" : ""}`} data-testid="journal-input-card">
         <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
           <div className="kicker-p text-white/85">· oggi · {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</div>
-        </div>
-        <Textarea
-          data-testid="journal-input"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Come è andata oggi? Cosa hai fatto, com'era il tuo umore, cosa vuoi ricordare…"
-          className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
-        />
-        <div className="flex items-center justify-between pt-2 border-t  gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 text-white/85">
-            <button
-              data-testid="journal-mic-btn"
-              onClick={recording ? stopRec : startRec}
-              disabled={transcribing}
-              className={`p-2 rounded-full transition-colors duration-150 inline-flex items-center gap-1.5 ${recording ? "bg-white/30 text-white animate-pulse" : "hover:bg-white/15"}`}
-              title={recording ? "Ferma registrazione" : "Registra vocale"}
-            >
-              {recording ? <MicOff size={16} /> : <Mic size={16} />}
-              <span className="text-[10px] font-mono-tight uppercase tracking-widest">
-                {recording ? "rec…" : transcribing ? "trascrivo…" : "vocale"}
-              </span>
-            </button>
-          </div>
-          <button data-testid="journal-save" onClick={save} disabled={saving || !text.trim() || transcribing}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white/10 text-sm">
-            <Sparkles size={14} /> {saving ? "mAIPAL sta scrivendo…" : "Salva nel diario"}
+          <button
+            data-testid="composer-toggle"
+            onClick={() => setComposerOpen((v) => !v)}
+            title={composerOpen ? "Chiudi la sezione per scrivere" : "Apri la sezione per scrivere"}
+            className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10"
+          >
+            {composerOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
         </div>
+        {composerOpen && (
+          <>
+            <Textarea
+              data-testid="journal-input"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Come è andata oggi? Cosa hai fatto, com'era il tuo umore, cosa vuoi ricordare…"
+              className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
+            />
+            <div className="flex items-center justify-between pt-2 border-t  gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 text-white/85">
+                <button
+                  data-testid="journal-mic-btn"
+                  onClick={recording ? stopRec : startRec}
+                  disabled={transcribing}
+                  className={`p-2 rounded-full transition-colors duration-150 inline-flex items-center gap-1.5 ${recording ? "bg-white/30 text-white animate-pulse" : "hover:bg-white/15"}`}
+                  title={recording ? "Ferma registrazione" : "Registra vocale"}
+                >
+                  {recording ? <MicOff size={16} /> : <Mic size={16} />}
+                  <span className="text-[10px] font-mono-tight uppercase tracking-widest">
+                    {recording ? "rec…" : transcribing ? "trascrivo…" : "vocale"}
+                  </span>
+                </button>
+              </div>
+              <button data-testid="journal-save" onClick={save} disabled={saving || !text.trim() || transcribing}
+                      className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white/10 text-sm">
+                <Sparkles size={14} /> {saving ? "mAIPAL sta scrivendo…" : "Salva nel diario"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Filters (periodo, ricerca, preferiti, umore, argomento) - sopra al riquadro di lettura */}
+      <div className="mt-8 p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm space-y-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 text-white/70">
+            <CalendarDays size={14} />
+            <span className="kicker">· periodo</span>
+          </div>
+          <div className="flex items-center gap-1 flex-wrap">
+            {PERIODS.map((p) => (
+              <button
+                key={p.key}
+                data-testid={`period-${p.key}`}
+                onClick={() => setPeriod(p.key)}
+                style={period === p.key ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${period === p.key ? "" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {period === "custom" && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="date"
+                data-testid="period-custom-from"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              />
+              <span className="text-white/40 text-xs">–</span>
+              <input
+                type="date"
+                data-testid="period-custom-to"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap pt-3 border-t">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
+            <Input
+              data-testid="journal-search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Cerca nel diario…"
+              className="pl-10 pr-10 h-10 rounded-full bg-white/10"
+            />
+            {q && (
+              <button
+                data-testid="journal-search-clear"
+                onClick={() => setQ("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1 flex-wrap">
+            <button
+              key="all"
+              data-testid="fav-filter-off"
+              onClick={() => setFavOnly(false)}
+              style={!favOnly ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
+            >tutti</button>
+            <button
+              data-testid="fav-filter-on"
+              onClick={() => setFavOnly(true)}
+              style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
+              title="Solo giornate memorabili"
+            >
+              <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
+            </button>
+          </div>
+        </div>
+
+        {/* Umore: multi-selezione - click per aggiungere/togliere ciascun umore dal filtro */}
+        <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t">
+          <span className="kicker text-white/50 mr-1">· umore</span>
+          {MOODS.map((m) => (
+            <button
+              key={m}
+              data-testid={`mood-filter-${m}`}
+              onClick={() => toggleMoodFilter(m)}
+              style={moodFilters.includes(m) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${moodFilters.includes(m) ? "" : "bg-white/5  text-white/60 hover:"}`}
+              title={m}
+            >
+              <span>{MOOD_EMOJI[m]}</span> {m}
+            </button>
+          ))}
+          {moodFilters.length > 0 && (
+            <button onClick={() => setMoodFilters([])} className="text-[10px] text-white/40 hover:text-white/70 px-1.5">✕ azzera</button>
+          )}
+        </div>
+
+        {/* Argomento: multi-selezione sui tag rilevati dalle voci di diario */}
+        {allTopics.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t">
+            <span className="kicker text-white/50 mr-1 inline-flex items-center gap-1"><Tag size={11} /> argomento</span>
+            {allTopics.map((t) => (
+              <button
+                key={t}
+                data-testid={`topic-filter-${t}`}
+                onClick={() => toggleTopicFilter(t)}
+                style={topicFilters.includes(t) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${topicFilters.includes(t) ? "" : "bg-white/5  text-white/60 hover:"}`}
+              >
+                {t}
+              </button>
+            ))}
+            {topicFilters.length > 0 && (
+              <button onClick={() => setTopicFilters([])} className="text-[10px] text-white/40 hover:text-white/70 px-1.5">✕ azzera</button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Entries: il riquadro per rileggere il diario, formattato come pagine di un diario */}
+      <div className="mt-6 space-y-4">
+        <div className="kicker">· voci precedenti · {filteredEntries.length}</div>
+        {filteredEntries.length === 0 && <div className="text-white/60 text-sm">Nessuna voce trovata con questi filtri.</div>}
+        {filteredEntries.map((e) => (
+          <div key={e.id} className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm" data-testid="journal-entry">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div className="kicker inline-flex items-center gap-1.5">
+                  <span>{MOOD_EMOJI[e.mood] || "📝"}</span> {formatDiaryDate(e.date)}
+                </div>
+                <div className="font-semibold text-lg mt-1">{e.title || "Diario"}</div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  data-testid="journal-fav"
+                  onClick={() => toggleFav(e.id, !!e.favorite)}
+                  title={e.favorite ? "Rimuovi da giornate memorabili" : "Segna come giornata memorabile"}
+                  className={`p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`}
+                >
+                  <Star size={16} className={e.favorite ? "fill-current" : ""} />
+                </button>
+                <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+              </div>
+            </div>
+
+            <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-white">{e.cleaned_text}</div>
+
+            {(e.tags || []).length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {e.tags.map((t, i) => (
+                  <span key={i} className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-white/10 text-white/60">{t}</span>
+                ))}
+              </div>
+            )}
+
+            {(e.highlights || []).length > 0 && (
+              <div className="mt-4 pt-4 border-t ">
+                <div className="kicker mb-2">· momenti chiave</div>
+                <ul className="text-sm text-white/70 space-y-1">
+                  {(e.highlights || []).map((h, i) => (<li key={i}>· {h}</li>))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
       {/* Stats summary */}
       {stats && (
-        <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="journal-stats">
+        <div className="mt-10 grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="journal-stats">
           <StatCard
             icon={<Notebook size={18} />}
             label="Voci scritte"
@@ -315,155 +524,6 @@ export default function JournalPage() {
           </>
         ) : (
           <div className="text-white/60 text-sm py-8 text-center">Nessun dato di umore ancora. Racconta qualche giornata per vedere il trend.</div>
-        ))}
-      </div>
-
-      {/* Period filter */}
-      <div className="mt-6 p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-1.5 text-white/70">
-            <CalendarDays size={14} />
-            <span className="kicker">· periodo</span>
-          </div>
-          <div className="flex items-center gap-1 flex-wrap">
-            {PERIODS.map((p) => (
-              <button
-                key={p.key}
-                data-testid={`period-${p.key}`}
-                onClick={() => setPeriod(p.key)}
-                style={period === p.key ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${period === p.key ? "" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {period === "custom" && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <input
-                type="date"
-                data-testid="period-custom-from"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-              />
-              <span className="text-white/40 text-xs">–</span>
-              <input
-                type="date"
-                data-testid="period-custom-to"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Search + mood filter */}
-      <div className="mt-8 p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative flex-1 min-w-[220px]">
-            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
-            <Input
-              data-testid="journal-search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Cerca nel diario…"
-              className="pl-10 pr-10 h-10 rounded-full bg-white/10"
-            />
-            {q && (
-              <button
-                data-testid="journal-search-clear"
-                onClick={() => setQ("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-1 flex-wrap">
-            <button
-              key="all"
-              data-testid="fav-filter-off"
-              onClick={() => setFavOnly(false)}
-              style={!favOnly ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
-            >tutti</button>
-            <button
-              data-testid="fav-filter-on"
-              onClick={() => setFavOnly(true)}
-              style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
-              title="Solo giornate memorabili"
-            >
-              <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
-            </button>
-            <span className="w-px h-4 bg-neutral-300 mx-1" />
-            <button
-              key="mood-all"
-              data-testid="mood-filter-all"
-              onClick={() => setMood("all")}
-              style={mood === "all" ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${mood === "all" ? "" : "bg-white/5  text-white/60 hover:"}`}
-            >ogni umore</button>
-            {MOODS.map((m) => (
-              <button
-                key={m}
-                data-testid={`mood-filter-${m}`}
-                onClick={() => setMood(m)}
-                style={mood === m ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${mood === m ? "" : "bg-white/5  text-white/60 hover:"}`}
-                title={m}
-              >
-                <span>{MOOD_EMOJI[m]}</span> {m}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Entries */}
-      <div className="mt-6 space-y-4">
-        <div className="kicker">· voci precedenti · {entries.length}</div>
-        {entries.length === 0 && <div className="text-white/60 text-sm">Nessuna voce trovata con questi filtri.</div>}
-        {entries.map((e) => (
-          <div key={e.id} className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm" data-testid="journal-entry">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">{MOOD_EMOJI[e.mood] || "📝"}</span>
-                <div>
-                  <div className="font-semibold text-lg">{e.title || "Diario"}</div>
-                  <div className="kicker">
-                    {new Date(e.date).toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "long", year: "numeric" })}
-                    {e.mood ? ` · ${e.mood}` : ""}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  data-testid="journal-fav"
-                  onClick={() => toggleFav(e.id, !!e.favorite)}
-                  title={e.favorite ? "Rimuovi da giornate memorabili" : "Segna come giornata memorabile"}
-                  className={`p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`}
-                >
-                  <Star size={16} className={e.favorite ? "fill-current" : ""} />
-                </button>
-                <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
-              </div>
-            </div>
-
-            <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-white">{e.cleaned_text}</div>
-
-            {(e.highlights || []).length > 0 && (
-              <div className="mt-4 pt-4 border-t ">
-                <div className="kicker mb-2">· momenti chiave</div>
-                <ul className="text-sm text-white/70 space-y-1">
-                  {(e.highlights || []).map((h, i) => (<li key={i}>· {h}</li>))}
-                </ul>
-              </div>
-            )}
-          </div>
         ))}
       </div>
     </div>
