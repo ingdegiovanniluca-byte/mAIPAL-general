@@ -172,33 +172,83 @@ def extract_template_structure(path: str) -> list[dict]:
 
 
 # ---- Report generation -------------------------------------------------------
-def _patient_context_block(patients: list[dict]) -> str:
-    if not patients:
-        return "(nessun paziente in anagrafica)"
-    lines = []
-    for p in patients[:300]:
-        d = p.get("data", {})
-        lines.append(f"- id={p['id']} | nome={d.get('nome','?')} | specie={d.get('tipo_animale','')} | proprietario={d.get('proprietario','')}")
-    return "\n".join(lines)
+def find_matching_patients(text: str, patients: list[dict]) -> list[dict]:
+    """Deterministic (non-LLM) name matching: whole-word, case-insensitive search of
+    each patient's registered name in the dictation. Several *distinct* patients
+    matching (e.g. two dogs both named "Fester") signals real ambiguity the caller
+    must resolve before generating anything - this is why matching happens as an
+    explicit pre-step instead of being left to the model to silently pick one."""
+    text_low = (text or "").lower()
+    matches = []
+    seen_ids = set()
+    for p in patients:
+        name = (p.get("data", {}).get("nome") or "").strip()
+        if not name or p["id"] in seen_ids:
+            continue
+        if re.search(rf"\b{re.escape(name.lower())}\b", text_low):
+            matches.append(p)
+            seen_ids.add(p["id"])
+    return matches
 
 
-async def interpret_visit(text: str, sections_skeleton: list[dict], patients: list[dict]) -> dict:
-    """Asks the LLM to (a) recognize which patient (if any) is named in the dictation,
-    and (b) fill the given section/field skeleton from the visit content. Returns
-    {"patient_item_id": str|None, "sections": [{"title":..., "fields": {label: value}}]}."""
+# Organ fields that only make anatomical sense for one sex - matched case-insensitively
+# against template field labels, so this also applies to custom uploaded templates.
+_FEMALE_ONLY_ORGANS = {"ovaia", "utero"}
+_MALE_ONLY_ORGANS = {"testicoli", "prostata"}
+
+
+def filter_sections_for_patient(sections_skeleton: list[dict], patient: dict | None) -> list[dict]:
+    """Drops organ fields not relevant to this patient's sex/reproductive status (e.g.
+    no 'Ovaia'/'Utero' for a male; no 'Testicoli'/'Prostata' for a female; sterilized/
+    castrated patients also lose the reproductive organs removed by that surgery).
+    Returns a new list - never mutates the shared BUILTIN_TEMPLATES constants."""
+    if not patient:
+        return [{"title": s["title"], "fields": list(s["fields"])} for s in sections_skeleton]
+
+    data = patient.get("data", {})
+    sesso = (data.get("sesso") or "").strip().lower()
+    stato = (data.get("stato_riproduttivo") or "").strip().lower()
+    sterilized = "steriliz" in stato or "castrat" in stato
+
+    exclude = set()
+    if sesso == "maschio":
+        exclude |= _FEMALE_ONLY_ORGANS
+        if sterilized:
+            exclude |= {"testicoli"}
+    elif sesso == "femmina":
+        exclude |= _MALE_ONLY_ORGANS
+        if sterilized:
+            exclude |= _FEMALE_ONLY_ORGANS
+
+    if not exclude:
+        return [{"title": s["title"], "fields": list(s["fields"])} for s in sections_skeleton]
+    return [
+        {"title": s["title"], "fields": [f for f in s["fields"] if f.strip().lower() not in exclude]}
+        for s in sections_skeleton
+    ]
+
+
+async def interpret_visit(text: str, sections_skeleton: list[dict]) -> dict:
+    """Asks the LLM to structure the dictation according to the given (already
+    sex-filtered) section/field skeleton, in technical veterinary register. Patient
+    identification is NOT the model's job - it's resolved deterministically before
+    this is called. Returns {"sections": [{"title":..., "fields": {label: value}}]}."""
     skeleton_desc = json.dumps([{"title": s["title"], "fields": s["fields"]} for s in sections_skeleton], ensure_ascii=False)
     system = (
         "Sei l'assistente di un medico veterinario. Ricevi il resoconto (dettato o scritto) di una visita "
-        "e devi strutturarlo secondo uno schema di sezioni/campi dato.\n\n"
-        f"Anagrafica pazienti conosciuti:\n{_patient_context_block(patients)}\n\n"
+        "e devi strutturarlo secondo uno schema di sezioni/campi dato, scrivendo come un referto veterinario "
+        "professionale.\n\n"
         f"Schema sezioni/campi da compilare (rispetta ESATTAMENTE titoli e nomi campo):\n{skeleton_desc}\n\n"
         "Regole:\n"
-        "1. Se il testo nomina chiaramente un paziente presente in anagrafica, restituisci il suo id in patient_item_id.\n"
-        "2. Compila SOLO i campi per cui il testo fornisce informazioni reali: se qualcosa non è menzionato, lascialo "
+        "1. Compila SOLO i campi per cui il testo fornisce informazioni reali: se qualcosa non è menzionato, lascialo "
         "come stringa vuota. NON inventare dati clinici, diagnosi o misurazioni non dette.\n"
-        "3. Scrivi in italiano, linguaggio clinico veterinario asciutto.\n"
+        "2. Registro linguistico: terminologia clinica veterinaria tecnica e professionale (es. \"non si "
+        "apprezzano alterazioni ecostrutturali di rilievo\" invece di \"tutto normale\", \"tumefazione\" invece di "
+        "\"gonfiore\", \"algia\" invece di \"dolore\", nomenclatura anatomica corretta), come in un referto scritto "
+        "da un veterinario per un collega, MAI un riassunto in linguaggio comune.\n"
+        "3. Frasi impersonali e concise, niente prima persona, niente commenti fuori dai campi dello schema.\n"
         "Rispondi SOLO con un JSON valido, in questo formato esatto: "
-        '{"patient_item_id": "..."|null, "sections": [{"title": "...", "fields": {"Nome campo": "valore", ...}}, ...]}'
+        '{"sections": [{"title": "...", "fields": {"Nome campo": "valore", ...}}, ...]}'
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     resp = await client.chat.completions.create(
@@ -222,11 +272,7 @@ async def interpret_visit(text: str, sections_skeleton: list[dict], patients: li
             fields_out[f] = str(got_fields.get(f) or "").strip()
         normalized.append({"title": skel["title"], "fields": fields_out})
 
-    patient_id = parsed.get("patient_item_id") or None
-    valid_ids = {p["id"] for p in patients}
-    if patient_id not in valid_ids:
-        patient_id = None
-    return {"patient_item_id": patient_id, "sections": normalized}
+    return {"sections": normalized}
 
 
 def apply_patient_data(sections: list[dict], patient: dict | None) -> None:

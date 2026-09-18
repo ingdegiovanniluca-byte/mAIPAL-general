@@ -286,6 +286,7 @@ class GenerateLessonPayload(BaseModel):
 class GenerateVetReportPayload(BaseModel):
     text: str
     visit_type: str  # "imaging" | "general" | id di un template personalizzato
+    patient_item_id: Optional[str] = None  # forza un paziente specifico (risoluzione ambiguità nome)
 
 
 # ============ AUTH HELPERS ============
@@ -2233,12 +2234,18 @@ async def delete_vet_template(template_id: str, current: User = Depends(get_curr
 
 @api_router.post("/vet/generate-report")
 async def generate_vet_report(payload: GenerateVetReportPayload, current: User = Depends(get_current_user)):
-    return await _generate_vet_report(current, payload.text, payload.visit_type)
+    return await _generate_vet_report(current, payload.text, payload.visit_type, payload.patient_item_id)
 
 
-async def _generate_vet_report(current: User, text: str, visit_type: str) -> dict:
+async def _generate_vet_report(current: User, text: str, visit_type: str, patient_item_id: Optional[str] = None) -> dict:
     """Shared by the web endpoint and the Telegram /report flow (telegram_bot.py calls
-    this directly - same process, no HTTP round-trip)."""
+    this directly - same process, no HTTP round-trip).
+
+    Patient recognition is deterministic (whole-word name match against the Pazienti
+    list), not left to the LLM: if the dictation names a patient but more than one
+    distinct patient shares that name, generation stops and returns
+    {"status": "ambiguous_patient", "candidates": [...], "text":..., "visit_type":...}
+    so the caller can ask the user to pick one and re-call with patient_item_id set."""
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Descrivi la visita")
@@ -2255,13 +2262,35 @@ async def _generate_vet_report(current: User, text: str, visit_type: str) -> dic
 
     _, patients = await _find_vet_patients(current)
 
+    patient = None
+    if patient_item_id:
+        patient = next((p for p in patients if p["id"] == patient_item_id), None)
+        if not patient:
+            raise HTTPException(status_code=404, detail="Paziente non trovato")
+    else:
+        matches = vet_reports.find_matching_patients(text, patients)
+        if len(matches) > 1:
+            candidates = [
+                {
+                    "item_id": p["id"],
+                    "name": p.get("data", {}).get("nome"),
+                    "owner": p.get("data", {}).get("proprietario"),
+                    "species": p.get("data", {}).get("tipo_animale"),
+                }
+                for p in matches
+            ]
+            return {"status": "ambiguous_patient", "candidates": candidates, "text": text, "visit_type": visit_type}
+        if len(matches) == 1:
+            patient = matches[0]
+
+    sections_skeleton = vet_reports.filter_sections_for_patient(sections_skeleton, patient)
+
     try:
-        interpreted = await vet_reports.interpret_visit(text, sections_skeleton, patients)
+        interpreted = await vet_reports.interpret_visit(text, sections_skeleton)
     except Exception as e:
         logger.exception("vet report interpretation failed")
         raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
 
-    patient = next((p for p in patients if p["id"] == interpreted["patient_item_id"]), None)
     vet_reports.apply_patient_data(interpreted["sections"], patient)
 
     patient_name = (patient.get("data", {}).get("nome") if patient else None) or None
@@ -2317,6 +2346,7 @@ async def _generate_vet_report(current: User, text: str, visit_type: str) -> dic
     import base64 as _b64
     report_doc = {
         "id": f"vrep_{uuid.uuid4().hex[:12]}",
+        "status": "ok",
         "user_id": current.user_id,
         "org_id": current.org_id,
         "patient_item_id": patient["id"] if patient else None,

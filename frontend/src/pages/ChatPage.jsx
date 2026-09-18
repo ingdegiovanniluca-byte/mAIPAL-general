@@ -163,6 +163,26 @@ export default function ChatPage() {
     }
   };
 
+  const appendVetReportResult = (rep) => {
+    if (rep.status === "ambiguous_patient") {
+      setThread((th) => ({ ...th, messages: [...th.messages, {
+        role: "assistant",
+        content: "🐾 Ho trovato più pazienti con questo nome. Quale intendi?",
+        ambiguous: { candidates: rep.candidates, text: rep.text, visit_type: rep.visit_type },
+      }] }));
+      return;
+    }
+    const lines = [
+      `✅ Report generato: ${rep.template_name}`,
+      rep.patient_name
+        ? `👤 Paziente: ${rep.patient_name} (data ultima visita aggiornata)`
+        : `👤 Paziente non riconosciuto — salvato tra i "Report generici"`,
+      rep.drive_link ? `📁 Salvato su Drive in "${rep.drive_folder}"` : "⚠️ Non salvato su Drive (collega Google Workspace in Impostazioni)",
+      rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
+    ].filter(Boolean).join("\n");
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id }] }));
+  };
+
   const sendVetReport = async () => {
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     let content = text.trim();
@@ -184,19 +204,22 @@ export default function ChatPage() {
 
     try {
       const r = await api.post("/vet/generate-report", { text: content, visit_type: visitType });
-      const rep = r.data;
-      const lines = [
-        `✅ Report generato: ${rep.template_name}`,
-        rep.patient_name
-          ? `👤 Paziente: ${rep.patient_name} (data ultima visita aggiornata)`
-          : `👤 Paziente non riconosciuto — salvato tra i "Report generici"`,
-        rep.drive_link ? `📁 Salvato su Drive in "${rep.drive_folder}"` : "⚠️ Non salvato su Drive (collega Google Workspace in Impostazioni)",
-        rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
-      ].filter(Boolean).join("\n");
-      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id }] }));
+      appendVetReportResult(r.data);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  const resolveVetPatient = async (patientId, ambText, ambVisitType) => {
+    setStreaming(true);
+    try {
+      const r = await api.post("/vet/generate-report", { text: ambText, visit_type: ambVisitType, patient_item_id: patientId });
+      appendVetReportResult(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore nella generazione del report");
     } finally {
       setStreaming(false);
     }
@@ -608,6 +631,20 @@ export default function ChatPage() {
                       >
                         <Download size={12} /> Scarica il referto (.docx)
                       </a>
+                    )}
+                    {m.ambiguous && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-patient-choices">
+                        {m.ambiguous.candidates.map((c) => (
+                          <button
+                            key={c.item_id}
+                            onClick={() => resolveVetPatient(c.item_id, m.ambiguous.text, m.ambiguous.visit_type)}
+                            disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
+                          >
+                            {c.name}{c.owner ? ` · ${c.owner}` : ""}{c.species ? ` (${c.species})` : ""}
+                          </button>
+                        ))}
+                      </div>
                     )}
                   </div>
                 ))}

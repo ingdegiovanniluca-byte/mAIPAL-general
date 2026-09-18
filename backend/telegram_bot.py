@@ -415,28 +415,42 @@ async def _cmd_report(update: Update, ctx):
     )
 
 
-async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_type):
+async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_type, patient_item_id=None):
     from server import _generate_vet_report
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
     current = _to_user_pydantic(user)
     try:
-        rep = await _generate_vet_report(current, content, visit_type)
+        rep = await _generate_vet_report(current, content, visit_type, patient_item_id)
     except Exception as e:
         logger.exception("tg vet report failed")
         await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Errore nella generazione del referto: {str(e)[:200]}")
+        await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
+        return
+
+    if rep.get("status") == "ambiguous_patient":
+        buttons = [
+            [InlineKeyboardButton(f"{c['name']} · {c.get('owner') or '?'} ({c.get('species') or '?'})", callback_data=f"vetpat:{c['item_id']}")]
+            for c in rep["candidates"]
+        ]
+        await _set_state(db, chat_id, user["user_id"], pending_report_context={"visit_type": visit_type, "text": content})
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text="🐾 Ho trovato più pazienti con questo nome. Quale intendi?",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    lines = [f"✅ Referto generato: {rep['template_name']}"]
+    if rep.get("patient_name"):
+        lines.append(f"👤 Paziente: {rep['patient_name']} (data ultima visita aggiornata)")
     else:
-        lines = [f"✅ Referto generato: {rep['template_name']}"]
-        if rep.get("patient_name"):
-            lines.append(f"👤 Paziente: {rep['patient_name']} (data ultima visita aggiornata)")
-        else:
-            lines.append('👤 Paziente non riconosciuto — salvato tra i "Report generici"')
-        if rep.get("drive_link"):
-            lines.append(f"📁 Salvato su Drive in \"{rep['drive_folder']}\"")
-        lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: nessun problema, resta salvato in app/Drive.")
-        await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines))
-    finally:
-        await _set_state(db, chat_id, user["user_id"], pending_report_type=None)
+        lines.append('👤 Paziente non riconosciuto — salvato tra i "Report generici"')
+    if rep.get("drive_link"):
+        lines.append(f"📁 Salvato su Drive in \"{rep['drive_folder']}\"")
+    lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: nessun problema, resta salvato in app/Drive.")
+    await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
 
 
 async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -460,6 +474,14 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         visit_type = data.split(":", 1)[1]
         await _set_state(db, chat_id, user["user_id"], pending_report_type=visit_type)
         await ctx.bot.send_message(chat_id=chat_id, text="🩺 Ok. Ora scrivi o manda un vocale con il resoconto della visita.")
+    elif data.startswith("vetpat:"):
+        patient_id = data.split(":", 1)[1]
+        state = await _get_state(db, user["user_id"], chat_id)
+        pctx = state.get("pending_report_context") or {}
+        if not pctx.get("text"):
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto della visita, rifai /report.")
+            return
+        await _run_vet_report_flow(q, ctx, db, user, pctx["text"], pctx["visit_type"], patient_item_id=patient_id)
     elif data.startswith("act:"):
         forced = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)
