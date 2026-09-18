@@ -1057,6 +1057,20 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                 txt = " · ".join(parts)
                 display = f"[Lista: {coll.get('name', '')}] {txt}"
                 candidates.append({"text": txt, "display": display, "source": "collection_item", "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": None})
+        vet_report_docs = await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(500)
+        for vrp in vet_report_docs:
+            txt = (vrp.get("transcript") or "").strip()
+            if not txt: continue
+            who = vrp.get("patient_name") or "paziente non identificato"
+            visit_date = (vrp.get("created_at") or "")[:10]
+            display = f"[Referto veterinario · {visit_date}] {who} — {vrp.get('template_name','')}. {txt[:400]}".strip()
+            candidates.append({
+                "text": f"{who} {txt}",
+                "display": display,
+                "source": "vet_report",
+                "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
+                "embedding": None,
+            })
 
     # Compute embeddings for all candidates (semantic scoring)
     if q_emb is not None:
