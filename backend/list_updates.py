@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o"
 
-VALID_OPS = {"add_item", "delete_item", "update_item", "add_sub_item", "delete_sub_item", "update_sub_item"}
+VALID_OPS = {
+    "add_item", "delete_item", "update_item", "clear_items",
+    "add_sub_item", "delete_sub_item", "update_sub_item", "clear_sub_items",
+}
 
 _STOPWORDS_IT = {
     "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di", "da", "in", "con", "su", "per",
@@ -52,11 +55,19 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
         f"Liste disponibili dell'utente (usa SOLO questi id, non inventarne altri):\n{catalog_desc}\n\n"
         "Determina quale operazione l'utente vuole fare, una tra:\n"
         "- add_item: aggiungere un nuovo Campo a una lista (es. un nuovo cliente, un nuovo prodotto)\n"
-        "- delete_item: eliminare un Campo esistente\n"
+        "- delete_item: eliminare UN Campo esistente specifico\n"
         "- update_item: modificare i valori di un Campo esistente\n"
+        "- clear_items: eliminare TUTTI i Campi di una lista (l'utente dice esplicitamente 'tutti/tutte/tutto/svuota "
+        "la lista', non un elemento specifico)\n"
         "- add_sub_item: aggiungere un nuovo Elemento annidato dentro un Campo esistente\n"
-        "- delete_sub_item: eliminare un Elemento annidato da un Campo\n"
-        "- update_sub_item: modificare i valori di un Elemento annidato\n\n"
+        "- delete_sub_item: eliminare UN Elemento annidato specifico da un Campo\n"
+        "- update_sub_item: modificare i valori di un Elemento annidato\n"
+        "- clear_sub_items: eliminare TUTTI gli Elementi annidati di un Campo (l'utente dice esplicitamente "
+        "'tutti/tutte/tutto/svuota', es. 'cancella tutte le persone dalla lezione di pilates del lunedì mattina' - "
+        "qui item_query identifica IL CAMPO 'lezione di pilates del lunedì mattina', non le singole persone)\n\n"
+        "IMPORTANTE: usa clear_items/clear_sub_items SOLO quando l'utente chiede esplicitamente di eliminare TUTTO/"
+        "TUTTI/TUTTE in un colpo solo - per l'eliminazione di uno o più elementi nominati singolarmente usa sempre "
+        "delete_item/delete_sub_item (uno per ciascun elemento nominato).\n\n"
         "Rispondi SOLO con un JSON valido in questo formato: "
         '{"op": "...", "collection_id": "id della lista scelta dal catalogo, o null se non sei sicuro di quale lista", '
         '"item_query": "testo breve che identifica il Campo bersaglio (es. nome cliente, nome lezione), vuoto se non applicabile", '

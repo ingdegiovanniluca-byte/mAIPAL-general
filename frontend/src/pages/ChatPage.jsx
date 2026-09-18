@@ -233,6 +233,14 @@ export default function ChatPage() {
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: prompt, listAmbiguous: res }] }));
       return;
     }
+    if (res.status === "confirm_clear") {
+      setThread((th) => ({ ...th, messages: [...th.messages, {
+        role: "assistant",
+        content: `⚠️ Stai per eliminare ${res.count} element${res.count === 1 ? "o" : "i"} in un colpo solo. Confermi?`,
+        listAmbiguous: res,
+      }] }));
+      return;
+    }
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: `✅ ${res.message}` }] }));
   };
 
@@ -717,15 +725,16 @@ export default function ChatPage() {
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-list-choices">
                         {m.listAmbiguous.candidates.map((c) => (
                           <button
-                            key={c.collection_id || c.item_id || c.sub_item_id}
+                            key={c.collection_id || c.item_id || c.sub_item_id || "confirm"}
                             onClick={() => resolveListUpdate(
                               m.listAmbiguous,
-                              c.collection_id ? { collection_id: c.collection_id }
+                              c.confirm ? { confirm: true }
+                                : c.collection_id ? { collection_id: c.collection_id }
                                 : c.item_id ? { item_id: c.item_id }
                                 : { sub_item_id: c.sub_item_id }
                             )}
                             disabled={streaming}
-                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
+                            className={`text-xs px-3 py-1.5 rounded-full disabled:opacity-50 ${c.confirm ? "bg-red-500/20 hover:bg-red-500/30 text-red-200" : "bg-white/10 hover:bg-white/20 text-white"}`}
                           >
                             {c.name || c.label}
                           </button>

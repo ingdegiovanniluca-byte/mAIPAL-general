@@ -249,6 +249,8 @@ class ListUpdatePayload(BaseModel):
     fields: Optional[dict] = None
     item_query: Optional[str] = None
     sub_item_query: Optional[str] = None
+    # Set on the follow-up call confirming a clear_items/clear_sub_items bulk delete.
+    confirm: bool = False
 
 
 class NewsFeedbackPayload(BaseModel):
@@ -1956,14 +1958,14 @@ async def update_list_via_text(payload: ListUpdatePayload, current: User = Depen
     return await _execute_list_update(
         current, payload.text, op=payload.op, collection_id=payload.collection_id,
         item_id=payload.item_id, sub_item_id=payload.sub_item_id, fields=payload.fields,
-        item_query=payload.item_query, sub_item_query=payload.sub_item_query,
+        item_query=payload.item_query, sub_item_query=payload.sub_item_query, confirm=payload.confirm,
     )
 
 
 async def _execute_list_update(
     current: User, text: str, op: Optional[str] = None, collection_id: Optional[str] = None,
     item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
-    item_query: Optional[str] = None, sub_item_query: Optional[str] = None,
+    item_query: Optional[str] = None, sub_item_query: Optional[str] = None, confirm: bool = False,
 ) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
 
@@ -1975,6 +1977,11 @@ async def _execute_list_update(
        with candidates for the caller to show as choices.
     2. Follow-up call (op/collection_id/fields carried over, plus a resolved item_id/
        sub_item_id): applies the edit directly, no LLM call.
+    A bulk op (clear_items/clear_sub_items - "cancella tutti/tutte...") is never applied
+    on the first call: it first returns a "confirm_clear" result with the count of records
+    that would be deleted, and only deletes once the caller re-calls with confirm=True -
+    a fuzzy-matched "delete everything" is exactly the kind of hard-to-reverse action that
+    deserves an explicit yes, unlike a single delete_item/delete_sub_item match.
     """
     text = (text or "").strip()
     if not text:
@@ -2012,7 +2019,7 @@ async def _execute_list_update(
     items = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).to_list(2000)
 
     item = None
-    if op != "add_item":
+    if op not in ("add_item", "clear_items"):
         if item_id:
             item = next((i for i in items if i["id"] == item_id), None)
             if not item:
@@ -2031,9 +2038,9 @@ async def _execute_list_update(
             item = next(i for i in items if i["id"] == ids[0])
 
     sub_item = None
-    if op in ("add_sub_item", "delete_sub_item", "update_sub_item"):
+    if op in ("add_sub_item", "delete_sub_item", "update_sub_item", "clear_sub_items"):
         sub_items = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item["id"]}, {"_id": 0}).to_list(500)
-        if op != "add_sub_item":
+        if op not in ("add_sub_item", "clear_sub_items"):
             if sub_item_id:
                 sub_item = next((s for s in sub_items if s["id"] == sub_item_id), None)
                 if not sub_item:
@@ -2051,6 +2058,23 @@ async def _execute_list_update(
                     }
                 sub_item = next(s for s in sub_items if s["id"] == ids[0])
 
+    if op == "clear_items" and not confirm:
+        if not items:
+            return {"status": "ok", "message": f"\"{coll['name']}\" è già vuota, nulla da eliminare.", "collection_id": collection_id, "collection_name": coll["name"]}
+        return {
+            "status": "confirm_clear", "op": op, "collection_id": collection_id, "fields": {},
+            "item_query": item_query, "sub_item_query": sub_item_query, "text": text, "count": len(items),
+            "candidates": [{"confirm": True, "label": f"Conferma: elimina tutti e {len(items)} gli elementi di \"{coll['name']}\""}],
+        }
+    if op == "clear_sub_items" and not confirm:
+        if not sub_items:
+            return {"status": "ok", "message": f"\"{lu.item_display(item)}\" è già vuoto, nulla da eliminare.", "collection_id": collection_id, "collection_name": coll["name"]}
+        return {
+            "status": "confirm_clear", "op": op, "collection_id": collection_id, "item_id": item["id"], "fields": {},
+            "item_query": item_query, "sub_item_query": sub_item_query, "text": text, "count": len(sub_items),
+            "candidates": [{"confirm": True, "label": f"Conferma: elimina tutti e {len(sub_items)} gli elementi di \"{lu.item_display(item)}\""}],
+        }
+
     if op in ("add_item", "update_item"):
         norm_fields = lu.normalize_fields(fields or {}, coll.get("fields", []))
     elif op in ("add_sub_item", "update_sub_item"):
@@ -2066,6 +2090,11 @@ async def _execute_list_update(
     elif op == "delete_item":
         await delete_collection_item(collection_id, item["id"], current)
         summary = f"Ho rimosso \"{lu.item_display(item)}\" da \"{coll['name']}\"."
+    elif op == "clear_items":
+        item_ids = [i["id"] for i in items]
+        await db.collection_items.delete_many({"collection_id": collection_id, "id": {"$in": item_ids}})
+        await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": {"$in": item_ids}})
+        summary = f"Ho eliminato tutti e {len(item_ids)} gli elementi di \"{coll['name']}\"."
     elif op == "update_item":
         merged = {**item.get("data", {}), **norm_fields}
         updated = await update_collection_item(collection_id, item["id"], CollectionItemPayload(data=merged), current)
@@ -2078,6 +2107,9 @@ async def _execute_list_update(
     elif op == "delete_sub_item":
         await delete_sub_item(collection_id, item["id"], sub_item["id"], current)
         summary = f"Ho rimosso \"{lu.item_display(sub_item)}\" da \"{lu.item_display(item)}\" ({coll['name']})."
+    elif op == "clear_sub_items":
+        await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item["id"]})
+        summary = f"Ho eliminato tutti e {len(sub_items)} gli elementi di \"{lu.item_display(item)}\" ({coll['name']})."
     elif op == "update_sub_item":
         merged = {**sub_item.get("data", {}), **norm_fields}
         updated = await update_sub_item(collection_id, item["id"], sub_item["id"], CollectionSubItemPayload(data=merged), current)
