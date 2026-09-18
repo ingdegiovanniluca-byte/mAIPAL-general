@@ -391,6 +391,27 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
   const [notes, setNotes] = useState(task.notes || "");
   const [savingNotes, setSavingNotes] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateDraft, setDateDraft] = useState("");
+  const [timeDraft, setTimeDraft] = useState("");
+  const [savingDate, setSavingDate] = useState(false);
+
+  const openDateEdit = () => {
+    setDateDraft(task.due_date || "");
+    setTimeDraft(task.due_time || "");
+    setEditingDate(true);
+  };
+
+  const saveDueDate = async () => {
+    setSavingDate(true);
+    try {
+      await api.patch(`/tasks/${task.id}`, { due_date: dateDraft || null, due_time: timeDraft || null });
+      onUpdated();
+      toast.success("Data aggiornata");
+      setEditingDate(false);
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore aggiornamento data"); }
+    finally { setSavingDate(false); }
+  };
 
   const send = async () => {
     if (!msg.trim()) return;
@@ -515,11 +536,42 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
             <DialogHeader>
               <DialogTitle className="text-xl font-bold text-white truncate">{task.title}</DialogTitle>
             </DialogHeader>
-            {task.due_date && (
-              <div className="flex items-center gap-1.5 mt-1.5 text-sm" style={{ color: "#D9D9D9" }}>
+            {editingDate ? (
+              <div className="flex items-center gap-1.5 mt-1.5 text-sm flex-wrap" style={{ color: "#D9D9D9" }}>
                 <Calendar size={14} />
-                {formatDayMonth(task.due_date, task.due_time)}
+                <input
+                  type="date"
+                  data-testid="task-due-date-input"
+                  value={dateDraft}
+                  onChange={(e) => setDateDraft(e.target.value)}
+                  className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                />
+                <input
+                  type="time"
+                  data-testid="task-due-time-input"
+                  value={timeDraft}
+                  onChange={(e) => setTimeDraft(e.target.value)}
+                  disabled={!dateDraft}
+                  className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 disabled:opacity-40"
+                />
+                <button data-testid="task-due-date-save" onClick={saveDueDate} disabled={savingDate} className="text-xs px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">
+                  {savingDate ? "…" : "Salva"}
+                </button>
+                <button onClick={() => setEditingDate(false)} className="text-xs px-1.5 py-0.5 rounded-full text-white/50 hover:text-white/80">
+                  Annulla
+                </button>
               </div>
+            ) : (
+              <button
+                onClick={openDateEdit}
+                data-testid="task-due-date-display"
+                className="flex items-center gap-1.5 mt-1.5 text-sm hover:underline decoration-dotted underline-offset-2"
+                style={{ color: "#D9D9D9" }}
+                title="Modifica la data"
+              >
+                <Calendar size={14} />
+                {task.due_date ? formatDayMonth(task.due_date, task.due_time) : "Aggiungi data"}
+              </button>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0 pt-1">

@@ -2762,20 +2762,30 @@ class ContextChatRequest(BaseModel):
 
 @api_router.post("/tasks/{task_id}/chat")
 async def task_chat(task_id: str, payload: ContextChatRequest, current: User = Depends(get_current_user)):
+    import re as _re_taskchat
     task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
     system = (
-        f"Sei mAIPAL. L'utente sta modificando il task: {task}. "
+        f"Sei mAIPAL. Oggi è {_today_it_string()}. Usa SEMPRE questa data come riferimento per calcolare "
+        "qualunque data relativa menzionata dall'utente (es. 'domani', '20 settembre', 'lunedì prossimo'). "
+        f"L'utente sta modificando il task: {task}. "
         "Rispondi in modo naturale (1-2 frasi) con la conferma della modifica. "
         "In coda includi SOLO per il sistema i campi da aggiornare tra i marcatori "
-        "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, due_date, due_time, priority, tags, notes."
+        "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, due_date (formato ESATTO YYYY-MM-DD), "
+        "due_time (formato ESATTO HH:MM, oppure null), priority ('alta'|'media'|'bassa'), tags, notes. "
+        "Includi in META SOLO le chiavi che l'utente ha chiesto esplicitamente di cambiare - non toccare le altre."
     )
     chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"task_{task_id}", system_message=system).with_model("openai", "gpt-4o")
     raw = await chat.send_message(UserMessage(text=payload.message))
     visible, meta = _extract_meta(raw)
     visible = visible.replace("```json", "").replace("```", "").strip()
+    if meta:
+        if "due_date" in meta and (not meta["due_date"] or not _re_taskchat.match(r"^\d{4}-\d{2}-\d{2}$", str(meta["due_date"]))):
+            meta.pop("due_date")
+        if "due_time" in meta and meta["due_time"] and not _re_taskchat.match(r"^\d{2}:\d{2}$", str(meta["due_time"])):
+            meta.pop("due_time")
     q = {"id": task_id, **_editable_query(current)}
     if meta:
         await db.tasks.update_one(q, {"$set": meta})
