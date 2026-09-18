@@ -963,14 +963,18 @@ def build_system_prompt(user: User, action: str) -> str:
     elif action == "journal":
         base += (
             " L'utente ti sta raccontando la sua giornata per il DIARIO. "
-            "Il tuo compito: (1) sistemare il testo (grammatica, punteggiatura, chiarezza) mantenendo la voce personale in prima persona, "
-            "(2) organizzare in paragrafi coerenti, (3) NON aggiungere fatti non presenti. "
+            "Il tuo compito è SOLO editoriale: (1) sistemare il testo (grammatica, punteggiatura, chiarezza) mantenendo "
+            "la voce personale in prima persona, (2) organizzare in paragrafi coerenti. "
+            "REGOLA CRITICA: non aggiungere MAI fatti, dettagli, emozioni o commenti sullo stato d'animo non esplicitamente "
+            "scritti dall'utente (es. non scrivere 'sono molto felice' o 'è stata una giornata dura' se l'utente non lo ha "
+            "detto lui stesso) - riscrivi solo ciò che c'è, non interpretarlo né arricchirlo. "
             "Rispondi con il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:'). "
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", "
             "\"summary\": \"riassunto in 1 riga max 140 caratteri\", "
-            "\"mood\": \"parola singola: felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
-            "\"highlights\": [\"1-3 momenti chiave estratti dal testo\"]}<<<END>>>"
+            "\"mood\": \"parola singola dedotta dal testo, SOLO per uso interno (non va scritta nel diario): "
+            "felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
+            "\"highlights\": [\"1-3 momenti chiave estratti letteralmente dal testo\"]}<<<END>>>"
         )
     return base
 
@@ -2599,13 +2603,21 @@ class JournalCreate(BaseModel):
 
 
 @api_router.get("/journal")
-async def list_journal(current: User = Depends(get_current_user), q: Optional[str] = None, mood: Optional[str] = None, favorite: Optional[bool] = None):
+async def list_journal(
+    current: User = Depends(get_current_user), q: Optional[str] = None, mood: Optional[str] = None,
+    favorite: Optional[bool] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+):
     import re as _re
     query: dict = {"user_id": current.user_id}
     if mood and mood != "all":
         query["mood"] = mood
     if favorite is True:
         query["favorite"] = True
+    if date_from or date_to:
+        date_q = {}
+        if date_from: date_q["$gte"] = date_from
+        if date_to: date_q["$lte"] = date_to
+        query["date"] = date_q
     if q:
         safe = _re.escape(q.strip())
         query["$or"] = [
@@ -2614,8 +2626,9 @@ async def list_journal(current: User = Depends(get_current_user), q: Optional[st
             {"title": {"$regex": safe, "$options": "i"}},
             {"highlights": {"$regex": safe, "$options": "i"}},
         ]
-    cursor = db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(365)
-    return await cursor.to_list(365)
+    limit = 2000 if (date_from or date_to) else 365
+    cursor = db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(limit)
+    return await cursor.to_list(limit)
 
 
 @api_router.post("/journal/{entry_id}/favorite")
@@ -2720,17 +2733,29 @@ async def create_journal(payload: JournalCreate, current: User = Depends(get_cur
     entry_date = payload.date or _date.today().isoformat()
     system = (
         f"Sei mAIPAL, l'assistente di {current.name}. L'utente ti sta raccontando la sua giornata. "
-        "Il tuo compito: (1) sistemare il testo (grammatica, punteggiatura, chiarezza) mantenendo la voce personale in prima persona, "
-        "(2) organizzare in paragrafi coerenti, (3) NON aggiungere fatti non presenti. "
+        "Il tuo compito è SOLO editoriale: (1) sistemare il testo (grammatica, punteggiatura, chiarezza) mantenendo "
+        "la voce personale in prima persona, (2) organizzare in paragrafi coerenti. "
+        "REGOLA CRITICA: non aggiungere MAI fatti, dettagli, emozioni o commenti sullo stato d'animo non esplicitamente "
+        "scritti dall'utente (es. non scrivere 'sono molto felice' o 'è stata una giornata dura' se l'utente non lo ha "
+        "detto lui stesso) - riscrivi solo ciò che c'è, non interpretarlo né arricchirlo. "
         "Restituisci una risposta con due parti: prima il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:'), "
         "poi in coda solo per il sistema: "
-        "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", \"mood\": \"parola singola: felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
-        "\"highlights\": [\"1-3 momenti chiave estratti dal testo\"]}<<<END>>>"
+        "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", \"mood\": \"parola singola dedotta dal testo, SOLO per uso interno "
+        "(non va scritta nel diario): felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
+        "\"highlights\": [\"1-3 momenti chiave estratti letteralmente dal testo\"]}<<<END>>>"
     )
-    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")  # text cleanup + metadata, not open-ended reasoning
-    raw = await chat.send_message(UserMessage(text=payload.content))
-    cleaned, meta = _extract_meta(raw)
-    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    # The journal must never be left unsaved because of a transient AI hiccup - if the
+    # cleanup call fails for any reason, fall back to storing the raw text as-is rather
+    # than losing the entry (this is the one journal entry-point without that safety net;
+    # the chat-based "journal" action already degrades gracefully via its own error path).
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o")
+        raw = await chat.send_message(UserMessage(text=payload.content))
+        cleaned, meta = _extract_meta(raw)
+        cleaned = (cleaned.replace("```json", "").replace("```", "").strip()) or payload.content
+    except Exception:
+        logger.exception("journal cleanup failed, saving raw text")
+        cleaned, meta = payload.content, None
     doc = {
         "id": f"jr_{uuid.uuid4().hex[:12]}",
         "user_id": current.user_id,

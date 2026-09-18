@@ -3,7 +3,7 @@ import { api, API } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook } from "lucide-react";
+import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook, Eye, EyeOff, CalendarDays } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 const MOODS = ["felice", "grato", "energico", "riflessivo", "neutro", "stanco", "stressato"];
@@ -12,7 +12,19 @@ const MOOD_EMOJI = {
   energico: "⚡", stanco: "😴", grato: "🙏",
 };
 
-const MOOD_LABEL_BY_SCORE = { 1: "😣", 2: "😴", 3: "😐", 4: "⚡", 5: "😊" };
+// Y axis is a plain 1-5 mood level (no emoji) - this legend above the chart spells out
+// what each level means instead.
+const MOOD_LEVEL_LABEL = { 1: "triste", 2: "stanco", 3: "neutro", 4: "energico", 5: "felice" };
+
+const PERIODS = [
+  { key: "all", label: "sempre" },
+  { key: "today", label: "oggi" },
+  { key: "week", label: "ultima settimana" },
+  { key: "month", label: "ultimo mese" },
+  { key: "custom", label: "personalizzato" },
+];
+
+const toISODate = (d) => d.toISOString().slice(0, 10);
 
 export default function JournalPage() {
   const [entries, setEntries] = useState([]);
@@ -23,6 +35,9 @@ export default function JournalPage() {
   const [q, setQ] = useState("");
   const [mood, setMood] = useState("all");
   const [favOnly, setFavOnly] = useState(false);
+  const [period, setPeriod] = useState("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
 
   // Voice recording
   const [recording, setRecording] = useState(false);
@@ -34,15 +49,28 @@ export default function JournalPage() {
   // Trend
   const [trend, setTrend] = useState([]);
   const [trendDays, setTrendDays] = useState(7);
+  const [showTrend, setShowTrend] = useState(true);
 
   // Stats
   const [stats, setStats] = useState(null);
+
+  // Resolve the selected period into concrete date_from/date_to bounds for the API.
+  const dateRange = useMemo(() => {
+    const today = new Date();
+    if (period === "today") { const s = toISODate(today); return { date_from: s, date_to: s }; }
+    if (period === "week") { const from = new Date(today); from.setDate(from.getDate() - 6); return { date_from: toISODate(from), date_to: toISODate(today) }; }
+    if (period === "month") { const from = new Date(today); from.setDate(from.getDate() - 29); return { date_from: toISODate(from), date_to: toISODate(today) }; }
+    if (period === "custom") return { date_from: customFrom || undefined, date_to: customTo || undefined };
+    return {};
+  }, [period, customFrom, customTo]);
 
   const load = async () => {
     const params = {};
     if (q.trim()) params.q = q.trim();
     if (mood && mood !== "all") params.mood = mood;
     if (favOnly) params.favorite = true;
+    if (dateRange.date_from) params.date_from = dateRange.date_from;
+    if (dateRange.date_to) params.date_to = dateRange.date_to;
     const r = await api.get("/journal", { params });
     setEntries(r.data);
   };
@@ -56,7 +84,7 @@ export default function JournalPage() {
       setStats(r.data);
     } catch { /* silent */ }
   };
-  useEffect(() => { load(); }, [q, mood, favOnly]);
+  useEffect(() => { load(); }, [q, mood, favOnly, dateRange.date_from, dateRange.date_to]);
   useEffect(() => { loadTrend(); }, [trendDays, entries.length]);
   useEffect(() => { loadStats(); }, [entries.length]);
 
@@ -226,47 +254,110 @@ export default function JournalPage() {
             <TrendingUp size={16} className="text-white/60" />
             <div className="kicker">· trend umore</div>
           </div>
-          <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="trend-range">
-            {[7, 30, 90].map((d) => (
+          <div className="flex items-center gap-2">
+            {showTrend && (
+              <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="trend-range">
+                {[7, 30, 90].map((d) => (
+                  <button
+                    key={d}
+                    data-testid={`trend-${d}`}
+                    onClick={() => setTrendDays(d)}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "bg-[#CECAD0] text-white shadow-sm" : "text-white/60 hover:text-white"}`}
+                  >
+                    {d}g
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              data-testid="trend-toggle"
+              onClick={() => setShowTrend((v) => !v)}
+              title={showTrend ? "Nascondi trend" : "Mostra trend"}
+              className="p-1.5 rounded-full text-white/50 hover:text-white hover:bg-white/10"
+            >
+              {showTrend ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+        </div>
+        {showTrend && (hasAnyScore ? (
+          <>
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2 text-[10px] text-white/60" data-testid="mood-legend">
+              {[1, 2, 3, 4, 5].map((lvl) => (
+                <span key={lvl} className="inline-flex items-center gap-1">
+                  <span className="font-mono-tight text-white/80">{lvl}</span> {MOOD_LEVEL_LABEL[lvl]}
+                </span>
+              ))}
+            </div>
+            <div className="w-full h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="#eee" strokeDasharray="3 3" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                  <YAxis domain={[1, 5]} ticks={[1, 2, 3, 4, 5]} tick={{ fontSize: 10 }} />
+                  <ReferenceLine y={3} stroke="#d1d5db" strokeDasharray="3 3" />
+                  <Tooltip
+                    contentStyle={{ borderRadius: 12, borderColor: "#e5e7eb", fontSize: 12 }}
+                    formatter={(val, _n, item) => [`${MOOD_LEVEL_LABEL[val] || ""} · ${item.payload.mood || "-"}`, "Umore"]}
+                    labelFormatter={(l) => l}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="score"
+                    stroke="#8B5CF6"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: "#8B5CF6" }}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : (
+          <div className="text-white/60 text-sm py-8 text-center">Nessun dato di umore ancora. Racconta qualche giornata per vedere il trend.</div>
+        ))}
+      </div>
+
+      {/* Period filter */}
+      <div className="mt-6 p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 text-white/70">
+            <CalendarDays size={14} />
+            <span className="kicker">· periodo</span>
+          </div>
+          <div className="flex items-center gap-1 flex-wrap">
+            {PERIODS.map((p) => (
               <button
-                key={d}
-                data-testid={`trend-${d}`}
-                onClick={() => setTrendDays(d)}
-                className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "bg-[#CECAD0] text-white shadow-sm" : "text-white/60 hover:text-white"}`}
+                key={p.key}
+                data-testid={`period-${p.key}`}
+                onClick={() => setPeriod(p.key)}
+                style={period === p.key ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${period === p.key ? "" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
               >
-                {d}g
+                {p.label}
               </button>
             ))}
           </div>
+          {period === "custom" && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="date"
+                data-testid="period-custom-from"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              />
+              <span className="text-white/40 text-xs">–</span>
+              <input
+                type="date"
+                data-testid="period-custom-to"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              />
+            </div>
+          )}
         </div>
-        {hasAnyScore ? (
-          <div className="w-full h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="#eee" strokeDasharray="3 3" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                <YAxis domain={[1, 5]} ticks={[1, 2, 3, 4, 5]} tick={{ fontSize: 10 }} tickFormatter={(v) => MOOD_LABEL_BY_SCORE[v] || v} />
-                <ReferenceLine y={3} stroke="#d1d5db" strokeDasharray="3 3" />
-                <Tooltip
-                  contentStyle={{ borderRadius: 12, borderColor: "#e5e7eb", fontSize: 12 }}
-                  formatter={(val, _n, item) => [`${MOOD_EMOJI[item.payload.mood] || ""} ${item.payload.mood || "-"}`, "Umore"]}
-                  labelFormatter={(l) => l}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="score"
-                  stroke="#8B5CF6"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, fill: "#8B5CF6" }}
-                  activeDot={{ r: 6 }}
-                  connectNulls
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <div className="text-white/60 text-sm py-8 text-center">Nessun dato di umore ancora. Racconta qualche giornata per vedere il trend.</div>
-        )}
       </div>
 
       {/* Search + mood filter */}
