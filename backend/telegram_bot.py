@@ -260,7 +260,8 @@ def _reply_keyboard(active_action: str | None) -> InlineKeyboardMarkup:
         kb("📝 Task", "act:task_todo", active_action == "task_todo"),
         kb("📔 Diario", "act:journal", active_action == "journal"),
     ]
-    return InlineKeyboardMarkup([row1, row2])
+    row3 = [kb("📋 Liste", "act:list_update", active_action == "list_update")]
+    return InlineKeyboardMarkup([row1, row2, row3])
 
 
 # ============ HANDLERS ============
@@ -309,6 +310,8 @@ async def _cmd_help(update: Update, ctx):
         "  /task <task>\n"
         "  /journal <racconto>\n"
         "  /report — genera un referto veterinario (scegli il tipo, poi detta la visita)\n"
+        "  /lista <richiesta> — aggiungi/modifica/rimuovi un elemento da una lista, es. "
+        "\"/lista aggiungi Mario Rossi alla lista clienti\"\n"
         "  /end   — chiudi la conversazione in corso\n"
         "  /help"
     )
@@ -377,6 +380,9 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         state = await _get_state(db, user["user_id"], chat_id)
         if state.get("pending_report_type"):
             await _run_vet_report_flow(update, ctx, db, user, content, state["pending_report_type"])
+            return
+        if state.get("pending_list_update"):
+            await _run_list_update_flow(update, ctx, db, user, content)
             return
         prev_ctx = state if _state_is_fresh(state) else None
         intent = await _classify_intent(content, prev_ctx)
@@ -453,6 +459,62 @@ async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_ty
     await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
 
 
+async def _cmd_list_update(update: Update, ctx):
+    """Modifica di una Lista (Collections) a parole: '/lista aggiungi Mario Rossi alla
+    lista clienti'. Senza testo dopo il comando, il prossimo messaggio (testo o vocale)
+    viene trattato come la richiesta - stesso schema del flusso /report."""
+    from server import db
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
+        return
+    parts = (update.message.text or "").split(" ", 1)
+    content = parts[1].strip() if len(parts) > 1 else ""
+    if content:
+        await _run_list_update_flow(update, ctx, db, user, content)
+    else:
+        await _set_state(db, chat_id, user["user_id"], pending_list_update=True)
+        await update.message.reply_text('📋 Scrivimi cosa vuoi modificare, es. "Aggiungi Mario Rossi alla lista clienti".')
+
+
+async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None, collection_id=None,
+                                 item_id=None, sub_item_id=None, fields=None, item_query=None, sub_item_query=None):
+    from server import _execute_list_update
+    chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    current = _to_user_pydantic(user)
+    try:
+        res = await _execute_list_update(
+            current, content, op=op, collection_id=collection_id, item_id=item_id, sub_item_id=sub_item_id,
+            fields=fields, item_query=item_query, sub_item_query=sub_item_query,
+        )
+    except Exception as e:
+        logger.exception("tg list update failed")
+        detail = getattr(e, "detail", None) or str(e)
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(detail)[:300]}")
+        await _set_state(db, chat_id, user["user_id"], pending_list_update=None, pending_list_context=None)
+        return
+
+    status = res.get("status")
+    if status in ("ambiguous_list", "ambiguous_item", "ambiguous_sub_item"):
+        if status == "ambiguous_list":
+            buttons = [[InlineKeyboardButton(c["name"][:60], callback_data=f"lstc:{c['collection_id']}")] for c in res["candidates"]]
+            prompt = "📋 A quale lista ti riferisci?"
+        elif status == "ambiguous_item":
+            buttons = [[InlineKeyboardButton(c["label"][:60], callback_data=f"lsti:{c['item_id']}")] for c in res["candidates"]]
+            prompt = "📋 Ho trovato più corrispondenze. Quale intendi?"
+        else:
+            buttons = [[InlineKeyboardButton(c["label"][:60], callback_data=f"lsts:{c['sub_item_id']}")] for c in res["candidates"]]
+            prompt = "📋 Ho trovato più corrispondenze. Quale intendi?"
+        await _set_state(db, chat_id, user["user_id"], pending_list_update=None, pending_list_context=res)
+        await ctx.bot.send_message(chat_id=chat_id, text=prompt, reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    await ctx.bot.send_message(chat_id=chat_id, text=f"✅ {res['message']}")
+    await _set_state(db, chat_id, user["user_id"], pending_list_update=None, pending_list_context=None)
+
+
 async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from server import db
     q = update.callback_query
@@ -482,6 +544,27 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto della visita, rifai /report.")
             return
         await _run_vet_report_flow(q, ctx, db, user, pctx["text"], pctx["visit_type"], patient_item_id=patient_id)
+    elif data.startswith("lstc:") or data.startswith("lsti:") or data.startswith("lsts:"):
+        target_id = data.split(":", 1)[1]
+        state = await _get_state(db, user["user_id"], chat_id)
+        pctx = state.get("pending_list_context") or {}
+        if not pctx.get("text"):
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto, rifai /lista.")
+            return
+        kwargs = dict(op=pctx.get("op"), collection_id=pctx.get("collection_id"), item_id=pctx.get("item_id"),
+                      fields=pctx.get("fields"), item_query=pctx.get("item_query"), sub_item_query=pctx.get("sub_item_query"))
+        if data.startswith("lstc:"): kwargs["collection_id"] = target_id
+        elif data.startswith("lsti:"): kwargs["item_id"] = target_id
+        else: kwargs["sub_item_id"] = target_id
+        await _run_list_update_flow(q, ctx, db, user, pctx["text"], **kwargs)
+    elif data == "act:list_update":
+        state = await _get_state(db, user["user_id"], chat_id)
+        last = state.get("last_user_message")
+        if last:
+            await _run_list_update_flow(q, ctx, db, user, last)
+        else:
+            await _set_state(db, chat_id, user["user_id"], pending_list_update=True, current_action="list_update", current_conv_id=None)
+            await ctx.bot.send_message(chat_id=chat_id, text="📋 Scrivimi cosa vuoi modificare nella lista.")
     elif data.startswith("act:"):
         forced = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)
@@ -571,6 +654,9 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if state.get("pending_report_type"):
             await _run_vet_report_flow(update, ctx, db, user, transcript, state["pending_report_type"])
             return
+        if state.get("pending_list_update"):
+            await _run_list_update_flow(update, ctx, db, user, transcript)
+            return
         prev_ctx = state if _state_is_fresh(state) else None
         intent = await _classify_intent(transcript, prev_ctx)
         action = intent["action"]
@@ -591,6 +677,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("task", _cmd_task))
     app.add_handler(CommandHandler("journal", _cmd_journal))
     app.add_handler(CommandHandler("report", _cmd_report))
+    app.add_handler(CommandHandler("lista", _cmd_list_update))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _msg_free))

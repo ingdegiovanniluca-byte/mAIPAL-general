@@ -37,6 +37,7 @@ import telegram_bot as tg
 import embeddings as emb
 import news_service
 import vet_reports
+import list_updates as lu
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -231,6 +232,19 @@ class CollectionItemPayload(BaseModel):
 
 class CollectionSubItemPayload(BaseModel):
     data: dict
+
+
+class ListUpdatePayload(BaseModel):
+    text: str
+    # Set on a follow-up call resolving an earlier ambiguous_list/ambiguous_item/
+    # ambiguous_sub_item result - skips re-asking the LLM and forces the given target.
+    op: Optional[str] = None
+    collection_id: Optional[str] = None
+    item_id: Optional[str] = None
+    sub_item_id: Optional[str] = None
+    fields: Optional[dict] = None
+    item_query: Optional[str] = None
+    sub_item_query: Optional[str] = None
 
 
 class NewsFeedbackPayload(BaseModel):
@@ -1918,6 +1932,142 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
     return {"ok": True}
+
+
+# ---- Modifica delle Liste da testo libero (chat web + Telegram) ----
+@api_router.post("/lists/update")
+async def update_list_via_text(payload: ListUpdatePayload, current: User = Depends(get_current_user)):
+    return await _execute_list_update(
+        current, payload.text, op=payload.op, collection_id=payload.collection_id,
+        item_id=payload.item_id, sub_item_id=payload.sub_item_id, fields=payload.fields,
+        item_query=payload.item_query, sub_item_query=payload.sub_item_query,
+    )
+
+
+async def _execute_list_update(
+    current: User, text: str, op: Optional[str] = None, collection_id: Optional[str] = None,
+    item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
+    item_query: Optional[str] = None, sub_item_query: Optional[str] = None,
+) -> dict:
+    """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
+
+    Two-phase flow, same shape as _generate_vet_report's ambiguous-patient handling:
+    1. First call (only `text` given): the LLM extracts intent (op, target list, free-text
+       description of the target item/sub-item, field values). Which list/item/sub-item is
+       actually meant is then resolved deterministically (match_candidates) - if that's
+       unambiguous the edit runs immediately; if not, an "ambiguous_*" result is returned
+       with candidates for the caller to show as choices.
+    2. Follow-up call (op/collection_id/fields carried over, plus a resolved item_id/
+       sub_item_id): applies the edit directly, no LLM call.
+    """
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Scrivi cosa vuoi modificare nella lista")
+
+    colls = await db.collections.find(_visible_query(current), {"_id": 0}).to_list(200)
+    if not colls:
+        raise HTTPException(status_code=400, detail="Non hai ancora nessuna lista. Creane una nella sezione Liste prima di poter usare questa funzione.")
+    coll_by_id = {c["id"]: c for c in colls}
+
+    if not op or not collection_id:
+        catalog = [{"id": c["id"], "name": c["name"], "fields": c.get("fields", []), "sub_item_fields": c.get("sub_item_fields", [])} for c in colls]
+        try:
+            interpreted = await lu.interpret_list_request(text, catalog)
+        except Exception as e:
+            logger.exception("list update interpretation failed")
+            raise HTTPException(status_code=500, detail=f"Non sono riuscito a interpretare la richiesta: {e}")
+        op = interpreted["op"]
+        collection_id = interpreted["collection_id"]
+        item_query = interpreted["item_query"]
+        sub_item_query = interpreted["sub_item_query"]
+        fields = interpreted["fields"]
+
+    if op not in lu.VALID_OPS:
+        raise HTTPException(status_code=400, detail="Non ho capito che tipo di modifica vuoi fare a una lista.")
+
+    if not collection_id or collection_id not in coll_by_id:
+        return {
+            "status": "ambiguous_list", "op": op, "fields": fields or {}, "item_query": item_query,
+            "sub_item_query": sub_item_query, "text": text,
+            "candidates": [{"collection_id": c["id"], "name": c["name"]} for c in colls],
+        }
+
+    coll = coll_by_id[collection_id]
+    items = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).to_list(2000)
+
+    item = None
+    if op != "add_item":
+        if item_id:
+            item = next((i for i in items if i["id"] == item_id), None)
+            if not item:
+                raise HTTPException(status_code=404, detail="Elemento non trovato nella lista")
+        else:
+            ids = lu.match_candidates(item_query or text, [(i["id"], lu.item_display(i)) for i in items])
+            if not ids:
+                raise HTTPException(status_code=404, detail=f"Non ho trovato nulla in \"{coll['name']}\" che corrisponda a \"{item_query or text}\".")
+            if len(ids) > 1:
+                by_id = {i["id"]: i for i in items}
+                return {
+                    "status": "ambiguous_item", "collection_id": collection_id, "op": op, "fields": fields or {},
+                    "item_query": item_query, "sub_item_query": sub_item_query, "text": text,
+                    "candidates": [{"item_id": iid, "label": lu.item_display(by_id[iid])} for iid in ids],
+                }
+            item = next(i for i in items if i["id"] == ids[0])
+
+    sub_item = None
+    if op in ("add_sub_item", "delete_sub_item", "update_sub_item"):
+        sub_items = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item["id"]}, {"_id": 0}).to_list(500)
+        if op != "add_sub_item":
+            if sub_item_id:
+                sub_item = next((s for s in sub_items if s["id"] == sub_item_id), None)
+                if not sub_item:
+                    raise HTTPException(status_code=404, detail="Elemento annidato non trovato")
+            else:
+                ids = lu.match_candidates(sub_item_query or text, [(s["id"], lu.item_display(s)) for s in sub_items])
+                if not ids:
+                    raise HTTPException(status_code=404, detail=f"Non ho trovato nulla che corrisponda a \"{sub_item_query or text}\" dentro \"{lu.item_display(item)}\".")
+                if len(ids) > 1:
+                    by_id = {s["id"]: s for s in sub_items}
+                    return {
+                        "status": "ambiguous_sub_item", "collection_id": collection_id, "item_id": item["id"], "op": op,
+                        "fields": fields or {}, "item_query": item_query, "sub_item_query": sub_item_query, "text": text,
+                        "candidates": [{"sub_item_id": sid, "label": lu.item_display(by_id[sid])} for sid in ids],
+                    }
+                sub_item = next(s for s in sub_items if s["id"] == ids[0])
+
+    if op in ("add_item", "update_item"):
+        norm_fields = lu.normalize_fields(fields or {}, coll.get("fields", []))
+    elif op in ("add_sub_item", "update_sub_item"):
+        norm_fields = lu.normalize_fields(fields or {}, coll.get("sub_item_fields", []))
+    else:
+        norm_fields = {}
+
+    if op == "add_item":
+        if not norm_fields:
+            raise HTTPException(status_code=400, detail="Non ho trovato nessun dato da salvare per il nuovo elemento.")
+        created = await create_collection_item(collection_id, CollectionItemPayload(data=norm_fields), current)
+        summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{coll['name']}\"."
+    elif op == "delete_item":
+        await delete_collection_item(collection_id, item["id"], current)
+        summary = f"Ho rimosso \"{lu.item_display(item)}\" da \"{coll['name']}\"."
+    elif op == "update_item":
+        merged = {**item.get("data", {}), **norm_fields}
+        updated = await update_collection_item(collection_id, item["id"], CollectionItemPayload(data=merged), current)
+        summary = f"Ho aggiornato \"{lu.item_display(updated)}\" in \"{coll['name']}\"."
+    elif op == "add_sub_item":
+        if not norm_fields:
+            raise HTTPException(status_code=400, detail="Non ho trovato nessun dato da salvare per il nuovo elemento.")
+        created = await create_sub_item(collection_id, item["id"], CollectionSubItemPayload(data=norm_fields), current)
+        summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{lu.item_display(item)}\" ({coll['name']})."
+    elif op == "delete_sub_item":
+        await delete_sub_item(collection_id, item["id"], sub_item["id"], current)
+        summary = f"Ho rimosso \"{lu.item_display(sub_item)}\" da \"{lu.item_display(item)}\" ({coll['name']})."
+    elif op == "update_sub_item":
+        merged = {**sub_item.get("data", {}), **norm_fields}
+        updated = await update_sub_item(collection_id, item["id"], sub_item["id"], CollectionSubItemPayload(data=merged), current)
+        summary = f"Ho aggiornato \"{lu.item_display(updated)}\" in \"{lu.item_display(item)}\" ({coll['name']})."
+
+    return {"status": "ok", "message": summary, "collection_id": collection_id, "collection_name": coll["name"]}
 
 
 # ============ FITNESS: ESERCIZI / LEZIONI / CLIENTI ============

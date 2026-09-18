@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, ListChecks } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -42,10 +42,17 @@ const ACTIONS = [
     placeholder: 'Descrivi la visita, es. "Ho visitato Fester, controllo ecografico di routine…"',
     color: "#2E7D63",
   },
+  {
+    id: "list_update", key: "list", icon: <ListChecks size={22} />,
+    title: "Modifica liste",
+    subtitle: "Aggiungi, modifica o rimuovi elementi dalle tue liste a parole",
+    placeholder: 'Es. "Aggiungi Mario Rossi alla lista clienti" o "Elimina Utente 2 dalla lezione di pilates del lunedì mattina"',
+    color: "#2E5F7D",
+  },
 ];
 
-const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63" };
-const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63" };
+const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D" };
+const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D" };
 
 export default function ChatPage() {
   const [active, setActive] = useState("info_request");
@@ -225,8 +232,65 @@ export default function ChatPage() {
     }
   };
 
+  const appendListUpdateResult = (res) => {
+    if (res.status === "ambiguous_list" || res.status === "ambiguous_item" || res.status === "ambiguous_sub_item") {
+      const prompt = res.status === "ambiguous_list"
+        ? "📋 A quale lista ti riferisci?"
+        : "📋 Ho trovato più corrispondenze. Quale intendi?";
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: prompt, listAmbiguous: res }] }));
+      return;
+    }
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: `✅ ${res.message}` }] }));
+  };
+
+  const sendListUpdate = async () => {
+    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    let content = text.trim();
+    if (pendingVoice) {
+      setTranscribing(true);
+      try { content = (await transcribeBlob(pendingVoice.blob)) || content; }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    if (!content) { toast.error("Scrivi cosa vuoi modificare nella lista"); return; }
+    if (streaming || transcribing) return;
+
+    setStreaming(true);
+    setThread((th) => th
+      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      : { conv_id: null, action: "list_update", messages: [{ role: "user", content }], liveAnswer: "" });
+    setText("");
+
+    try {
+      const r = await api.post("/lists/update", { text: content });
+      appendListUpdateResult(r.data);
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella modifica della lista");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  const resolveListUpdate = async (amb, override) => {
+    setStreaming(true);
+    try {
+      const r = await api.post("/lists/update", {
+        text: amb.text, op: amb.op, fields: amb.fields, item_query: amb.item_query, sub_item_query: amb.sub_item_query,
+        collection_id: amb.collection_id, item_id: amb.item_id, ...override,
+      });
+      appendListUpdateResult(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore nella modifica della lista");
+    } finally {
+      setStreaming(false);
+    }
+  };
+
   const send = async () => {
     if (active === "vet_report") { await sendVetReport(); return; }
+    if (active === "list_update") { await sendListUpdate(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
       const resolved = await resolveDrivePending(text.trim());
@@ -600,7 +664,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
                   <div className="kicker">
-                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : "task / to-do"}
+                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "report" : thread.action === "list_update" ? "modifica lista" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -642,6 +706,25 @@ export default function ChatPage() {
                             className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
                           >
                             {c.name}{c.owner ? ` · ${c.owner}` : ""}{c.species ? ` (${c.species})` : ""}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {m.listAmbiguous && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-list-choices">
+                        {m.listAmbiguous.candidates.map((c) => (
+                          <button
+                            key={c.collection_id || c.item_id || c.sub_item_id}
+                            onClick={() => resolveListUpdate(
+                              m.listAmbiguous,
+                              c.collection_id ? { collection_id: c.collection_id }
+                                : c.item_id ? { item_id: c.item_id }
+                                : { sub_item_id: c.sub_item_id }
+                            )}
+                            disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
+                          >
+                            {c.name || c.label}
                           </button>
                         ))}
                       </div>
