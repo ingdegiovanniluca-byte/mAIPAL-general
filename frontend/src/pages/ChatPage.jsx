@@ -318,7 +318,7 @@ export default function ChatPage() {
                     title={a.title}
                     aria-label={a.title}
                     style={{
-                      backgroundColor: selected ? `${a.color}66` : undefined,
+                      backgroundColor: selected ? a.color : undefined,
                       color: "#CECAD0",
                       opacity: selected ? 1 : 0.5,
                       borderColor: selected ? a.color : "rgba(206,202,208,0.25)",
