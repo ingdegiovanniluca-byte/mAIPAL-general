@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, ListChecks } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,9 +16,9 @@ const ACTIONS = [
   },
   {
     id: "info_upload", key: "upload", icon: <CloudUpload size={22} />,
-    title: "Caricamento informazioni",
-    subtitle: "Archivia documenti, note o dati nel sistema",
-    placeholder: "Cosa vuoi salvare nella tua knowledge base?",
+    title: "Salva informazioni",
+    subtitle: "Nota, documento o dato — oppure aggiungi/modifica/rimuovi un elemento da una lista",
+    placeholder: 'Es. "Il codice del wifi è XYZ" oppure "Aggiungi Mario Rossi alla lista clienti"',
     color: "#6D6181",
   },
   {
@@ -41,13 +41,6 @@ const ACTIONS = [
     subtitle: "Detta o scrivi il resoconto: genero il referto strutturato",
     placeholder: 'Descrivi la visita, es. "Ho visitato Fester, controllo ecografico di routine…"',
     color: "#2E7D63",
-  },
-  {
-    id: "list_update", key: "list", icon: <ListChecks size={22} />,
-    title: "Modifica liste",
-    subtitle: "Aggiungi, modifica o rimuovi elementi dalle tue liste a parole",
-    placeholder: 'Es. "Aggiungi Mario Rossi alla lista clienti" o "Elimina Utente 2 dalla lezione di pilates del lunedì mattina"',
-    color: "#2E5F7D",
   },
 ];
 
@@ -243,25 +236,13 @@ export default function ChatPage() {
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: `✅ ${res.message}` }] }));
   };
 
-  const sendListUpdate = async () => {
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
-    let content = text.trim();
-    if (pendingVoice) {
-      setTranscribing(true);
-      try { content = (await transcribeBlob(pendingVoice.blob)) || content; }
-      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
-      setTranscribing(false);
-      setPendingVoice(null);
-    }
-    if (!content) { toast.error("Scrivi cosa vuoi modificare nella lista"); return; }
-    if (streaming || transcribing) return;
-
-    setStreaming(true);
+  // Shared by the auto-classifier below and by follow-up messages inside a thread that
+  // already turned out to be a list edit - `content` is already fully resolved (voice
+  // transcribed if needed) by the caller.
+  const runListUpdateFor = async (content) => {
     setThread((th) => th
       ? { ...th, messages: [...th.messages, { role: "user", content }] }
       : { conv_id: null, action: "list_update", messages: [{ role: "user", content }], liveAnswer: "" });
-    setText("");
-
     try {
       const r = await api.post("/lists/update", { text: content });
       appendListUpdateResult(r.data);
@@ -290,7 +271,6 @@ export default function ChatPage() {
 
   const send = async () => {
     if (active === "vet_report") { await sendVetReport(); return; }
-    if (active === "list_update") { await sendListUpdate(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
       const resolved = await resolveDrivePending(text.trim());
@@ -313,6 +293,29 @@ export default function ChatPage() {
 
     setStreaming(true);
     let currentQuestion = [text.trim(), voiceText].filter(Boolean).join(" ").trim();
+
+    // "Salva informazioni" doubles as "modifica lista": a thread already recognized as a
+    // list edit keeps going as one; a fresh message gets a cheap classification pass so
+    // "aggiungi Mario alla lista clienti" is routed to the list editor instead of being
+    // saved as a generic note - no separate button needed for the two.
+    if (active === "info_upload" && attachments.length === 0 && currentQuestion) {
+      if (thread?.action === "list_update") {
+        setText("");
+        await runListUpdateFor(currentQuestion);
+        return;
+      }
+      if (!thread) {
+        try {
+          const cls = await api.post("/classify-save-intent", { text: currentQuestion });
+          if (cls.data?.kind === "list_update") {
+            setText("");
+            await runListUpdateFor(currentQuestion);
+            return;
+          }
+        } catch { /* classification failed: fall through to a normal save */ }
+      }
+    }
+
     if (attachments.length > 0) {
       const kbLine = attachments.filter((a) => a.kb).map((a) => `📎 ${a.name} · ${a.chunks} chunk indicizzati (~${a.chars} caratteri)`).join("\n");
       const driveLine = attachments.filter((a) => !a.kb).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");

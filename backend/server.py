@@ -234,6 +234,10 @@ class CollectionSubItemPayload(BaseModel):
     data: dict
 
 
+class ClassifySaveIntentPayload(BaseModel):
+    text: str
+
+
 class ListUpdatePayload(BaseModel):
     text: str
     # Set on a follow-up call resolving an earlier ambiguous_list/ambiguous_item/
@@ -1932,6 +1936,14 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
     return {"ok": True}
+
+
+# ---- Rilevamento automatico "salva nota" vs "modifica lista" (un solo tasto in chat) ----
+@api_router.post("/classify-save-intent")
+async def classify_save_intent(payload: ClassifySaveIntentPayload, current: User = Depends(get_current_user)):
+    colls = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(200)
+    kind = await lu.classify_save_intent(payload.text, [c["name"] for c in colls])
+    return {"kind": kind}
 
 
 # ---- Modifica delle Liste da testo libero (chat web + Telegram) ----

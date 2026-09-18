@@ -48,8 +48,15 @@ async def _get_user_by_chat(db, chat_id: int):
     return await db.users.find_one({"telegram_chat_id": chat_id}, {"_id": 0})
 
 
+async def _user_list_names(db, user_doc: dict) -> list[str]:
+    from server import _visible_query
+    current = _to_user_pydantic(user_doc)
+    colls = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(200)
+    return [c["name"] for c in colls]
+
+
 # ============ INTENT CLASSIFIER ============
-async def _classify_intent(text: str, last_context: dict | None) -> dict:
+async def _classify_intent(text: str, last_context: dict | None, list_names: list[str] | None = None) -> dict:
     """Return {action, continuation, confidence}. Fallback: heuristic."""
     ctx_hint = ""
     if last_context and last_context.get("current_action"):
@@ -57,19 +64,23 @@ async def _classify_intent(text: str, last_context: dict | None) -> dict:
             f"\nUltima azione in corso: {last_context['current_action']}. "
             f"Ultimo messaggio utente: \"{(last_context.get('last_user_message') or '')[:200]}\"."
         )
+    lists_hint = f"\nListe esistenti dell'utente: {', '.join(list_names)}." if list_names else ""
     system = (
         "Sei un classificatore di intenti per un assistente personale. "
         "Ricevi un messaggio utente e restituisci SOLO un JSON:\n"
-        "{\"action\": \"info_upload|info_request|task_todo|journal\", "
+        "{\"action\": \"info_upload|info_request|task_todo|journal|list_update\", "
         "\"continuation\": \"continue|new\", \"confidence\": 0.0-1.0}\n\n"
         "Regole per action:\n"
-        "- info_upload: l'utente sta comunicando/salvando un'informazione da ricordare (es. 'la mia patente scade il 12/2028', 'il codice del wifi è XYZ', 'mia sorella si chiama Anna').\n"
+        "- info_upload: l'utente sta comunicando/salvando un'informazione generica da ricordare (es. 'la mia patente scade il 12/2028', 'il codice del wifi è XYZ', 'mia sorella si chiama Anna').\n"
         "- info_request: l'utente sta ponendo una domanda a cui rispondere con la sua knowledge base o conoscenza generale (es. 'quando scade Netflix?', 'che ristorante mi consigli?', 'chi è il sindaco di Milano?').\n"
         "- task_todo: c'è un'intenzione di azione futura, un promemoria, una data (es. 'ricordami di chiamare Marco martedì', 'devo comprare il latte', 'presentazione lunedì alle 10').\n"
-        "- journal: l'utente racconta la sua giornata, come si sente, riflessioni personali (es. 'oggi è stata una giornata dura', 'sono felice perché...').\n\n"
+        "- journal: l'utente racconta la sua giornata, come si sente, riflessioni personali (es. 'oggi è stata una giornata dura', 'sono felice perché...').\n"
+        "- list_update: l'utente vuole aggiungere, modificare o rimuovere un elemento specifico in una delle sue liste esistenti "
+        "(es. 'aggiungi Mario alla lista clienti', 'elimina Utente 2 dalla lezione di pilates del lunedì mattina', 'cambia il telefono di Luca').\n\n"
         "Regole per continuation:\n"
         "- continue: se il messaggio è chiaramente un follow-up sul contesto precedente (segue lo stesso argomento, risponde a una richiesta di chiarimento, aggiunge dettagli).\n"
         "- new: se apre un argomento diverso, cambia azione, o non c'è contesto precedente.\n\n"
+        f"{lists_hint}\n"
         f"Contesto:{ctx_hint if ctx_hint else ' nessun contesto precedente.'}\n"
         "IMPORTANTE: rispondi SOLO con il JSON, senza testo aggiuntivo."
     )
@@ -85,18 +96,20 @@ async def _classify_intent(text: str, last_context: dict | None) -> dict:
         action = data.get("action") or "info_request"
         cont = data.get("continuation") or "new"
         conf = float(data.get("confidence") or 0.5)
-        if action not in {"info_upload","info_request","task_todo","journal"}:
+        if action not in {"info_upload","info_request","task_todo","journal","list_update"}:
             action = "info_request"
         if cont not in {"continue", "new"}:
             cont = "new"
         return {"action": action, "continuation": cont, "confidence": conf}
     except Exception:
         logger.exception("intent classification failed, using heuristic")
-        return {"action": _infer_action_heuristic(text), "continuation": "new", "confidence": 0.3}
+        return {"action": _infer_action_heuristic(text, list_names), "continuation": "new", "confidence": 0.3}
 
 
-def _infer_action_heuristic(text: str) -> str:
+def _infer_action_heuristic(text: str, list_names: list[str] | None = None) -> str:
     t = (text or "").lower().strip()
+    if list_names and any(k in t for k in ("aggiungi", "elimina", "rimuovi", "cancella", "modifica", "cambia")) and any(n.lower() in t for n in list_names):
+        return "list_update"
     if any(t.startswith(k) for k in ("ricordami ", "aggiungi task", "task:", "todo ", "to-do", "domani ", "lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato", "domenica")):
         return "task_todo"
     if any(k in t for k in ("oggi è stata", "oggi ho", "mi sento", "sono stanco", "sono felice", "sono grato", "diario:")):
@@ -260,8 +273,7 @@ def _reply_keyboard(active_action: str | None) -> InlineKeyboardMarkup:
         kb("📝 Task", "act:task_todo", active_action == "task_todo"),
         kb("📔 Diario", "act:journal", active_action == "journal"),
     ]
-    row3 = [kb("📋 Liste", "act:list_update", active_action == "list_update")]
-    return InlineKeyboardMarkup([row1, row2, row3])
+    return InlineKeyboardMarkup([row1, row2])
 
 
 # ============ HANDLERS ============
@@ -385,8 +397,12 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             await _run_list_update_flow(update, ctx, db, user, content)
             return
         prev_ctx = state if _state_is_fresh(state) else None
-        intent = await _classify_intent(content, prev_ctx)
+        list_names = await _user_list_names(db, user)
+        intent = await _classify_intent(content, prev_ctx, list_names)
         action = intent["action"]
+        if action == "list_update":
+            await _run_list_update_flow(update, ctx, db, user, content)
+            return
         force_new = (intent["continuation"] == "new") or (prev_ctx is None) or (state.get("current_action") != action)
 
     await _run_and_reply(update, ctx, db, user, action, content, force_new=force_new)
@@ -557,14 +573,6 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("lsti:"): kwargs["item_id"] = target_id
         else: kwargs["sub_item_id"] = target_id
         await _run_list_update_flow(q, ctx, db, user, pctx["text"], **kwargs)
-    elif data == "act:list_update":
-        state = await _get_state(db, user["user_id"], chat_id)
-        last = state.get("last_user_message")
-        if last:
-            await _run_list_update_flow(q, ctx, db, user, last)
-        else:
-            await _set_state(db, chat_id, user["user_id"], pending_list_update=True, current_action="list_update", current_conv_id=None)
-            await ctx.bot.send_message(chat_id=chat_id, text="📋 Scrivimi cosa vuoi modificare nella lista.")
     elif data.startswith("act:"):
         forced = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)
@@ -658,8 +666,12 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await _run_list_update_flow(update, ctx, db, user, transcript)
             return
         prev_ctx = state if _state_is_fresh(state) else None
-        intent = await _classify_intent(transcript, prev_ctx)
+        list_names = await _user_list_names(db, user)
+        intent = await _classify_intent(transcript, prev_ctx, list_names)
         action = intent["action"]
+        if action == "list_update":
+            await _run_list_update_flow(update, ctx, db, user, transcript)
+            return
         force_new = (intent["continuation"] == "new") or (prev_ctx is None) or (state.get("current_action") != action)
         await _run_and_reply(update, ctx, db, user, action, transcript, force_new=force_new)
     except Exception as e:

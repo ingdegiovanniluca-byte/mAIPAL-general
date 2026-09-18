@@ -110,6 +110,41 @@ def item_display(item: dict) -> str:
     return " · ".join(parts) if parts else "(vuoto)"
 
 
+async def classify_save_intent(text: str, list_names: list[str]) -> str:
+    """Cheap pre-classification used to merge "salva informazione" and "modifica lista"
+    into a single chat action: is this free text an instruction to add/edit/remove a
+    record in one of the user's existing Liste, or just generic information to save as a
+    note? Falls back to 'info_upload' (the safe default - nothing gets deleted) on any
+    error or when the user has no lists at all."""
+    if not list_names:
+        return "info_upload"
+    names_desc = ", ".join(f'"{n}"' for n in list_names[:50])
+    system = (
+        "Devi classificare una frase in una di due categorie:\n"
+        "- 'list_update': l'utente vuole aggiungere, modificare o rimuovere un elemento specifico "
+        f"in una delle sue liste esistenti ({names_desc}). Es. 'aggiungi Mario alla lista clienti', "
+        "'elimina Utente 2 dalla lezione di pilates del lunedì mattina', 'cambia il telefono di Luca'.\n"
+        "- 'info_upload': qualunque altra informazione generica da salvare/ricordare (una nota, un documento, "
+        "un fatto), che non è un'istruzione di modifica su una lista specifica.\n"
+        'Rispondi SOLO con un JSON: {"kind": "list_update"} oppure {"kind": "info_upload"}.'
+    )
+    try:
+        client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini", max_completion_tokens=20,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
+        )
+        raw = resp.choices[0].message.content or ""
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group(0))
+            if parsed.get("kind") in ("list_update", "info_upload"):
+                return parsed["kind"]
+    except Exception:
+        logger.exception("classify_save_intent failed")
+    return "info_upload"
+
+
 def match_candidates(query_text: str, candidates: list[tuple[str, str]]) -> list[str]:
     """Deterministic (non-LLM) matching of a free-text query against (id, display_text)
     candidates: a near-exact substring match wins outright, otherwise the candidate(s) with
