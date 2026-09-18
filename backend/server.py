@@ -1031,7 +1031,7 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
 
     # Build candidate pool: kb_chunks always, plus extras when scope=='all'
     candidates: List[dict] = []
-    forced_ids: set = set()  # candidate ids guaranteed into `top` regardless of score
+    forced: set = set()  # id() of candidate dicts guaranteed into `top` regardless of score
     kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
     # Map: doc_id → list of sibling chunks (ordered by chunk_index) — used for doc expansion
     doc_siblings: dict = {}
@@ -1100,8 +1100,8 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
             query_low = query.lower()
             named_coll_ids = {c["id"] for c in colls if (c.get("name") or "").strip() and c["name"].strip().lower() in query_low}
             if named_coll_ids:
-                forced_ids.update(
-                    c["meta"]["id"] for c in candidates
+                forced.update(
+                    id(c) for c in candidates
                     if c.get("source") == "collection_item" and c["meta"].get("collection_id") in named_coll_ids
                 )
         vet_report_docs = await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(500)
@@ -1118,6 +1118,24 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                 "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
                 "embedding": None,
             })
+
+    # A query naming a specific month+year (e.g. "luglio 2026") should surface any
+    # candidate whose text literally contains that same month+year - one specific monthly
+    # data point (e.g. one of twelve monthly bills) can score just below other same-topic
+    # candidates and fall outside `limit`, the same structural gap the named-list force-
+    # include above addresses. Runs unconditionally (not just scope=='all') since kb_chunks
+    # - where a monthly document most likely lives - are always in the candidate pool.
+    _IT_MONTHS_LOW = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+                       "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+    query_low_full = query.lower()
+    date_month = next((m for m in _IT_MONTHS_LOW if m in query_low_full), None)
+    date_year_m = _re.search(r"\b(19|20)\d{2}\b", query_low_full)
+    if date_month and date_year_m:
+        date_year = date_year_m.group(0)
+        for c in candidates:
+            ctext_low = c["text"].lower()
+            if date_month in ctext_low and date_year in ctext_low:
+                forced.add(id(c))
 
     # Compute embeddings for all candidates (semantic scoring)
     if q_emb is not None:
@@ -1156,9 +1174,10 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
         scored.append((score, sem, kh, c))
 
     # Keep chunks that have EITHER decent semantic score OR at least one keyword match,
-    # OR are force-included (a named list's items - see forced_ids above).
+    # OR are force-included (a named list's items, or a candidate matching a month+year
+    # named in the query - see `forced` above).
     def _is_forced(s) -> bool:
-        return (s[3].get("meta") or {}).get("id") in forced_ids
+        return id(s[3]) in forced
 
     scored = [s for s in scored if s[1] >= 0.20 or s[2] >= 1 or _is_forced(s)]
     forced_scored = [s for s in scored if _is_forced(s)]
