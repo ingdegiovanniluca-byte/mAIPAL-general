@@ -38,8 +38,8 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
     """Asks the LLM to classify a free-text request into a structured intent, given the
     user's actual lists and their field schemas. Returns
     {"op": ..., "collection_id": ... | None, "item_query": "...", "sub_item_query": "...",
-    "fields": {...}}. Never invents a collection_id outside the given catalog (validated by
-    the caller, not here)."""
+    "fields": {...}, "sub_items": [...]}. Never invents a collection_id outside the given
+    catalog (validated by the caller, not here)."""
     catalog_desc = json.dumps([
         {
             "id": c["id"], "name": c["name"],
@@ -54,12 +54,17 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
         "Campo, opzionale, es. una persona iscritta a una lezione). "
         f"Liste disponibili dell'utente (usa SOLO questi id, non inventarne altri):\n{catalog_desc}\n\n"
         "Determina quale operazione l'utente vuole fare, una tra:\n"
-        "- add_item: aggiungere un nuovo Campo a una lista (es. un nuovo cliente, un nuovo prodotto)\n"
+        "- add_item: aggiungere un nuovo Campo a una lista (es. un nuovo cliente, un nuovo prodotto). Se la stessa "
+        "richiesta chiede ANCHE di popolare il nuovo Campo con uno o più Elementi (es. 'crea la lezione di pilates "
+        "del martedì mattina e aggiungi utente1, utente2 e utente3'), includi TUTTI quegli elementi in 'sub_items' "
+        "nella stessa risposta - non servono richieste separate.\n"
         "- delete_item: eliminare UN Campo esistente specifico\n"
         "- update_item: modificare i valori di un Campo esistente\n"
         "- clear_items: eliminare TUTTI i Campi di una lista (l'utente dice esplicitamente 'tutti/tutte/tutto/svuota "
         "la lista', non un elemento specifico)\n"
-        "- add_sub_item: aggiungere un nuovo Elemento annidato dentro un Campo esistente\n"
+        "- add_sub_item: aggiungere uno o più nuovi Elementi dentro un Campo GIÀ esistente. Se l'utente nomina PIÙ "
+        "elementi da aggiungere (es. 'aggiungi utente1, utente2 e utente3 alla lezione di pilates del martedì'), "
+        "metti UN oggetto per ciascuno in 'sub_items' (non usare 'fields' per uno solo e perdere gli altri).\n"
         "- delete_sub_item: eliminare UN Elemento annidato specifico da un Campo\n"
         "- update_sub_item: modificare i valori di un Elemento annidato\n"
         "- clear_sub_items: eliminare TUTTI gli Elementi annidati di un Campo (l'utente dice esplicitamente "
@@ -72,10 +77,12 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
         '{"op": "...", "collection_id": "id della lista scelta dal catalogo, o null se non sei sicuro di quale lista", '
         '"item_query": "testo breve che identifica il Campo bersaglio (es. nome cliente, nome lezione), vuoto se non applicabile", '
         '"sub_item_query": "testo breve che identifica l\'Elemento annidato bersaglio, vuoto se non applicabile", '
-        '"fields": {"key del campo dallo schema": "valore"}}. '
-        "Per 'fields' usa ESATTAMENTE la 'key' (non la 'label') definita nello schema della lista scelta "
-        "(campo_fields per add_item/update_item, elemento_fields per add_sub_item/update_sub_item). Includi in "
-        "'fields' SOLO i valori esplicitamente forniti dall'utente, non inventare dati."
+        '"fields": {"key del campo dallo schema": "valore"}, '
+        '"sub_items": [{"key del campo elemento dallo schema": "valore"}, ...]}. '
+        "Per 'fields' e per ogni oggetto di 'sub_items' usa ESATTAMENTE la 'key' (non la 'label') definita nello "
+        "schema della lista scelta (campo_fields per 'fields' di add_item/update_item, elemento_fields per 'fields' "
+        "di add_sub_item/update_sub_item e per ogni oggetto di 'sub_items'). Includi SOLO i valori esplicitamente "
+        "forniti dall'utente, non inventare dati. Ometti 'sub_items' (lista vuota) se non applicabile."
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     resp = await client.chat.completions.create(
@@ -88,12 +95,15 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
     if not match:
         raise ValueError("Nessun JSON nella risposta del modello")
     parsed = json.loads(match.group(0))
+    raw_sub_items = parsed.get("sub_items")
+    sub_items = [s for s in raw_sub_items if isinstance(s, dict)] if isinstance(raw_sub_items, list) else []
     return {
         "op": parsed.get("op"),
         "collection_id": parsed.get("collection_id") or None,
         "item_query": (parsed.get("item_query") or "").strip(),
         "sub_item_query": (parsed.get("sub_item_query") or "").strip(),
         "fields": parsed.get("fields") if isinstance(parsed.get("fields"), dict) else {},
+        "sub_items": sub_items,
     }
 
 

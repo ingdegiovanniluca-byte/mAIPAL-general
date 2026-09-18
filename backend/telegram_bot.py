@@ -496,7 +496,7 @@ async def _cmd_list_update(update: Update, ctx):
 
 async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None, collection_id=None,
                                  item_id=None, sub_item_id=None, fields=None, item_query=None, sub_item_query=None,
-                                 confirm=False):
+                                 confirm=False, sub_items=None):
     from server import _execute_list_update
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -505,6 +505,7 @@ async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None
         res = await _execute_list_update(
             current, content, op=op, collection_id=collection_id, item_id=item_id, sub_item_id=sub_item_id,
             fields=fields, item_query=item_query, sub_item_query=sub_item_query, confirm=confirm,
+            new_sub_items=sub_items,
         )
     except Exception as e:
         logger.exception("tg list update failed")
@@ -579,7 +580,8 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto, rifai /lista.")
             return
         kwargs = dict(op=pctx.get("op"), collection_id=pctx.get("collection_id"), item_id=pctx.get("item_id"),
-                      fields=pctx.get("fields"), item_query=pctx.get("item_query"), sub_item_query=pctx.get("sub_item_query"))
+                      fields=pctx.get("fields"), item_query=pctx.get("item_query"), sub_item_query=pctx.get("sub_item_query"),
+                      sub_items=pctx.get("sub_items"))
         if data.startswith("lstc:"): kwargs["collection_id"] = target_id
         elif data.startswith("lsti:"): kwargs["item_id"] = target_id
         else: kwargs["sub_item_id"] = target_id

@@ -249,6 +249,9 @@ class ListUpdatePayload(BaseModel):
     fields: Optional[dict] = None
     item_query: Optional[str] = None
     sub_item_query: Optional[str] = None
+    # Multiple new nested Elementi to create at once (add_item/add_sub_item), e.g. several
+    # people enrolled in one lesson in a single request.
+    sub_items: Optional[List[dict]] = None
     # Set on the follow-up call confirming a clear_items/clear_sub_items bulk delete.
     confirm: bool = False
 
@@ -1766,9 +1769,13 @@ async def list_collections(current: User = Depends(get_current_user)):
 async def create_collection(payload: CollectionCreatePayload, current: User = Depends(get_current_user)):
     if not payload.fields:
         raise HTTPException(status_code=400, detail="Definisci almeno un campo per la lista")
+    name = payload.name.strip() or "Nuova lista"
+    existing = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(500)
+    if any((e.get("name") or "").strip().lower() == name.lower() for e in existing):
+        raise HTTPException(status_code=400, detail=f"Esiste già una lista chiamata \"{name}\".")
     doc = {
         "id": f"coll_{uuid.uuid4().hex[:12]}",
-        "name": payload.name.strip() or "Nuova lista",
+        "name": name,
         "icon": payload.icon,
         "fields": [f.model_dump() for f in payload.fields],
         "sub_item_fields": [f.model_dump() for f in payload.sub_item_fields],
@@ -1850,6 +1857,15 @@ async def create_collection_item(collection_id: str, payload: CollectionItemPayl
     coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    # The first field is the item's display "name" convention (used everywhere else, e.g.
+    # itemLabel in CollectionsPage.jsx) - two items sharing it would be indistinguishable.
+    name_field = (coll.get("fields") or [None])[0]
+    if name_field:
+        new_val = str(payload.data.get(name_field["key"]) or "").strip().lower()
+        if new_val:
+            existing = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "data": 1}).to_list(2000)
+            if any(str((e.get("data") or {}).get(name_field["key"]) or "").strip().lower() == new_val for e in existing):
+                raise HTTPException(status_code=400, detail=f"Esiste già un elemento con {name_field['label']} \"{payload.data.get(name_field['key'])}\" in questa lista.")
     doc = {
         "id": f"item_{uuid.uuid4().hex[:12]}",
         "collection_id": collection_id,
@@ -1908,6 +1924,13 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
     item = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="Campo non trovato")
+    name_field = (coll.get("sub_item_fields") or [None])[0]
+    if name_field:
+        new_val = str(payload.data.get(name_field["key"]) or "").strip().lower()
+        if new_val:
+            existing = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "data": 1}).to_list(500)
+            if any(str((e.get("data") or {}).get(name_field["key"]) or "").strip().lower() == new_val for e in existing):
+                raise HTTPException(status_code=400, detail=f"Esiste già un elemento con {name_field['label']} \"{payload.data.get(name_field['key'])}\" in questo campo.")
     doc = {
         "id": f"sub_{uuid.uuid4().hex[:12]}",
         "collection_id": collection_id,
@@ -1959,6 +1982,7 @@ async def update_list_via_text(payload: ListUpdatePayload, current: User = Depen
         current, payload.text, op=payload.op, collection_id=payload.collection_id,
         item_id=payload.item_id, sub_item_id=payload.sub_item_id, fields=payload.fields,
         item_query=payload.item_query, sub_item_query=payload.sub_item_query, confirm=payload.confirm,
+        new_sub_items=payload.sub_items,
     )
 
 
@@ -1966,6 +1990,7 @@ async def _execute_list_update(
     current: User, text: str, op: Optional[str] = None, collection_id: Optional[str] = None,
     item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
     item_query: Optional[str] = None, sub_item_query: Optional[str] = None, confirm: bool = False,
+    new_sub_items: Optional[List[dict]] = None,
 ) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
 
@@ -2004,6 +2029,7 @@ async def _execute_list_update(
         item_query = interpreted["item_query"]
         sub_item_query = interpreted["sub_item_query"]
         fields = interpreted["fields"]
+        new_sub_items = interpreted["sub_items"]
 
     if op not in lu.VALID_OPS:
         raise HTTPException(status_code=400, detail="Non ho capito che tipo di modifica vuoi fare a una lista.")
@@ -2011,7 +2037,7 @@ async def _execute_list_update(
     if not collection_id or collection_id not in coll_by_id:
         return {
             "status": "ambiguous_list", "op": op, "fields": fields or {}, "item_query": item_query,
-            "sub_item_query": sub_item_query, "text": text,
+            "sub_item_query": sub_item_query, "text": text, "sub_items": new_sub_items or [],
             "candidates": [{"collection_id": c["id"], "name": c["name"]} for c in colls],
         }
 
@@ -2033,6 +2059,7 @@ async def _execute_list_update(
                 return {
                     "status": "ambiguous_item", "collection_id": collection_id, "op": op, "fields": fields or {},
                     "item_query": item_query, "sub_item_query": sub_item_query, "text": text,
+                    "sub_items": new_sub_items or [],
                     "candidates": [{"item_id": iid, "label": lu.item_display(by_id[iid])} for iid in ids],
                 }
             item = next(i for i in items if i["id"] == ids[0])
@@ -2054,6 +2081,7 @@ async def _execute_list_update(
                     return {
                         "status": "ambiguous_sub_item", "collection_id": collection_id, "item_id": item["id"], "op": op,
                         "fields": fields or {}, "item_query": item_query, "sub_item_query": sub_item_query, "text": text,
+                        "sub_items": new_sub_items or [],
                         "candidates": [{"sub_item_id": sid, "label": lu.item_display(by_id[sid])} for sid in ids],
                     }
                 sub_item = next(s for s in sub_items if s["id"] == ids[0])
@@ -2082,11 +2110,25 @@ async def _execute_list_update(
     else:
         norm_fields = {}
 
+    # Several new Elementi at once (e.g. "aggiungi utente1, utente2 e utente3 alla lezione..."):
+    # only relevant for add_item (populate the new Campo right away) and add_sub_item.
+    norm_new_sub_items: List[dict] = []
+    if op in ("add_item", "add_sub_item") and new_sub_items:
+        for s in new_sub_items:
+            nf = lu.normalize_fields(s or {}, coll.get("sub_item_fields", []))
+            if nf:
+                norm_new_sub_items.append(nf)
+
     if op == "add_item":
         if not norm_fields:
             raise HTTPException(status_code=400, detail="Non ho trovato nessun dato da salvare per il nuovo elemento.")
         created = await create_collection_item(collection_id, CollectionItemPayload(data=norm_fields), current)
-        summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{coll['name']}\"."
+        sub_created = [await create_sub_item(collection_id, created["id"], CollectionSubItemPayload(data=e), current) for e in norm_new_sub_items]
+        if sub_created:
+            names = ", ".join(f"\"{lu.item_display(c)}\"" for c in sub_created)
+            summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{coll['name']}\" con {len(sub_created)} elementi: {names}."
+        else:
+            summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{coll['name']}\"."
     elif op == "delete_item":
         await delete_collection_item(collection_id, item["id"], current)
         summary = f"Ho rimosso \"{lu.item_display(item)}\" da \"{coll['name']}\"."
@@ -2100,10 +2142,14 @@ async def _execute_list_update(
         updated = await update_collection_item(collection_id, item["id"], CollectionItemPayload(data=merged), current)
         summary = f"Ho aggiornato \"{lu.item_display(updated)}\" in \"{coll['name']}\"."
     elif op == "add_sub_item":
-        if not norm_fields:
+        entries = list(norm_new_sub_items)
+        if norm_fields:
+            entries.append(norm_fields)
+        if not entries:
             raise HTTPException(status_code=400, detail="Non ho trovato nessun dato da salvare per il nuovo elemento.")
-        created = await create_sub_item(collection_id, item["id"], CollectionSubItemPayload(data=norm_fields), current)
-        summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{lu.item_display(item)}\" ({coll['name']})."
+        created_list = [await create_sub_item(collection_id, item["id"], CollectionSubItemPayload(data=e), current) for e in entries]
+        names = ", ".join(f"\"{lu.item_display(c)}\"" for c in created_list)
+        summary = f"Ho aggiunto {names} a \"{lu.item_display(item)}\" ({coll['name']})."
     elif op == "delete_sub_item":
         await delete_sub_item(collection_id, item["id"], sub_item["id"], current)
         summary = f"Ho rimosso \"{lu.item_display(sub_item)}\" da \"{lu.item_display(item)}\" ({coll['name']})."
