@@ -264,6 +264,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     background-attachment: local;
 }
 
+/* Saved diary entries reuse the same ruled paper as the composer, plus a warm
+   margin line (the template's own accent-orange, at low opacity) so a read-only
+   entry still reads as an actual diary page rather than a generic content card. */
+.diary-page-lines {
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent 27px,
+        rgba(255, 255, 255, 0.10) 28px,
+        transparent 29px
+    );
+}
+.diary-margin-line {
+    position: relative;
+    padding-left: 1.25rem;
+}
+.diary-margin-line::before {
+    content: "";
+    position: absolute;
+    top: 0.1rem;
+    bottom: 0.1rem;
+    left: 0.375rem;
+    width: 1px;
+    background: rgba(221, 119, 47, 0.35);
+}
+
 /* Liquid Glass — full-page animated color wave (.liquid-page-bg) + frosted glass
    surfaces (.liquid-glass-btn, .liquid-glass-panel) that reveal it through
    backdrop-filter blur, inspired by Apple's Liquid Glass material. Used on the login

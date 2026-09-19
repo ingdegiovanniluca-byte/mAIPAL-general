@@ -3,7 +3,7 @@ import { api, API } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook, Eye, EyeOff, CalendarDays, ChevronUp, ChevronDown, Tag } from "lucide-react";
+import { BookOpen, Trash2, Sparkles, Mic, MicOff, Search, X, TrendingUp, Star, Flame, BarChart3, Notebook, Eye, EyeOff, CalendarDays, ChevronUp, ChevronDown, Tag, Smile } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 const MOODS = ["felice", "grato", "energico", "riflessivo", "neutro", "stanco", "stressato"];
@@ -220,7 +220,7 @@ export default function JournalPage() {
             data-testid="composer-toggle"
             onClick={() => setComposerOpen((v) => !v)}
             title={composerOpen ? "Chiudi la sezione per scrivere" : "Apri la sezione per scrivere"}
-            className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10"
+            className="liquid-glass-btn p-1.5 rounded-full text-white/80 hover:text-white"
           >
             {composerOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
@@ -240,7 +240,7 @@ export default function JournalPage() {
                   data-testid="journal-mic-btn"
                   onClick={recording ? stopRec : startRec}
                   disabled={transcribing}
-                  className={`p-2 rounded-full transition-colors duration-150 inline-flex items-center gap-1.5 ${recording ? "bg-white/30 text-white animate-pulse" : "hover:bg-white/15"}`}
+                  className={`liquid-glass-btn p-2 rounded-full transition-colors duration-150 inline-flex items-center gap-1.5 ${recording ? "text-white animate-pulse" : ""}`}
                   title={recording ? "Ferma registrazione" : "Registra vocale"}
                 >
                   {recording ? <MicOff size={16} /> : <Mic size={16} />}
@@ -250,7 +250,7 @@ export default function JournalPage() {
                 </button>
               </div>
               <button data-testid="journal-save" onClick={save} disabled={saving || !text.trim() || transcribing}
-                      className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white/10 text-sm">
+                      className="liquid-glass-btn inline-flex items-center gap-2 px-5 py-2 rounded-full font-medium disabled:opacity-50 text-sm">
                 <Sparkles size={14} /> {saving ? "mAIPAL sta scrivendo…" : "Salva nel diario"}
               </button>
             </div>
@@ -272,7 +272,7 @@ export default function JournalPage() {
                 data-testid={`period-${p.key}`}
                 onClick={() => setPeriod(p.key)}
                 style={period === p.key ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${period === p.key ? "" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+                className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${period === p.key ? "" : "text-white/70"}`}
               >
                 {p.label}
               </button>
@@ -285,6 +285,7 @@ export default function JournalPage() {
                 data-testid="period-custom-from"
                 value={customFrom}
                 onChange={(e) => setCustomFrom(e.target.value)}
+                style={{ fontFamily: "'Poppins', sans-serif" }}
                 className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
               />
               <span className="text-white/40 text-xs">–</span>
@@ -293,6 +294,7 @@ export default function JournalPage() {
                 data-testid="period-custom-to"
                 value={customTo}
                 onChange={(e) => setCustomTo(e.target.value)}
+                style={{ fontFamily: "'Poppins', sans-serif" }}
                 className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
               />
             </div>
@@ -325,13 +327,13 @@ export default function JournalPage() {
               data-testid="fav-filter-off"
               onClick={() => setFavOnly(false)}
               style={!favOnly ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
+              className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "text-white/70"}`}
             >tutti</button>
             <button
               data-testid="fav-filter-on"
               onClick={() => setFavOnly(true)}
               style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "bg-white/5  text-white/60 hover:"}`}
+              className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "text-white/70"}`}
               title="Solo giornate memorabili"
             >
               <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
@@ -341,14 +343,14 @@ export default function JournalPage() {
 
         {/* Umore: multi-selezione - click per aggiungere/togliere ciascun umore dal filtro */}
         <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t">
-          <span className="kicker text-white/50 mr-1">· umore</span>
+          <span className="kicker text-white/50 mr-1 inline-flex items-center gap-1"><Smile size={11} /> umore</span>
           {MOODS.map((m) => (
             <button
               key={m}
               data-testid={`mood-filter-${m}`}
               onClick={() => toggleMoodFilter(m)}
               style={moodFilters.includes(m) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${moodFilters.includes(m) ? "" : "bg-white/5  text-white/60 hover:"}`}
+              className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${moodFilters.includes(m) ? "" : "text-white/70"}`}
               title={m}
             >
               <span>{MOOD_EMOJI[m]}</span> {m}
@@ -369,7 +371,7 @@ export default function JournalPage() {
                 data-testid={`topic-filter-${t}`}
                 onClick={() => toggleTopicFilter(t)}
                 style={topicFilters.includes(t) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${topicFilters.includes(t) ? "" : "bg-white/5  text-white/60 hover:"}`}
+                className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${topicFilters.includes(t) ? "" : "text-white/70"}`}
               >
                 {t}
               </button>
@@ -386,43 +388,34 @@ export default function JournalPage() {
         <div className="kicker">· voci precedenti · {filteredEntries.length}</div>
         {filteredEntries.length === 0 && <div className="text-white/60 text-sm">Nessuna voce trovata con questi filtri.</div>}
         {filteredEntries.map((e) => (
-          <div key={e.id} className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm" data-testid="journal-entry">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div key={e.id} className="p-6 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm" data-testid="journal-entry">
+            <div className="flex items-start justify-between gap-3 flex-wrap pb-3 border-b border-white/15">
               <div>
-                <div className="kicker inline-flex items-center gap-1.5">
+                <div className="font-serif-italic text-lg text-white/90 inline-flex items-center gap-2">
                   <span>{MOOD_EMOJI[e.mood] || "📝"}</span> {formatDiaryDate(e.date)}
                 </div>
-                <div className="font-semibold text-lg mt-1">{e.title || "Diario"}</div>
+                <div className="font-semibold text-base text-white mt-1">{e.title || "Diario"}</div>
               </div>
               <div className="flex items-center gap-1">
                 <button
                   data-testid="journal-fav"
                   onClick={() => toggleFav(e.id, !!e.favorite)}
                   title={e.favorite ? "Rimuovi da giornate memorabili" : "Segna come giornata memorabile"}
-                  className={`p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`}
+                  className={`liquid-glass-btn p-2 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-400" : "text-white/60"}`}
                 >
                   <Star size={16} className={e.favorite ? "fill-current" : ""} />
                 </button>
-                <button data-testid="journal-delete" onClick={() => del(e.id)} className="p-2 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+                <button data-testid="journal-delete" onClick={() => del(e.id)} className="liquid-glass-btn p-2 rounded-full text-white/60 hover:text-red-300"><Trash2 size={14} /></button>
               </div>
             </div>
 
-            <div className="mt-4 prose-answer whitespace-pre-wrap text-[15px] text-white">{e.cleaned_text}</div>
+            <div className="diary-page-lines diary-margin-line mt-3 pt-1 pb-1 prose-answer whitespace-pre-wrap text-[15px] text-white">{e.cleaned_text}</div>
 
             {(e.tags || []).length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {e.tags.map((t, i) => (
                   <span key={i} className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-white/10 text-white/60">{t}</span>
                 ))}
-              </div>
-            )}
-
-            {(e.highlights || []).length > 0 && (
-              <div className="mt-4 pt-4 border-t ">
-                <div className="kicker mb-2">· momenti chiave</div>
-                <ul className="text-sm text-white/70 space-y-1">
-                  {(e.highlights || []).map((h, i) => (<li key={i}>· {h}</li>))}
-                </ul>
               </div>
             )}
           </div>
@@ -465,13 +458,14 @@ export default function JournalPage() {
           </div>
           <div className="flex items-center gap-2">
             {showTrend && (
-              <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="trend-range">
+              <div className="flex items-center gap-1" data-testid="trend-range">
                 {[7, 30, 90].map((d) => (
                   <button
                     key={d}
                     data-testid={`trend-${d}`}
                     onClick={() => setTrendDays(d)}
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "bg-[#CECAD0] text-white shadow-sm" : "text-white/60 hover:text-white"}`}
+                    style={trendDays === d ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                    className={`liquid-glass-btn px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "" : "text-white/70"}`}
                   >
                     {d}g
                   </button>
@@ -482,7 +476,7 @@ export default function JournalPage() {
               data-testid="trend-toggle"
               onClick={() => setShowTrend((v) => !v)}
               title={showTrend ? "Nascondi trend" : "Mostra trend"}
-              className="p-1.5 rounded-full text-white/50 hover:text-white hover:bg-white/10"
+              className="liquid-glass-btn p-1.5 rounded-full text-white/70 hover:text-white"
             >
               {showTrend ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
