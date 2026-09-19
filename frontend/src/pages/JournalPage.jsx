@@ -24,6 +24,15 @@ const PERIODS = [
   { key: "custom", label: "personalizzato" },
 ];
 
+// Icon-only filter category selector, styled like the chat page's action icon bar:
+// each icon expands/collapses its own section below instead of carrying a label.
+const FILTER_ICONS = [
+  { key: "period", icon: <CalendarDays size={15} />, title: "Periodo", color: "#DD772F" },
+  { key: "mood", icon: <Smile size={15} />, title: "Umore", color: "#6D6181" },
+  { key: "search", icon: <Search size={15} />, title: "Cerca", color: "#7C6A7D" },
+  { key: "topic", icon: <Tag size={15} />, title: "Argomento", color: "#8E2E11" },
+];
+
 const toISODate = (d) => d.toISOString().slice(0, 10);
 
 const IT_WEEKDAYS_LONG = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
@@ -53,6 +62,14 @@ export default function JournalPage() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [composerOpen, setComposerOpen] = useState(true);
+  // Periodo and umore stay open by default (the "main" filters); ricerca e argomento
+  // are tucked behind their icon until clicked, like the chat page's action bar.
+  const [expandedFilters, setExpandedFilters] = useState(() => new Set(["period", "mood"]));
+  const toggleFilterSection = (key) => setExpandedFilters((cur) => {
+    const next = new Set(cur);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
 
   // Voice recording
   const [recording, setRecording] = useState(false);
@@ -258,124 +275,163 @@ export default function JournalPage() {
         )}
       </div>
 
-      {/* Filters (periodo, ricerca, preferiti, umore, argomento) - sopra al riquadro di lettura */}
+      {/* Filters (periodo, ricerca, preferiti, umore, argomento) - sopra al riquadro di lettura.
+          La riga di icone sceglie QUALE filtro mostrare (come la barra azioni della chat):
+          periodo e umore restano aperti di default, gli altri si aprono al click. */}
       <div className="mt-8 p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm space-y-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-1.5 text-white/70">
-            <CalendarDays size={14} />
-            <span className="kicker">· periodo</span>
-          </div>
-          <div className="flex items-center gap-1 flex-wrap">
+        <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
+          {FILTER_ICONS.map((f) => {
+            if (f.key === "topic" && allTopics.length === 0) return null;
+            const on = expandedFilters.has(f.key);
+            return (
+              <button
+                key={f.key}
+                data-testid={`filter-toggle-${f.key}`}
+                onClick={() => toggleFilterSection(f.key)}
+                title={f.title}
+                aria-label={f.title}
+                style={{
+                  backgroundColor: on ? f.color : undefined,
+                  color: "#CECAD0",
+                  opacity: on ? 1 : 0.5,
+                  borderColor: on ? f.color : "rgba(206,202,208,0.25)",
+                }}
+                className="liquid-glass-btn h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100"
+              >
+                {f.icon}
+              </button>
+            );
+          })}
+          <span className="w-px h-5 bg-white/15 mx-1" />
+          <button
+            data-testid="fav-filter-toggle"
+            onClick={() => setFavOnly((v) => !v)}
+            title="Solo giornate memorabili"
+            aria-label="Solo giornate memorabili"
+            style={{
+              backgroundColor: favOnly ? "#F59E0B" : undefined,
+              color: "#CECAD0",
+              opacity: favOnly ? 1 : 0.5,
+              borderColor: favOnly ? "#F59E0B" : "rgba(206,202,208,0.25)",
+            }}
+            className="liquid-glass-btn h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100"
+          >
+            <Star size={15} className={favOnly ? "fill-current" : ""} />
+          </button>
+        </div>
+
+        {expandedFilters.has("period") && (
+          <div className="flex items-center gap-1 flex-wrap pt-3 border-t">
             {PERIODS.map((p) => (
               <button
                 key={p.key}
                 data-testid={`period-${p.key}`}
                 onClick={() => setPeriod(p.key)}
-                style={period === p.key ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${period === p.key ? "" : "text-white/70"}`}
+                style={{
+                  backgroundColor: period === p.key ? "#DD772F" : undefined,
+                  opacity: period === p.key ? 1 : 0.5,
+                  borderColor: period === p.key ? "#DD772F" : "rgba(206,202,208,0.25)",
+                }}
+                className="liquid-glass-btn px-3 py-1.5 rounded-full border text-[10px] font-mono-tight uppercase tracking-widest text-white hover:opacity-100 transition-opacity"
               >
                 {p.label}
               </button>
             ))}
-          </div>
-          {period === "custom" && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <input
-                type="date"
-                data-testid="period-custom-from"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                style={{ fontFamily: "'Poppins', sans-serif" }}
-                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-              />
-              <span className="text-white/40 text-xs">–</span>
-              <input
-                type="date"
-                data-testid="period-custom-to"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                style={{ fontFamily: "'Poppins', sans-serif" }}
-                className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3 flex-wrap pt-3 border-t">
-          <div className="relative flex-1 min-w-[220px]">
-            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
-            <Input
-              data-testid="journal-search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Cerca nel diario…"
-              className="pl-10 pr-10 h-10 rounded-full bg-white/10"
-            />
-            {q && (
-              <button
-                data-testid="journal-search-clear"
-                onClick={() => setQ("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"
-              >
-                <X size={14} />
-              </button>
+            {period === "custom" && (
+              <div className="flex items-center gap-2 flex-wrap ml-1">
+                <input
+                  type="date"
+                  data-testid="period-custom-from"
+                  value={customFrom}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  style={{ fontFamily: "'Poppins', sans-serif" }}
+                  className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                />
+                <span className="text-white/40 text-xs">–</span>
+                <input
+                  type="date"
+                  data-testid="period-custom-to"
+                  value={customTo}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  style={{ fontFamily: "'Poppins', sans-serif" }}
+                  className="bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                />
+              </div>
             )}
           </div>
-          <div className="flex items-center gap-1 flex-wrap">
-            <button
-              key="all"
-              data-testid="fav-filter-off"
-              onClick={() => setFavOnly(false)}
-              style={!favOnly ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-              className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${!favOnly ? "" : "text-white/70"}`}
-            >tutti</button>
-            <button
-              data-testid="fav-filter-on"
-              onClick={() => setFavOnly(true)}
-              style={favOnly ? { backgroundColor: "#F59E0B", color: "#fff", border: "none" } : {}}
-              className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${favOnly ? "" : "text-white/70"}`}
-              title="Solo giornate memorabili"
-            >
-              <Star size={11} className={favOnly ? "fill-current" : ""} /> preferiti
-            </button>
-          </div>
-        </div>
+        )}
 
-        {/* Umore: multi-selezione - click per aggiungere/togliere ciascun umore dal filtro */}
-        <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t">
-          <span className="kicker text-white/50 mr-1 inline-flex items-center gap-1"><Smile size={11} /> umore</span>
-          {MOODS.map((m) => (
-            <button
-              key={m}
-              data-testid={`mood-filter-${m}`}
-              onClick={() => toggleMoodFilter(m)}
-              style={moodFilters.includes(m) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-              className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${moodFilters.includes(m) ? "" : "text-white/70"}`}
-              title={m}
-            >
-              <span>{MOOD_EMOJI[m]}</span> {m}
-            </button>
-          ))}
-          {moodFilters.length > 0 && (
-            <button onClick={() => setMoodFilters([])} className="text-[10px] text-white/40 hover:text-white/70 px-1.5">✕ azzera</button>
-          )}
-        </div>
-
-        {/* Argomento: multi-selezione sui tag rilevati dalle voci di diario */}
-        {allTopics.length > 0 && (
+        {expandedFilters.has("mood") && (
           <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t">
-            <span className="kicker text-white/50 mr-1 inline-flex items-center gap-1"><Tag size={11} /> argomento</span>
-            {allTopics.map((t) => (
-              <button
-                key={t}
-                data-testid={`topic-filter-${t}`}
-                onClick={() => toggleTopicFilter(t)}
-                style={topicFilters.includes(t) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                className={`liquid-glass-btn px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest ${topicFilters.includes(t) ? "" : "text-white/70"}`}
-              >
-                {t}
-              </button>
-            ))}
+            {MOODS.map((m) => {
+              const on = moodFilters.includes(m);
+              return (
+                <button
+                  key={m}
+                  data-testid={`mood-filter-${m}`}
+                  onClick={() => toggleMoodFilter(m)}
+                  style={{
+                    backgroundColor: on ? "#6D6181" : undefined,
+                    opacity: on ? 1 : 0.5,
+                    borderColor: on ? "#6D6181" : "rgba(206,202,208,0.25)",
+                  }}
+                  className="liquid-glass-btn px-3 py-1.5 rounded-full border text-[10px] font-mono-tight uppercase tracking-widest text-white inline-flex items-center gap-1 hover:opacity-100 transition-opacity"
+                  title={m}
+                >
+                  <span>{MOOD_EMOJI[m]}</span> {m}
+                </button>
+              );
+            })}
+            {moodFilters.length > 0 && (
+              <button onClick={() => setMoodFilters([])} className="text-[10px] text-white/40 hover:text-white/70 px-1.5">✕ azzera</button>
+            )}
+          </div>
+        )}
+
+        {expandedFilters.has("search") && (
+          <div className="pt-3 border-t">
+            <div className="relative max-w-sm">
+              <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
+              <Input
+                data-testid="journal-search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Cerca nel diario…"
+                className="pl-10 pr-10 h-10 rounded-full bg-white/10"
+              />
+              {q && (
+                <button
+                  data-testid="journal-search-clear"
+                  onClick={() => setQ("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {expandedFilters.has("topic") && allTopics.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t">
+            {allTopics.map((t) => {
+              const on = topicFilters.includes(t);
+              return (
+                <button
+                  key={t}
+                  data-testid={`topic-filter-${t}`}
+                  onClick={() => toggleTopicFilter(t)}
+                  style={{
+                    backgroundColor: on ? "#8E2E11" : undefined,
+                    opacity: on ? 1 : 0.5,
+                    borderColor: on ? "#8E2E11" : "rgba(206,202,208,0.25)",
+                  }}
+                  className="liquid-glass-btn px-3 py-1.5 rounded-full border text-[10px] font-mono-tight uppercase tracking-widest text-white hover:opacity-100 transition-opacity"
+                >
+                  {t}
+                </button>
+              );
+            })}
             {topicFilters.length > 0 && (
               <button onClick={() => setTopicFilters([])} className="text-[10px] text-white/40 hover:text-white/70 px-1.5">✕ azzera</button>
             )}
@@ -464,8 +520,12 @@ export default function JournalPage() {
                     key={d}
                     data-testid={`trend-${d}`}
                     onClick={() => setTrendDays(d)}
-                    style={trendDays === d ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                    className={`liquid-glass-btn px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${trendDays === d ? "" : "text-white/70"}`}
+                    style={{
+                      backgroundColor: trendDays === d ? "#DD772F" : undefined,
+                      opacity: trendDays === d ? 1 : 0.5,
+                      borderColor: trendDays === d ? "#DD772F" : "rgba(206,202,208,0.25)",
+                    }}
+                    className="liquid-glass-btn px-2.5 py-1 rounded-full border text-[10px] font-mono-tight uppercase tracking-widest text-white hover:opacity-100 transition-opacity"
                   >
                     {d}g
                   </button>
