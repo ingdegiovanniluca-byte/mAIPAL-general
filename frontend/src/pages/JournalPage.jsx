@@ -96,7 +96,7 @@ export default function JournalPage() {
   const expandedEntry = entries.find((e) => e.id === expandedId) || null;
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center"><BookOpen size={18} /></div>
         <div>
@@ -154,17 +154,15 @@ export default function JournalPage() {
           const images = (e.images || []).slice(0, 3);
           const subtitle = (e.tags || []).length > 0 ? `Argomenti: ${e.tags.join(", ")}` : "";
           return (
-            <div key={e.id} className="flex items-start gap-3" data-testid="journal-entry">
-              <div className="flex flex-col items-center gap-2 shrink-0 w-20">
-                <div className="w-full rounded-2xl bg-white/10 text-center py-2.5 px-1">
-                  <div className="text-2xl font-bold text-white leading-none">{day}</div>
-                  <div className="text-[10px] uppercase tracking-widest text-white/60 mt-1">{monYear}</div>
-                </div>
+            <div key={e.id} className="flex items-stretch gap-3" data-testid="journal-entry">
+              <div className="flex flex-col items-center justify-center gap-1.5 shrink-0 w-20 rounded-2xl bg-white/10 text-center py-2.5 px-1">
+                <div className="text-2xl font-bold text-white leading-none">{day}</div>
+                <div className="text-[10px] uppercase tracking-widest text-white/60">{monYear}</div>
                 <button
                   data-testid="journal-fav"
                   onClick={() => toggleFav(e.id, !!e.favorite)}
                   title={e.favorite ? "Rimuovi dai preferiti" : "Segna come giornata memorabile"}
-                  className={`liquid-glass-btn p-1.5 rounded-full transition-colors duration-150 ${e.favorite ? "text-amber-400" : "text-white/50"}`}
+                  className={`liquid-glass-btn p-1.5 rounded-full transition-colors duration-150 mt-0.5 ${e.favorite ? "text-amber-400" : "text-white/50"}`}
                 >
                   <Star size={15} className={e.favorite ? "fill-current" : ""} />
                 </button>
