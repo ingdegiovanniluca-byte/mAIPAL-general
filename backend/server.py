@@ -1143,11 +1143,15 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
 
         # "Quali pazienti ho in lista?" style questions need the WHOLE list, not just
         # the fragments that happen to score well against a generic question - no
-        # single item's text closely resembles "quali pazienti ho". If the query
-        # names one of the user's lists directly, force-include ALL of its items
-        # regardless of semantic/keyword score (and regardless of scope).
-        query_low = query.lower()
-        named_coll_ids = {c["id"] for c in colls if (c.get("name") or "").strip() and c["name"].strip().lower() in query_low}
+        # single item's text closely resembles "quali pazienti ho". If the query names
+        # one of the user's lists, force-include ALL of its items regardless of semantic/
+        # keyword score (and regardless of scope). Same fuzzy matcher as "Modifica liste"
+        # (token-overlap, not a strict substring) so plural/singular or extra words in the
+        # question (e.g. "lezione di pilates" vs a list named "Lezioni Pilates") don't
+        # silently miss an otherwise obvious match - this deterministic name-matching,
+        # not an LLM guess, is what decides whether a question gets this exhaustive,
+        # guaranteed-complete answer path instead of the regular fuzzy-scored search.
+        named_coll_ids = set(lu.match_candidates(query, [(c["id"], c["name"]) for c in colls if (c.get("name") or "").strip()]))
         if named_coll_ids:
             for cand in item_candidates:
                 if cand["meta"].get("collection_id") in named_coll_ids:
