@@ -1006,6 +1006,27 @@ def _extract_meta(text: str) -> tuple[str, Optional[dict]]:
     return visible, meta
 
 
+def _clear_cached_embedding(payload: dict, text_fields: set):
+    """retrieve_kb caches a lazily-computed semantic embedding on tasks/todos/list items
+    (see _EMBED_SOURCE_COLLECTIONS below) so it isn't recomputed on every search. If this
+    update touches one of the fields that embedding was computed from, drop the stale
+    cache so the next search recomputes it from the new text."""
+    if any(f in payload for f in text_fields):
+        payload["embedding"] = None
+
+
+# Maps a retrieve_kb candidate "source" to the Mongo collection its document lives in,
+# used to persist a lazily-computed embedding back onto the document itself (see below).
+_EMBED_SOURCE_COLLECTIONS = {
+    "task": db.tasks,
+    "todo": db.todos,
+    "journal": db.journal_entries,
+    "collection_item": db.collection_items,
+    "collection_sub_item": db.collection_sub_items,
+    "vet_report": db.vet_reports,
+}
+
+
 async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb", org_id: Optional[str] = None) -> List[dict]:
     """Hybrid semantic + keyword retrieval over kb_chunks (and tasks/todos/journal if scope='all').
     - Semantic scoring via multilingual MiniLM cosine similarity.
@@ -1066,20 +1087,20 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
             if not txt: continue
             when = t.get("due_date", "") + (f" {t.get('due_time','')}" if t.get("due_time") else "")
             display = f"[Task] {t.get('title','')} — {when} · priorità {t.get('priority','media')}. {t.get('description','') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": None})
+            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": t.get("embedding")})
         todos = await db.todos.find({"user_id": user_id}, {"_id": 0}).to_list(500)
         for td in todos:
             txt_parts = [td.get("title", ""), td.get("description", ""), td.get("notes", "")]
             txt = " · ".join([p for p in txt_parts if p])
             if not txt: continue
             display = f"[To-Do] {td.get('title','')} — stato {td.get('status','da_fare')} ({td.get('completion_percent',0)}%). {td.get('description','') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "todo", "meta": {"id": td.get("id")}, "embedding": None})
+            candidates.append({"text": txt, "display": display, "source": "todo", "meta": {"id": td.get("id")}, "embedding": td.get("embedding")})
         journal_docs = await db.journal_entries.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
         for j in journal_docs:
             txt = (j.get("cleaned_text") or j.get("raw_text") or "").strip()
             if not txt: continue
             display = f"[Diario · {j.get('date','')}] {j.get('title','')} · mood: {j.get('mood','')}. {txt[:400]}".strip()
-            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": None})
+            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": j.get("embedding")})
         vet_report_docs = await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(500)
         for vrp in vet_report_docs:
             txt = (vrp.get("transcript") or "").strip()
@@ -1092,7 +1113,7 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                 "display": display,
                 "source": "vet_report",
                 "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
-                "embedding": None,
+                "embedding": vrp.get("embedding"),
             })
 
     # Liste (Collections): fetched and force-matchable regardless of scope - a query that
@@ -1114,7 +1135,7 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
             if not parts: continue
             txt = " · ".join(parts)
             display = f"[Lista: {coll.get('name', '')}] {txt}"
-            cand = {"text": txt, "display": display, "source": "collection_item", "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": None}
+            cand = {"text": txt, "display": display, "source": "collection_item", "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": it.get("embedding")}
             item_candidates.append(cand)
             item_display_map[it["id"]] = txt
         if scope == "all":
@@ -1171,7 +1192,7 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                     cand = {
                         "text": sub_txt, "display": display, "source": "collection_sub_item",
                         "meta": {"id": s.get("id"), "item_id": s.get("item_id"), "collection_id": s.get("collection_id")},
-                        "embedding": None,
+                        "embedding": s.get("embedding"),
                     }
                     candidates.append(cand)
                     forced.add(id(cand))
@@ -1205,12 +1226,28 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                     await db.kb_chunks.update_one({"chunk_id": c["meta"]["chunk_id"]}, {"$set": {"embedding": e}})
             except Exception:
                 logger.exception("backfill embeddings failed")
+        # Tasks/todos/journal/list items/vet reports never had their embeddings persisted,
+        # so "tutto" search recomputed one for EVERY such record on EVERY query - the
+        # dominant cost that made search noticeably slower as a user's data grew. Cache
+        # them on the source document itself (same pattern as kb_chunks above) so a
+        # record's embedding is computed once and reused; the update endpoints below
+        # clear the cached value whenever the text it was computed from changes.
         non_kb = [c for c in candidates if c["source"] != "kb" and not c.get("embedding")]
         if non_kb:
             try:
                 nk_embs = await emb.embed_texts([c["text"] for c in non_kb])
+                from pymongo import UpdateOne
+                writes_by_source: dict = {}
                 for c, e in zip(non_kb, nk_embs):
                     c["embedding"] = e
+                    doc_id = (c.get("meta") or {}).get("id")
+                    if doc_id and c["source"] in _EMBED_SOURCE_COLLECTIONS:
+                        writes_by_source.setdefault(c["source"], []).append(UpdateOne({"id": doc_id}, {"$set": {"embedding": e}}))
+                for source, ops in writes_by_source.items():
+                    try:
+                        await _EMBED_SOURCE_COLLECTIONS[source].bulk_write(ops, ordered=False)
+                    except Exception:
+                        logger.exception(f"embedding cache write failed for source={source}")
             except Exception:
                 logger.exception("non-kb embed failed")
 
@@ -1697,6 +1734,7 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
     ):
         payload["reminder_msg_sent"] = False
 
+    _clear_cached_embedding(payload, {"title", "description", "notes"})
     await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": payload})
     doc = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     return doc
@@ -1741,6 +1779,7 @@ async def create_todo(payload: TodoUpsert, current: User = Depends(get_current_u
 @api_router.patch("/todos/{todo_id}")
 async def update_todo(todo_id: str, payload: dict, current: User = Depends(get_current_user)):
     payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None)
+    _clear_cached_embedding(payload, {"title", "description", "notes"})
     await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": payload})
     doc = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
     return doc
@@ -1961,7 +2000,7 @@ async def update_collection_item(collection_id: str, item_id: str, payload: Coll
     coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
-    updates = {"data": payload.data}
+    updates = {"data": payload.data, "embedding": None}
     if payload.visibility is not None:
         if payload.visibility == "org" and current.org_id:
             updates["visibility"] = "org"
@@ -2026,7 +2065,7 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     r = await db.collection_sub_items.update_one(
-        {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": payload.data}}
+        {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": payload.data, "embedding": None}}
     )
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
@@ -2971,6 +3010,7 @@ async def task_chat(task_id: str, payload: ContextChatRequest, current: User = D
             meta.pop("due_time")
     q = {"id": task_id, **_editable_query(current)}
     if meta:
+        _clear_cached_embedding(meta, {"title", "description", "notes"})
         await db.tasks.update_one(q, {"$set": meta})
     updated = await db.tasks.find_one(q, {"_id": 0})
     return {"answer": visible, "task": updated}
@@ -2993,6 +3033,7 @@ async def todo_chat(todo_id: str, payload: ContextChatRequest, current: User = D
     visible, meta = _extract_meta(raw)
     visible = visible.replace("```json", "").replace("```", "").strip()
     if meta:
+        _clear_cached_embedding(meta, {"title", "description", "notes"})
         await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": meta})
     updated = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
     return {"answer": visible, "todo": updated}
