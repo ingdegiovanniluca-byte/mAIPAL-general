@@ -162,9 +162,14 @@ async def classify_save_intent(text: str, list_names: list[str]) -> str:
     names_desc = ", ".join(f'"{n}"' for n in list_names[:50])
     system = (
         "Devi classificare una frase in una di due categorie:\n"
-        "- 'list_update': l'utente vuole aggiungere, modificare o rimuovere un elemento specifico "
-        f"in una delle sue liste esistenti ({names_desc}). Es. 'aggiungi Mario alla lista clienti', "
-        "'elimina Utente 2 dalla lezione di pilates del lunedì mattina', 'cambia il telefono di Luca'.\n"
+        "- 'list_update': l'utente vuole aggiungere, modificare o rimuovere uno o PIÙ elementi (anche in blocco/"
+        f"massa) in una delle sue liste esistenti ({names_desc}). Rientra qui anche una richiesta di creare PIÙ "
+        "Campi in un colpo solo, uno per ciascuna voce simile (es. un orario, un giorno, una riga di un documento "
+        "caricato in precedenza) - non serve che l'utente elenchi i valori esatti nel messaggio, può bastare che "
+        "descriva il criterio (es. 'un campo per ogni orario in cui c'è lezione'). Esempi: 'aggiungi Mario alla "
+        "lista clienti', 'elimina Utente 2 dalla lezione di pilates del lunedì mattina', 'cambia il telefono di "
+        "Luca', 'crea nella lista lezioni pilates un campo per ogni giorno e orario in cui è prevista una "
+        "lezione', 'aggiungi un elemento per ciascuna voce dell'elenco che ho caricato'.\n"
         "- 'info_upload': qualunque altra informazione generica da salvare/ricordare (una nota, un documento, "
         "un fatto), che non è un'istruzione di modifica su una lista specifica.\n"
         'Rispondi SOLO con un JSON: {"kind": "list_update"} oppure {"kind": "info_upload"}.'

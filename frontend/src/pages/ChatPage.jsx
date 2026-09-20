@@ -354,7 +354,11 @@ export default function ChatPage() {
         await runListUpdateFor(currentQuestion);
         return;
       }
-      if (!thread) {
+      // Re-classify on every new message, not just the first one in a thread: a user who
+      // uploaded a file (starting an "info_upload" thread) may only ask to act on it - "crea
+      // un campo per ogni orario..." - in a LATER message of that same thread, and that must
+      // still be caught instead of being treated as a plain conversational follow-up.
+      if (!thread || thread.action === "info_upload") {
         try {
           const cls = await api.post("/classify-save-intent", { text: currentQuestion });
           if (cls.data?.kind === "list_update") {
