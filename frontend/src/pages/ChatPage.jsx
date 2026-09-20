@@ -47,6 +47,40 @@ const ACTIONS = [
 const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D" };
 const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D" };
 
+// Diary photos are downscaled/compressed client-side (max ~1600px, JPEG) before being
+// turned into a data URI, both to keep the request small and to stay under the backend's
+// ~2MB-per-image cap without the user having to think about file size.
+const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error("Lettura file fallita"));
+  reader.onload = () => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("Immagine non valida"));
+    img.onload = () => {
+      const maxDim = 1600;
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      let quality = 0.85;
+      let dataUri = canvas.toDataURL("image/jpeg", quality);
+      while (dataUri.length * 0.75 > 2 * 1024 * 1024 && quality > 0.4) {
+        quality -= 0.1;
+        dataUri = canvas.toDataURL("image/jpeg", quality);
+      }
+      resolve(dataUri);
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
+
 export default function ChatPage() {
   const [active, setActive] = useState("info_request");
   const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
@@ -332,9 +366,10 @@ export default function ChatPage() {
       }
     }
 
+    const journalImgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
     if (attachments.length > 0) {
       const kbLine = attachments.filter((a) => a.kb).map((a) => `📎 ${a.name} · ${a.chunks} chunk indicizzati (~${a.chars} caratteri)`).join("\n");
-      const driveLine = attachments.filter((a) => !a.kb).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
+      const driveLine = attachments.filter((a) => !a.kb && !a.journalImage).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
       const parts = [];
       if (kbLine) parts.push(`Allegati caricati nella knowledge base personale:\n${kbLine}`);
       if (driveLine) parts.push(`Allegati caricati su Drive:\n${driveLine}`);
@@ -372,6 +407,7 @@ export default function ChatPage() {
 
     const payload = { action: active, content: currentQuestion };
     if (active === "info_request") payload.filters = { scope };
+    if (active === "journal" && journalImgs.length > 0) payload.images = journalImgs;
     if (thread?.conv_id) payload.conv_id = thread.conv_id;
 
     await streamChat(
@@ -395,6 +431,30 @@ export default function ChatPage() {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     e.target.value = "";
+
+    // Diario: photos stay local (compressed into a data URI) instead of going through
+    // KB/Drive - they're only sent to the backend once, embedded in the journal entry,
+    // when the message is saved (see send()'s payload.images).
+    if (active === "journal") {
+      const existingCount = attachments.filter((a) => a.journalImage).length;
+      let remaining = 3 - existingCount;
+      for (const f of files) {
+        if (!f.type.startsWith("image/")) { toast.error(`${f.name} non è un'immagine`); continue; }
+        if (remaining <= 0) { toast.error("Massimo 3 foto per voce di diario"); break; }
+        setUploadingFiles((u) => [...u, f.name]);
+        try {
+          const dataUri = await fileToJournalImageDataUri(f);
+          setAttachments((a) => [...a, { name: f.name, journalImage: true, dataUri }]);
+          remaining -= 1;
+        } catch (err) {
+          toast.error(`Errore con ${f.name}: ${err.message}`);
+        } finally {
+          setUploadingFiles((u) => u.filter((n) => n !== f.name));
+        }
+      }
+      return;
+    }
+
     // In info_upload: extract text and save into personal KB (no Google needed)
     // In other actions: keep the previous behaviour (upload to Drive as attachment)
     const useKb = active === "info_upload";
@@ -642,7 +702,7 @@ export default function ChatPage() {
                 )}
                 {attachments.map((a, i) => (
                   <span key={i} className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white flex items-center gap-1" title={a.preview || a.name}>
-                    {a.ocr ? "🖼️" : "📎"} {a.name.slice(0,12)}{a.name.length > 12 ? "…" : ""}
+                    {a.journalImage ? "📷" : a.ocr ? "🖼️" : "📎"} {a.name.slice(0,12)}{a.name.length > 12 ? "…" : ""}
                     {a.ocr && <span className="opacity-70">· ocr</span>}
                     <button onClick={() => removeAttachment(i)}><X size={10} /></button>
                   </span>
@@ -659,7 +719,7 @@ export default function ChatPage() {
                 <Send size={14} /> {streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : uploadingFiles.length > 0 ? "Carico…" : recording ? "Ferma & invia" : "Invia"}
               </button>
             </div>
-            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : undefined} data-testid="file-input" />
+            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*" : undefined} data-testid="file-input" />
           </div>
         </aside>
 

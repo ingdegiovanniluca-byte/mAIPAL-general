@@ -131,6 +131,10 @@ class ChatRequest(BaseModel):
     content: str
     filters: Optional[dict] = None
     conv_id: Optional[str] = None
+    # Photos attached while writing a diary entry (action == "journal" only) - each a
+    # "data:image/...;base64,..." URI, already size-checked client-side. Stored on the
+    # journal entry so the Diario page can show them without depending on Google Drive.
+    images: Optional[List[str]] = None
 
 
 class Task(BaseModel):
@@ -1558,6 +1562,20 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     await _create_task_or_todo(current.user_id, meta, conv_id)
             elif action == "journal":
                 from datetime import date as _date
+                # Each image is a "data:image/...;base64,..." URI, already size-checked
+                # client-side - re-checked here (max 3, ~2MB decoded each) since the app
+                # always renders straight from this field, independent of Google Drive.
+                valid_images: List[str] = []
+                for img in (payload.images or [])[:3]:
+                    if not isinstance(img, str) or not img.startswith("data:image/") or "," not in img:
+                        continue
+                    try:
+                        if len(img.split(",", 1)[1]) * 3 / 4 > 2 * 1024 * 1024:
+                            continue
+                    except Exception:
+                        continue
+                    valid_images.append(img)
+
                 jr = {
                     "id": f"jr_{uuid.uuid4().hex[:12]}",
                     "user_id": current.user_id,
@@ -1568,10 +1586,36 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     "mood": (meta or {}).get("mood", ""),
                     "tags": (meta or {}).get("tags", []),
                     "highlights": (meta or {}).get("highlights", []),
+                    "images": valid_images,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "source_conv": conv_id,
                 }
                 await db.journal_entries.insert_one(jr)
+
+                # Best-effort backup copy on Drive (Diario subfolder) when connected - the
+                # app itself always displays the images straight from `jr["images"]` above,
+                # this is purely for the user's own organization/backup on Drive.
+                if valid_images:
+                    try:
+                        creds = await gi.get_credentials(db, current.user_id)
+                        if creds:
+                            folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, "Diario")
+                            import base64 as _b64
+                            for idx, img in enumerate(valid_images):
+                                header, b64_part = img.split(",", 1)
+                                content_type = header.split(":", 1)[1].split(";", 1)[0] or "image/jpeg"
+                                ext = content_type.split("/", 1)[-1] or "jpg"
+                                raw = _b64.b64decode(b64_part)
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+                                    tmp.write(raw)
+                                    tmp_path = tmp.name
+                                try:
+                                    gi.upload_file_to_folder(creds, folder_id, tmp_path, f"diario_{jr['date']}_{idx + 1}.{ext}", content_type)
+                                finally:
+                                    try: os.unlink(tmp_path)
+                                    except Exception: pass
+                    except Exception:
+                        logger.exception("Drive backup of journal images failed")
 
         yield _json.dumps({"type": "done", "conv_id": conv_id}) + "\n"
 
