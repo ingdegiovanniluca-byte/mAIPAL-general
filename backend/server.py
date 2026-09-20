@@ -3137,13 +3137,19 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> 
         return None
 
 
-async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str) -> dict:
+async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
     Uploads a file into the mAIPAL Drive tree, picking the subfolder from the user's
     message when possible. If no folder can be determined, stashes the file and returns
-    suggestions so the conversation can ask the user (see _drive_resolve_pending_core)."""
+    suggestions so the conversation can ask the user (see _drive_resolve_pending_core) -
+    UNLESS `silent` is set, in which case it just reports {"status": "skipped"} instead:
+    used when a file was primarily attached for the knowledge base and the caller wants
+    to *also* save it to Drive automatically only if the message clearly names a folder,
+    without ever prompting the user for one."""
     creds = await gi.get_credentials(db, current.user_id)
     if not creds:
+        if silent:
+            return {"status": "skipped"}
         raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
 
     subfolders = await gi.list_subfolders(db, current.user_id, creds)
@@ -3161,6 +3167,9 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
             try: os.unlink(tmp_path)
             except Exception: pass
 
+    if silent:
+        return {"status": "skipped"}
+
     import base64 as _b64
     pending_id = f"pdu_{uuid.uuid4().hex[:12]}"
     await db.pending_drive_uploads.insert_one({
@@ -3175,9 +3184,9 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
 
 
 @api_router.post("/drive/smart-upload")
-async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), current: User = Depends(get_current_user)):
+async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), silent: bool = Form(False), current: User = Depends(get_current_user)):
     contents = await file.read()
-    return await _drive_smart_upload_core(current, contents, file.filename, file.content_type, text)
+    return await _drive_smart_upload_core(current, contents, file.filename, file.content_type, text, silent=silent)
 
 
 async def _drive_resolve_pending_core(current: User, pending_id: str, text: str) -> dict:

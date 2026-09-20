@@ -336,7 +336,7 @@ export default function ChatPage() {
     const driveHintText = text.trim();
     setText("");
     setAttachments([]);
-    driveFiles.forEach((a) => smartUploadToDrive(a.driveFile, driveHintText));
+    driveFiles.forEach((a) => smartUploadToDrive(a.driveFile, driveHintText, !a.driveExplicit));
 
     if (thread) {
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: currentQuestion }], liveAnswer: "" }));
@@ -385,7 +385,12 @@ export default function ChatPage() {
         }
         const j = await res.json();
         if (useKb) {
-          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview, ocr: j.source_type === "image_ocr", driveFile: saveToDrive ? f : undefined }]);
+          // Always keep the raw file so it can ALSO be saved to Drive at send time - either
+          // because the user pre-toggled "salva anche su Drive" (asks for a folder if the
+          // message doesn't name one), or automatically/silently whenever the message text
+          // turns out to name a folder on its own (e.g. "salva il file nella cartella X"),
+          // with no toggle needed - see smartUploadToDrive's `silent` mode in send().
+          setAttachments((a) => [...a, { name: f.name, id: j.doc_id, kb: true, chunks: j.chunks, chars: j.chars, preview: j.preview, ocr: j.source_type === "image_ocr", driveFile: f, driveExplicit: saveToDrive }]);
           if (j.source_type === "image_ocr") {
             toast.success(`${f.name} → OCR + Knowledge Base (${j.chars} caratteri)`);
           } else {
@@ -402,23 +407,25 @@ export default function ChatPage() {
   };
   const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
 
-  const smartUploadToDrive = async (file, hintText) => {
+  const smartUploadToDrive = async (file, hintText, silent = false) => {
     setUploadingFiles((u) => [...u, file.name]);
     try {
       const fd = new FormData();
       fd.append("file", file, file.name);
       fd.append("text", hintText || "");
+      if (silent) fd.append("silent", "true");
       const res = await fetch(`${API}/drive/smart-upload`, { method: "POST", body: fd, credentials: "include" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);
       if (j.status === "saved") {
         toast.success(`${file.name} → Drive/${j.folder}`);
-      } else {
+      } else if (!silent) {
         setPendingDriveUpload({ pendingId: j.pending_id, fileName: file.name, suggestions: j.suggestions || [] });
         toast.message(`In quale cartella salvo "${file.name}"? Scrivilo nel messaggio o scegli qui sotto.`);
       }
     } catch (err) {
-      toast.error(`Drive: ${err.message}`);
+      if (!silent) toast.error(`Drive: ${err.message}`);
+      else console.error("smartUploadToDrive (silent) failed:", err);
     } finally {
       setUploadingFiles((u) => u.filter((n) => n !== file.name));
     }
