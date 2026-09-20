@@ -61,7 +61,7 @@ export default function ChatPage() {
   const [pendingVoice, setPendingVoice] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [uploadingFiles, setUploadingFiles] = useState([]); // filenames currently being caricati
-  const [saveToDrive, setSaveToDrive] = useState(false);
+  const [saveToDrive, setSaveToDrive] = useState(true);
   const [pendingDriveUpload, setPendingDriveUpload] = useState(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
