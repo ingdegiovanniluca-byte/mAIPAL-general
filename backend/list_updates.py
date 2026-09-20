@@ -23,6 +23,7 @@ MODEL = "gpt-4o"
 VALID_OPS = {
     "add_item", "delete_item", "update_item", "clear_items",
     "add_sub_item", "delete_sub_item", "update_sub_item", "clear_sub_items",
+    "bulk_add_items",
 }
 
 _STOPWORDS_IT = {
@@ -34,12 +35,14 @@ _STOPWORDS_IT = {
 }
 
 
-async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
+async def interpret_list_request(text: str, catalog: list[dict], kb_context: str = "") -> dict:
     """Asks the LLM to classify a free-text request into a structured intent, given the
     user's actual lists and their field schemas. Returns
     {"op": ..., "collection_id": ... | None, "item_query": "...", "sub_item_query": "...",
-    "fields": {...}, "sub_items": [...]}. Never invents a collection_id outside the given
-    catalog (validated by the caller, not here)."""
+    "fields": {...}, "sub_items": [...], "items": [...]}. Never invents a collection_id
+    outside the given catalog (validated by the caller, not here). `kb_context`, when given,
+    is text pulled from the user's own uploaded documents (e.g. an OCR'd schedule) that may
+    be needed to fulfil a bulk request like "un campo per ogni orario delle lezioni"."""
     catalog_desc = json.dumps([
         {
             "id": c["id"], "name": c["name"],
@@ -48,16 +51,26 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
         }
         for c in catalog
     ], ensure_ascii=False)
+    context_block = (
+        f"\n\nCONTESTO da documenti caricati dall'utente (usalo SOLO se serve per estrarre dati come orari, nomi, "
+        f"date richiesti dall'utente - es. un elenco di orari da cui creare più Campi):\n{kb_context}\n"
+    ) if kb_context else ""
     system = (
         "Sei l'assistente che interpreta richieste di modifica di 'Liste' personali strutturate su 3 livelli: "
         "Lista -> Campo (elemento di primo livello, es. un cliente o una lezione) -> Elemento (annidato dentro un "
         "Campo, opzionale, es. una persona iscritta a una lezione). "
-        f"Liste disponibili dell'utente (usa SOLO questi id, non inventarne altri):\n{catalog_desc}\n\n"
+        f"Liste disponibili dell'utente (usa SOLO questi id, non inventarne altri):\n{catalog_desc}"
+        f"{context_block}\n\n"
         "Determina quale operazione l'utente vuole fare, una tra:\n"
-        "- add_item: aggiungere un nuovo Campo a una lista (es. un nuovo cliente, un nuovo prodotto). Se la stessa "
+        "- add_item: aggiungere UN nuovo Campo a una lista (es. un nuovo cliente, un nuovo prodotto). Se la stessa "
         "richiesta chiede ANCHE di popolare il nuovo Campo con uno o più Elementi (es. 'crea la lezione di pilates "
         "del martedì mattina e aggiungi utente1, utente2 e utente3'), includi TUTTI quegli elementi in 'sub_items' "
         "nella stessa risposta - non servono richieste separate.\n"
+        "- bulk_add_items: creare PIÙ Campi distinti in un colpo solo, uno per ciascuno di una serie di voci simili "
+        "che l'utente descrive o che compaiono nel CONTESTO sopra (es. 'crea un campo per ogni orario in cui è "
+        "prevista una lezione di pilates' quando gli orari sono elencati in un documento caricato in precedenza). "
+        "Usala SOLO quando è chiaro che vanno creati PIÙ Campi separati (non un solo Campo con più Elementi "
+        "annidati, che è add_item con 'sub_items').\n"
         "- delete_item: eliminare UN Campo esistente specifico\n"
         "- update_item: modificare i valori di un Campo esistente\n"
         "- clear_items: eliminare TUTTI i Campi di una lista (l'utente dice esplicitamente 'tutti/tutte/tutto/svuota "
@@ -78,16 +91,20 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
         '"item_query": "testo breve che identifica il Campo bersaglio (es. nome cliente, nome lezione), vuoto se non applicabile", '
         '"sub_item_query": "testo breve che identifica l\'Elemento annidato bersaglio, vuoto se non applicabile", '
         '"fields": {"key del campo dallo schema": "valore"}, '
-        '"sub_items": [{"key del campo elemento dallo schema": "valore"}, ...]}. '
-        "Per 'fields' e per ogni oggetto di 'sub_items' usa ESATTAMENTE la 'key' (non la 'label') definita nello "
-        "schema della lista scelta (campo_fields per 'fields' di add_item/update_item, elemento_fields per 'fields' "
-        "di add_sub_item/update_sub_item e per ogni oggetto di 'sub_items'). Includi SOLO i valori esplicitamente "
-        "forniti dall'utente, non inventare dati. Ometti 'sub_items' (lista vuota) se non applicabile."
+        '"sub_items": [{"key del campo elemento dallo schema": "valore"}, ...], '
+        '"items": [{"key del campo dallo schema": "valore"}, ...]}. '
+        "Usa 'items' SOLO per bulk_add_items (un oggetto per ciascun nuovo Campo da creare, con le key di "
+        "campo_fields della lista scelta); usa 'sub_items' per gli Elementi annidati come descritto sopra. "
+        "Per 'fields' e per ogni oggetto di 'sub_items'/'items' usa ESATTAMENTE la 'key' (non la 'label') definita "
+        "nello schema della lista scelta (campo_fields per 'fields' di add_item/update_item e per ogni oggetto di "
+        "'items', elemento_fields per 'fields' di add_sub_item/update_sub_item e per ogni oggetto di 'sub_items'). "
+        "Includi SOLO i valori esplicitamente forniti dall'utente o chiaramente presenti nel CONTESTO, non inventare "
+        "dati. Ometti 'sub_items'/'items' (lista vuota) se non applicabile."
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     resp = await client.chat.completions.create(
         model=MODEL,
-        max_completion_tokens=1024,
+        max_completion_tokens=4096,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
     )
     raw = resp.choices[0].message.content or ""
@@ -97,6 +114,8 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
     parsed = json.loads(match.group(0))
     raw_sub_items = parsed.get("sub_items")
     sub_items = [s for s in raw_sub_items if isinstance(s, dict)] if isinstance(raw_sub_items, list) else []
+    raw_items = parsed.get("items")
+    items = [it for it in raw_items if isinstance(it, dict)] if isinstance(raw_items, list) else []
     return {
         "op": parsed.get("op"),
         "collection_id": parsed.get("collection_id") or None,
@@ -104,6 +123,7 @@ async def interpret_list_request(text: str, catalog: list[dict]) -> dict:
         "sub_item_query": (parsed.get("sub_item_query") or "").strip(),
         "fields": parsed.get("fields") if isinstance(parsed.get("fields"), dict) else {},
         "sub_items": sub_items,
+        "items": items,
     }
 
 

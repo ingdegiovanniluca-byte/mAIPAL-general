@@ -241,6 +241,14 @@ export default function ChatPage() {
       }] }));
       return;
     }
+    if (res.status === "confirm_bulk_add") {
+      setThread((th) => ({ ...th, messages: [...th.messages, {
+        role: "assistant",
+        content: `⚠️ ${res.message}`,
+        listAmbiguous: res,
+      }] }));
+      return;
+    }
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: `✅ ${res.message}` }] }));
   };
 
@@ -267,7 +275,7 @@ export default function ChatPage() {
     try {
       const r = await api.post("/lists/update", {
         text: amb.text, op: amb.op, fields: amb.fields, item_query: amb.item_query, sub_item_query: amb.sub_item_query,
-        sub_items: amb.sub_items, collection_id: amb.collection_id, item_id: amb.item_id, ...override,
+        sub_items: amb.sub_items, items: amb.items, collection_id: amb.collection_id, item_id: amb.item_id, ...override,
       });
       appendListUpdateResult(r.data);
     } catch (e) {

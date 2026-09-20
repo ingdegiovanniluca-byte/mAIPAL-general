@@ -501,7 +501,7 @@ async def _cmd_list_update(update: Update, ctx):
 
 async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None, collection_id=None,
                                  item_id=None, sub_item_id=None, fields=None, item_query=None, sub_item_query=None,
-                                 confirm=False, sub_items=None):
+                                 confirm=False, sub_items=None, items=None):
     from server import _execute_list_update
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -510,7 +510,7 @@ async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None
         res = await _execute_list_update(
             current, content, op=op, collection_id=collection_id, item_id=item_id, sub_item_id=sub_item_id,
             fields=fields, item_query=item_query, sub_item_query=sub_item_query, confirm=confirm,
-            new_sub_items=sub_items,
+            new_sub_items=sub_items, new_items=items,
         )
     except Exception as e:
         logger.exception("tg list update failed")
@@ -542,6 +542,12 @@ async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None
             text=f"⚠️ Stai per eliminare {res['count']} element{'o' if res['count'] == 1 else 'i'} in un colpo solo. Confermi?",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
+        return
+
+    if status == "confirm_bulk_add":
+        buttons = [[InlineKeyboardButton(f"✅ Conferma: crea {res['count']} elementi", callback_data="lstx:1")]]
+        await _set_state(db, chat_id, user["user_id"], pending_list_update=None, pending_list_context=res)
+        await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=InlineKeyboardMarkup(buttons))
         return
 
     await ctx.bot.send_message(chat_id=chat_id, text=f"✅ {res['message']}")
@@ -600,7 +606,7 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _run_list_update_flow(
             q, ctx, db, user, pctx["text"], op=pctx.get("op"), collection_id=pctx.get("collection_id"),
             item_id=pctx.get("item_id"), fields=pctx.get("fields"), item_query=pctx.get("item_query"),
-            sub_item_query=pctx.get("sub_item_query"), confirm=True,
+            sub_item_query=pctx.get("sub_item_query"), confirm=True, items=pctx.get("items"),
         )
     elif data.startswith("act:"):
         forced = data.split(":", 1)[1]

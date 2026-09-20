@@ -258,7 +258,10 @@ class ListUpdatePayload(BaseModel):
     # Multiple new nested Elementi to create at once (add_item/add_sub_item), e.g. several
     # people enrolled in one lesson in a single request.
     sub_items: Optional[List[dict]] = None
-    # Set on the follow-up call confirming a clear_items/clear_sub_items bulk delete.
+    # Multiple new Campi to create at once (bulk_add_items), one dict of fields per Campo -
+    # e.g. one per class time parsed out of an uploaded schedule document.
+    items: Optional[List[dict]] = None
+    # Set on the follow-up call confirming a clear_items/clear_sub_items/bulk_add_items bulk op.
     confirm: bool = False
 
 
@@ -2143,7 +2146,7 @@ async def update_list_via_text(payload: ListUpdatePayload, current: User = Depen
         current, payload.text, op=payload.op, collection_id=payload.collection_id,
         item_id=payload.item_id, sub_item_id=payload.sub_item_id, fields=payload.fields,
         item_query=payload.item_query, sub_item_query=payload.sub_item_query, confirm=payload.confirm,
-        new_sub_items=payload.sub_items,
+        new_sub_items=payload.sub_items, new_items=payload.items,
     )
 
 
@@ -2151,7 +2154,7 @@ async def _execute_list_update(
     current: User, text: str, op: Optional[str] = None, collection_id: Optional[str] = None,
     item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
     item_query: Optional[str] = None, sub_item_query: Optional[str] = None, confirm: bool = False,
-    new_sub_items: Optional[List[dict]] = None,
+    new_sub_items: Optional[List[dict]] = None, new_items: Optional[List[dict]] = None,
 ) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
 
@@ -2180,8 +2183,17 @@ async def _execute_list_update(
 
     if not op or not collection_id:
         catalog = [{"id": c["id"], "name": c["name"], "fields": c.get("fields", []), "sub_item_fields": c.get("sub_item_fields", [])} for c in colls]
+        # Give the interpreter a shot at the user's own uploaded documents too - e.g. "crea
+        # un campo per ogni orario delle lezioni di pilates" only makes sense if it can see
+        # the schedule that was OCR'd/extracted into the KB in an earlier message.
+        kb_context = ""
         try:
-            interpreted = await lu.interpret_list_request(text, catalog)
+            kb_hits = await retrieve_kb(current.user_id, text, limit=4, scope="kb", org_id=current.org_id)
+            kb_context = "\n---\n".join((h.get("text") or "").strip() for h in kb_hits if (h.get("text") or "").strip())[:6000]
+        except Exception:
+            logger.exception("KB context retrieval for list update failed")
+        try:
+            interpreted = await lu.interpret_list_request(text, catalog, kb_context=kb_context)
         except Exception as e:
             logger.exception("list update interpretation failed")
             raise HTTPException(status_code=500, detail=f"Non sono riuscito a interpretare la richiesta: {e}")
@@ -2191,6 +2203,7 @@ async def _execute_list_update(
         sub_item_query = interpreted["sub_item_query"]
         fields = interpreted["fields"]
         new_sub_items = interpreted["sub_items"]
+        new_items = interpreted["items"]
 
     if op not in lu.VALID_OPS:
         raise HTTPException(status_code=400, detail="Non ho capito che tipo di modifica vuoi fare a una lista.")
@@ -2206,7 +2219,7 @@ async def _execute_list_update(
     items = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).to_list(2000)
 
     item = None
-    if op not in ("add_item", "clear_items"):
+    if op not in ("add_item", "clear_items", "bulk_add_items"):
         if item_id:
             item = next((i for i in items if i["id"] == item_id), None)
             if not item:
@@ -2246,6 +2259,29 @@ async def _execute_list_update(
                         "candidates": [{"sub_item_id": sid, "label": lu.item_display(by_id[sid])} for sid in ids],
                     }
                 sub_item = next(s for s in sub_items if s["id"] == ids[0])
+
+    norm_new_items: List[dict] = []
+    if op == "bulk_add_items" and new_items:
+        for it in new_items:
+            nf = lu.normalize_fields(it or {}, coll.get("fields", []))
+            if nf:
+                norm_new_items.append(nf)
+
+    if op == "bulk_add_items" and not confirm:
+        if not norm_new_items:
+            raise HTTPException(status_code=400, detail="Non ho trovato dati sufficienti per creare i nuovi elementi (magari il documento caricato non contiene informazioni chiare a riguardo).")
+        max_items = coll.get("max_items")
+        current_count = len(items)
+        if max_items and current_count + len(norm_new_items) > max_items:
+            raise HTTPException(status_code=400, detail=f"Creare {len(norm_new_items)} nuovi elementi supererebbe il limite di {max_items} per \"{coll['name']}\" (attualmente {current_count}).")
+        preview_lines = "\n".join(f"{i + 1}. {lu.item_display({'data': f})}" for i, f in enumerate(norm_new_items))
+        return {
+            "status": "confirm_bulk_add", "op": op, "collection_id": collection_id, "fields": {},
+            "item_query": item_query, "sub_item_query": sub_item_query, "text": text, "count": len(norm_new_items),
+            "items": norm_new_items,
+            "message": f"Sto per creare {len(norm_new_items)} nuovi elementi in \"{coll['name']}\":\n{preview_lines}",
+            "candidates": [{"confirm": True, "label": f"Conferma: crea {len(norm_new_items)} elementi in \"{coll['name']}\""}],
+        }
 
     if op == "clear_items" and not confirm:
         if not items:
@@ -2321,6 +2357,9 @@ async def _execute_list_update(
         merged = {**sub_item.get("data", {}), **norm_fields}
         updated = await update_sub_item(collection_id, item["id"], sub_item["id"], CollectionSubItemPayload(data=merged), current)
         summary = f"Ho aggiornato \"{lu.item_display(updated)}\" in \"{lu.item_display(item)}\" ({coll['name']})."
+    elif op == "bulk_add_items":
+        created_list = [await create_collection_item(collection_id, CollectionItemPayload(data=f), current) for f in norm_new_items]
+        summary = f"Ho creato {len(created_list)} nuovi elementi in \"{coll['name']}\"."
 
     return {"status": "ok", "message": summary, "collection_id": collection_id, "collection_name": coll["name"]}
 
