@@ -336,7 +336,25 @@ export default function ChatPage() {
     const driveHintText = text.trim();
     setText("");
     setAttachments([]);
-    driveFiles.forEach((a) => smartUploadToDrive(a.driveFile, driveHintText, !a.driveExplicit));
+
+    if (driveFiles.length > 0) {
+      // Awaited (not fire-and-forget) so the AI's confirmation message below can be
+      // told the real outcome instead of assuming the file landed on Drive - see the
+      // matching "REGOLA CRITICA SU GOOGLE DRIVE" instruction in build_system_prompt.
+      const driveResults = await Promise.all(
+        driveFiles.map(async (a) => ({ name: a.name, ...(await smartUploadToDrive(a.driveFile, driveHintText, !a.driveExplicit)) }))
+      );
+      const statusLines = driveResults
+        .filter((r) => r.status !== "skipped")
+        .map((r) => {
+          if (r.status === "saved") return `File salvato su Drive in "${r.folder}": ${r.name}.`;
+          if (r.status === "needs_folder") return `Non è stato possibile determinare automaticamente la cartella Drive per "${r.name}": è stato chiesto all'utente in che cartella salvarlo, il file non è ancora stato salvato su Drive.`;
+          return `Salvataggio su Drive di "${r.name}" non riuscito${r.error ? `: ${r.error}` : "."}`;
+        });
+      if (statusLines.length > 0) {
+        currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + statusLines.join("\n");
+      }
+    }
 
     if (thread) {
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: currentQuestion }], liveAnswer: "" }));
@@ -419,13 +437,19 @@ export default function ChatPage() {
       if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);
       if (j.status === "saved") {
         toast.success(`${file.name} → Drive/${j.folder}`);
-      } else if (!silent) {
+        return { status: "saved", folder: j.folder };
+      }
+      if (j.status === "skipped") return { status: "skipped" };
+      if (!silent) {
         setPendingDriveUpload({ pendingId: j.pending_id, fileName: file.name, suggestions: j.suggestions || [] });
         toast.message(`In quale cartella salvo "${file.name}"? Scrivilo nel messaggio o scegli qui sotto.`);
+        return { status: "needs_folder" };
       }
+      return { status: "skipped" };
     } catch (err) {
       if (!silent) toast.error(`Drive: ${err.message}`);
       else console.error("smartUploadToDrive (silent) failed:", err);
+      return { status: "error", error: err.message };
     } finally {
       setUploadingFiles((u) => u.filter((n) => n !== file.name));
     }

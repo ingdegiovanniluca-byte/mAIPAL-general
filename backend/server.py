@@ -933,6 +933,13 @@ def build_system_prompt(user: User, action: str) -> str:
     if action == "info_upload":
         base += (
             " L'utente sta caricando un'informazione. Conferma cosa hai memorizzato in modo naturale (1-3 frasi). "
+            "REGOLA CRITICA SU GOOGLE DRIVE: il salvataggio del file su Google Drive (se richiesto) è un processo "
+            "separato ed eseguito da un altro componente, di cui NON hai visibilità diretta in questo momento — "
+            "NON dare mai per scontato che un file sia stato salvato su Drive o in una cartella specifica solo perché "
+            "l'utente lo ha chiesto. Conferma il salvataggio su Drive SOLO se nel messaggio è presente una riga di "
+            "stato automatica che lo conferma esplicitamente (es. 'File salvato su Drive in ...'); se è presente una "
+            "riga che indica un errore o che la cartella non è stata determinata, comunicalo onestamente; se non è "
+            "presente nessuna riga di stato su Drive, non menzionare affatto Drive nella tua risposta. "
             "Se nel testo è chiaramente presente ANCHE un impegno futuro da ricordare (una richiesta esplicita tipo "
             "'ricordami di...', o un'azione futura con una data/intervallo di tempo esplicito o facilmente calcolabile "
             "dalla data odierna, es. 'tra 10 giorni', 'lunedì prossimo'), crea ANCHE un task: aggiungi il campo 'task' "
@@ -3112,6 +3119,28 @@ async def upload_attachment(file: UploadFile = File(...), current: User = Depend
         except Exception: pass
 
 
+_DRIVE_FOLDER_HINT_RE = None
+
+
+def _regex_drive_folder_hint(text: str) -> Optional[str]:
+    """Deterministic fallback used when the LLM-based folder-hint resolution fails
+    outright (e.g. a transient error calling the model) - catches the common literal
+    phrasing '...nella cartella NomeCartella...' without depending on any external call."""
+    global _DRIVE_FOLDER_HINT_RE
+    if _DRIVE_FOLDER_HINT_RE is None:
+        import re as _re
+        _DRIVE_FOLDER_HINT_RE = _re.compile(
+            r"cartella\s+(?:chiamata\s+|denominata\s+|di\s+nome\s+)?[\"'«]?"
+            r"([A-Za-zÀ-ÖØ-öø-ÿ0-9_\-]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ0-9_\-]+){0,3})[\"'»]?",
+            _re.IGNORECASE,
+        )
+    m = _DRIVE_FOLDER_HINT_RE.search(text or "")
+    if not m:
+        return None
+    name = m.group(1).strip().rstrip(".,;:!?")
+    return name or None
+
+
 async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> Optional[str]:
     """Ask the LLM whether the user's message names a target Drive folder (existing or
     new). Returns the folder name, or None if the message doesn't specify one."""
@@ -3133,8 +3162,11 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> 
             return None
         return raw
     except Exception:
-        logger.exception("drive folder hint resolution failed")
-        return None
+        # A failed LLM call (auth/config/network) must NOT be treated the same as "no
+        # folder mentioned" - fall back to a deterministic regex match on the common
+        # Italian phrasing so an explicit "salvalo nella cartella X" still works.
+        logger.exception("drive folder hint resolution via LLM failed, trying regex fallback")
+        return _regex_drive_folder_hint(text)
 
 
 async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False) -> dict:
