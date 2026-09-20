@@ -1134,38 +1134,47 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
                         candidates.append(cand)
                     forced.add(id(cand))
 
-        # Elementi annidati (livello 3, es. le persone iscritte a una lezione) were never
-        # part of the candidate pool at all, so a question like "quante persone ci sono
-        # nella lezione di pilates di lunedì mattina" had nothing to retrieve. Match the
-        # query against each Campo's display text with the same fuzzy matcher "Modifica
-        # liste" uses, and if one is a plausible match, force-include ALL of its nested
-        # Elementi - a partial sample would silently give a wrong count.
-        if coll_items and item_display_map:
-            sub_items_all = await db.collection_sub_items.find(
-                {"item_id": {"$in": list(item_display_map.keys())}}, {"_id": 0}
-            ).to_list(5000)
-            if sub_items_all:
-                matched_item_ids = set(lu.match_candidates(query, list(item_display_map.items())))
-                if matched_item_ids:
-                    item_coll_map = {it["id"]: it.get("collection_id") for it in coll_items}
-                    for s in sub_items_all:
-                        if s.get("item_id") not in matched_item_ids:
-                            continue
-                        coll = coll_map.get(s.get("collection_id") or item_coll_map.get(s.get("item_id")))
-                        if not coll: continue
-                        sub_field_labels = {f["key"]: f["label"] for f in (coll.get("sub_item_fields") or [])}
-                        sub_parts = [f"{sub_field_labels.get(k, k)}: {v}" for k, v in (s.get("data") or {}).items() if v not in (None, "")]
-                        if not sub_parts: continue
-                        sub_txt = " · ".join(sub_parts)
-                        parent_txt = item_display_map.get(s.get("item_id"), "")
-                        display = f"[Lista: {coll.get('name','')} > {parent_txt}] {sub_txt}"
-                        cand = {
-                            "text": sub_txt, "display": display, "source": "collection_sub_item",
-                            "meta": {"id": s.get("id"), "item_id": s.get("item_id"), "collection_id": s.get("collection_id")},
-                            "embedding": None,
-                        }
+        # A Campo named in the question (e.g. "lezione di pilates di lunedì mattina") is
+        # matched with the same fuzzy matcher "Modifica liste" uses - this catches it even
+        # when the query doesn't repeat the Lista's own name verbatim (singular/plural,
+        # extra words, etc. can all break the exact-substring named-list check above).
+        # Force BOTH the Campo's own candidate (its answer may sit directly in its own
+        # fields, e.g. a 2-level list) AND all of its nested Elementi (a 3-level list, e.g.
+        # people enrolled in a lesson) - a partial sample of either would silently give a
+        # wrong count for a question like "quante persone ci sono".
+        if item_display_map:
+            matched_item_ids = set(lu.match_candidates(query, list(item_display_map.items())))
+            if matched_item_ids:
+                item_by_id = {c["meta"]["id"]: c for c in item_candidates}
+                for iid in matched_item_ids:
+                    cand = item_by_id.get(iid)
+                    if not cand: continue
+                    if scope != "all":
                         candidates.append(cand)
-                        forced.add(id(cand))
+                    forced.add(id(cand))
+
+                sub_items_all = await db.collection_sub_items.find(
+                    {"item_id": {"$in": list(matched_item_ids)}}, {"_id": 0}
+                ).to_list(5000)
+                item_coll_map = {it["id"]: it.get("collection_id") for it in coll_items}
+                for s in sub_items_all:
+                    if s.get("item_id") not in matched_item_ids:
+                        continue
+                    coll = coll_map.get(s.get("collection_id") or item_coll_map.get(s.get("item_id")))
+                    if not coll: continue
+                    sub_field_labels = {f["key"]: f["label"] for f in (coll.get("sub_item_fields") or [])}
+                    sub_parts = [f"{sub_field_labels.get(k, k)}: {v}" for k, v in (s.get("data") or {}).items() if v not in (None, "")]
+                    if not sub_parts: continue
+                    sub_txt = " · ".join(sub_parts)
+                    parent_txt = item_display_map.get(s.get("item_id"), "")
+                    display = f"[Lista: {coll.get('name','')} > {parent_txt}] {sub_txt}"
+                    cand = {
+                        "text": sub_txt, "display": display, "source": "collection_sub_item",
+                        "meta": {"id": s.get("id"), "item_id": s.get("item_id"), "collection_id": s.get("collection_id")},
+                        "embedding": None,
+                    }
+                    candidates.append(cand)
+                    forced.add(id(cand))
 
     # A query naming a specific month+year (e.g. "luglio 2026") should surface any
     # candidate whose text literally contains that same month+year - one specific monthly
