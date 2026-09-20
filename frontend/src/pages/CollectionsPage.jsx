@@ -492,6 +492,8 @@ function ManageAttributesDialog({ collection, onClose, onSaved }) {
   const [subFields, setSubFields] = useState(
     (collection.sub_item_fields || []).map((f) => ({ ...f, optionsText: (f.options || []).join(", ") }))
   );
+  const [maxItems, setMaxItems] = useState(collection.max_items != null ? String(collection.max_items) : "");
+  const [maxSubItems, setMaxSubItems] = useState(collection.max_sub_items_per_item != null ? String(collection.max_sub_items_per_item) : "");
   const [allCollections, setAllCollections] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -504,10 +506,12 @@ function ManageAttributesDialog({ collection, onClose, onSaved }) {
     if (cleanFields.length === 0) { toast.error("Serve almeno un attributo per i campi"); return; }
     setSaving(true);
     try {
-      await api.patch(`/collections/${collection.id}`, {
-        fields: cleanFields,
-        sub_item_fields: toApiFields(subFields),
-      });
+      const payload = { fields: cleanFields, sub_item_fields: toApiFields(subFields) };
+      if (maxItems.trim() === "") payload.clear_max_items = true;
+      else payload.max_items = parseInt(maxItems, 10);
+      if (maxSubItems.trim() === "") payload.clear_max_sub_items_per_item = true;
+      else payload.max_sub_items_per_item = parseInt(maxSubItems, 10);
+      await api.patch(`/collections/${collection.id}`, payload);
       toast.success("Attributi aggiornati");
       onSaved();
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -532,6 +536,25 @@ function ManageAttributesDialog({ collection, onClose, onSaved }) {
               existingCollections={allCollections}
               emptyHint='Non ancora configurati: nessun campo di questa lista mostrerà elementi annidati finché non ne aggiungi almeno uno (es. "persone" per una lezione, "commesse" per un cliente).'
             />
+          </div>
+          <div className="pt-3 border-t grid grid-cols-2 gap-3">
+            <div>
+              <div className="kicker mb-1">limite campi (livello 2)</div>
+              <Input
+                type="number" min="1" value={maxItems} onChange={(e) => setMaxItems(e.target.value)}
+                placeholder="illimitato" data-testid="max-items-input" className="h-9 rounded-lg bg-white/10 text-sm"
+              />
+            </div>
+            <div>
+              <div className="kicker mb-1">limite elementi per campo</div>
+              <Input
+                type="number" min="1" value={maxSubItems} onChange={(e) => setMaxSubItems(e.target.value)}
+                placeholder="illimitato" data-testid="max-sub-items-input" className="h-9 rounded-lg bg-white/10 text-sm"
+              />
+            </div>
+            <div className="col-span-2 text-[11px] text-white/40">
+              Lascia vuoto per nessun limite. Superato il limite, aggiungere un nuovo campo o elemento darà errore finché non ne elimini uno o alzi il limite.
+            </div>
           </div>
         </div>
 

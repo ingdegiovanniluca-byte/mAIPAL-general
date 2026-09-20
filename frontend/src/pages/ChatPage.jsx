@@ -49,7 +49,7 @@ const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_tod
 
 export default function ChatPage() {
   const [active, setActive] = useState("info_request");
-  const [scope, setScope] = useState("kb"); // 'kb' | 'all' — solo per info_request
+  const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [history, setHistory] = useState([]);

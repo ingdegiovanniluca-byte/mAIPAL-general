@@ -215,6 +215,8 @@ class CollectionCreatePayload(BaseModel):
     fields: List[CollectionFieldDef]
     sub_item_fields: List[CollectionFieldDef] = []  # schema per gli "elementi" annidati in ogni campo
     visibility: Literal["private", "org"] = "private"
+    max_items: Optional[int] = None  # limite massimo di Campi nella lista, nullo = illimitato
+    max_sub_items_per_item: Optional[int] = None  # limite massimo di Elementi per Campo, nullo = illimitato
 
 
 class CollectionUpdatePayload(BaseModel):
@@ -223,6 +225,10 @@ class CollectionUpdatePayload(BaseModel):
     fields: Optional[List[CollectionFieldDef]] = None
     sub_item_fields: Optional[List[CollectionFieldDef]] = None
     visibility: Optional[Literal["private", "org"]] = None
+    max_items: Optional[int] = None
+    max_sub_items_per_item: Optional[int] = None
+    clear_max_items: bool = False  # esplicito: azzera il limite invece di lasciarlo invariato
+    clear_max_sub_items_per_item: bool = False
 
 
 class CollectionItemPayload(BaseModel):
@@ -1391,9 +1397,9 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     kb_context = []
     if action == "info_request":
         if payload.conv_id:
-            scope = (conv.get("filters", {}) or {}).get("scope", "kb")
+            scope = (conv.get("filters", {}) or {}).get("scope", "all")
         else:
-            scope = (payload.filters or {}).get("scope", "kb")
+            scope = (payload.filters or {}).get("scope", "all")
         kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope, org_id=current.org_id)
         logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={payload.content[:60]!r} chunks={len(kb_context)}")
 
@@ -1889,6 +1895,10 @@ async def list_collections(current: User = Depends(get_current_user)):
 async def create_collection(payload: CollectionCreatePayload, current: User = Depends(get_current_user)):
     if not payload.fields:
         raise HTTPException(status_code=400, detail="Definisci almeno un campo per la lista")
+    if payload.max_items is not None and payload.max_items < 1:
+        raise HTTPException(status_code=400, detail="Il limite di Campi deve essere almeno 1")
+    if payload.max_sub_items_per_item is not None and payload.max_sub_items_per_item < 1:
+        raise HTTPException(status_code=400, detail="Il limite di Elementi per Campo deve essere almeno 1")
     name = payload.name.strip() or "Nuova lista"
     existing = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(500)
     if any((e.get("name") or "").strip().lower() == name.lower() for e in existing):
@@ -1900,6 +1910,8 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
         "fields": [f.model_dump() for f in payload.fields],
         "sub_item_fields": [f.model_dump() for f in payload.sub_item_fields],
         "visibility": payload.visibility,
+        "max_items": payload.max_items,
+        "max_sub_items_per_item": payload.max_sub_items_per_item,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _stamp_owner_fields(doc, current)
@@ -1937,6 +1949,18 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
         else:
             updates["visibility"] = "private"
             updates["org_id"] = None
+    if payload.clear_max_items:
+        updates["max_items"] = None
+    elif payload.max_items is not None:
+        if payload.max_items < 1:
+            raise HTTPException(status_code=400, detail="Il limite di Campi deve essere almeno 1")
+        updates["max_items"] = payload.max_items
+    if payload.clear_max_sub_items_per_item:
+        updates["max_sub_items_per_item"] = None
+    elif payload.max_sub_items_per_item is not None:
+        if payload.max_sub_items_per_item < 1:
+            raise HTTPException(status_code=400, detail="Il limite di Elementi per Campo deve essere almeno 1")
+        updates["max_sub_items_per_item"] = payload.max_sub_items_per_item
     if updates:
         await db.collections.update_one({"id": collection_id}, {"$set": updates})
     return await db.collections.find_one({"id": collection_id}, {"_id": 0})
@@ -1977,6 +2001,11 @@ async def create_collection_item(collection_id: str, payload: CollectionItemPayl
     coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    max_items = coll.get("max_items")
+    if max_items:
+        current_count = await db.collection_items.count_documents({"collection_id": collection_id})
+        if current_count >= max_items:
+            raise HTTPException(status_code=400, detail=f"Hai raggiunto il limite di {max_items} elementi per la lista \"{coll['name']}\".")
     # The first field is the item's display "name" convention (used everywhere else, e.g.
     # itemLabel in CollectionsPage.jsx) - two items sharing it would be indistinguishable.
     name_field = (coll.get("fields") or [None])[0]
@@ -2044,6 +2073,11 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
     item = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="Campo non trovato")
+    max_sub_items = coll.get("max_sub_items_per_item")
+    if max_sub_items:
+        current_count = await db.collection_sub_items.count_documents({"collection_id": collection_id, "item_id": item_id})
+        if current_count >= max_sub_items:
+            raise HTTPException(status_code=400, detail=f"Hai raggiunto il limite di {max_sub_items} elementi per questo campo.")
     name_field = (coll.get("sub_item_fields") or [None])[0]
     if name_field:
         new_val = str(payload.data.get(name_field["key"]) or "").strip().lower()
@@ -3103,26 +3137,25 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> 
         return None
 
 
-@api_router.post("/drive/smart-upload")
-async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), current: User = Depends(get_current_user)):
-    """Upload a file into the mAIPAL Drive tree, picking the subfolder from the user's
+async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str) -> dict:
+    """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
+    Uploads a file into the mAIPAL Drive tree, picking the subfolder from the user's
     message when possible. If no folder can be determined, stashes the file and returns
-    suggestions so the conversation can ask the user (see /drive/resolve-pending)."""
+    suggestions so the conversation can ask the user (see _drive_resolve_pending_core)."""
     creds = await gi.get_credentials(db, current.user_id)
     if not creds:
         raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
 
-    contents = await file.read()
     subfolders = await gi.list_subfolders(db, current.user_id, creds)
     folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders])
 
     if folder_name:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file.filename.rsplit('.',1)[-1] if '.' in (file.filename or '') else 'bin'}") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{filename.rsplit('.',1)[-1] if '.' in (filename or '') else 'bin'}") as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
         try:
             folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
-            result = gi.upload_file_to_folder(creds, folder_id, tmp_path, file.filename, file.content_type)
+            result = gi.upload_file_to_folder(creds, folder_id, tmp_path, filename, content_type)
             return {"status": "saved", "folder": folder_name, **result}
         finally:
             try: os.unlink(tmp_path)
@@ -3133,20 +3166,24 @@ async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""),
     await db.pending_drive_uploads.insert_one({
         "pending_id": pending_id,
         "user_id": current.user_id,
-        "filename": file.filename,
-        "content_type": file.content_type,
+        "filename": filename,
+        "content_type": content_type,
         "data_b64": _b64.b64encode(contents).decode("ascii"),
         "created_at": datetime.now(timezone.utc),
     })
     return {"status": "needs_folder", "pending_id": pending_id, "suggestions": [f["name"] for f in subfolders]}
 
 
-@api_router.post("/drive/resolve-pending")
-async def drive_resolve_pending(payload: dict, current: User = Depends(get_current_user)):
-    """Second turn of the smart-upload flow: the user's follow-up message may now name
-    the folder. Resolves it and finally uploads the stashed file."""
-    pending_id = payload.get("pending_id")
-    text = payload.get("text", "")
+@api_router.post("/drive/smart-upload")
+async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), current: User = Depends(get_current_user)):
+    contents = await file.read()
+    return await _drive_smart_upload_core(current, contents, file.filename, file.content_type, text)
+
+
+async def _drive_resolve_pending_core(current: User, pending_id: str, text: str) -> dict:
+    """Shared by the web endpoint and the Telegram bot. Second turn of the smart-upload
+    flow: the user's follow-up message may now name the folder. Resolves it and finally
+    uploads the stashed file."""
     doc = await db.pending_drive_uploads.find_one({"pending_id": pending_id, "user_id": current.user_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Nessun upload in attesa trovato")
@@ -3173,6 +3210,11 @@ async def drive_resolve_pending(payload: dict, current: User = Depends(get_curre
     finally:
         try: os.unlink(tmp_path)
         except Exception: pass
+
+
+@api_router.post("/drive/resolve-pending")
+async def drive_resolve_pending(payload: dict, current: User = Depends(get_current_user)):
+    return await _drive_resolve_pending_core(current, payload.get("pending_id"), payload.get("text", ""))
 
 
 # ============ KB DIRECT UPLOAD (no Google) ============

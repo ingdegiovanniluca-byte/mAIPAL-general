@@ -314,6 +314,8 @@ async def _cmd_help(update: Update, ctx):
         "🤖 mAIPAL su Telegram\n\n"
         "Puoi scrivere liberamente: il bot capisce da solo se stai:\n"
         "  💾 salvando informazioni · 🔍 cercando · 📝 creando task · 📔 scrivendo il diario\n\n"
+        "Mandami anche una foto (con o senza didascalia): te la salvo su Drive - se non capisco da solo "
+        "in quale cartella, te lo chiedo.\n\n"
         "Continuità: se il messaggio successivo prosegue lo stesso argomento, rimango nel contesto. "
         "Se cambi argomento, apro una nuova conversazione.\n\n"
         "Comandi:\n"
@@ -395,6 +397,9 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             return
         if state.get("pending_list_update"):
             await _run_list_update_flow(update, ctx, db, user, content)
+            return
+        if state.get("pending_drive_upload_id"):
+            await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], content)
             return
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)
@@ -689,6 +694,9 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if state.get("pending_list_update"):
             await _run_list_update_flow(update, ctx, db, user, transcript)
             return
+        if state.get("pending_drive_upload_id"):
+            await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], transcript)
+            return
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)
         intent = await _classify_intent(transcript, prev_ctx, list_names)
@@ -701,6 +709,64 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("voice message failed")
         await update.message.reply_text(f"⚠️ Errore trascrizione: {str(e)[:200]}")
+
+
+async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, text):
+    """Second turn of a photo/document save: this message may now name the Drive folder."""
+    from server import _drive_resolve_pending_core
+    chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
+    current = _to_user_pydantic(user)
+    try:
+        result = await _drive_resolve_pending_core(current, pending_id, text)
+    except Exception as e:
+        logger.exception("tg drive pending resolve failed")
+        detail = getattr(e, "detail", None) or str(e)
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(detail)[:300]}")
+        await _set_state(db, chat_id, user["user_id"], pending_drive_upload_id=None)
+        return
+
+    if result.get("status") == "needs_folder":
+        suggestions = result.get("suggestions") or []
+        hint = f" Cartelle esistenti: {', '.join(suggestions[:8])}." if suggestions else ""
+        await ctx.bot.send_message(chat_id=chat_id, text=f"📁 In quale cartella la salvo?{hint}")
+        return
+
+    await ctx.bot.send_message(chat_id=chat_id, text=f"✅ Salvata su Drive in \"{result['folder']}\".")
+    await _set_state(db, chat_id, user["user_id"], pending_drive_upload_id=None)
+
+
+async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from server import db, _drive_smart_upload_core
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
+        return
+    photos = update.message.photo
+    if not photos:
+        return
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+    caption = (update.message.caption or "").strip()
+    current = _to_user_pydantic(user)
+    try:
+        tg_file = await ctx.bot.get_file(photos[-1].file_id)  # last = highest resolution
+        raw = await tg_file.download_as_bytearray()
+        filename = f"foto_{uuid.uuid4().hex[:8]}.jpg"
+        result = await _drive_smart_upload_core(current, bytes(raw), filename, "image/jpeg", caption)
+    except Exception as e:
+        logger.exception("tg photo upload failed")
+        detail = getattr(e, "detail", None) or str(e)
+        await update.message.reply_text(f"⚠️ {str(detail)[:300]}")
+        return
+
+    if result.get("status") == "needs_folder":
+        suggestions = result.get("suggestions") or []
+        hint = f" Cartelle esistenti: {', '.join(suggestions[:8])}." if suggestions else ""
+        await _set_state(db, chat_id, user["user_id"], pending_drive_upload_id=result["pending_id"])
+        await update.message.reply_text(f"📸 In quale cartella la salvo?{hint}")
+        return
+
+    await update.message.reply_text(f"✅ Foto salvata su Drive in \"{result['folder']}\".")
 
 
 def build_application() -> Application:
@@ -716,6 +782,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("lista", _cmd_list_update))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, _msg_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _msg_free))
     return app
 
