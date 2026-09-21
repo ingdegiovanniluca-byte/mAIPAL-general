@@ -33,6 +33,8 @@ export default function CollectionsPage() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState({ level: 1 }); // {level:1} | {level:2, collection} | {level:3, collection, item}
   const [showCreate, setShowCreate] = useState(false);
+  const [draggedId, setDraggedId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
 
   const load = async () => {
     try {
@@ -46,6 +48,24 @@ export default function CollectionsPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  // Drag-to-reorder the list cards - moves optimistically in local state, then persists
+  // the new order server-side so it survives a reload.
+  const reorder = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return;
+    setCollections((cur) => {
+      const arr = [...cur];
+      const fromIdx = arr.findIndex((c) => c.id === fromId);
+      const toIdx = arr.findIndex((c) => c.id === toId);
+      if (fromIdx === -1 || toIdx === -1) return cur;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      api.patch("/collections/reorder", { ordered_ids: arr.map((c) => c.id) }).catch(() => {
+        toast.error("Errore nel salvare l'ordine delle liste");
+      });
+      return arr;
+    });
+  };
 
   const del = (coll) => {
     toast(`Eliminare "${coll.name}" e tutto il suo contenuto?`, {
@@ -108,7 +128,18 @@ export default function CollectionsPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {collections.map((c) => (
-          <div key={c.id} className="card-soft card-hover p-5 rounded-2xl cursor-pointer relative group" onClick={() => setView({ level: 2, collection: c })}>
+          <div
+            key={c.id}
+            draggable
+            onDragStart={(e) => { setDraggedId(c.id); e.dataTransfer.effectAllowed = "move"; }}
+            onDragOver={(e) => { e.preventDefault(); if (dragOverId !== c.id) setDragOverId(c.id); }}
+            onDragLeave={() => setDragOverId((v) => (v === c.id ? null : v))}
+            onDrop={(e) => { e.preventDefault(); reorder(draggedId, c.id); setDraggedId(null); setDragOverId(null); }}
+            onDragEnd={() => { setDraggedId(null); setDragOverId(null); }}
+            data-testid={`collection-card-${c.id}`}
+            className={`card-soft card-hover p-5 rounded-2xl cursor-grab active:cursor-grabbing relative group transition-transform duration-150 ${dragOverId === c.id && draggedId !== c.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === c.id ? "opacity-50" : ""}`}
+            onClick={() => setView({ level: 2, collection: c })}
+          >
             <div className="flex items-start justify-between mb-2">
               <div className="font-semibold text-lg">{c.name}</div>
               {c.visibility === "org" ? <Users size={14} className="text-white/40 mt-1" title="Condivisa col team" /> : <Lock size={14} className="text-white/30 mt-1" title="Privata" />}

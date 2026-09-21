@@ -235,6 +235,10 @@ class CollectionUpdatePayload(BaseModel):
     clear_max_sub_items_per_item: bool = False
 
 
+class CollectionReorderPayload(BaseModel):
+    ordered_ids: List[str]  # tutti gli id delle liste visibili all'utente, nel nuovo ordine
+
+
 class CollectionItemPayload(BaseModel):
     data: dict
     visibility: Optional[Literal["private", "org"]] = None
@@ -1933,6 +1937,19 @@ async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current
 async def list_collections(current: User = Depends(get_current_user)):
     cursor = db.collections.find(_visible_query(current), {"_id": 0}).sort("created_at", 1)
     collections = await cursor.to_list(200)
+    # Backfill sort_order (added for drag-to-reorder) for lists that predate it, keeping
+    # the order they already had (by creation date) instead of jumping around on first load.
+    missing = [c for c in collections if c.get("sort_order") is None]
+    if missing:
+        from pymongo import UpdateOne
+        next_order = max([c.get("sort_order", -1) for c in collections if c.get("sort_order") is not None], default=-1) + 1
+        ops = []
+        for c in missing:
+            c["sort_order"] = next_order
+            ops.append(UpdateOne({"id": c["id"]}, {"$set": {"sort_order": next_order}}))
+            next_order += 1
+        await db.collections.bulk_write(ops)
+    collections.sort(key=lambda c: c["sort_order"])
     ids = [c["id"] for c in collections]
     if ids:
         counts = await db.collection_items.aggregate([
@@ -1945,6 +1962,21 @@ async def list_collections(current: User = Depends(get_current_user)):
     return collections
 
 
+@api_router.patch("/collections/reorder")
+async def reorder_collections(payload: CollectionReorderPayload, current: User = Depends(get_current_user)):
+    """Persists the drag-and-drop order from the Liste page. Silently ignores any id the
+    caller can't edit or that doesn't exist, rather than failing the whole reorder."""
+    editable = await db.collections.find({**_editable_query(current)}, {"_id": 0, "id": 1}).to_list(500)
+    editable_ids = {c["id"] for c in editable}
+    ids = [i for i in payload.ordered_ids if i in editable_ids]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Nessuna lista valida da riordinare")
+    from pymongo import UpdateOne
+    ops = [UpdateOne({"id": cid}, {"$set": {"sort_order": idx}}) for idx, cid in enumerate(ids)]
+    await db.collections.bulk_write(ops)
+    return {"ok": True}
+
+
 @api_router.post("/collections")
 async def create_collection(payload: CollectionCreatePayload, current: User = Depends(get_current_user)):
     if not payload.fields:
@@ -1954,9 +1986,10 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
     if payload.max_sub_items_per_item is not None and payload.max_sub_items_per_item < 1:
         raise HTTPException(status_code=400, detail="Il limite di Elementi per Campo deve essere almeno 1")
     name = payload.name.strip() or "Nuova lista"
-    existing = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(500)
+    existing = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1, "sort_order": 1}).to_list(500)
     if any((e.get("name") or "").strip().lower() == name.lower() for e in existing):
         raise HTTPException(status_code=400, detail=f"Esiste già una lista chiamata \"{name}\".")
+    next_order = max([e.get("sort_order", -1) for e in existing], default=-1) + 1
     doc = {
         "id": f"coll_{uuid.uuid4().hex[:12]}",
         "name": name,
@@ -1966,6 +1999,7 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
         "visibility": payload.visibility,
         "max_items": payload.max_items,
         "max_sub_items_per_item": payload.max_sub_items_per_item,
+        "sort_order": next_order,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _stamp_owner_fields(doc, current)
