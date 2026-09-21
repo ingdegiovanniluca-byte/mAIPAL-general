@@ -2192,6 +2192,19 @@ async def list_collection_items(collection_id: str, current: User = Depends(get_
         raise HTTPException(status_code=404, detail="Lista non trovata")
     cursor = db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).sort("created_at", -1)
     items = await cursor.to_list(1000)
+    # Backfill sort_order (added for drag-to-reorder) for Campi that predate it, keeping
+    # the order they already had (by creation date) instead of jumping around on first load.
+    missing = [it for it in items if it.get("sort_order") is None]
+    if missing:
+        from pymongo import UpdateOne
+        next_order = max([it.get("sort_order", -1) for it in items if it.get("sort_order") is not None], default=-1) + 1
+        ops = []
+        for it in missing:
+            it["sort_order"] = next_order
+            ops.append(UpdateOne({"id": it["id"]}, {"$set": {"sort_order": next_order}}))
+            next_order += 1
+        await db.collection_items.bulk_write(ops)
+    items.sort(key=lambda it: it["sort_order"])
     ids = [it["id"] for it in items]
     if ids:
         counts = await db.collection_sub_items.aggregate([
@@ -2223,17 +2236,36 @@ async def create_collection_item(collection_id: str, payload: CollectionItemPayl
             existing = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "data": 1}).to_list(2000)
             if any(str((e.get("data") or {}).get(name_field["key"]) or "").strip().lower() == new_val for e in existing):
                 raise HTTPException(status_code=400, detail=f"Esiste già un elemento con {name_field['label']} \"{payload.data.get(name_field['key'])}\" in questa lista.")
+    existing_orders = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "sort_order": 1}).to_list(2000)
+    next_order = max([o.get("sort_order") for o in existing_orders if o.get("sort_order") is not None], default=-1) + 1
     doc = {
         "id": f"item_{uuid.uuid4().hex[:12]}",
         "collection_id": collection_id,
         "data": payload.data,
         "visibility": payload.visibility or coll.get("visibility", "private"),
+        "sort_order": next_order,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _stamp_owner_fields(doc, current)
     await db.collection_items.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+@api_router.patch("/collections/{collection_id}/items/reorder")
+async def reorder_collection_items(collection_id: str, payload: CollectionReorderPayload, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    existing = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "id": 1}).to_list(2000)
+    existing_ids = {it["id"] for it in existing}
+    ids = [i for i in payload.ordered_ids if i in existing_ids]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Nessun campo valido da riordinare")
+    from pymongo import UpdateOne
+    ops = [UpdateOne({"id": iid, "collection_id": collection_id}, {"$set": {"sort_order": idx}}) for idx, iid in enumerate(ids)]
+    await db.collection_items.bulk_write(ops)
+    return {"ok": True}
 
 
 @api_router.patch("/collections/{collection_id}/items/{item_id}")

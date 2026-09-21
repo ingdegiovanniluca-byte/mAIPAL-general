@@ -8,7 +8,7 @@ import { BookOpen, Trash2, Search, Star, Briefcase, PartyPopper, Palmtree, Home,
 // Diario theme colors (from the design spec)
 const DIARY_TITLE_COLOR = "#D9D9D9";
 const DIARY_TEXT_COLOR = "#000000";
-const DIARY_CARD_BG = "rgba(178, 143, 142, 0.2)"; // #B28F8E @ 20%
+const DIARY_CARD_BG = "rgba(178, 143, 142, 0.1)"; // #B28F8E @ 10%
 const DIARY_DAY_COLOR = "#AC6C41";
 const DIARY_FAV_COLOR = "#FFC000";
 
@@ -206,9 +206,9 @@ export default function JournalPage() {
                 style={{ backgroundColor: DIARY_CARD_BG }}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{e.title || "Diario"}</div>
+                  <div className="font-normal text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{e.title || "Diario"}</div>
                   {subtitle && <div className="text-xs truncate mt-0.5 opacity-80" style={{ color: DIARY_TITLE_COLOR }}>{subtitle}</div>}
-                  <div className="text-sm mt-1.5 line-clamp-3" style={{ color: DIARY_TEXT_COLOR }}>{e.cleaned_text}</div>
+                  <div className="text-xs mt-1.5 line-clamp-3" style={{ color: DIARY_TEXT_COLOR }}>{e.cleaned_text}</div>
                   {topics.length > 0 && (
                     <div className="flex items-center gap-2 mt-2">
                       {topics.map((t) => (

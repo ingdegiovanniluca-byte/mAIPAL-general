@@ -299,6 +299,8 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // campo in modifica, o {} per nuovo
   const [managingFields, setManagingFields] = useState(false);
+  const [draggedId, setDraggedId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
 
   const load = async () => {
     try {
@@ -319,6 +321,23 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasSubLevel = (coll.sub_item_fields || []).length > 0;
+
+  // Drag-to-reorder the Campi cards - same approach as the Liste page's card reorder.
+  const reorderItems = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return;
+    setItems((cur) => {
+      const arr = [...cur];
+      const fromIdx = arr.findIndex((it) => it.id === fromId);
+      const toIdx = arr.findIndex((it) => it.id === toId);
+      if (fromIdx === -1 || toIdx === -1) return cur;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      api.patch(`/collections/${coll.id}/items/reorder`, { ordered_ids: arr.map((it) => it.id) }).catch(() => {
+        toast.error("Errore nel salvare l'ordine dei campi");
+      });
+      return arr;
+    });
+  };
 
   const delItem = (item) => {
     toast("Eliminare questo campo?", {
@@ -364,7 +383,14 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
         {items.map((item) => (
           <div
             key={item.id}
-            className={`card-soft p-4 rounded-2xl relative group ${hasSubLevel ? "cursor-pointer card-hover" : ""}`}
+            draggable
+            onDragStart={(e) => { setDraggedId(item.id); e.dataTransfer.effectAllowed = "move"; }}
+            onDragOver={(e) => { e.preventDefault(); if (dragOverId !== item.id) setDragOverId(item.id); }}
+            onDragLeave={() => setDragOverId((v) => (v === item.id ? null : v))}
+            onDrop={(e) => { e.preventDefault(); reorderItems(draggedId, item.id); setDraggedId(null); setDragOverId(null); }}
+            onDragEnd={() => { setDraggedId(null); setDragOverId(null); }}
+            data-testid={`item-card-${item.id}`}
+            className={`card-soft p-4 rounded-2xl relative group cursor-grab active:cursor-grabbing transition-transform duration-150 ${hasSubLevel ? "card-hover" : ""} ${dragOverId === item.id && draggedId !== item.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === item.id ? "opacity-50" : ""}`}
             onClick={hasSubLevel ? () => onOpenItem(item) : undefined}
           >
             {(coll.fields || []).slice(0, 5).map((f) => (
