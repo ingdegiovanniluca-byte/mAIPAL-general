@@ -135,6 +135,9 @@ class ChatRequest(BaseModel):
     # "data:image/...;base64,..." URI, already size-checked client-side. Stored on the
     # journal entry so the Diario page can show them without depending on Google Drive.
     images: Optional[List[str]] = None
+    # Non-image files attached to a diary entry (action == "journal" only) - already
+    # uploaded to Drive client-side, each {"name": ..., "url": ...}.
+    documents: Optional[List[dict]] = None
 
 
 class Task(BaseModel):
@@ -1567,10 +1570,10 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             elif action == "journal":
                 from datetime import date as _date
                 # Each image is a "data:image/...;base64,..." URI, already size-checked
-                # client-side - re-checked here (max 3, ~2MB decoded each) since the app
+                # client-side - re-checked here (max 5, ~2MB decoded each) since the app
                 # always renders straight from this field, independent of Google Drive.
                 valid_images: List[str] = []
-                for img in (payload.images or [])[:3]:
+                for img in (payload.images or [])[:5]:
                     if not isinstance(img, str) or not img.startswith("data:image/") or "," not in img:
                         continue
                     try:
@@ -1579,6 +1582,14 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     except Exception:
                         continue
                     valid_images.append(img)
+
+                # Non-image documents (already uploaded to Drive client-side by the time
+                # they get here) - just {"name", "url"} references, nothing to re-validate.
+                valid_documents = [
+                    {"name": str(d.get("name") or "documento"), "url": str(d["url"])}
+                    for d in (payload.documents or [])
+                    if isinstance(d, dict) and d.get("url")
+                ]
 
                 jr = {
                     "id": f"jr_{uuid.uuid4().hex[:12]}",
@@ -1591,6 +1602,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                     "tags": (meta or {}).get("tags", []),
                     "highlights": (meta or {}).get("highlights", []),
                     "images": valid_images,
+                    "documents": valid_documents,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "source_conv": conv_id,
                 }
@@ -3245,6 +3257,19 @@ async def delete_journal(entry_id: str, current: User = Depends(get_current_user
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+@api_router.delete("/journal/{entry_id}/images/{index}")
+async def delete_journal_image(entry_id: str, index: int, current: User = Depends(get_current_user)):
+    entry = await db.journal_entries.find_one({"id": entry_id, "user_id": current.user_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Voce di diario non trovata")
+    images = list(entry.get("images") or [])
+    if index < 0 or index >= len(images):
+        raise HTTPException(status_code=404, detail="Immagine non trovata")
+    images.pop(index)
+    await db.journal_entries.update_one({"id": entry_id, "user_id": current.user_id}, {"$set": {"images": images}})
+    return {"images": images}
 
 
 # ============ CONTEXTUAL CHAT (per task/todo) ============

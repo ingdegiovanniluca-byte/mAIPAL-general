@@ -418,9 +418,10 @@ export default function ChatPage() {
     }
 
     const journalImgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
+    const journalDocs = attachments.filter((a) => a.journalDocument).map((a) => ({ name: a.name, url: a.url }));
     if (attachments.length > 0) {
       const kbLine = attachments.filter((a) => a.kb).map((a) => `📎 ${a.name} · ${a.chunks} chunk indicizzati (~${a.chars} caratteri)`).join("\n");
-      const driveLine = attachments.filter((a) => !a.kb && !a.journalImage).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
+      const driveLine = attachments.filter((a) => !a.kb && !a.journalImage && !a.journalDocument).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
       const parts = [];
       if (kbLine) parts.push(`Allegati caricati nella knowledge base personale:\n${kbLine}`);
       if (driveLine) parts.push(`Allegati caricati su Drive:\n${driveLine}`);
@@ -459,6 +460,7 @@ export default function ChatPage() {
     const payload = { action: active, content: currentQuestion };
     if (active === "info_request") payload.filters = { scope };
     if (active === "journal" && journalImgs.length > 0) payload.images = journalImgs;
+    if (active === "journal" && journalDocs.length > 0) payload.documents = journalDocs;
     if (thread?.conv_id) payload.conv_id = thread.conv_id;
 
     await streamChat(
@@ -485,18 +487,35 @@ export default function ChatPage() {
 
     // Diario: photos stay local (compressed into a data URI) instead of going through
     // KB/Drive - they're only sent to the backend once, embedded in the journal entry,
-    // when the message is saved (see send()'s payload.images).
+    // when the message is saved (see send()'s payload.images). Non-image files go to
+    // Drive instead (payload.documents), same as a plain attachment elsewhere in the app.
     if (active === "journal") {
-      const existingCount = attachments.filter((a) => a.journalImage).length;
-      let remaining = 3 - existingCount;
+      const existingImgCount = attachments.filter((a) => a.journalImage).length;
+      let remainingImgs = 5 - existingImgCount;
       for (const f of files) {
-        if (!f.type.startsWith("image/")) { toast.error(`${f.name} non è un'immagine`); continue; }
-        if (remaining <= 0) { toast.error("Massimo 3 foto per voce di diario"); break; }
+        if (!f.type.startsWith("image/")) {
+          setUploadingFiles((u) => [...u, f.name]);
+          try {
+            const fd = new FormData();
+            fd.append("file", f, f.name);
+            const res = await fetch(`${API}/attachments/upload`, { method: "POST", body: fd, credentials: "include" });
+            const j = await res.json();
+            if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);
+            setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link, journalDocument: true }]);
+            toast.success(`${f.name} → Drive`);
+          } catch (err) {
+            toast.error(`Errore con ${f.name}: ${err.message}`);
+          } finally {
+            setUploadingFiles((u) => u.filter((n) => n !== f.name));
+          }
+          continue;
+        }
+        if (remainingImgs <= 0) { toast.error("Massimo 5 foto per voce di diario"); continue; }
         setUploadingFiles((u) => [...u, f.name]);
         try {
           const dataUri = await fileToJournalImageDataUri(f);
           setAttachments((a) => [...a, { name: f.name, journalImage: true, dataUri }]);
-          remaining -= 1;
+          remainingImgs -= 1;
         } catch (err) {
           toast.error(`Errore con ${f.name}: ${err.message}`);
         } finally {
@@ -770,7 +789,7 @@ export default function ChatPage() {
                 <Send size={14} /> {streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : uploadingFiles.length > 0 ? "Carico…" : recording ? "Ferma & invia" : "Invia"}
               </button>
             </div>
-            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*" : undefined} data-testid="file-input" />
+            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : undefined} data-testid="file-input" />
           </div>
         </aside>
 

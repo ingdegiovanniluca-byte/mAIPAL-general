@@ -3,7 +3,31 @@ import { api } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Search, Star } from "lucide-react";
+import { BookOpen, Trash2, Search, Star, Briefcase, PartyPopper, Palmtree, Home, HeartPulse, Users, Plane, X, Paperclip } from "lucide-react";
+
+// Diario theme colors (from the design spec)
+const DIARY_TITLE_COLOR = "#D9D9D9";
+const DIARY_TEXT_COLOR = "#000000";
+const DIARY_CARD_BG = "rgba(178, 143, 142, 0.2)"; // #B28F8E @ 20%
+const DIARY_DAY_COLOR = "#AC6C41";
+const DIARY_FAV_COLOR = "#FFC000";
+
+// I 7 temi riconosciuti nelle giornate, mostrati come icone bianche sotto l'anteprima del
+// testo - dedotti dai tag che l'AI assegna alla voce (nessuna scelta manuale per ora).
+const TOPIC_ICONS = [
+  { key: "lavoro", icon: Briefcase, match: ["lavoro", "lavorativo", "ufficio", "riunione", "meeting", "progetto", "collega", "clienti"] },
+  { key: "tempo_libero", icon: PartyPopper, match: ["tempo libero", "svago", "hobby", "divertimento", "amici", "festa"] },
+  { key: "vacanza", icon: Palmtree, match: ["vacanza", "vacanze", "ferie"] },
+  { key: "vita_privata", icon: Home, match: ["vita privata", "privato", "personale", "casa"] },
+  { key: "salute", icon: HeartPulse, match: ["salute", "medico", "malattia", "palestra", "sport", "benessere"] },
+  { key: "famiglia", icon: Users, match: ["famiglia", "figli", "genitori", "moglie", "marito", "matrimonio"] },
+  { key: "viaggi", icon: Plane, match: ["viaggio", "viaggi", "trasferta", "volo"] },
+];
+const topicsForEntry = (entry) => {
+  const tags = (entry.tags || []).map((t) => (t || "").toLowerCase());
+  if (tags.length === 0) return [];
+  return TOPIC_ICONS.filter((t) => tags.some((tag) => t.match.some((kw) => tag.includes(kw))));
+};
 
 const toISODate = (d) => d.toISOString().slice(0, 10);
 
@@ -93,6 +117,13 @@ export default function JournalPage() {
     });
   };
 
+  const delImage = async (id, index) => {
+    const prev = entries;
+    setEntries((es) => es.map((e) => (e.id === id ? { ...e, images: (e.images || []).filter((_, i) => i !== index) } : e)));
+    try { await api.delete(`/journal/${id}/images/${index}`); }
+    catch { toast.error("Errore nell'eliminare l'immagine"); setEntries(prev); }
+  };
+
   const expandedEntry = entries.find((e) => e.id === expandedId) || null;
 
   return (
@@ -153,28 +184,38 @@ export default function JournalPage() {
           const { day, monYear } = formatBadge(e.date);
           const images = (e.images || []).slice(0, 3);
           const subtitle = (e.tags || []).length > 0 ? `Argomenti: ${e.tags.join(", ")}` : "";
+          const topics = topicsForEntry(e);
           return (
             <div key={e.id} className="flex items-stretch gap-3" data-testid="journal-entry">
-              <div className="flex flex-col items-center justify-center gap-1.5 shrink-0 w-20 rounded-2xl bg-white/10 text-center py-2.5 px-1">
-                <div className="text-2xl font-bold text-white leading-none">{day}</div>
-                <div className="text-[10px] uppercase tracking-widest text-white/60">{monYear}</div>
+              <div className="flex flex-col items-center justify-center gap-1.5 shrink-0 w-20 rounded-2xl text-center py-2.5 px-1" style={{ backgroundColor: DIARY_CARD_BG }}>
+                <div className="text-2xl font-normal leading-none" style={{ color: DIARY_DAY_COLOR }}>{day}</div>
+                <div className="text-[10px] uppercase tracking-widest font-normal" style={{ color: DIARY_TITLE_COLOR }}>{monYear}</div>
                 <button
                   data-testid="journal-fav"
                   onClick={() => toggleFav(e.id, !!e.favorite)}
                   title={e.favorite ? "Rimuovi dai preferiti" : "Segna come giornata memorabile"}
-                  className={`liquid-glass-btn p-1.5 rounded-full transition-colors duration-150 mt-0.5 ${e.favorite ? "text-amber-400" : "text-white/50"}`}
+                  className="p-1.5 rounded-lg transition-colors duration-150 mt-0.5"
+                  style={{ backgroundColor: e.favorite ? DIARY_FAV_COLOR : "transparent" }}
                 >
-                  <Star size={15} className={e.favorite ? "fill-current" : ""} />
+                  <Star size={15} className={e.favorite ? "text-white fill-current" : "text-white/50"} />
                 </button>
               </div>
               <button
                 onClick={() => setExpandedId(e.id)}
-                className="flex-1 min-w-0 text-left p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm hover:bg-white/10 transition-colors flex items-center gap-4"
+                className="flex-1 min-w-0 text-left p-4 rounded-2xl shadow-sm hover:brightness-110 transition-[filter] flex items-center gap-4"
+                style={{ backgroundColor: DIARY_CARD_BG }}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-base text-white truncate">{e.title || "Diario"}</div>
-                  {subtitle && <div className="text-xs text-white/50 truncate mt-0.5">{subtitle}</div>}
-                  <div className="text-sm text-white/75 mt-1.5 line-clamp-3">{e.cleaned_text}</div>
+                  <div className="font-semibold text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{e.title || "Diario"}</div>
+                  {subtitle && <div className="text-xs truncate mt-0.5 opacity-80" style={{ color: DIARY_TITLE_COLOR }}>{subtitle}</div>}
+                  <div className="text-sm mt-1.5 line-clamp-3" style={{ color: DIARY_TEXT_COLOR }}>{e.cleaned_text}</div>
+                  {topics.length > 0 && (
+                    <div className="flex items-center gap-2 mt-2">
+                      {topics.map((t) => (
+                        <t.icon key={t.key} size={15} className="text-white" title={t.key.replace("_", " ")} />
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {images.length > 0 && (
                   <div className="flex gap-1 shrink-0">
@@ -195,7 +236,7 @@ export default function JournalPage() {
           <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="journal-expanded">
             <DialogHeader>
               <div className="flex items-center justify-between gap-2 pr-6">
-                <DialogTitle>{expandedEntry.title || "Diario"}</DialogTitle>
+                <DialogTitle style={{ color: DIARY_TITLE_COLOR }}>{expandedEntry.title || "Diario"}</DialogTitle>
                 <button
                   data-testid="journal-delete"
                   onClick={() => { del(expandedEntry.id); setExpandedId(null); }}
@@ -210,7 +251,17 @@ export default function JournalPage() {
             {(expandedEntry.images || []).length > 0 && (
               <div className={`grid gap-1.5 rounded-2xl overflow-hidden ${imgGridClass(expandedEntry.images.length)}`}>
                 {expandedEntry.images.map((src, i) => (
-                  <img key={i} src={src} alt="" className="w-full h-48 md:h-56 object-cover" />
+                  <div key={i} className="relative group">
+                    <img src={src} alt="" className="w-full h-48 md:h-56 object-cover" />
+                    <button
+                      data-testid="journal-image-delete"
+                      onClick={() => delImage(expandedEntry.id, i)}
+                      title="Elimina immagine"
+                      className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -226,6 +277,15 @@ export default function JournalPage() {
             <div className="mt-3 pt-3 border-t border-white/15 prose-answer whitespace-pre-wrap text-[15px] text-white">
               {expandedEntry.cleaned_text}
             </div>
+            {(expandedEntry.documents || []).length > 0 && (
+              <div className="mt-3 pt-3 border-t border-white/15 space-y-1.5">
+                {expandedEntry.documents.map((d, i) => (
+                  <a key={i} href={d.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm text-white/80 hover:text-white">
+                    <Paperclip size={13} className="shrink-0" /> <span className="truncate">{d.name}</span>
+                  </a>
+                ))}
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       )}
