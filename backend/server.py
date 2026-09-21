@@ -1641,7 +1641,7 @@ def _parse_task_json(text: str) -> Optional[dict]:
         return None
 
 
-async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
+async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default_reminder_enabled: bool = False):
     now = datetime.now(timezone.utc).isoformat()
     # RULE: if due_date is present → TASK, otherwise → TODO (regardless of any 'type' field the LLM returned)
     due_date = parsed.get("due_date")
@@ -1668,7 +1668,10 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
             "notes": parsed.get("notes", ""),
             "calendar_synced": False,
             "reminder_sent": False,
-            "reminder_enabled": reminder_offset_minutes is not None,
+            # A web-created task defaults the reminder off (there's a one-click toggle on
+            # the card to turn it on); a Telegram-created one has no such toggle, so the
+            # caller passes default_reminder_enabled=True there instead.
+            "reminder_enabled": reminder_offset_minutes is not None or default_reminder_enabled,
             "reminder_offset_minutes": reminder_offset_minutes,
             "reminder_msg_sent": False,
             "created_at": now,
@@ -1690,6 +1693,111 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str):
             "source_conv": conv_id,
         }
         await db.todos.insert_one(doc)
+
+
+async def interpret_task_command(text: str, catalog: List[dict]) -> Optional[dict]:
+    """Cheap LLM check: is this free text asking to DELETE or mark-COMPLETE an EXISTING
+    task/to-do (as opposed to creating a new one, or an unrelated message)? Returns None
+    when it isn't - the caller then falls through to normal task/to-do creation, exactly
+    like classify_save_intent does for "Modifica liste" vs a generic note."""
+    if not catalog:
+        return None
+    catalog_desc = ", ".join(f'"{c["title"]}"' for c in catalog[:50])
+    system = (
+        "Sei l'assistente che interpreta richieste su task/to-do ESISTENTI dell'utente. "
+        f"Task/to-do attivi dell'utente: {catalog_desc}. "
+        "Se il messaggio chiede di ELIMINARE/CANCELLARE/RIMUOVERE un task o to-do esistente, oppure di segnarlo "
+        "come COMPLETATO/FATTO/FINITO, rispondi SOLO con un JSON: "
+        '{"op": "delete", "query": "testo breve che identifica il task/to-do"} oppure '
+        '{"op": "complete", "query": "..."}. '
+        "Se il messaggio NON è un'istruzione di questo tipo (es. sta creando/descrivendo un NUOVO task/to-do, o è "
+        'un messaggio generico), rispondi SOLO con: {"op": null}.'
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"taskcmd_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")
+        raw = (await chat.send_message(UserMessage(text=text))).strip()
+        import re as _re, json as _json
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            return None
+        parsed = _json.loads(m.group(0))
+        if parsed.get("op") not in ("delete", "complete"):
+            return None
+        return {"op": parsed["op"], "query": (parsed.get("query") or "").strip()}
+    except Exception:
+        logger.exception("interpret_task_command failed")
+        return None
+
+
+async def _apply_task_command(target_id: str, op: str, user_id: str) -> dict:
+    """Actually deletes/completes a task or to-do, given a resolved id (from
+    _execute_task_command, or from the caller re-invoking after an ambiguous choice).
+    Always scoped to `user_id` so a crafted id from one user can never touch another's."""
+    is_task = target_id.startswith("task_")
+    coll = db.tasks if is_task else db.todos
+    doc = await coll.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+    if not doc:
+        return {"status": "not_found"}
+    title = doc.get("title", "")
+    label = "il task" if is_task else "il to-do"
+    if op == "delete":
+        await coll.delete_one({"id": target_id, "user_id": user_id})
+        return {"status": "ok", "message": f"Ho eliminato {label} \"{title}\"."}
+    if is_task:
+        await coll.update_one({"id": target_id, "user_id": user_id}, {"$set": {"completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}})
+    else:
+        await coll.update_one({"id": target_id, "user_id": user_id}, {"$set": {"status": "fatto", "completion_percent": 100}})
+    return {"status": "ok", "message": f"Ho segnato come completato {label} \"{title}\"."}
+
+
+async def _execute_task_command(user_id: str, text: str) -> Optional[dict]:
+    """Returns None if `text` isn't a delete/complete instruction on an existing task/
+    to-do (the caller should fall through to normal creation). Otherwise resolves the
+    target deterministically (same fuzzy matcher as _execute_list_update, never an
+    LLM-picked id) and performs the action. Returns {"status": "ok"|"ambiguous"|
+    "not_found", ...}."""
+    tasks = await db.tasks.find({"user_id": user_id}, {"_id": 0}).to_list(500)
+    todos = await db.todos.find({"user_id": user_id}, {"_id": 0}).to_list(500)
+    catalog = [{"id": t["id"], "title": t.get("title", "")} for t in tasks] + [{"id": t["id"], "title": t.get("title", "")} for t in todos]
+    if not catalog:
+        return None
+    interpreted = await interpret_task_command(text, catalog)
+    if not interpreted:
+        return None
+    ids = lu.match_candidates(interpreted["query"] or text, [(c["id"], c["title"]) for c in catalog])
+    if not ids:
+        return {"status": "not_found", "query": interpreted["query"]}
+    if len(ids) > 1:
+        by_id = {c["id"]: c for c in catalog}
+        return {"status": "ambiguous", "op": interpreted["op"], "candidates": [{"id": i, "title": by_id[i]["title"]} for i in ids]}
+    return await _apply_task_command(ids[0], interpreted["op"], user_id)
+
+
+class TaskCommandPayload(BaseModel):
+    text: str
+
+
+class TaskCommandApplyPayload(BaseModel):
+    target_id: str
+    op: str
+
+
+@api_router.post("/tasks/command")
+async def run_task_command(payload: TaskCommandPayload, current: User = Depends(get_current_user)):
+    """Web chat's counterpart to the Telegram bot's task-command fast path: lets "Salva
+    task/to-do" also handle 'elimina/segna come fatto il task X' instead of just creating
+    new ones. Returns {"status": "not_applicable"} when the text isn't such an instruction,
+    so the caller can fall through to normal task/to-do creation."""
+    res = await _execute_task_command(current.user_id, payload.text)
+    return res or {"status": "not_applicable"}
+
+
+@api_router.post("/tasks/command/apply")
+async def apply_task_command(payload: TaskCommandApplyPayload, current: User = Depends(get_current_user)):
+    """Follow-up call once the user picked one of an 'ambiguous' result's candidates."""
+    if payload.op not in ("delete", "complete"):
+        raise HTTPException(status_code=400, detail="Operazione non valida")
+    return await _apply_task_command(payload.target_id, payload.op, current.user_id)
 
 
 # ============ CONVERSATIONS ============

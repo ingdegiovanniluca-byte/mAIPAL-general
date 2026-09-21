@@ -319,6 +319,34 @@ export default function ChatPage() {
     }
   };
 
+  // "elimina/segna come fatto il task X" - checked before a plain "task_todo" message is
+  // treated as a request to CREATE a new task, same false-confirmation trap already fixed
+  // for Telegram: without this, the LLM would just chat back "fatto!" with no actual delete
+  // tool available to it in the normal creation flow.
+  const appendTaskCommandResult = (res) => {
+    if (res.status === "ambiguous") {
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "Ho trovato più corrispondenze. Quale intendi?", taskAmbiguous: res }] }));
+      return;
+    }
+    if (res.status === "not_found") {
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: `⚠️ Non ho trovato nessun task/to-do che corrisponda a "${res.query || ""}".` }] }));
+      return;
+    }
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: `✅ ${res.message}` }] }));
+  };
+
+  const resolveTaskCommand = async (targetId, op) => {
+    setStreaming(true);
+    try {
+      const r = await api.post("/tasks/command/apply", { target_id: targetId, op });
+      appendTaskCommandResult(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore");
+    } finally {
+      setStreaming(false);
+    }
+  };
+
   const send = async () => {
     if (active === "vet_report") { await sendVetReport(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
@@ -368,6 +396,25 @@ export default function ChatPage() {
           }
         } catch { /* classification failed: fall through to a normal save */ }
       }
+    }
+
+    // "Salvataggio task o to-do" doubles as "elimina/segna come fatto" - checked on every
+    // fresh message before it's treated as a request to create a new one.
+    if (active === "task_todo" && attachments.length === 0 && currentQuestion && (!thread || thread.action === "task_todo")) {
+      try {
+        const cmd = await api.post("/tasks/command", { text: currentQuestion });
+        if (cmd.data?.status && cmd.data.status !== "not_applicable") {
+          setText("");
+          if (thread) {
+            setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: currentQuestion }] }));
+          } else {
+            setThread({ conv_id: null, action: "task_todo", messages: [{ role: "user", content: currentQuestion }], liveAnswer: "" });
+          }
+          appendTaskCommandResult(cmd.data);
+          setStreaming(false);
+          return;
+        }
+      } catch { /* check failed: fall through to a normal task/to-do creation */ }
     }
 
     const journalImgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
@@ -840,6 +887,20 @@ export default function ChatPage() {
                             className={`text-xs px-3 py-1.5 rounded-full disabled:opacity-50 ${c.confirm ? "bg-red-500/20 hover:bg-red-500/30 text-red-200" : "bg-white/10 hover:bg-white/20 text-white"}`}
                           >
                             {c.name || c.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {m.taskAmbiguous && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-task-choices">
+                        {m.taskAmbiguous.candidates.map((c) => (
+                          <button
+                            key={c.id}
+                            onClick={() => resolveTaskCommand(c.id, m.taskAmbiguous.op)}
+                            disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-white/10 hover:bg-white/20 text-white"
+                          >
+                            {c.title}
                           </button>
                         ))}
                       </div>

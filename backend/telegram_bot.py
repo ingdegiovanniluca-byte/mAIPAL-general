@@ -234,13 +234,15 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         # when the model attached a task with a certain due_date.
         if meta and meta.get("task") and isinstance(meta["task"], dict) and meta["task"].get("due_date"):
             try:
-                await _create_task_or_todo(user_doc["user_id"], meta["task"], conv_id)
+                await _create_task_or_todo(user_doc["user_id"], meta["task"], conv_id, default_reminder_enabled=True)
             except Exception:
                 logger.exception("auto task creation from info_upload failed")
     elif action == "task_todo":
         parsed = _parse_task_json(answer) or meta
         if parsed:
-            await _create_task_or_todo(user_doc["user_id"], parsed, conv_id)
+            # A Telegram-created task has no reminder-toggle button like the web app does,
+            # so the reminder defaults ON here - otherwise it silently never fires.
+            await _create_task_or_todo(user_doc["user_id"], parsed, conv_id, default_reminder_enabled=True)
     elif action == "journal":
         from datetime import date as _date
         await db.journal_entries.insert_one({
@@ -408,6 +410,8 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         if action == "list_update":
             await _run_list_update_flow(update, ctx, db, user, content)
             return
+        if action == "task_todo" and await _try_task_command(update, ctx, db, user, content):
+            return
         force_new = (intent["continuation"] == "new") or (prev_ctx is None) or (state.get("current_action") != action)
 
     await _run_and_reply(update, ctx, db, user, action, content, force_new=force_new)
@@ -554,6 +558,28 @@ async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None
     await _set_state(db, chat_id, user["user_id"], pending_list_update=None, pending_list_context=None)
 
 
+async def _try_task_command(update_or_query, ctx, db, user, text: str) -> bool:
+    """Fast path for 'elimina/segna come fatto il task X' - checked before a "task_todo"-
+    classified message is treated as a request to CREATE a new task. Without this, the LLM
+    would just chat back "fatto!" without ever actually deleting/completing anything (it has
+    no such tool in the normal task_todo flow), the same false-confirmation trap fixed
+    earlier for Drive uploads. Returns True if it handled the message (caller should stop
+    processing it any further)."""
+    from server import _execute_task_command
+    res = await _execute_task_command(user["user_id"], text)
+    if res is None:
+        return False
+    chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
+    if res["status"] == "ok":
+        await ctx.bot.send_message(chat_id=chat_id, text=f"✅ {res['message']}")
+    elif res["status"] == "ambiguous":
+        buttons = [[InlineKeyboardButton(c["title"][:60], callback_data=f"taskcmd:{res['op']}:{c['id']}")] for c in res["candidates"]]
+        await ctx.bot.send_message(chat_id=chat_id, text="Ho trovato più corrispondenze. Quale intendi?", reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await ctx.bot.send_message(chat_id=chat_id, text=f"Non ho trovato nessun task/to-do che corrisponda a \"{res.get('query', text)}\".")
+    return True
+
+
 async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from server import db
     q = update.callback_query
@@ -608,6 +634,12 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             item_id=pctx.get("item_id"), fields=pctx.get("fields"), item_query=pctx.get("item_query"),
             sub_item_query=pctx.get("sub_item_query"), confirm=True, items=pctx.get("items"),
         )
+    elif data.startswith("taskcmd:"):
+        _, op, target_id = data.split(":", 2)
+        from server import _apply_task_command
+        res = await _apply_task_command(target_id, op, user["user_id"])
+        text = f"✅ {res['message']}" if res.get("status") == "ok" else "⚠️ Non trovato (forse già eliminato/completato)."
+        await ctx.bot.send_message(chat_id=chat_id, text=text)
     elif data.startswith("act:"):
         forced = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)
@@ -709,6 +741,8 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         action = intent["action"]
         if action == "list_update":
             await _run_list_update_flow(update, ctx, db, user, transcript)
+            return
+        if action == "task_todo" and await _try_task_command(update, ctx, db, user, transcript):
             return
         force_new = (intent["continuation"] == "new") or (prev_ctx is None) or (state.get("current_action") != action)
         await _run_and_reply(update, ctx, db, user, action, transcript, force_new=force_new)
