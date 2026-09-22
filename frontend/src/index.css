@@ -142,9 +142,7 @@ body {
 .priority-med  { border-left: 3px solid #DD772F; }
 .priority-low  { border-left: 3px solid #7C6A7D; }
 
-.column-tint-high { background: linear-gradient(180deg, rgba(142, 46, 17, 0.16) 0%, rgba(142, 46, 17, 0.02) 60%); }
-.column-tint-med  { background: linear-gradient(180deg, rgba(221, 119, 47, 0.18) 0%, rgba(221, 119, 47, 0.02) 60%); }
-.column-tint-low  { background: linear-gradient(180deg, rgba(124, 106, 125, 0.18) 0%, rgba(124, 106, 125, 0.02) 60%); }
+.column-tint-high, .column-tint-med, .column-tint-low { background: rgba(237, 235, 235, 0.2); }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
