@@ -219,8 +219,14 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
              "$set": {"updated_at": now_iso}}
         )
 
-    # Side effects
-    if action == "info_upload" and new_conv:
+    # Side effects. info_upload always saves a new KB chunk on EVERY turn (not just the
+    # first message of a new conversation) - a follow-up message in an ongoing "salva
+    # informazioni" thread is virtually always a NEW distinct fact (e.g. "oggi Martina ha
+    # fatto lezione di Pilates" followed later, in the same thread, by "venerdì scorso
+    # Martina ha fatto lezione di Pilates"), not a duplicate of the first. Gating this to
+    # new_conv silently dropped every fact stated in a follow-up turn, with no error and no
+    # sign anything was wrong - it just never became retrievable.
+    if action == "info_upload":
         await db.kb_chunks.insert_one({
             "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
             "user_id": user_doc["user_id"],

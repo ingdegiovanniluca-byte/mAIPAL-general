@@ -1511,59 +1511,69 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             },
         )
 
-        # side-effects only on first exchange of upload/task actions
+        # info_upload always persists a new KB chunk on EVERY user turn - unlike
+        # task_todo/journal below, a follow-up message in an ongoing "Salva informazioni"
+        # conversation is virtually always a NEW distinct fact to remember (e.g. "oggi
+        # Martina ha fatto lezione di Pilates" followed later by "venerdì scorso Martina ha
+        # fatto lezione di Pilates" - two separate facts, both needed for "quando ha fatto
+        # Pilates Martina?" to be answerable), not a duplicate of the first message. Gating
+        # this on `not prior_messages` (first turn only) silently dropped every fact stated
+        # in a follow-up turn - it never became retrievable, with no error to the user.
+        if action == "info_upload":
+            try:
+                e = await emb.embed_texts([payload.content])
+                embedding = e[0] if e else None
+            except Exception:
+                embedding = None
+            doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+            await db.kb_chunks.insert_one({
+                "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
+                "user_id": current.user_id,
+                "text": payload.content,
+                "title": (meta or {}).get("title") if meta else None,
+                "tags": (meta or {}).get("tags", []) if meta else [],
+                "summary": (meta or {}).get("summary") if meta else visible_answer,
+                "embedding": embedding,
+                "doc_id": doc_id,
+                "source_type": "chat",
+                "chunk_index": 0,
+                "conv_id": conv_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            # Classify + persist document-level record so it appears in the Documents page
+            try:
+                classification = await _classify_document(payload.content)
+            except Exception:
+                classification = {"category": "altro", "keywords": []}
+            await db.kb_documents.insert_one({
+                "doc_id": doc_id,
+                "user_id": current.user_id,
+                "name": (meta or {}).get("title") if meta else (payload.content[:60] + ("…" if len(payload.content) > 60 else "")),
+                "ext": "chat",
+                "source_type": "chat",
+                "category": classification["category"],
+                "keywords": list({*(classification["keywords"] or []), *(((meta or {}).get("tags") or []))})[:8],
+                "chunks_count": 1,
+                "chars": len(payload.content),
+                "size_bytes": len(payload.content.encode("utf-8")),
+                "preview": ((meta or {}).get("summary") if meta else payload.content)[:280],
+                "drive_link": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "conv_id": conv_id,
+            })
+            # If a clearly-dated follow-up action was embedded in the uploaded info
+            # (e.g. "ricordami di chiedere come sta tra 10 giorni"), the model attaches
+            # a 'task' field to the meta - only when it's certain of the date.
+            if meta and meta.get("task") and isinstance(meta["task"], dict) and meta["task"].get("due_date"):
+                try:
+                    await _create_task_or_todo(current.user_id, meta["task"], conv_id)
+                except Exception:
+                    logger.exception("auto task creation from info_upload failed")
+
+        # side-effects only on first exchange of task/journal actions - a follow-up turn is
+        # normally a refinement of the SAME task/entry, not a brand new one.
         if not prior_messages:
-            if action == "info_upload":
-                try:
-                    e = await emb.embed_texts([payload.content])
-                    embedding = e[0] if e else None
-                except Exception:
-                    embedding = None
-                doc_id = f"doc_{uuid.uuid4().hex[:12]}"
-                await db.kb_chunks.insert_one({
-                    "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
-                    "user_id": current.user_id,
-                    "text": payload.content,
-                    "title": (meta or {}).get("title") if meta else None,
-                    "tags": (meta or {}).get("tags", []) if meta else [],
-                    "summary": (meta or {}).get("summary") if meta else visible_answer,
-                    "embedding": embedding,
-                    "doc_id": doc_id,
-                    "source_type": "chat",
-                    "chunk_index": 0,
-                    "conv_id": conv_id,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                })
-                # Classify + persist document-level record so it appears in the Documents page
-                try:
-                    classification = await _classify_document(payload.content)
-                except Exception:
-                    classification = {"category": "altro", "keywords": []}
-                await db.kb_documents.insert_one({
-                    "doc_id": doc_id,
-                    "user_id": current.user_id,
-                    "name": (meta or {}).get("title") if meta else (payload.content[:60] + ("…" if len(payload.content) > 60 else "")),
-                    "ext": "chat",
-                    "source_type": "chat",
-                    "category": classification["category"],
-                    "keywords": list({*(classification["keywords"] or []), *(((meta or {}).get("tags") or []))})[:8],
-                    "chunks_count": 1,
-                    "chars": len(payload.content),
-                    "size_bytes": len(payload.content.encode("utf-8")),
-                    "preview": ((meta or {}).get("summary") if meta else payload.content)[:280],
-                    "drive_link": None,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "conv_id": conv_id,
-                })
-                # If a clearly-dated follow-up action was embedded in the uploaded info
-                # (e.g. "ricordami di chiedere come sta tra 10 giorni"), the model attaches
-                # a 'task' field to the meta - only when it's certain of the date.
-                if meta and meta.get("task") and isinstance(meta["task"], dict) and meta["task"].get("due_date"):
-                    try:
-                        await _create_task_or_todo(current.user_id, meta["task"], conv_id)
-                    except Exception:
-                        logger.exception("auto task creation from info_upload failed")
-            elif action == "task_todo":
+            if action == "task_todo":
                 logger.info(f"[task_todo] meta={meta!r}")
                 if meta:
                     await _create_task_or_todo(current.user_id, meta, conv_id)
