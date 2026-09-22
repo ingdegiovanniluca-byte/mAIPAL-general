@@ -8,9 +8,33 @@ from datetime import datetime, timezone
 
 import openai
 
+import usage_tracking as ut
+
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o"
+
+
+def _track(resp, user_id, status: str = "ok"):
+    """This module builds its own openai client and uses the Responses API (not Chat
+    Completions, for web_search_preview) - so it calls usage_tracking directly, right after
+    client.responses.create(...). Always trigger=automatico: the daily digest is generated
+    by a background job, never directly requested by the user in the moment (per the
+    usage-tracking spec, this is why it must NOT count as a "giorno attivo")."""
+    usage = getattr(resp, "usage", None) if resp is not None else None
+    cached = 0
+    details = getattr(usage, "input_tokens_details", None) if usage else None
+    if details is not None:
+        cached = getattr(details, "cached_tokens", 0) or 0
+    ut.fire_and_forget_llm_call(
+        user_id=user_id, feature="invio_news", channel="sistema", trigger="automatico",
+        model=(getattr(resp, "model", None) if resp is not None else None) or MODEL,
+        endpoint="responses",
+        input_tokens=(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
+        cached_input_tokens=cached,
+        output_tokens=(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
+        status=status, request_id=getattr(resp, "id", None) if resp is not None else None,
+    )
 
 
 def _profile_description(user: dict) -> str:
@@ -84,12 +108,17 @@ async def generate_news_for_user(user: dict, prefs: dict | None = None, context:
     )
 
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = await client.responses.create(
-        model=MODEL,
-        max_output_tokens=4096,
-        tools=[{"type": "web_search_preview"}],
-        input=prompt,
-    )
+    try:
+        resp = await client.responses.create(
+            model=MODEL,
+            max_output_tokens=4096,
+            tools=[{"type": "web_search_preview"}],
+            input=prompt,
+        )
+    except Exception:
+        _track(None, user.get("user_id"), status="errore")
+        raise
+    _track(resp, user.get("user_id"))
 
     text = resp.output_text or ""
     match = re.search(r"\[.*\]", text, re.DOTALL)

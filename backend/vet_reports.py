@@ -14,14 +14,38 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
+from typing import Optional
 
 import openai
 from docx import Document
 from docx.shared import Pt
 
+import usage_tracking as ut
+
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o"
+FEATURE = "creazione_report"
+
+
+def _track(resp, user_id: Optional[str], channel: str, status: str = "ok"):
+    """This module builds its own openai client (bypasses LlmChat), so it calls
+    usage_tracking directly right after chat.completions.create(...) - same
+    fire-and-forget, never-block, never-raise pattern LlmChat uses internally."""
+    usage = getattr(resp, "usage", None) if resp is not None else None
+    cached = 0
+    details = getattr(usage, "prompt_tokens_details", None) if usage else None
+    if details is not None:
+        cached = getattr(details, "cached_tokens", 0) or 0
+    ut.fire_and_forget_llm_call(
+        user_id=user_id, feature=FEATURE, channel=channel, trigger="utente",
+        model=(getattr(resp, "model", None) if resp is not None else None) or MODEL,
+        endpoint="chat.completions",
+        input_tokens=(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
+        cached_input_tokens=cached,
+        output_tokens=(getattr(usage, "completion_tokens", 0) or 0) if usage else 0,
+        status=status, request_id=getattr(resp, "id", None) if resp is not None else None,
+    )
 
 # ---- Built-in templates ----------------------------------------------------
 IMAGING_SECTIONS = [
@@ -228,7 +252,7 @@ def filter_sections_for_patient(sections_skeleton: list[dict], patient: dict | N
     ]
 
 
-async def interpret_visit(text: str, sections_skeleton: list[dict]) -> dict:
+async def interpret_visit(text: str, sections_skeleton: list[dict], user_id: Optional[str] = None, channel: str = "web") -> dict:
     """Asks the LLM to structure the dictation according to the given (already
     sex-filtered) section/field skeleton, in technical veterinary register. Patient
     identification is NOT the model's job - it's resolved deterministically before
@@ -251,11 +275,16 @@ async def interpret_visit(text: str, sections_skeleton: list[dict]) -> dict:
         '{"sections": [{"title": "...", "fields": {"Nome campo": "valore", ...}}, ...]}'
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = await client.chat.completions.create(
-        model=MODEL,
-        max_completion_tokens=4096,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
-    )
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
+        )
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
     raw = resp.choices[0].message.content or ""
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:

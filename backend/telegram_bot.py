@@ -18,9 +18,11 @@ import logging
 import re as _re
 import uuid
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from llm_integrations import LlmChat, UserMessage, OpenAISpeechToText
+import usage_tracking as ut
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,18 @@ _polling_task = None
 CONTEXT_TIMEOUT_MIN = 15  # after this many minutes, "continue" intent is ignored and a new conv is started
 ACTIONS_LABEL = {"info_upload": "💾 Salvato", "info_request": "🔍 Risposta", "task_todo": "✅ Task/To-Do", "journal": "📔 Diario"}
 ACTION_ITA = {"info_upload": "salva", "info_request": "chiedi", "task_todo": "task", "journal": "diario"}
+
+# Usage tracking (see usage_tracking.py): maps a resolved Telegram action to its catalog
+# feature (§4 of the usage-tracking spec) - same idea as server.py's _ACTION_TO_FEATURE,
+# plus list_update, which only the Telegram classifier resolves directly (the web app's
+# "Modifica liste" engine is reached through a different endpoint, not the chat action).
+_TG_ACTION_TO_FEATURE = {
+    "info_request": "ricerca_informazioni",
+    "info_upload": "caricamento_informazioni",
+    "task_todo": "creazione_task",
+    "journal": "diario",
+    "list_update": "gestione_liste",
+}
 
 
 def bot_token() -> str:
@@ -56,8 +70,15 @@ async def _user_list_names(db, user_doc: dict) -> list[str]:
 
 
 # ============ INTENT CLASSIFIER ============
-async def _classify_intent(text: str, last_context: dict | None, list_names: list[str] | None = None) -> dict:
-    """Return {action, continuation, confidence}. Fallback: heuristic."""
+async def _classify_intent(text: str, last_context: dict | None, list_names: list[str] | None = None,
+                            user_id: Optional[str] = None) -> dict:
+    """Return {action, continuation, confidence}. Fallback: heuristic.
+
+    This call's own OUTPUT is what determines which catalog feature it belongs to, so it
+    can't be tracked with eager kwargs at construction time (that feature isn't known yet) -
+    it uses LlmChat.record_deferred() once the action is resolved (success or heuristic
+    fallback alike), per the usage-tracking spec's rule that support calls like this must be
+    attributed to the feature they end up enabling, never dumped into "altro" by default."""
     ctx_hint = ""
     if last_context and last_context.get("current_action"):
         ctx_hint = (
@@ -84,6 +105,7 @@ async def _classify_intent(text: str, last_context: dict | None, list_names: lis
         f"Contesto:{ctx_hint if ctx_hint else ' nessun contesto precedente.'}\n"
         "IMPORTANTE: rispondi SOLO con il JSON, senza testo aggiuntivo."
     )
+    chat = None
     try:
         chat = LlmChat(
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
@@ -100,10 +122,14 @@ async def _classify_intent(text: str, last_context: dict | None, list_names: lis
             action = "info_request"
         if cont not in {"continue", "new"}:
             cont = "new"
+        chat.record_deferred(user_id=user_id, feature=_TG_ACTION_TO_FEATURE.get(action, "altro"), channel="telegram", trigger="utente")
         return {"action": action, "continuation": cont, "confidence": conf}
     except Exception:
         logger.exception("intent classification failed, using heuristic")
-        return {"action": _infer_action_heuristic(text, list_names), "continuation": "new", "confidence": 0.3}
+        heuristic_action = _infer_action_heuristic(text, list_names)
+        if chat is not None:
+            chat.record_deferred(user_id=user_id, feature=_TG_ACTION_TO_FEATURE.get(heuristic_action, "altro"), channel="telegram", trigger="utente")
+        return {"action": heuristic_action, "continuation": "new", "confidence": 0.3}
 
 
 def _infer_action_heuristic(text: str, list_names: list[str] | None = None) -> str:
@@ -182,6 +208,8 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         api_key=os.environ.get("ANTHROPIC_API_KEY"),
         session_id=conv_id,
         system_message=system,
+        user_id=user_doc["user_id"], feature=_TG_ACTION_TO_FEATURE.get(action, "altro"),
+        channel="telegram", trigger="utente", org_id=user_doc.get("org_id"),
     ).with_model("openai", "gpt-4o")
 
     # Rebuild history so Claude "remembers" what was said in this thread
@@ -264,6 +292,10 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
             "source_conv": conv_id,
         })
 
+    ut.fire_and_forget_feature_event(
+        user_id=user_doc["user_id"], feature=_TG_ACTION_TO_FEATURE.get(action, "altro"),
+        channel="telegram", trigger="utente", org_id=user_doc.get("org_id"),
+    )
     return visible, conv_id
 
 
@@ -411,7 +443,7 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             return
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)
-        intent = await _classify_intent(content, prev_ctx, list_names)
+        intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"])
         action = intent["action"]
         if action == "list_update":
             await _run_list_update_flow(update, ctx, db, user, content)
@@ -458,7 +490,7 @@ async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_ty
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
     current = _to_user_pydantic(user)
     try:
-        rep = await _generate_vet_report(current, content, visit_type, patient_item_id)
+        rep = await _generate_vet_report(current, content, visit_type, patient_item_id, channel="telegram")
     except Exception as e:
         logger.exception("tg vet report failed")
         await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Errore nella generazione del referto: {str(e)[:200]}")
@@ -520,7 +552,7 @@ async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None
         res = await _execute_list_update(
             current, content, op=op, collection_id=collection_id, item_id=item_id, sub_item_id=sub_item_id,
             fields=fields, item_query=item_query, sub_item_query=sub_item_query, confirm=confirm,
-            new_sub_items=sub_items, new_items=items,
+            new_sub_items=sub_items, new_items=items, channel="telegram",
         )
     except Exception as e:
         logger.exception("tg list update failed")
@@ -572,7 +604,7 @@ async def _try_task_command(update_or_query, ctx, db, user, text: str) -> bool:
     earlier for Drive uploads. Returns True if it handled the message (caller should stop
     processing it any further)."""
     from server import _execute_task_command
-    res = await _execute_task_command(user["user_id"], text)
+    res = await _execute_task_command(user["user_id"], text, channel="telegram")
     if res is None:
         return False
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
@@ -644,6 +676,12 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _, op, target_id = data.split(":", 2)
         from server import _apply_task_command
         res = await _apply_task_command(target_id, op, user["user_id"])
+        if res.get("status") == "ok":
+            is_task = target_id.startswith("task_")
+            ut.fire_and_forget_feature_event(
+                user_id=user["user_id"], feature="creazione_task" if is_task else "creazione_todo",
+                channel="telegram", trigger="utente", org_id=user.get("org_id"),
+            )
         text = f"✅ {res['message']}" if res.get("status") == "ok" else "⚠️ Non trovato (forse già eliminato/completato)."
         await ctx.bot.send_message(chat_id=chat_id, text=text)
     elif data.startswith("act:"):
@@ -702,6 +740,14 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
     tmp_path = None
     mp3_path = None
+    stt = OpenAISpeechToText(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    def _track_stt(feature: str):
+        # A voice transcription has no feature of its own at call time - it's only known
+        # once the transcript is classified (or a pending-flow's own feature is known
+        # outright). Called exactly once per voice message, right before handing off.
+        stt.record_deferred(user_id=user["user_id"], feature=feature, channel="telegram", trigger="utente", org_id=user.get("org_id"))
+
     try:
         tg_file = await ctx.bot.get_file(voice.file_id)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
@@ -718,33 +764,37 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _, ffmpeg_err = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {ffmpeg_err.decode()[:200]}")
-        stt = OpenAISpeechToText(api_key=os.environ.get("OPENAI_API_KEY"))
         with open(mp3_path, "rb") as f:
-            result = await stt.transcribe(file=f, model="whisper-1", response_format="json", language="it")
+            result = await stt.transcribe(file=f, model="whisper-1", response_format="verbose_json", language="it")
         transcript = getattr(result, "text", None) or (result.get("text") if isinstance(result, dict) else "")
         for p in (tmp_path, mp3_path):
             try:
                 if p: os.unlink(p)
             except Exception: pass
         if not transcript.strip():
+            _track_stt("altro")
             await update.message.reply_text("🎙️ Non ho capito l'audio. Riprova più chiaramente.")
             return
         await update.message.reply_text(f"🎙️ _{transcript}_", parse_mode="Markdown")
 
         state = await _get_state(db, user["user_id"], chat_id)
         if state.get("pending_report_type"):
+            _track_stt("creazione_report")
             await _run_vet_report_flow(update, ctx, db, user, transcript, state["pending_report_type"])
             return
         if state.get("pending_list_update"):
+            _track_stt("gestione_liste")
             await _run_list_update_flow(update, ctx, db, user, transcript)
             return
         if state.get("pending_drive_upload_id"):
+            _track_stt("caricamento_informazioni")
             await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], transcript)
             return
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)
-        intent = await _classify_intent(transcript, prev_ctx, list_names)
+        intent = await _classify_intent(transcript, prev_ctx, list_names, user_id=user["user_id"])
         action = intent["action"]
+        _track_stt(_TG_ACTION_TO_FEATURE.get(action, "altro"))
         if action == "list_update":
             await _run_list_update_flow(update, ctx, db, user, transcript)
             return
@@ -754,6 +804,7 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _run_and_reply(update, ctx, db, user, action, transcript, force_new=force_new)
     except Exception as e:
         logger.exception("voice message failed")
+        _track_stt("altro")
         await update.message.reply_text(f"⚠️ Errore trascrizione: {str(e)[:200]}")
 
 
@@ -763,7 +814,7 @@ async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, te
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     current = _to_user_pydantic(user)
     try:
-        result = await _drive_resolve_pending_core(current, pending_id, text)
+        result = await _drive_resolve_pending_core(current, pending_id, text, channel="telegram")
     except Exception as e:
         logger.exception("tg drive pending resolve failed")
         detail = getattr(e, "detail", None) or str(e)
@@ -798,7 +849,7 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tg_file = await ctx.bot.get_file(photos[-1].file_id)  # last = highest resolution
         raw = await tg_file.download_as_bytearray()
         filename = f"foto_{uuid.uuid4().hex[:8]}.jpg"
-        result = await _drive_smart_upload_core(current, bytes(raw), filename, "image/jpeg", caption)
+        result = await _drive_smart_upload_core(current, bytes(raw), filename, "image/jpeg", caption, channel="telegram")
     except Exception as e:
         logger.exception("tg photo upload failed")
         detail = getattr(e, "detail", None) or str(e)

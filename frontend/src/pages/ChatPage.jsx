@@ -173,6 +173,7 @@ export default function ChatPage() {
   const transcribeBlob = async (blob) => {
     const fd = new FormData();
     fd.append("file", blob, "voice.webm");
+    fd.append("action", active);
     const res = await fetch(`${API}/voice/transcribe`, { method: "POST", body: fd, credentials: "include" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();

@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import UpdateOne
 import os
 import logging
 import uuid
@@ -38,6 +39,7 @@ import embeddings as emb
 import news_service
 import vet_reports
 import list_updates as lu
+import usage_tracking as ut
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -45,6 +47,7 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+ut.init(db)
 
 # Passed as `api_key=` into LlmChat/OpenAISpeechToText for interface compatibility, but
 # llm_integrations.py ignores it and reads ANTHROPIC_API_KEY / OPENAI_API_KEY directly.
@@ -705,6 +708,19 @@ async def admin_delete_user(user_id: str, current: User = Depends(require_admin)
     ]:
         r = await db[coll].delete_many({"user_id": user_id})
         counts[coll] = r.deleted_count
+    # Usage tracking (see usage_tracking.py) - never keeps metadata for a deleted account,
+    # per the tracking spec's privacy requirement. llm_calls/feature_events rows are
+    # anonymized (user_id -> null) rather than deleted outright: they still feed the
+    # aggregate usage_daily numbers (system-wide cost/token totals must stay accurate),
+    # they carry no prompt/response content to begin with, and the null user_id is the
+    # same "no owning user" shape already used for background-job calls. usage_daily rows
+    # for this user are removed outright since they're a derived per-user aggregate.
+    r = await db.llm_calls.update_many({"user_id": user_id}, {"$set": {"user_id": None}})
+    counts["llm_calls_anonymized"] = r.modified_count
+    r = await db.feature_events.update_many({"user_id": user_id}, {"$set": {"user_id": None}})
+    counts["feature_events_anonymized"] = r.modified_count
+    r = await db.usage_daily.delete_many({"user_id": user_id})
+    counts["usage_daily"] = r.deleted_count
     # whitelist + user doc
     r = await db.allowed_emails.delete_one({"email": user.get("email")})
     counts["allowed_emails"] = r.deleted_count
@@ -1379,6 +1395,19 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
     return top
 
 
+# Usage tracking: the chat "action" field already tells us which catalog feature (§4 of
+# the usage-tracking spec) a chat_stream/telegram _process_action call belongs to.
+# task_todo can resolve to either a task or a to-do only after the LLM answers (see
+# _create_task_or_todo's due_date rule) - tracked as creazione_task either way, since the
+# feature can't be known yet at call time.
+_ACTION_TO_FEATURE = {
+    "info_request": "ricerca_informazioni",
+    "info_upload": "caricamento_informazioni",
+    "task_todo": "creazione_task",
+    "journal": "diario",
+}
+
+
 @api_router.post("/chat/stream")
 async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_user)):
     now = datetime.now(timezone.utc).isoformat()
@@ -1445,6 +1474,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         session_id=conv_id,
         system_message=system,
         initial_messages=initial,
+        user_id=current.user_id, feature=_ACTION_TO_FEATURE.get(action, "altro"),
+        channel="web", trigger="utente", org_id=current.org_id,
     ).with_model("openai", "gpt-4o")
 
     # Save the user turn to the messages array immediately
@@ -1511,6 +1542,13 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             },
         )
 
+        # One feature_events row per chat turn, regardless of how many (if any) LLM calls
+        # it triggered - lets the usage dashboard count feature USES, not just LLM calls.
+        ut.fire_and_forget_feature_event(
+            user_id=current.user_id, feature=_ACTION_TO_FEATURE.get(action, "altro"),
+            channel="web", trigger="utente", org_id=current.org_id,
+        )
+
         # info_upload always persists a new KB chunk on EVERY user turn - unlike
         # task_todo/journal below, a follow-up message in an ongoing "Salva informazioni"
         # conversation is virtually always a NEW distinct fact to remember (e.g. "oggi
@@ -1542,7 +1580,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             })
             # Classify + persist document-level record so it appears in the Documents page
             try:
-                classification = await _classify_document(payload.content)
+                classification = await _classify_document(payload.content, user_id=current.user_id, channel="web")
             except Exception:
                 classification = {"category": "altro", "keywords": []}
             await db.kb_documents.insert_one({
@@ -1717,7 +1755,7 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
         await db.todos.insert_one(doc)
 
 
-async def interpret_task_command(text: str, catalog: List[dict]) -> Optional[dict]:
+async def interpret_task_command(text: str, catalog: List[dict], user_id: Optional[str] = None, channel: str = "web") -> Optional[dict]:
     """Cheap LLM check: is this free text asking to DELETE or mark-COMPLETE an EXISTING
     task/to-do (as opposed to creating a new one, or an unrelated message)? Returns None
     when it isn't - the caller then falls through to normal task/to-do creation, exactly
@@ -1736,7 +1774,10 @@ async def interpret_task_command(text: str, catalog: List[dict]) -> Optional[dic
         'un messaggio generico), rispondi SOLO con: {"op": null}.'
     )
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"taskcmd_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"taskcmd_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=user_id, feature="creazione_task", channel=channel, trigger="utente",
+        ).with_model("openai", "gpt-4o-mini")
         raw = (await chat.send_message(UserMessage(text=text))).strip()
         import re as _re, json as _json
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
@@ -1772,7 +1813,7 @@ async def _apply_task_command(target_id: str, op: str, user_id: str) -> dict:
     return {"status": "ok", "message": f"Ho segnato come completato {label} \"{title}\"."}
 
 
-async def _execute_task_command(user_id: str, text: str) -> Optional[dict]:
+async def _execute_task_command(user_id: str, text: str, channel: str = "web") -> Optional[dict]:
     """Returns None if `text` isn't a delete/complete instruction on an existing task/
     to-do (the caller should fall through to normal creation). Otherwise resolves the
     target deterministically (same fuzzy matcher as _execute_list_update, never an
@@ -1783,7 +1824,7 @@ async def _execute_task_command(user_id: str, text: str) -> Optional[dict]:
     catalog = [{"id": t["id"], "title": t.get("title", "")} for t in tasks] + [{"id": t["id"], "title": t.get("title", "")} for t in todos]
     if not catalog:
         return None
-    interpreted = await interpret_task_command(text, catalog)
+    interpreted = await interpret_task_command(text, catalog, user_id=user_id, channel=channel)
     if not interpreted:
         return None
     ids = lu.match_candidates(interpreted["query"] or text, [(c["id"], c["title"]) for c in catalog])
@@ -1792,7 +1833,12 @@ async def _execute_task_command(user_id: str, text: str) -> Optional[dict]:
     if len(ids) > 1:
         by_id = {c["id"]: c for c in catalog}
         return {"status": "ambiguous", "op": interpreted["op"], "candidates": [{"id": i, "title": by_id[i]["title"]} for i in ids]}
-    return await _apply_task_command(ids[0], interpreted["op"], user_id)
+    result = await _apply_task_command(ids[0], interpreted["op"], user_id)
+    is_task = ids[0].startswith("task_")
+    ut.fire_and_forget_feature_event(
+        user_id=user_id, feature="creazione_task" if is_task else "creazione_todo", channel=channel, trigger="utente",
+    )
+    return result
 
 
 class TaskCommandPayload(BaseModel):
@@ -1810,7 +1856,7 @@ async def run_task_command(payload: TaskCommandPayload, current: User = Depends(
     task/to-do" also handle 'elimina/segna come fatto il task X' instead of just creating
     new ones. Returns {"status": "not_applicable"} when the text isn't such an instruction,
     so the caller can fall through to normal task/to-do creation."""
-    res = await _execute_task_command(current.user_id, payload.text)
+    res = await _execute_task_command(current.user_id, payload.text, channel="web")
     return res or {"status": "not_applicable"}
 
 
@@ -1819,7 +1865,12 @@ async def apply_task_command(payload: TaskCommandApplyPayload, current: User = D
     """Follow-up call once the user picked one of an 'ambiguous' result's candidates."""
     if payload.op not in ("delete", "complete"):
         raise HTTPException(status_code=400, detail="Operazione non valida")
-    return await _apply_task_command(payload.target_id, payload.op, current.user_id)
+    result = await _apply_task_command(payload.target_id, payload.op, current.user_id)
+    is_task = payload.target_id.startswith("task_")
+    ut.fire_and_forget_feature_event(
+        user_id=current.user_id, feature="creazione_task" if is_task else "creazione_todo", channel="web", trigger="utente",
+    )
+    return result
 
 
 # ============ CONVERSATIONS ============
@@ -2375,7 +2426,7 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current
 @api_router.post("/classify-save-intent")
 async def classify_save_intent(payload: ClassifySaveIntentPayload, current: User = Depends(get_current_user)):
     colls = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(200)
-    kind = await lu.classify_save_intent(payload.text, [c["name"] for c in colls])
+    kind = await lu.classify_save_intent(payload.text, [c["name"] for c in colls], user_id=current.user_id, channel="web")
     return {"kind": kind}
 
 
@@ -2394,7 +2445,7 @@ async def _execute_list_update(
     current: User, text: str, op: Optional[str] = None, collection_id: Optional[str] = None,
     item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
     item_query: Optional[str] = None, sub_item_query: Optional[str] = None, confirm: bool = False,
-    new_sub_items: Optional[List[dict]] = None, new_items: Optional[List[dict]] = None,
+    new_sub_items: Optional[List[dict]] = None, new_items: Optional[List[dict]] = None, channel: str = "web",
 ) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
 
@@ -2433,7 +2484,7 @@ async def _execute_list_update(
         except Exception:
             logger.exception("KB context retrieval for list update failed")
         try:
-            interpreted = await lu.interpret_list_request(text, catalog, kb_context=kb_context)
+            interpreted = await lu.interpret_list_request(text, catalog, kb_context=kb_context, user_id=current.user_id, channel=channel)
         except Exception as e:
             logger.exception("list update interpretation failed")
             raise HTTPException(status_code=500, detail=f"Non sono riuscito a interpretare la richiesta: {e}")
@@ -2525,6 +2576,7 @@ async def _execute_list_update(
 
     if op == "clear_items" and not confirm:
         if not items:
+            ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
             return {"status": "ok", "message": f"\"{coll['name']}\" è già vuota, nulla da eliminare.", "collection_id": collection_id, "collection_name": coll["name"]}
         return {
             "status": "confirm_clear", "op": op, "collection_id": collection_id, "fields": {},
@@ -2533,6 +2585,7 @@ async def _execute_list_update(
         }
     if op == "clear_sub_items" and not confirm:
         if not sub_items:
+            ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
             return {"status": "ok", "message": f"\"{lu.item_display(item)}\" è già vuoto, nulla da eliminare.", "collection_id": collection_id, "collection_name": coll["name"]}
         return {
             "status": "confirm_clear", "op": op, "collection_id": collection_id, "item_id": item["id"], "fields": {},
@@ -2601,6 +2654,7 @@ async def _execute_list_update(
         created_list = [await create_collection_item(collection_id, CollectionItemPayload(data=f), current) for f in norm_new_items]
         summary = f"Ho creato {len(created_list)} nuovi elementi in \"{coll['name']}\"."
 
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
     return {"status": "ok", "message": summary, "collection_id": collection_id, "collection_name": coll["name"]}
 
 
@@ -2814,8 +2868,10 @@ async def generate_lesson(payload: GenerateLessonPayload, current: User = Depend
         api_key=EMERGENT_LLM_KEY,
         session_id=f"lesson_gen_{uuid.uuid4().hex[:8]}",
         system_message=system,
+        user_id=current.user_id, feature="creazione_lezioni", channel="web", trigger="utente", org_id=current.org_id,
     ).with_model("openai", "gpt-4o")
     raw = await chat.send_message(UserMessage(text=payload.prompt))
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_lezioni", channel="web", trigger="utente", org_id=current.org_id)
 
     match = _re.search(r"\{.*\}", raw or "", _re.DOTALL)
     if not match:
@@ -2963,7 +3019,7 @@ async def generate_vet_report(payload: GenerateVetReportPayload, current: User =
     return await _generate_vet_report(current, payload.text, payload.visit_type, payload.patient_item_id)
 
 
-async def _generate_vet_report(current: User, text: str, visit_type: str, patient_item_id: Optional[str] = None) -> dict:
+async def _generate_vet_report(current: User, text: str, visit_type: str, patient_item_id: Optional[str] = None, channel: str = "web") -> dict:
     """Shared by the web endpoint and the Telegram /report flow (telegram_bot.py calls
     this directly - same process, no HTTP round-trip).
 
@@ -3012,7 +3068,7 @@ async def _generate_vet_report(current: User, text: str, visit_type: str, patien
     sections_skeleton = vet_reports.filter_sections_for_patient(sections_skeleton, patient)
 
     try:
-        interpreted = await vet_reports.interpret_visit(text, sections_skeleton)
+        interpreted = await vet_reports.interpret_visit(text, sections_skeleton, user_id=current.user_id, channel=channel)
     except Exception as e:
         logger.exception("vet report interpretation failed")
         raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
@@ -3088,6 +3144,7 @@ async def _generate_vet_report(current: User, text: str, visit_type: str, patien
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.vet_reports.insert_one(report_doc)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_report", channel=channel, trigger="utente", org_id=current.org_id)
     report_doc.pop("_id", None)
     report_doc.pop("docx_b64", None)
     return report_doc
@@ -3269,7 +3326,10 @@ async def create_journal(payload: JournalCreate, current: User = Depends(get_cur
     # than losing the entry (this is the one journal entry-point without that safety net;
     # the chat-based "journal" action already degrades gracefully via its own error path).
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o")
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"journal_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=current.user_id, feature="diario", channel="web", trigger="utente", org_id=current.org_id,
+        ).with_model("openai", "gpt-4o")
         raw = await chat.send_message(UserMessage(text=payload.content))
         cleaned, meta = _extract_meta(raw)
         cleaned = (cleaned.replace("```json", "").replace("```", "").strip()) or payload.content
@@ -3289,6 +3349,7 @@ async def create_journal(payload: JournalCreate, current: User = Depends(get_cur
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.journal_entries.insert_one(doc)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel="web", trigger="utente", org_id=current.org_id)
     doc.pop("_id", None)
     return doc
 
@@ -3336,8 +3397,12 @@ async def task_chat(task_id: str, payload: ContextChatRequest, current: User = D
         "due_time (formato ESATTO HH:MM, oppure null), priority ('alta'|'media'|'bassa'), tags, notes. "
         "Includi in META SOLO le chiavi che l'utente ha chiesto esplicitamente di cambiare - non toccare le altre."
     )
-    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"task_{task_id}", system_message=system).with_model("openai", "gpt-4o")
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY, session_id=f"task_{task_id}", system_message=system,
+        user_id=current.user_id, feature="creazione_task", channel="web", trigger="utente", org_id=current.org_id,
+    ).with_model("openai", "gpt-4o")
     raw = await chat.send_message(UserMessage(text=payload.message))
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_task", channel="web", trigger="utente", org_id=current.org_id)
     visible, meta = _extract_meta(raw)
     visible = visible.replace("```json", "").replace("```", "").strip()
     if meta:
@@ -3365,8 +3430,12 @@ async def todo_chat(todo_id: str, payload: ContextChatRequest, current: User = D
         "In coda includi SOLO per il sistema i campi da aggiornare tra i marcatori "
         "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, status ('da_fare'|'in_corso'|'fatto'), completion_percent, priority, tags, notes."
     )
-    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"todo_{todo_id}", system_message=system).with_model("openai", "gpt-4o")
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY, session_id=f"todo_{todo_id}", system_message=system,
+        user_id=current.user_id, feature="creazione_todo", channel="web", trigger="utente", org_id=current.org_id,
+    ).with_model("openai", "gpt-4o")
     raw = await chat.send_message(UserMessage(text=payload.message))
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_todo", channel="web", trigger="utente", org_id=current.org_id)
     visible, meta = _extract_meta(raw)
     visible = visible.replace("```json", "").replace("```", "").strip()
     if meta:
@@ -3433,7 +3502,7 @@ def _regex_drive_folder_hint(text: str) -> Optional[str]:
     return name or None
 
 
-async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> Optional[str]:
+async def _resolve_drive_folder_hint(text: str, existing_folders: List[str], user_id: Optional[str] = None, channel: str = "web") -> Optional[str]:
     """Ask the LLM whether the user's message names a target Drive folder (existing or
     new). Returns the folder name, or None if the message doesn't specify one."""
     text = (text or "").strip()
@@ -3448,7 +3517,10 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> 
         "senza virgolette né altro testo. Se non lo specifica, rispondi SOLO con la parola: NESSUNA."
     )
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"drivehint_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")  # single-word folder-name extraction
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"drivehint_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=user_id, feature="caricamento_informazioni", channel=channel, trigger="utente",
+        ).with_model("openai", "gpt-4o-mini")  # single-word folder-name extraction
         raw = (await chat.send_message(UserMessage(text=text))).strip().strip('"').strip()
         if not raw or raw.upper() == "NESSUNA":
             return None
@@ -3461,7 +3533,7 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str]) -> 
         return _regex_drive_folder_hint(text)
 
 
-async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False) -> dict:
+async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False, channel: str = "web") -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
     Uploads a file into the mAIPAL Drive tree, picking the subfolder from the user's
     message when possible. If no folder can be determined, stashes the file and returns
@@ -3477,7 +3549,7 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
         raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
 
     subfolders = await gi.list_subfolders(db, current.user_id, creds)
-    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders])
+    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders], user_id=current.user_id, channel=channel)
 
     if folder_name:
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{filename.rsplit('.',1)[-1] if '.' in (filename or '') else 'bin'}") as tmp:
@@ -3486,6 +3558,7 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
         try:
             folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
             result = gi.upload_file_to_folder(creds, folder_id, tmp_path, filename, content_type)
+            ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
             return {"status": "saved", "folder": folder_name, **result}
         finally:
             try: os.unlink(tmp_path)
@@ -3513,7 +3586,7 @@ async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""),
     return await _drive_smart_upload_core(current, contents, file.filename, file.content_type, text, silent=silent)
 
 
-async def _drive_resolve_pending_core(current: User, pending_id: str, text: str) -> dict:
+async def _drive_resolve_pending_core(current: User, pending_id: str, text: str, channel: str = "web") -> dict:
     """Shared by the web endpoint and the Telegram bot. Second turn of the smart-upload
     flow: the user's follow-up message may now name the folder. Resolves it and finally
     uploads the stashed file."""
@@ -3526,7 +3599,7 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str)
         raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
 
     subfolders = await gi.list_subfolders(db, current.user_id, creds)
-    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders])
+    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders], user_id=current.user_id, channel=channel)
     if not folder_name:
         return {"status": "needs_folder", "pending_id": pending_id, "suggestions": [f["name"] for f in subfolders]}
 
@@ -3539,6 +3612,7 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str)
         folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
         result = gi.upload_file_to_folder(creds, folder_id, tmp_path, doc["filename"], doc["content_type"])
         await db.pending_drive_uploads.delete_one({"pending_id": pending_id})
+        ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
         return {"status": "saved", "folder": folder_name, **result}
     finally:
         try: os.unlink(tmp_path)
@@ -3554,7 +3628,7 @@ async def drive_resolve_pending(payload: dict, current: User = Depends(get_curre
 IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "heic", "heif")
 
 
-async def _ocr_image_bytes(contents: bytes, filename: str) -> str:
+async def _ocr_image_bytes(contents: bytes, filename: str, user_id: Optional[str] = None, channel: str = "web") -> str:
     """Run OCR on an image using the model's vision capability."""
     import base64 as _b64
     b64 = _b64.b64encode(contents).decode("ascii")
@@ -3569,6 +3643,7 @@ async def _ocr_image_bytes(contents: bytes, filename: str) -> str:
         api_key=EMERGENT_LLM_KEY,
         session_id=f"ocr_{uuid.uuid4().hex[:8]}",
         system_message=system,
+        user_id=user_id, feature="caricamento_informazioni", channel=channel, trigger="utente",
     ).with_model("openai", "gpt-4o-mini")  # OCR transcription, not reasoning
     msg = UserMessage(text="Estrai tutto il testo dall'immagine.", file_contents=[ImageContent(image_base64=b64)])
     result = await chat.send_message(msg)
@@ -3633,7 +3708,7 @@ def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 150) -> List[st
     return [c for c in chunks if c]
 
 
-async def _classify_document(text: str) -> dict:
+async def _classify_document(text: str, user_id: Optional[str] = None, channel: str = "web") -> dict:
     """Ask the LLM for a category + keywords for the uploaded document. Best-effort."""
     sample = (text or "")[:3500]
     if not sample.strip():
@@ -3646,7 +3721,10 @@ async def _classify_document(text: str) -> dict:
         "Rispondi con SOLO il JSON, senza commenti né markdown."
     )
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cls_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")  # simple category+keywords classification
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"cls_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=user_id, feature="caricamento_informazioni", channel=channel, trigger="utente",
+        ).with_model("openai", "gpt-4o-mini")  # simple category+keywords classification
         raw = await chat.send_message(UserMessage(text=sample))
         import json as _json, re as _re
         raw = (raw or "").strip()
@@ -3699,7 +3777,7 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
                         send_bytes = buf.getvalue()
                     except Exception:
                         logger.exception("image transcode failed; using original bytes")
-                text = await _ocr_image_bytes(send_bytes, file.filename)
+                text = await _ocr_image_bytes(send_bytes, file.filename, user_id=current.user_id, channel="web")
                 source_type = "image_ocr"
             else:
                 text = _extract_text_from_file(tmp_path, file.filename)
@@ -3724,7 +3802,7 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
             embeddings = [None] * len(chunks)
 
         # Classify (category + keywords) — best effort, does not block upload on failure
-        classification = await _classify_document(text)
+        classification = await _classify_document(text, user_id=current.user_id, channel="web")
 
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
@@ -3764,6 +3842,7 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
             "created_at": now,
         })
 
+        ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel="web", trigger="utente", org_id=current.org_id)
         return {
             "doc_id": doc_id,
             "name": file.filename,
@@ -3992,7 +4071,7 @@ async def telegram_disconnect(current: User = Depends(get_current_user)):
 
 # ============ VOICE STT ============
 @api_router.post("/voice/transcribe")
-async def voice_transcribe(file: UploadFile = File(...), current: User = Depends(get_current_user)):
+async def voice_transcribe(file: UploadFile = File(...), action: str = Form(""), current: User = Depends(get_current_user)):
     # Save to temp file with proper extension
     ext = "webm"
     if file.filename and "." in file.filename:
@@ -4005,9 +4084,15 @@ async def voice_transcribe(file: UploadFile = File(...), current: User = Depends
         tmp_path = tmp.name
 
     try:
-        stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+        # `action` is the caller's active tab/action hint (frontend already knows it) -
+        # voice transcription has no feature of its own at call time, so it's attributed
+        # to whichever chat feature triggered it, same mapping as chat_stream's.
+        stt = OpenAISpeechToText(
+            api_key=EMERGENT_LLM_KEY, user_id=current.user_id,
+            feature=_ACTION_TO_FEATURE.get(action, "altro"), channel="web", trigger="utente", org_id=current.org_id,
+        )
         with open(tmp_path, "rb") as f:
-            result = await stt.transcribe(file=f, model="whisper-1", response_format="json", language="it")
+            result = await stt.transcribe(file=f, model="whisper-1", response_format="verbose_json", language="it")
         text = getattr(result, "text", None) or (result.get("text") if isinstance(result, dict) else str(result))
         return {"text": text}
     except Exception as e:
@@ -4155,6 +4240,10 @@ async def start_services():
         asyncio.create_task(_daily_news_loop())
     except Exception:
         logger.exception("failed to start daily news loop")
+    try:
+        asyncio.create_task(_usage_aggregation_loop())
+    except Exception:
+        logger.exception("failed to start usage aggregation loop")
 
 
 def _snooze_keyboard(task_id: str):
@@ -4249,7 +4338,10 @@ async def _kb_reminder_enrichment(user_id: str, task: dict, org_id: Optional[str
         "c'è nulla di utile o il riferimento è ambiguo. Nessun altro testo, nessuna spiegazione."
     )
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"remind_ctx_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"remind_ctx_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=user_id, feature="creazione_task", channel="telegram", trigger="automatico", org_id=org_id,
+        ).with_model("openai", "gpt-4o-mini")
         raw = (await asyncio.wait_for(chat.send_message(UserMessage(text="Genera la sezione, se applicabile.")), timeout=8)).strip()
     except Exception:
         logger.exception("reminder enrichment LLM call failed")
@@ -4592,6 +4684,9 @@ async def _run_daily_news_for_user(user: dict, today: str):
     context = await _news_current_context(user["user_id"])
     items = await news_service.generate_news_for_user(user, prefs, context)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"news_date": today}})
+    ut.fire_and_forget_feature_event(
+        user_id=user["user_id"], feature="invio_news", channel="sistema", trigger="automatico", org_id=user.get("org_id"),
+    )
     if not items:
         return []
 
@@ -4626,6 +4721,94 @@ async def _run_daily_news_for_user(user: dict, today: str):
             logger.exception("failed to send daily news via telegram")
 
     return docs
+
+
+async def _compute_usage_daily(target_date: str):
+    """(Re)computes usage_daily rows for one Europe/Rome calendar day from llm_calls +
+    feature_events, upserting so re-running the same day never duplicates rows. This is the
+    dashboard's fast-path aggregate table (day+user+feature+channel+model), per the
+    usage-tracking spec's performance requirement - the dashboard itself stays read-only and
+    never computes this on its own."""
+    day_start_local = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+    day_end_local = day_start_local + timedelta(days=1)
+    day_start_iso = day_start_local.astimezone(timezone.utc).isoformat()
+    day_end_iso = day_end_local.astimezone(timezone.utc).isoformat()
+
+    call_rows = await db.llm_calls.aggregate([
+        {"$match": {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}}},
+        {"$group": {
+            "_id": {"user_id": "$user_id", "feature": "$feature", "channel": "$channel", "model": "$model"},
+            "calls": {"$sum": 1},
+            "calls_error": {"$sum": {"$cond": [{"$eq": ["$status", "errore"]}, 1, 0]}},
+            "calls_no_price": {"$sum": {"$cond": [{"$eq": ["$cost_usd", None]}, 1, 0]}},
+            "input_tokens": {"$sum": "$input_tokens"},
+            "cached_input_tokens": {"$sum": "$cached_input_tokens"},
+            "output_tokens": {"$sum": "$output_tokens"},
+            "total_tokens": {"$sum": "$total_tokens"},
+            "cost_usd": {"$sum": {"$ifNull": ["$cost_usd", 0]}},
+        }},
+    ]).to_list(20000)
+
+    event_rows = await db.feature_events.aggregate([
+        {"$match": {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}}},
+        {"$group": {
+            "_id": {"user_id": "$user_id", "feature": "$feature", "channel": "$channel"},
+            "feature_events": {"$sum": 1},
+            "feature_events_utente": {"$sum": {"$cond": [{"$eq": ["$trigger", "utente"]}, 1, 0]}},
+        }},
+    ]).to_list(20000)
+    events_by_key = {(r["_id"]["user_id"], r["_id"]["feature"], r["_id"]["channel"]): r for r in event_rows}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    keys_seen = set()
+    ops = []
+    for r in call_rows:
+        k = r["_id"]
+        ev = events_by_key.get((k["user_id"], k["feature"], k["channel"]), {})
+        keys_seen.add((k["user_id"], k["feature"], k["channel"]))
+        doc_key = {"date": target_date, "user_id": k["user_id"], "feature": k["feature"], "channel": k["channel"], "model": k["model"]}
+        ops.append(UpdateOne(doc_key, {"$set": {
+            **doc_key,
+            "calls": r["calls"], "calls_error": r["calls_error"], "calls_no_price": r["calls_no_price"],
+            "input_tokens": r["input_tokens"], "cached_input_tokens": r["cached_input_tokens"],
+            "output_tokens": r["output_tokens"], "total_tokens": r["total_tokens"],
+            "cost_usd": round(r["cost_usd"], 6),
+            "feature_events": ev.get("feature_events", 0), "feature_events_utente": ev.get("feature_events_utente", 0),
+            "updated_at": now_iso,
+        }}, upsert=True))
+
+    # A feature use that triggered zero LLM calls (or whose calls fell in a different
+    # model bucket) still needs to be counted - never silently dropped, per the spec's "una
+    # chiamata non deve mai andare persa" applied to feature use as well as LLM calls.
+    for (user_id, feature, channel), ev in events_by_key.items():
+        if (user_id, feature, channel) in keys_seen:
+            continue
+        doc_key = {"date": target_date, "user_id": user_id, "feature": feature, "channel": channel, "model": None}
+        ops.append(UpdateOne(doc_key, {"$set": {
+            **doc_key,
+            "calls": 0, "calls_error": 0, "calls_no_price": 0,
+            "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0,
+            "feature_events": ev.get("feature_events", 0), "feature_events_utente": ev.get("feature_events_utente", 0),
+            "updated_at": now_iso,
+        }}, upsert=True))
+
+    if ops:
+        await db.usage_daily.bulk_write(ops, ordered=False)
+
+
+async def _usage_aggregation_loop():
+    """Every hour: recomputes usage_daily for yesterday and today (Europe/Rome). Today's
+    row is necessarily partial and gets overwritten again on every run until the day rolls
+    over; yesterday is recomputed once more after midnight to catch anything that landed
+    between the loop's last pass and the day boundary."""
+    while True:
+        try:
+            today_local = datetime.now(timezone.utc).astimezone(LOCAL_TZ).date()
+            await _compute_usage_daily((today_local - timedelta(days=1)).isoformat())
+            await _compute_usage_daily(today_local.isoformat())
+        except Exception:
+            logger.exception("usage aggregation loop iteration failed")
+        await asyncio.sleep(60 * 60)
 
 
 async def _daily_news_loop():

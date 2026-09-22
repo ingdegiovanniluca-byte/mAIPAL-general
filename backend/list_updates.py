@@ -13,12 +13,36 @@ import json
 import logging
 import os
 import re
+from typing import Optional
 
 import openai
+
+import usage_tracking as ut
 
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o"
+FEATURE = "gestione_liste"
+
+
+def _track(resp, user_id: Optional[str], channel: str, status: str = "ok", model: Optional[str] = None):
+    """This module builds its own openai client (bypasses LlmChat), so it calls
+    usage_tracking directly right after each chat.completions.create(...) - same
+    fire-and-forget, never-block, never-raise pattern LlmChat uses internally."""
+    usage = getattr(resp, "usage", None) if resp is not None else None
+    cached = 0
+    details = getattr(usage, "prompt_tokens_details", None) if usage else None
+    if details is not None:
+        cached = getattr(details, "cached_tokens", 0) or 0
+    ut.fire_and_forget_llm_call(
+        user_id=user_id, feature=FEATURE, channel=channel, trigger="utente",
+        model=(getattr(resp, "model", None) if resp is not None else None) or model or MODEL,
+        endpoint="chat.completions",
+        input_tokens=(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
+        cached_input_tokens=cached,
+        output_tokens=(getattr(usage, "completion_tokens", 0) or 0) if usage else 0,
+        status=status, request_id=getattr(resp, "id", None) if resp is not None else None,
+    )
 
 VALID_OPS = {
     "add_item", "delete_item", "update_item", "clear_items",
@@ -35,7 +59,8 @@ _STOPWORDS_IT = {
 }
 
 
-async def interpret_list_request(text: str, catalog: list[dict], kb_context: str = "") -> dict:
+async def interpret_list_request(text: str, catalog: list[dict], kb_context: str = "",
+                                  user_id: Optional[str] = None, channel: str = "web") -> dict:
     """Asks the LLM to classify a free-text request into a structured intent, given the
     user's actual lists and their field schemas. Returns
     {"op": ..., "collection_id": ... | None, "item_query": "...", "sub_item_query": "...",
@@ -102,11 +127,16 @@ async def interpret_list_request(text: str, catalog: list[dict], kb_context: str
         "dati. Ometti 'sub_items'/'items' (lista vuota) se non applicabile."
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp = await client.chat.completions.create(
-        model=MODEL,
-        max_completion_tokens=4096,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
-    )
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
+        )
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
     raw = resp.choices[0].message.content or ""
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
@@ -151,7 +181,7 @@ def item_display(item: dict) -> str:
     return " · ".join(parts) if parts else "(vuoto)"
 
 
-async def classify_save_intent(text: str, list_names: list[str]) -> str:
+async def classify_save_intent(text: str, list_names: list[str], user_id: Optional[str] = None, channel: str = "web") -> str:
     """Cheap pre-classification used to merge "salva informazione" and "modifica lista"
     into a single chat action: is this free text an instruction to add/edit/remove a
     record in one of the user's existing Liste, or just generic information to save as a
@@ -180,6 +210,7 @@ async def classify_save_intent(text: str, list_names: list[str]) -> str:
             model="gpt-4o-mini", max_completion_tokens=20,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
         )
+        _track(resp, user_id, channel, model="gpt-4o-mini")
         raw = resp.choices[0].message.content or ""
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
@@ -188,6 +219,7 @@ async def classify_save_intent(text: str, list_names: list[str]) -> str:
                 return parsed["kind"]
     except Exception:
         logger.exception("classify_save_intent failed")
+        _track(None, user_id, channel, status="errore", model="gpt-4o-mini")
     return "info_upload"
 
 
