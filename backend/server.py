@@ -992,12 +992,26 @@ def build_system_prompt(user: User, action: str) -> str:
         )
     elif action == "task_todo":
         base += (
-            " L'utente vuole salvare un task o un to-do. "
-            "REGOLA CRITICA: se il messaggio dell'utente non sta chiaramente descrivendo un task/to-do da creare o "
-            "modificare (es. sta facendo una domanda, un commento generico, o parlando d'altro), NON includere il "
-            "blocco META qui sotto - rispondi in modo naturale e basta, senza fingere di aver salvato nulla. "
-            "Se invece sta chiaramente chiedendo di creare o aggiornare un task/to-do, scrivi UNA risposta di conferma "
-            "naturale (1-2 frasi, es. 'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
+            " L'utente vuole salvare un task o un to-do. Se è presente un CONTESTO dalla knowledge base personale "
+            "(es. un documento o un'immagine caricati prima, o proprio in questo messaggio, con un programma/orario/"
+            "elenco di eventi), usalo per capire di quali eventi l'utente sta parlando. "
+            "REGOLA CRITICA: se il messaggio dell'utente non sta chiaramente descrivendo uno o più task/to-do da "
+            "creare o modificare (es. sta facendo una domanda, un commento generico, o parlando d'altro), NON "
+            "includere il blocco META qui sotto - rispondi in modo naturale e basta, senza fingere di aver salvato "
+            "nulla. "
+            "CREAZIONE MULTIPLA: se l'utente chiede di creare un task per OGNUNO di più eventi (es. 'crea un task per "
+            "ogni lezione di pilates della settimana', quando il CONTESTO contiene un programma con più orari/date), "
+            "e il CONTESTO fornisce dati sufficienti per identificarli tutti con certezza, crea un task PER CIASCUNO: "
+            "usa il blocco META in forma elenco, "
+            "<<<META>>>{\"tasks\": [{\"title\": \"...\", \"due_date\": \"YYYY-MM-DD\", \"due_time\": \"HH:MM o null\", "
+            "\"duration_minutes\": \"numero o null\", \"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}, "
+            "...]}<<<END>>>, un oggetto per evento, con le stesse regole su date/ore/durata descritte sotto. Nella "
+            "risposta visibile elenca brevemente cosa hai creato (es. 'Ho creato 5 task, uno per ogni lezione di "
+            "pilates della settimana: lunedì, mercoledì...'). Se il CONTESTO non è chiaro o sufficiente per "
+            "identificare con certezza tutti gli eventi, NON inventare: chiedi all'utente di chiarire o ricaricare il "
+            "documento, senza includere il blocco META. "
+            "CREAZIONE SINGOLA: altrimenti, per un solo task/to-do, scrivi UNA risposta di conferma naturale (1-2 "
+            "frasi, es. 'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"breve titolo del task/todo\", \"summary\": \"riassunto in 1 riga max 140 caratteri\", \"description\": \"\", "
             "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", \"duration_minutes\": \"numero di minuti o null\", "
@@ -1447,7 +1461,11 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         })
 
     # RAG context: run on EVERY info_request turn (not just first) so follow-up questions
-    # can pull fresh chunks based on the new question.
+    # can pull fresh chunks based on the new question. Also runs for task_todo so a request
+    # like "crea un task per ogni lezione di pilates" can see a schedule the user uploaded
+    # earlier (or just now, in this same turn - see the attachment handling above) without
+    # having to paste its content into the chat - scope is forced to "kb" (personal
+    # documents only, not other tasks/todos/journal entries, which would just be noise here).
     kb_context = []
     if action == "info_request":
         if payload.conv_id:
@@ -1456,6 +1474,9 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             scope = (payload.filters or {}).get("scope", "all")
         kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope, org_id=current.org_id)
         logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={payload.content[:60]!r} chunks={len(kb_context)}")
+    elif action == "task_todo":
+        kb_context = await retrieve_kb(current.user_id, payload.content, scope="kb", org_id=current.org_id)
+        logger.info(f"[RAG] user={current.user_id[:8]} scope=kb (task_todo) q={payload.content[:60]!r} chunks={len(kb_context)}")
 
     system = build_system_prompt(current, action)
     user_text = payload.content
@@ -1467,7 +1488,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                 return c["display"]
             return c.get("text", "")
         ctx = "\n\n".join([f"- {_fmt(c)}" for c in kb_context])
-        user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{payload.content}"
+        label = "RICHIESTA" if action == "task_todo" else "DOMANDA"
+        user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\n{label}:\n{payload.content}"
 
     initial = [{"role": "system", "content": system}]
     for m in prior_messages:
@@ -1620,7 +1642,18 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         # because it wasn't the very first message.
         if action == "task_todo":
             logger.info(f"[task_todo] meta={meta!r}")
-            if meta:
+            bulk_tasks = meta.get("tasks") if meta else None
+            if isinstance(bulk_tasks, list) and bulk_tasks:
+                # Multiple events read from an attached/KB document (e.g. "un task per ogni
+                # lezione di pilates"): one task/todo per item, all sharing this conv_id -
+                # no dedup-into-an-update here, each item is its own new record.
+                for item in bulk_tasks:
+                    if isinstance(item, dict) and item.get("title"):
+                        try:
+                            await _create_task_or_todo(current.user_id, item, conv_id)
+                        except Exception:
+                            logger.exception(f"bulk task creation failed for item={item!r}")
+            elif meta:
                 existing = await _find_created_in_conv(conv_id)
                 if existing is None:
                     await _create_task_or_todo(current.user_id, meta, conv_id)

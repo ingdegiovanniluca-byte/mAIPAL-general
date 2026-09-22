@@ -206,6 +206,14 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         if kb:
             def _fmt(c): return c.get("display") or c.get("text","")[:400]
             user_text = f"CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {_fmt(c)}" for c in kb) + f"\n\nDOMANDA:\n{content}"
+    elif action == "task_todo":
+        # Same idea as info_request's RAG above, scoped to the personal KB only (not other
+        # tasks/journal entries) - lets "crea un task per ogni lezione di pilates" see a
+        # schedule the user uploaded earlier, without pasting it into the message.
+        kb = await retrieve_kb(user_doc["user_id"], content, scope="kb", org_id=user_doc.get("org_id"))
+        if kb:
+            def _fmt(c): return c.get("display") or c.get("text", "")[:400]
+            user_text = f"CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {_fmt(c)}" for c in kb) + f"\n\nRICHIESTA:\n{content}"
 
     chat = LlmChat(
         api_key=os.environ.get("ANTHROPIC_API_KEY"),
@@ -276,7 +284,17 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
                 logger.exception("auto task creation from info_upload failed")
     elif action == "task_todo":
         parsed = _parse_task_json(answer) or meta
-        if parsed:
+        bulk_tasks = parsed.get("tasks") if parsed else None
+        if isinstance(bulk_tasks, list) and bulk_tasks:
+            # Multiple events read from the KB (e.g. "un task per ogni lezione di pilates"):
+            # one task/todo per item, all sharing this conv_id.
+            for item in bulk_tasks:
+                if isinstance(item, dict) and item.get("title"):
+                    try:
+                        await _create_task_or_todo(user_doc["user_id"], item, conv_id, default_reminder_enabled=True)
+                    except Exception:
+                        logger.exception(f"bulk task creation failed for item={item!r}")
+        elif parsed:
             # A follow-up turn in the SAME thread updates what was already created there
             # instead of creating a duplicate every time the user adds more detail.
             existing = await _find_created_in_conv(conv_id)

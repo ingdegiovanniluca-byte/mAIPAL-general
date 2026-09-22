@@ -526,9 +526,12 @@ export default function ChatPage() {
       return;
     }
 
-    // In info_upload: extract text and save into personal KB (no Google needed)
-    // In other actions: keep the previous behaviour (upload to Drive as attachment)
-    const useKb = active === "info_upload";
+    // In info_upload and task_todo: extract text (OCR for images) and save into the
+    // personal KB (no Google needed) - task_todo needs this so the AI can actually read an
+    // attached schedule/program and create a task per event, instead of it going straight
+    // to Drive unread. In other actions: keep the previous behaviour (upload to Drive as
+    // attachment).
+    const useKb = active === "info_upload" || active === "task_todo";
     for (const f of files) {
       setUploadingFiles((u) => [...u, f.name]);
       try {
