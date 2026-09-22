@@ -8,6 +8,7 @@ import { BookOpen, Trash2, Star, Briefcase, PartyPopper, Palmtree, Home, HeartPu
 const DIARY_TITLE_COLOR = "#D9D9D9";
 const DIARY_TEXT_COLOR = "#000000";
 const DIARY_CARD_BG = "#B28F8E";
+const DIARY_TEXT_CARD_BG = "rgba(178, 143, 142, 0.1)"; // #B28F8E @ 10%, solo per la card con l'abstract
 const DIARY_DAY_COLOR = "#AC6C41";
 const DIARY_FAV_COLOR = "#FFC000";
 
@@ -150,21 +151,12 @@ export default function JournalPage() {
           mese (default); un giorno specifico filtra solo quello. */}
       <div className="flex flex-col items-center gap-3 mb-6">
         <div className="flex items-center gap-2">
-          <button
-            data-testid="journal-month-label"
-            onClick={() => setSelectedDay(null)}
-            title="Mostra tutto il mese"
-            className="text-xl font-semibold tracking-tight hover:opacity-80 transition-opacity"
-            style={{ color: DIARY_TITLE_COLOR }}
-          >
-            {cap(IT_MONTHS_LONG[viewMonth - 1])} {viewYear}
-          </button>
           <div className="relative">
             <button
               data-testid="journal-month-picker-toggle"
               onClick={() => setMonthPickerOpen((v) => !v)}
               title="Cambia mese"
-              className="liquid-glass-btn p-1.5 rounded-full text-white/70 hover:text-white"
+              className="p-1.5 text-white/70 hover:text-white transition-colors"
             >
               <Calendar size={16} />
             </button>
@@ -176,10 +168,19 @@ export default function JournalPage() {
                 value={`${viewYear}-${pad2(viewMonth)}`}
                 onChange={onMonthPick}
                 onBlur={() => setMonthPickerOpen(false)}
-                className="absolute z-10 top-full left-1/2 -translate-x-1/2 mt-1 rounded-lg bg-[#403A3C] text-white px-2 py-1 text-xs shadow-lg"
+                className="absolute z-10 top-full left-0 mt-1 rounded-lg bg-[#403A3C] text-white px-2 py-1 text-xs shadow-lg"
               />
             )}
           </div>
+          <button
+            data-testid="journal-month-label"
+            onClick={() => setSelectedDay(null)}
+            title="Mostra tutto il mese"
+            className="text-xl font-semibold tracking-tight hover:opacity-80 transition-opacity"
+            style={{ color: DIARY_TITLE_COLOR }}
+          >
+            {cap(IT_MONTHS_LONG[viewMonth - 1])} {viewYear}
+          </button>
         </div>
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full px-1 py-1">
           {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
@@ -231,7 +232,7 @@ export default function JournalPage() {
               <button
                 onClick={() => setExpandedId(e.id)}
                 className="flex-1 min-w-0 text-left p-4 rounded-2xl shadow-sm hover:brightness-110 transition-[filter] flex items-center gap-4"
-                style={{ backgroundColor: DIARY_CARD_BG }}
+                style={{ backgroundColor: DIARY_TEXT_CARD_BG }}
               >
                 <div className="min-w-0 flex-1">
                   <div className="font-normal text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{e.title || "Diario"}</div>
