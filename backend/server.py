@@ -4207,6 +4207,60 @@ async def _reminders_loop():
         await asyncio.sleep(30 * 60)
 
 
+async def _kb_reminder_enrichment(user_id: str, task: dict, org_id: Optional[str] = None) -> str:
+    """Looks up the user's own Knowledge Base for information useful to carry out a task,
+    and returns a short bullet-point block to append to its Telegram reminder - or "" when
+    nothing relevant/confident enough was found (the reminder is then sent exactly as
+    before, with no mention of the search ever having happened). Never raises - any
+    failure here must never affect whether or when the reminder itself gets sent."""
+    title = (task.get("title") or "").strip()
+    notes = (task.get("notes") or "").strip()
+    query = f"{title} {notes}".strip()
+    if not query:
+        return ""
+    try:
+        kb_hits = await retrieve_kb(user_id, query, limit=8, scope="all", org_id=org_id)
+    except Exception:
+        logger.exception("KB lookup for reminder enrichment failed")
+        return ""
+    if not kb_hits:
+        return ""
+    def _fmt(c):
+        return c.get("display") or (c.get("text") or "")[:500]
+    context = "\n\n".join(f"- {_fmt(c)}" for c in kb_hits)[:6000]
+    system = (
+        "Stai per generare la sezione 'Informazioni utili' di un promemoria Telegram per un task. "
+        f"Task: \"{title}\". Note: \"{notes or 'nessuna'}\".\n\n"
+        f"CONTESTO dalla knowledge base personale dell'utente (può contenere informazioni non pertinenti):\n{context}\n\n"
+        "Analizza il task (titolo e note) per capire di chi/cosa si parla e che tipo di azione va svolta "
+        "(chiamare, chiedere aggiornamenti, fare un follow-up, inviare un documento...), poi valuta se il "
+        "CONTESTO sopra contiene informazioni davvero utili per svolgere QUESTA azione specifica.\n\n"
+        "Regole tassative:\n"
+        "- Usa SOLO informazioni presenti nel contesto sopra. Non inventare né dedurre dati non scritti "
+        "esplicitamente (dati clinici, economici o personali non presenti).\n"
+        "- Se il riferimento del task è ambiguo (es. il contesto riguarda più persone/cose con lo stesso nome) e "
+        "le note del task non permettono di capire con sicurezza a chi/cosa si riferisce, non produrre nulla.\n"
+        "- Se il contesto non contiene nulla di realmente utile per questo task specifico (es. task generico come "
+        "'fare la spesa', o nessuna informazione pertinente), non produrre nulla.\n"
+        "- Se produci qualcosa: 3-5 punti elenco sintetici (un fatto essenziale ciascuno), con la data quando "
+        "disponibile nel contesto (es. 'Ultima visita: 15 settembre — ...'). Stesso tono asciutto e diretto di un "
+        "promemoria, in italiano.\n\n"
+        "Rispondi SOLO con i punti elenco (ogni riga inizia con '• '), oppure con la sola parola NESSUNA se non "
+        "c'è nulla di utile o il riferimento è ambiguo. Nessun altro testo, nessuna spiegazione."
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"remind_ctx_{uuid.uuid4().hex[:8]}", system_message=system).with_model("openai", "gpt-4o-mini")
+        raw = (await asyncio.wait_for(chat.send_message(UserMessage(text="Genera la sezione, se applicabile.")), timeout=8)).strip()
+    except Exception:
+        logger.exception("reminder enrichment LLM call failed")
+        return ""
+    if not raw or raw.strip().upper().startswith("NESSUNA"):
+        return ""
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    lines = [(l if l.startswith("•") else f"• {l}") for l in lines][:5]
+    return "\n".join(lines)
+
+
 async def _exact_reminders_loop():
     """Every minute: for tasks with reminder_enabled=True and reminder_msg_sent!=True,
     fire a Telegram message at (due_date + due_time - reminder_offset_minutes); offset
@@ -4254,6 +4308,31 @@ async def _exact_reminders_loop():
                         f"{t.get('description','') or ''}"
                         f"{notes_line}"
                     )
+                    # Best-effort: look up the user's own KB for info useful to carry out this
+                    # task (e.g. a patient's last visit, a contact's last conversation) and
+                    # append it. Never delays/blocks the reminder itself (bounded timeout,
+                    # falls back to the plain text above on any failure or empty result) and
+                    # never mentions the search when it finds nothing.
+                    try:
+                        enrichment = await asyncio.wait_for(
+                            _kb_reminder_enrichment(t["user_id"], t, org_id=t.get("org_id")), timeout=12
+                        )
+                    except Exception:
+                        enrichment = ""
+                    if enrichment:
+                        # Stay well under Telegram's 4096-char cap - if the enrichment doesn't
+                        # fully fit, drop whole bullet lines from the end rather than cutting
+                        # into title/scadenza/note, per spec.
+                        header = "\n\n💡 Informazioni utili\n"
+                        budget = 4000 - len(text) - len(header)
+                        kept, used = [], 0
+                        for line in enrichment.split("\n"):
+                            if used + len(line) + 1 > budget:
+                                break
+                            kept.append(line)
+                            used += len(line) + 1
+                        if kept:
+                            text = f"{text}{header}" + "\n".join(kept)
                     await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
                     await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
                     logger.info(f"exact reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
