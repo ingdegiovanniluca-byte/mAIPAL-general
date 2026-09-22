@@ -4,11 +4,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { toast } from "sonner";
 import { BookOpen, Trash2, Star, Briefcase, PartyPopper, Palmtree, Home, HeartPulse, Users, Plane, X, Paperclip, Calendar } from "lucide-react";
 
-// Diario theme colors (from the design spec)
+// Diario theme colors (from the design spec). The card backgrounds now use the app's
+// standard translucent "card-soft" glass style (same as Chat/News) instead of a custom
+// color, so the preview text - originally tuned for a light #B28F8E card - is light too,
+// to stay legible on the dark glass background.
 const DIARY_TITLE_COLOR = "#D9D9D9";
-const DIARY_TEXT_COLOR = "#000000";
-const DIARY_CARD_BG = "#B28F8E";
-const DIARY_TEXT_CARD_BG = "rgba(178, 143, 142, 0.1)"; // #B28F8E @ 10%, solo per la card con l'abstract
+const DIARY_TEXT_COLOR = "rgba(255,255,255,0.75)";
 const DIARY_DAY_COLOR = "#AC6C41";
 const DIARY_FAV_COLOR = "#FFC000";
 
@@ -193,7 +194,7 @@ export default function JournalPage() {
                 onClick={() => setSelectedDay(d)}
                 title={has ? "Apri questa giornata" : undefined}
                 className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${isSelected ? "ring-2 ring-white" : ""}`}
-                style={{ backgroundColor: has ? DIARY_CARD_BG : "rgba(255,255,255,0.06)", color: has ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
+                style={{ backgroundColor: has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: has ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
               >
                 {d}
               </button>
@@ -216,7 +217,7 @@ export default function JournalPage() {
           const topics = topicsForEntry(e);
           return (
             <div key={e.id} className="flex items-stretch gap-3" data-testid="journal-entry">
-              <div className="flex flex-col items-center justify-center gap-1.5 shrink-0 w-20 rounded-2xl text-center py-2.5 px-1" style={{ backgroundColor: DIARY_CARD_BG }}>
+              <div className="card-soft flex flex-col items-center justify-center gap-1.5 shrink-0 w-20 text-center py-2.5 px-1">
                 <div className="text-2xl font-normal leading-none" style={{ color: DIARY_DAY_COLOR }}>{day}</div>
                 <div className="text-[10px] uppercase tracking-widest font-normal" style={{ color: DIARY_TITLE_COLOR }}>{monYear}</div>
                 <button
@@ -231,8 +232,7 @@ export default function JournalPage() {
               </div>
               <button
                 onClick={() => setExpandedId(e.id)}
-                className="flex-1 min-w-0 text-left p-4 rounded-2xl shadow-sm hover:brightness-110 transition-[filter] flex items-center gap-4"
-                style={{ backgroundColor: DIARY_TEXT_CARD_BG }}
+                className="card-soft card-hover flex-1 min-w-0 text-left p-4 flex items-center gap-4"
               >
                 <div className="min-w-0 flex-1">
                   <div className="font-normal text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{e.title || "Diario"}</div>
