@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -13,8 +13,8 @@ const DIARY_TEXT_COLOR = "rgba(255,255,255,0.75)";
 const DIARY_DAY_COLOR = "#AC6C41";
 const DIARY_FAV_COLOR = "#FFC000";
 
-// I 7 temi riconosciuti nelle giornate, mostrati come icone bianche sotto l'anteprima del
-// testo - dedotti dai tag che l'AI assegna alla voce (nessuna scelta manuale per ora).
+// I 7 temi riconosciuti nelle giornate, mostrati come icone bianche accanto al titolo -
+// dedotti dai tag che l'AI assegna alla voce (nessuna scelta manuale per ora).
 const TOPIC_ICONS = [
   { key: "lavoro", icon: Briefcase, match: ["lavoro", "lavorativo", "ufficio", "riunione", "meeting", "progetto", "collega", "clienti"] },
   { key: "tempo_libero", icon: PartyPopper, match: ["tempo libero", "svago", "hobby", "divertimento", "amici", "festa"] },
@@ -60,67 +60,334 @@ const formatBadge = (iso) => {
 const imgGridClass = (n) => (n <= 1 ? "grid-cols-1" : n === 2 ? "grid-cols-2" : "grid-cols-3");
 
 const pad2 = (n) => String(n).padStart(2, "0");
+const addDaysIso = (iso, delta) => {
+  const p = parseIsoDate(iso);
+  if (!p) return iso;
+  const dt = new Date(p.y, p.m - 1, p.d + delta);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+};
+const buildDateWindow = (centerIso, radius) => {
+  const out = [];
+  for (let i = -radius; i <= radius; i++) out.push(addDaysIso(centerIso, i));
+  return out;
+};
 
-export default function JournalPage() {
-  const [entries, setEntries] = useState([]);
+// ===== Carosello "coverflow" per giorno =====
+const CAROUSEL_RADIUS = 20;            // giorni renderizzati per lato (finestra scorrevole)
+const CAROUSEL_EDGE_MARGIN = 6;        // a quanti giorni dal bordo della finestra si "ricentra" in silenzio
+const CAROUSEL_FETCH_HALF_WINDOW = 40; // giorni di dati caricati per lato (margine oltre la finestra renderizzata)
+const CAROUSEL_IMG_H = 64;             // px, altezza fissa dell'area immagini nella card
 
-  // Navigazione a calendario: mese mostrato (default il mese corrente) + giorno
-  // selezionato dentro quel mese (null = mostra tutto il mese, il default).
-  const today = new Date();
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [viewMonth, setViewMonth] = useState(today.getMonth() + 1); // 1-indexato
-  const [selectedDay, setSelectedDay] = useState(null);
-  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+function DiaryDayCard({ iso, entry, isFocused, cardW, onClick, onToggleFav }) {
+  const { day, monYear } = formatBadge(iso);
+  if (!entry) {
+    return (
+      <div
+        data-date={iso}
+        onClick={onClick}
+        className="card-soft flex flex-col p-5 cursor-pointer select-none h-full"
+        data-testid="journal-day-card-empty"
+      >
+        <div className="text-4xl font-normal leading-none" style={{ color: DIARY_DAY_COLOR }}>{day}</div>
+        <div className="text-[10px] uppercase tracking-widest mt-1" style={{ color: DIARY_TITLE_COLOR }}>{monYear}</div>
+        <div className="text-xs mt-4 opacity-40" style={{ color: DIARY_TEXT_COLOR }}>Nessuna voce</div>
+      </div>
+    );
+  }
+  const images = (entry.images || []).slice(0, 3);
+  const subtitle = (entry.tags || []).length > 0 ? `Argomenti: ${entry.tags.join(", ")}` : "";
+  const topics = topicsForEntry(entry);
+  return (
+    <div
+      data-date={iso}
+      onClick={onClick}
+      className={`card-soft flex flex-col p-5 cursor-pointer select-none h-full ${isFocused ? "card-hover" : ""}`}
+      data-testid="journal-day-card"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-4xl font-normal leading-none" style={{ color: DIARY_DAY_COLOR }}>{day}</div>
+          <div className="text-[10px] uppercase tracking-widest mt-1" style={{ color: DIARY_TITLE_COLOR }}>{monYear}</div>
+        </div>
+        <button
+          data-testid="journal-fav"
+          onClick={(ev) => { ev.stopPropagation(); onToggleFav(entry); }}
+          title={entry.favorite ? "Rimuovi dai preferiti" : "Segna come giornata memorabile"}
+          className="p-1.5 rounded-lg transition-colors duration-150 shrink-0"
+          style={{ backgroundColor: entry.favorite ? DIARY_FAV_COLOR : "transparent" }}
+        >
+          <Star size={15} className={entry.favorite ? "text-white fill-current" : "text-white/50"} />
+        </button>
+      </div>
 
-  const [expandedId, setExpandedId] = useState(null);
+      <div className="flex items-start justify-between gap-2 mt-3">
+        <div className="min-w-0">
+          <div className="font-normal text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{entry.title || "Diario"}</div>
+          {subtitle && <div className="text-xs truncate mt-0.5 opacity-80" style={{ color: DIARY_TITLE_COLOR }}>{subtitle}</div>}
+        </div>
+        {topics.length > 0 && (
+          <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+            {topics.map((t) => <t.icon key={t.key} size={14} className="text-white" title={t.key.replace("_", " ")} />)}
+          </div>
+        )}
+      </div>
 
-  const daysInMonth = useMemo(() => new Date(viewYear, viewMonth, 0).getDate(), [viewYear, viewMonth]);
-  const monthRange = useMemo(() => ({
-    date_from: `${viewYear}-${pad2(viewMonth)}-01`,
-    date_to: `${viewYear}-${pad2(viewMonth)}-${pad2(daysInMonth)}`,
-  }), [viewYear, viewMonth, daysInMonth]);
+      <div className="text-xs mt-2 line-clamp-4" style={{ color: DIARY_TEXT_COLOR }}>{entry.cleaned_text}</div>
 
-  const load = async () => {
-    const r = await api.get("/journal", { params: monthRange });
-    setEntries(r.data);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [monthRange.date_from, monthRange.date_to]);
-
-  const daysWithEntries = useMemo(() => {
-    const s = new Set();
-    entries.forEach((e) => { const p = parseIsoDate(e.date); if (p) s.add(p.d); });
-    return s;
-  }, [entries]);
-  const visibleEntries = useMemo(
-    () => (selectedDay ? entries.filter((e) => parseIsoDate(e.date)?.d === selectedDay) : entries),
-    [entries, selectedDay]
+      {images.length > 0 && (
+        <div className="flex items-end gap-1.5 mt-3 overflow-hidden" style={{ height: CAROUSEL_IMG_H }}>
+          {images.map((src, i) => (
+            <img key={i} src={src} alt="" className="rounded-md" style={{ height: CAROUSEL_IMG_H, width: "auto" }} />
+          ))}
+        </div>
+      )}
+    </div>
   );
+}
 
-  const onMonthPick = (e) => {
-    const [y, m] = (e.target.value || "").split("-").map(Number);
-    if (y && m) { setViewYear(y); setViewMonth(m); setSelectedDay(null); }
-    setMonthPickerOpen(false);
+function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettle, onOpenEntry, onToggleFav }) {
+  const scrollerRef = useRef(null);
+  const rafRef = useRef(null);
+  const settleTimerRef = useRef(null);
+  const draggingRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, scrollLeft: 0 });
+
+  const [cardW, setCardW] = useState(300);
+  useEffect(() => {
+    const calc = () => setCardW(Math.max(220, Math.min(320, window.innerWidth - 64)));
+    calc();
+    window.addEventListener("resize", calc);
+    return () => window.removeEventListener("resize", calc);
+  }, []);
+
+  // Applica scala/opacità/rotazione 3D in base alla distanza dal centro, direttamente sul
+  // DOM (niente re-render React per ogni frame di scroll) - e ritorna l'indice della card
+  // più vicina al centro, usata sia per lo "snap" manuale sia per rilevare l'arresto dello
+  // scroll (settle).
+  const applyTransforms = () => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return null;
+    const children = scroller.children;
+    const rects = [];
+    for (let i = 0; i < children.length; i++) rects.push(children[i].getBoundingClientRect());
+    const containerRect = scroller.getBoundingClientRect();
+    const centerX = containerRect.left + containerRect.width / 2;
+    const unit = rects.length > 1 ? Math.abs(rects[1].left - rects[0].left) || 300 : 300;
+    let nearestIdx = 0, nearestDist = Infinity;
+    rects.forEach((r, i) => {
+      const elCenterX = r.left + r.width / 2;
+      const dist = (elCenterX - centerX) / unit;
+      const ad = Math.min(Math.abs(dist), 4);
+      const scale = 1 - 0.14 * ad;
+      const opacity = Math.max(0.3, 1 - 0.32 * ad);
+      const rotate = Math.max(-28, Math.min(28, -dist * 20));
+      const tz = -ad * 60;
+      const el = children[i];
+      el.style.transform = `perspective(1400px) translateZ(${tz}px) rotateY(${rotate}deg) scale(${scale})`;
+      el.style.opacity = String(opacity);
+      el.style.zIndex = String(1000 - Math.round(ad * 10));
+      const adist = Math.abs(elCenterX - centerX);
+      if (adist < nearestDist) { nearestDist = adist; nearestIdx = i; }
+    });
+    return nearestIdx;
   };
 
-  const toggleFav = async (id, currentVal) => {
-    setEntries((es) => es.map((e) => (e.id === id ? { ...e, favorite: !currentVal } : e)));
-    try { await api.post(`/journal/${id}/favorite`); }
-    catch {
-      toast.error("Errore preferito");
-      setEntries((es) => es.map((e) => (e.id === id ? { ...e, favorite: currentVal } : e)));
+  const scheduleFrame = () => {
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      applyTransforms();
+    });
+  };
+
+  const onScroll = () => {
+    scheduleFrame();
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => {
+      const idx = applyTransforms();
+      if (idx != null && dates[idx]) onSettle(dates[idx], idx, dates.length);
+    }, 130);
+  };
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return undefined;
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    requestAnimationFrame(applyTransforms);
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dates]);
+
+  // Riposiziona il carosello quando il genitore chiede un salto esplicito (click su un
+  // giorno nella striscia, cambio mese) o silenzioso (ricentraggio ai bordi della finestra).
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const mid = scroller.children[CAROUSEL_RADIUS];
+    if (mid) mid.scrollIntoView({ inline: "center", block: "nearest", behavior: centerRequest.behavior });
+    requestAnimationFrame(applyTransforms);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centerRequest.nonce]);
+
+  // Drag-to-scroll per mouse desktop (il touch ha già lo scroll nativo fluido)
+  const onPointerDown = (e) => {
+    if (e.pointerType === "touch") return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    draggingRef.current = true;
+    dragStartRef.current = { x: e.clientX, scrollLeft: scroller.scrollLeft };
+    scroller.style.scrollSnapType = "none";
+    scroller.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    if (!draggingRef.current) return;
+    const scroller = scrollerRef.current;
+    const dx = e.clientX - dragStartRef.current.x;
+    scroller.scrollLeft = dragStartRef.current.scrollLeft - dx;
+    scheduleFrame();
+  };
+  const endDrag = () => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    scroller.style.scrollSnapType = "x mandatory";
+    // Lo snap CSS non si riapplica retroattivamente dopo il drag: agganciamo esplicitamente
+    // alla card più vicina.
+    const idx = applyTransforms();
+    if (idx != null && scroller.children[idx]) {
+      scroller.children[idx].scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
     }
   };
 
-  const del = (id) => {
+  return (
+    <div
+      ref={scrollerRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      className="flex gap-4 overflow-x-auto no-scrollbar py-8 cursor-grab active:cursor-grabbing"
+      style={{
+        scrollSnapType: "x mandatory",
+        WebkitOverflowScrolling: "touch",
+        paddingLeft: `calc(50% - ${cardW / 2}px)`,
+        paddingRight: `calc(50% - ${cardW / 2}px)`,
+      }}
+      data-testid="journal-carousel"
+    >
+      {dates.map((iso) => {
+        const entry = entriesByDate[iso];
+        const isFocused = iso === focusDate;
+        return (
+          <div key={iso} style={{ scrollSnapAlign: "center", width: cardW, flexShrink: 0 }}>
+            <DiaryDayCard
+              iso={iso}
+              entry={entry}
+              isFocused={isFocused}
+              cardW={cardW}
+              onToggleFav={onToggleFav}
+              onClick={() => {
+                if (!isFocused) {
+                  scrollerRef.current?.querySelector(`[data-date="${iso}"]`)?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+                  return;
+                }
+                if (entry) onOpenEntry(entry);
+              }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function JournalPage() {
+  const today = new Date();
+  const initialIso = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-01`;
+
+  // Un'unica sorgente di verità per la navigazione: la data attualmente al centro del
+  // carosello. centerRequest è il "comando" esplicito che sposta il carosello (click su un
+  // giorno, cambio mese, oppure il ricentraggio silenzioso quando si scorre vicino al bordo
+  // della finestra renderizzata) - focusDate segue lo scroll effettivo (anche durante un
+  // trascinamento libero) per tenere sincronizzata l'intestazione (mese/striscia giorni).
+  const [centerRequest, setCenterRequest] = useState({ date: initialIso, behavior: "auto", nonce: 0 });
+  const [focusDate, setFocusDate] = useState(initialIso);
+  const [entriesByDate, setEntriesByDate] = useState({});
+  const [loadedRange, setLoadedRange] = useState(null);
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [expandedEntry, setExpandedEntry] = useState(null);
+
+  const dates = useMemo(() => buildDateWindow(centerRequest.date, CAROUSEL_RADIUS), [centerRequest.date]);
+
+  const focusParts = parseIsoDate(focusDate) || parseIsoDate(initialIso);
+  const daysInMonth = useMemo(() => new Date(focusParts.y, focusParts.m, 0).getDate(), [focusParts.y, focusParts.m]);
+
+  // Carica le voci in una finestra di giorni attorno al centro (non solo il mese mostrato,
+  // dato che il carosello può scorrere oltre i confini del mese) - rifà la richiesta solo
+  // quando ci si avvicina al bordo di quanto già caricato.
+  useEffect(() => {
+    const from = addDaysIso(centerRequest.date, -CAROUSEL_FETCH_HALF_WINDOW);
+    const to = addDaysIso(centerRequest.date, CAROUSEL_FETCH_HALF_WINDOW);
+    if (loadedRange && from >= loadedRange.from && to <= loadedRange.to) return;
+    (async () => {
+      const r = await api.get("/journal", { params: { date_from: from, date_to: to } });
+      const map = {};
+      // Più voci nello stesso giorno (raro, ma non impedito): la card del giorno mostra la
+      // più recente; le altre restano comunque nel DB e nella lista completa.
+      r.data.forEach((e) => {
+        const existing = map[e.date];
+        if (!existing || (e.created_at || "") > (existing.created_at || "")) map[e.date] = e;
+      });
+      setEntriesByDate(map);
+      setLoadedRange({ from, to });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centerRequest.date]);
+
+  const goTo = (iso, behavior = "smooth") => {
+    setFocusDate(iso);
+    setCenterRequest((r) => ({ date: iso, behavior, nonce: r.nonce + 1 }));
+  };
+
+  const onCarouselSettle = (iso, idx, len) => {
+    setFocusDate(iso);
+    if (idx <= CAROUSEL_EDGE_MARGIN || idx >= len - 1 - CAROUSEL_EDGE_MARGIN) {
+      setCenterRequest((r) => ({ date: iso, behavior: "auto", nonce: r.nonce + 1 }));
+    }
+  };
+
+  const onMonthPick = (e) => {
+    const [y, m] = (e.target.value || "").split("-").map(Number);
+    if (y && m) goTo(`${y}-${pad2(m)}-01`);
+    setMonthPickerOpen(false);
+  };
+
+  const toggleFav = async (entry) => {
+    const prevVal = !!entry.favorite;
+    setEntriesByDate((mp) => ({ ...mp, [entry.date]: { ...mp[entry.date], favorite: !prevVal } }));
+    if (expandedEntry?.id === entry.id) setExpandedEntry((e) => (e ? { ...e, favorite: !prevVal } : e));
+    try { await api.post(`/journal/${entry.id}/favorite`); }
+    catch {
+      toast.error("Errore preferito");
+      setEntriesByDate((mp) => ({ ...mp, [entry.date]: { ...mp[entry.date], favorite: prevVal } }));
+      if (expandedEntry?.id === entry.id) setExpandedEntry((e) => (e ? { ...e, favorite: prevVal } : e));
+    }
+  };
+
+  const del = (entry) => {
     toast("Eliminare questa voce di diario?", {
       action: {
         label: "Elimina",
         onClick: async () => {
-          const prev = entries;
-          setEntries((es) => es.filter((e) => e.id !== id));
-          try { await api.delete(`/journal/${id}`); toast.success("Voce eliminata"); }
-          catch { toast.error("Errore"); setEntries(prev); }
+          const prev = entriesByDate;
+          setEntriesByDate((mp) => { const n = { ...mp }; delete n[entry.date]; return n; });
+          try { await api.delete(`/journal/${entry.id}`); toast.success("Voce eliminata"); }
+          catch { toast.error("Errore"); setEntriesByDate(prev); }
         },
       },
       cancel: { label: "Annulla", onClick: () => {} },
@@ -128,14 +395,25 @@ export default function JournalPage() {
     });
   };
 
-  const delImage = async (id, index) => {
-    const prev = entries;
-    setEntries((es) => es.map((e) => (e.id === id ? { ...e, images: (e.images || []).filter((_, i) => i !== index) } : e)));
-    try { await api.delete(`/journal/${id}/images/${index}`); }
-    catch { toast.error("Errore nell'eliminare l'immagine"); setEntries(prev); }
+  const delImage = async (entry, index) => {
+    const prevImgs = entry.images || [];
+    const newImgs = prevImgs.filter((_, i) => i !== index);
+    setEntriesByDate((mp) => ({ ...mp, [entry.date]: { ...mp[entry.date], images: newImgs } }));
+    setExpandedEntry((e) => (e && e.id === entry.id ? { ...e, images: newImgs } : e));
+    try { await api.delete(`/journal/${entry.id}/images/${index}`); }
+    catch {
+      toast.error("Errore nell'eliminare l'immagine");
+      setEntriesByDate((mp) => ({ ...mp, [entry.date]: { ...mp[entry.date], images: prevImgs } }));
+      setExpandedEntry((e) => (e && e.id === entry.id ? { ...e, images: prevImgs } : e));
+    }
   };
 
-  const expandedEntry = entries.find((e) => e.id === expandedId) || null;
+  const daysWithEntries = useMemo(() => {
+    const s = new Set();
+    const prefix = `${focusParts.y}-${pad2(focusParts.m)}-`;
+    Object.keys(entriesByDate).forEach((iso) => { if (iso.startsWith(prefix)) s.add(Number(iso.slice(8, 10))); });
+    return s;
+  }, [entriesByDate, focusParts.y, focusParts.m]);
 
   return (
     <div className="w-full">
@@ -148,9 +426,9 @@ export default function JournalPage() {
       </div>
 
       {/* Navigazione: mese al centro in alto, sotto tutti i giorni del mese in una riga -
-          colorati se c'è una voce di diario quel giorno. Il mese mostra tutte le voci del
-          mese (default); un giorno specifico filtra solo quello. */}
-      <div className="flex flex-col items-center gap-3 mb-6">
+          colorati se c'è una voce di diario quel giorno. Cliccando un giorno il carosello
+          sotto scorre fino a portarlo al centro. */}
+      <div className="flex flex-col items-center gap-3 mb-2">
         <div className="flex items-center gap-2">
           <div className="relative">
             <button
@@ -166,7 +444,7 @@ export default function JournalPage() {
                 data-testid="journal-month-picker"
                 type="month"
                 autoFocus
-                value={`${viewYear}-${pad2(viewMonth)}`}
+                value={`${focusParts.y}-${pad2(focusParts.m)}`}
                 onChange={onMonthPick}
                 onBlur={() => setMonthPickerOpen(false)}
                 className="absolute z-10 top-full left-0 mt-1 rounded-lg bg-[#403A3C] text-white px-2 py-1 text-xs shadow-lg"
@@ -175,23 +453,23 @@ export default function JournalPage() {
           </div>
           <button
             data-testid="journal-month-label"
-            onClick={() => setSelectedDay(null)}
-            title="Mostra tutto il mese"
+            onClick={() => goTo(`${focusParts.y}-${pad2(focusParts.m)}-01`)}
+            title="Torna al primo del mese"
             className="text-xl font-semibold tracking-tight hover:opacity-80 transition-opacity"
             style={{ color: DIARY_TITLE_COLOR }}
           >
-            {cap(IT_MONTHS_LONG[viewMonth - 1])} {viewYear}
+            {cap(IT_MONTHS_LONG[focusParts.m - 1])} {focusParts.y}
           </button>
         </div>
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full px-1 py-1">
           {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
             const has = daysWithEntries.has(d);
-            const isSelected = selectedDay === d;
+            const isSelected = focusParts.d === d;
             return (
               <button
                 key={d}
                 data-testid={`journal-day-${d}`}
-                onClick={() => setSelectedDay(d)}
+                onClick={() => goTo(`${focusParts.y}-${pad2(focusParts.m)}-${pad2(d)}`)}
                 title={has ? "Apri questa giornata" : undefined}
                 className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${isSelected ? "ring-2 ring-white" : ""}`}
                 style={{ backgroundColor: has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: has ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
@@ -203,72 +481,29 @@ export default function JournalPage() {
         </div>
       </div>
 
-      {/* Giornate: solo i riquadri, nessun grafico/umore - la scrittura avviene dalla chat */}
-      <div className="mt-6 space-y-3">
-        {visibleEntries.length === 0 && (
-          <div className="text-white/60 text-sm text-center">
-            {selectedDay ? "Nessuna voce in questo giorno." : "Nessuna voce in questo mese."}
-          </div>
-        )}
-        {visibleEntries.map((e) => {
-          const { day, monYear } = formatBadge(e.date);
-          const images = (e.images || []).slice(0, 3);
-          const subtitle = (e.tags || []).length > 0 ? `Argomenti: ${e.tags.join(", ")}` : "";
-          const topics = topicsForEntry(e);
-          return (
-            <div key={e.id} className="flex items-stretch gap-3" data-testid="journal-entry">
-              <div className="card-soft flex flex-col items-center justify-center gap-1.5 shrink-0 w-20 text-center py-2.5 px-1">
-                <div className="text-2xl font-normal leading-none" style={{ color: DIARY_DAY_COLOR }}>{day}</div>
-                <div className="text-[10px] uppercase tracking-widest font-normal" style={{ color: DIARY_TITLE_COLOR }}>{monYear}</div>
-                <button
-                  data-testid="journal-fav"
-                  onClick={() => toggleFav(e.id, !!e.favorite)}
-                  title={e.favorite ? "Rimuovi dai preferiti" : "Segna come giornata memorabile"}
-                  className="p-1.5 rounded-lg transition-colors duration-150 mt-0.5"
-                  style={{ backgroundColor: e.favorite ? DIARY_FAV_COLOR : "transparent" }}
-                >
-                  <Star size={15} className={e.favorite ? "text-white fill-current" : "text-white/50"} />
-                </button>
-              </div>
-              <button
-                onClick={() => setExpandedId(e.id)}
-                className="card-soft card-hover flex-1 min-w-0 text-left p-4 flex items-center gap-4"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="font-normal text-base truncate" style={{ color: DIARY_TITLE_COLOR }}>{e.title || "Diario"}</div>
-                  {subtitle && <div className="text-xs truncate mt-0.5 opacity-80" style={{ color: DIARY_TITLE_COLOR }}>{subtitle}</div>}
-                  <div className="text-xs mt-1.5 line-clamp-3" style={{ color: DIARY_TEXT_COLOR }}>{e.cleaned_text}</div>
-                  {topics.length > 0 && (
-                    <div className="flex items-center gap-2 mt-2">
-                      {topics.map((t) => (
-                        <t.icon key={t.key} size={15} className="text-white" title={t.key.replace("_", " ")} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {images.length > 0 && (
-                  <div className="flex gap-1 shrink-0">
-                    {images.map((src, i) => (
-                      <img key={i} src={src} alt="" className="w-14 h-14 md:w-16 md:h-16 rounded-lg object-cover" />
-                    ))}
-                  </div>
-                )}
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      {/* Carosello "coverflow": il giorno al centro in primo piano, gli altri sfumati in
+          prospettiva - scorrimento fluido (trascinamento o rotellina/touch), niente
+          grafico/umore, la scrittura avviene dalla chat. */}
+      <DiaryCarousel
+        dates={dates}
+        entriesByDate={entriesByDate}
+        focusDate={focusDate}
+        centerRequest={centerRequest}
+        onSettle={onCarouselSettle}
+        onOpenEntry={setExpandedEntry}
+        onToggleFav={toggleFav}
+      />
 
       {/* Vista estesa di una giornata: foto in griglia + testo completo */}
       {expandedEntry && (
-        <Dialog open={true} onOpenChange={() => setExpandedId(null)}>
+        <Dialog open={true} onOpenChange={() => setExpandedEntry(null)}>
           <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="journal-expanded">
             <DialogHeader>
               <div className="flex items-center justify-between gap-2 pr-6">
                 <DialogTitle style={{ color: DIARY_TITLE_COLOR }}>{expandedEntry.title || "Diario"}</DialogTitle>
                 <button
                   data-testid="journal-delete"
-                  onClick={() => { del(expandedEntry.id); setExpandedId(null); }}
+                  onClick={() => { del(expandedEntry); setExpandedEntry(null); }}
                   className="liquid-glass-btn p-2 rounded-full text-white/60 hover:text-red-300 shrink-0"
                   title="Elimina voce"
                 >
@@ -284,7 +519,7 @@ export default function JournalPage() {
                     <img src={src} alt="" className="w-full h-48 md:h-56 object-cover" />
                     <button
                       data-testid="journal-image-delete"
-                      onClick={() => delImage(expandedEntry.id, i)}
+                      onClick={() => delImage(expandedEntry, i)}
                       title="Elimina immagine"
                       className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
                     >
