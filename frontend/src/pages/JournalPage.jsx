@@ -66,34 +66,16 @@ const addDaysIso = (iso, delta) => {
   const dt = new Date(p.y, p.m - 1, p.d + delta);
   return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
 };
-const buildDateWindow = (centerIso, radius) => {
-  const out = [];
-  for (let i = -radius; i <= radius; i++) out.push(addDaysIso(centerIso, i));
-  return out;
-};
 
-// ===== Carosello "coverflow" per giorno =====
-const CAROUSEL_RADIUS = 20;            // giorni renderizzati per lato (finestra scorrevole)
-const CAROUSEL_EDGE_MARGIN = 6;        // a quanti giorni dal bordo della finestra si "ricentra" in silenzio
-const CAROUSEL_FETCH_HALF_WINDOW = 40; // giorni di dati caricati per lato (margine oltre la finestra renderizzata)
-const CAROUSEL_IMG_H = 64;             // px, altezza fissa dell'area immagini nella card
+// ===== Carosello "coverflow" per giorno (solo le giornate che hanno una voce) =====
+const CAROUSEL_EDGE_MARGIN = 6;         // a quante voci dal bordo di quanto caricato si "ricentra" in silenzio
+const CAROUSEL_FETCH_HALF_WINDOW = 150; // giorni di dati caricati per lato attorno al centro
+const CAROUSEL_IMG_H = 64;              // px, altezza fissa dell'area immagini nella card
+const CLICK_DRAG_THRESHOLD = 6;         // px di movimento oltre cui un trascinamento non conta come click
 
-function DiaryDayCard({ iso, entry, isFocused, cardW, onClick, onToggleFav }) {
+function DiaryDayCard({ iso, entry, isFocused, onClick, onToggleFav }) {
+  if (!entry) return null;
   const { day, monYear } = formatBadge(iso);
-  if (!entry) {
-    return (
-      <div
-        data-date={iso}
-        onClick={onClick}
-        className="card-soft flex flex-col p-5 cursor-pointer select-none h-full"
-        data-testid="journal-day-card-empty"
-      >
-        <div className="text-4xl font-normal leading-none" style={{ color: DIARY_DAY_COLOR }}>{day}</div>
-        <div className="text-[10px] uppercase tracking-widest mt-1" style={{ color: DIARY_TITLE_COLOR }}>{monYear}</div>
-        <div className="text-xs mt-4 opacity-40" style={{ color: DIARY_TEXT_COLOR }}>Nessuna voce</div>
-      </div>
-    );
-  }
   const images = (entry.images || []).slice(0, 3);
   const subtitle = (entry.tags || []).length > 0 ? `Argomenti: ${entry.tags.join(", ")}` : "";
   const topics = topicsForEntry(entry);
@@ -111,6 +93,7 @@ function DiaryDayCard({ iso, entry, isFocused, cardW, onClick, onToggleFav }) {
         </div>
         <button
           data-testid="journal-fav"
+          onPointerDown={(ev) => ev.stopPropagation()}
           onClick={(ev) => { ev.stopPropagation(); onToggleFav(entry); }}
           title={entry.favorite ? "Rimuovi dai preferiti" : "Segna come giornata memorabile"}
           className="p-1.5 rounded-lg transition-colors duration-150 shrink-0"
@@ -150,6 +133,7 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
   const rafRef = useRef(null);
   const settleTimerRef = useRef(null);
   const draggingRef = useRef(false);
+  const dragMovedRef = useRef(false);
   const dragStartRef = useRef({ x: 0, scrollLeft: 0 });
 
   const [cardW, setCardW] = useState(300);
@@ -222,13 +206,26 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dates]);
 
+  // Un trascinamento reale (mouse spostato oltre una soglia) non deve anche "cliccare" e
+  // aprire la card sotto al rilascio - senza questo, ogni scorrimento in trascinamento
+  // aprirebbe a caso l'ultima giornata toccata.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return undefined;
+    const suppressClickAfterDrag = (e) => {
+      if (dragMovedRef.current) { e.preventDefault(); e.stopPropagation(); }
+    };
+    scroller.addEventListener("click", suppressClickAfterDrag, true);
+    return () => scroller.removeEventListener("click", suppressClickAfterDrag, true);
+  }, []);
+
   // Riposiziona il carosello quando il genitore chiede un salto esplicito (click su un
-  // giorno nella striscia, cambio mese) o silenzioso (ricentraggio ai bordi della finestra).
+  // giorno nella striscia, cambio mese) o silenzioso (ricentraggio ai bordi di quanto caricato).
   useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    const mid = scroller.children[CAROUSEL_RADIUS];
-    if (mid) mid.scrollIntoView({ inline: "center", block: "nearest", behavior: centerRequest.behavior });
+    const target = scroller.querySelector(`[data-date="${centerRequest.date}"]`);
+    if (target) target.scrollIntoView({ inline: "center", block: "nearest", behavior: centerRequest.behavior });
     requestAnimationFrame(applyTransforms);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerRequest.nonce]);
@@ -239,6 +236,7 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
     const scroller = scrollerRef.current;
     if (!scroller) return;
     draggingRef.current = true;
+    dragMovedRef.current = false;
     dragStartRef.current = { x: e.clientX, scrollLeft: scroller.scrollLeft };
     scroller.style.scrollSnapType = "none";
     scroller.setPointerCapture(e.pointerId);
@@ -247,6 +245,7 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
     if (!draggingRef.current) return;
     const scroller = scrollerRef.current;
     const dx = e.clientX - dragStartRef.current.x;
+    if (Math.abs(dx) > CLICK_DRAG_THRESHOLD) dragMovedRef.current = true;
     scroller.scrollLeft = dragStartRef.current.scrollLeft - dx;
     scheduleFrame();
   };
@@ -262,6 +261,8 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
     if (idx != null && scroller.children[idx]) {
       scroller.children[idx].scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
     }
+    // Il flag serve solo per il "click" che segue immediatamente questo rilascio.
+    setTimeout(() => { dragMovedRef.current = false; }, 0);
   };
 
   return (
@@ -289,15 +290,8 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
               iso={iso}
               entry={entry}
               isFocused={isFocused}
-              cardW={cardW}
               onToggleFav={onToggleFav}
-              onClick={() => {
-                if (!isFocused) {
-                  scrollerRef.current?.querySelector(`[data-date="${iso}"]`)?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
-                  return;
-                }
-                if (entry) onOpenEntry(entry);
-              }}
+              onClick={() => { if (entry) onOpenEntry(entry); }}
             />
           </div>
         );
@@ -322,18 +316,25 @@ export default function JournalPage() {
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [expandedEntry, setExpandedEntry] = useState(null);
 
-  const dates = useMemo(() => buildDateWindow(centerRequest.date, CAROUSEL_RADIUS), [centerRequest.date]);
+  // Il carosello mostra SOLO le giornate con una voce di diario (niente caselle vuote):
+  // "dates" è l'elenco ordinato delle date effettivamente presenti tra quelle caricate, non
+  // una finestra continua di giorni di calendario.
+  const [initialized, setInitialized] = useState(false);
+  const dates = useMemo(() => Object.keys(entriesByDate).sort(), [entriesByDate]);
 
   const focusParts = parseIsoDate(focusDate) || parseIsoDate(initialIso);
   const daysInMonth = useMemo(() => new Date(focusParts.y, focusParts.m, 0).getDate(), [focusParts.y, focusParts.m]);
 
   // Carica le voci in una finestra di giorni attorno al centro (non solo il mese mostrato,
   // dato che il carosello può scorrere oltre i confini del mese) - rifà la richiesta solo
-  // quando ci si avvicina al bordo di quanto già caricato.
+  // quando ci si avvicina al bordo di quanto già caricato. Un salto esplicito lontano da
+  // quanto già caricato (es. dal selettore mese) sostituisce la finestra invece di unirla,
+  // per non dare per scontata una copertura di giorni mai richiesti al server.
   useEffect(() => {
     const from = addDaysIso(centerRequest.date, -CAROUSEL_FETCH_HALF_WINDOW);
     const to = addDaysIso(centerRequest.date, CAROUSEL_FETCH_HALF_WINDOW);
     if (loadedRange && from >= loadedRange.from && to <= loadedRange.to) return;
+    const disjoint = loadedRange && (to < loadedRange.from || from > loadedRange.to);
     (async () => {
       const r = await api.get("/journal", { params: { date_from: from, date_to: to } });
       const map = {};
@@ -343,8 +344,22 @@ export default function JournalPage() {
         const existing = map[e.date];
         if (!existing || (e.created_at || "") > (existing.created_at || "")) map[e.date] = e;
       });
-      setEntriesByDate(map);
-      setLoadedRange({ from, to });
+      setEntriesByDate((prev) => (disjoint ? map : { ...prev, ...map }));
+      setLoadedRange((prev) => {
+        if (!prev || disjoint) return { from, to };
+        return { from: from < prev.from ? from : prev.from, to: to > prev.to ? to : prev.to };
+      });
+      if (!initialized) {
+        setInitialized(true);
+        const keys = Object.keys(map).sort();
+        const todayIso = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+        const upToToday = keys.filter((k) => k <= todayIso);
+        const best = upToToday.length ? upToToday[upToToday.length - 1] : keys[keys.length - 1];
+        if (best) {
+          setFocusDate(best);
+          setCenterRequest((r2) => ({ date: best, behavior: "auto", nonce: r2.nonce + 1 }));
+        }
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerRequest.date]);
@@ -356,7 +371,8 @@ export default function JournalPage() {
 
   const onCarouselSettle = (iso, idx, len) => {
     setFocusDate(iso);
-    if (idx <= CAROUSEL_EDGE_MARGIN || idx >= len - 1 - CAROUSEL_EDGE_MARGIN) {
+    const edgeMargin = Math.min(CAROUSEL_EDGE_MARGIN, Math.floor((len - 1) / 2));
+    if (idx <= edgeMargin || idx >= len - 1 - edgeMargin) {
       setCenterRequest((r) => ({ date: iso, behavior: "auto", nonce: r.nonce + 1 }));
     }
   };
@@ -469,9 +485,10 @@ export default function JournalPage() {
               <button
                 key={d}
                 data-testid={`journal-day-${d}`}
-                onClick={() => goTo(`${focusParts.y}-${pad2(focusParts.m)}-${pad2(d)}`)}
-                title={has ? "Apri questa giornata" : undefined}
-                className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${isSelected ? "ring-2 ring-white" : ""}`}
+                onClick={has ? () => goTo(`${focusParts.y}-${pad2(focusParts.m)}-${pad2(d)}`) : undefined}
+                disabled={!has}
+                title={has ? "Apri questa giornata" : "Nessuna voce"}
+                className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${has ? "cursor-pointer" : "cursor-default"} ${isSelected ? "ring-2 ring-white" : ""}`}
                 style={{ backgroundColor: has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: has ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
               >
                 {d}
@@ -481,18 +498,26 @@ export default function JournalPage() {
         </div>
       </div>
 
-      {/* Carosello "coverflow": il giorno al centro in primo piano, gli altri sfumati in
-          prospettiva - scorrimento fluido (trascinamento o rotellina/touch), niente
-          grafico/umore, la scrittura avviene dalla chat. */}
-      <DiaryCarousel
-        dates={dates}
-        entriesByDate={entriesByDate}
-        focusDate={focusDate}
-        centerRequest={centerRequest}
-        onSettle={onCarouselSettle}
-        onOpenEntry={setExpandedEntry}
-        onToggleFav={toggleFav}
-      />
+      {/* Carosello "coverflow": solo le giornate con una voce, quella al centro in primo
+          piano e le altre sfumate in prospettiva - scorrimento fluido (trascinamento o
+          rotellina/touch), niente grafico/umore, la scrittura avviene dalla chat. */}
+      {dates.length > 0 ? (
+        <DiaryCarousel
+          dates={dates}
+          entriesByDate={entriesByDate}
+          focusDate={focusDate}
+          centerRequest={centerRequest}
+          onSettle={onCarouselSettle}
+          onOpenEntry={setExpandedEntry}
+          onToggleFav={toggleFav}
+        />
+      ) : (
+        initialized && (
+          <div className="text-center text-white/50 text-sm py-14">
+            Nessuna voce di diario ancora. Scrivi qualcosa nella chat per iniziare.
+          </div>
+        )
+      )}
 
       {/* Vista estesa di una giornata: foto in griglia + testo completo */}
       {expandedEntry && (
