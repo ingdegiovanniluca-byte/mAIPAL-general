@@ -992,8 +992,12 @@ def build_system_prompt(user: User, action: str) -> str:
         )
     elif action == "task_todo":
         base += (
-            " L'utente vuole salvare un task o un to-do. Scrivi UNA risposta di conferma naturale (1-2 frasi, es. "
-            "'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
+            " L'utente vuole salvare un task o un to-do. "
+            "REGOLA CRITICA: se il messaggio dell'utente non sta chiaramente descrivendo un task/to-do da creare o "
+            "modificare (es. sta facendo una domanda, un commento generico, o parlando d'altro), NON includere il "
+            "blocco META qui sotto - rispondi in modo naturale e basta, senza fingere di aver salvato nulla. "
+            "Se invece sta chiaramente chiedendo di creare o aggiornare un task/to-do, scrivi UNA risposta di conferma "
+            "naturale (1-2 frasi, es. 'Perfetto, ho preso nota: ti ricorderò di chiamare Marco domani alle 15:30.'). "
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"breve titolo del task/todo\", \"summary\": \"riassunto in 1 riga max 140 caratteri\", \"description\": \"\", "
             "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", \"duration_minutes\": \"numero di minuti o null\", "
@@ -1608,78 +1612,88 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                 except Exception:
                     logger.exception("auto task creation from info_upload failed")
 
-        # side-effects only on first exchange of task/journal actions - a follow-up turn is
-        # normally a refinement of the SAME task/entry, not a brand new one.
-        if not prior_messages:
-            if action == "task_todo":
-                logger.info(f"[task_todo] meta={meta!r}")
-                if meta:
+        # task_todo: creates on the FIRST turn of the thread that actually describes
+        # something to save (per the system prompt, an earlier turn may have omitted META
+        # entirely, e.g. a clarifying question) - not necessarily message #1. A later turn
+        # with more META in the SAME thread updates what was already created there instead
+        # of creating a duplicate, or - the bug this fixes - being silently dropped just
+        # because it wasn't the very first message.
+        if action == "task_todo":
+            logger.info(f"[task_todo] meta={meta!r}")
+            if meta:
+                existing = await _find_created_in_conv(conv_id)
+                if existing is None:
                     await _create_task_or_todo(current.user_id, meta, conv_id)
-            elif action == "journal":
-                from datetime import date as _date
-                # Each image is a "data:image/...;base64,..." URI, already size-checked
-                # client-side - re-checked here (max 5, ~2MB decoded each) since the app
-                # always renders straight from this field, independent of Google Drive.
-                valid_images: List[str] = []
-                for img in (payload.images or [])[:5]:
-                    if not isinstance(img, str) or not img.startswith("data:image/") or "," not in img:
+                else:
+                    kind, existing_doc = existing
+                    await _update_task_or_todo_from_meta(kind, existing_doc["id"], meta)
+        # journal: side-effect only on first exchange - a follow-up turn is normally a
+        # refinement of the SAME entry, not a brand new one.
+        elif not prior_messages and action == "journal":
+            from datetime import date as _date
+            # Each image is a "data:image/...;base64,..." URI, already size-checked
+            # client-side - re-checked here (max 5, ~2MB decoded each) since the app
+            # always renders straight from this field, independent of Google Drive.
+            valid_images: List[str] = []
+            for img in (payload.images or [])[:5]:
+                if not isinstance(img, str) or not img.startswith("data:image/") or "," not in img:
+                    continue
+                try:
+                    if len(img.split(",", 1)[1]) * 3 / 4 > 2 * 1024 * 1024:
                         continue
-                    try:
-                        if len(img.split(",", 1)[1]) * 3 / 4 > 2 * 1024 * 1024:
-                            continue
-                    except Exception:
-                        continue
-                    valid_images.append(img)
+                except Exception:
+                    continue
+                valid_images.append(img)
 
-                # Non-image documents (already uploaded to Drive client-side by the time
-                # they get here) - just {"name", "url"} references, nothing to re-validate.
-                valid_documents = [
-                    {"name": str(d.get("name") or "documento"), "url": str(d["url"])}
-                    for d in (payload.documents or [])
-                    if isinstance(d, dict) and d.get("url")
-                ]
+            # Non-image documents (already uploaded to Drive client-side by the time
+            # they get here) - just {"name", "url"} references, nothing to re-validate.
+            valid_documents = [
+                {"name": str(d.get("name") or "documento"), "url": str(d["url"])}
+                for d in (payload.documents or [])
+                if isinstance(d, dict) and d.get("url")
+            ]
 
-                jr = {
-                    "id": f"jr_{uuid.uuid4().hex[:12]}",
-                    "user_id": current.user_id,
-                    "date": _date.today().isoformat(),
-                    "raw_text": payload.content,
-                    "cleaned_text": visible_answer,
-                    "title": (meta or {}).get("title", ""),
-                    "mood": (meta or {}).get("mood", ""),
-                    "tags": (meta or {}).get("tags", []),
-                    "highlights": (meta or {}).get("highlights", []),
-                    "images": valid_images,
-                    "documents": valid_documents,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "source_conv": conv_id,
-                }
-                await db.journal_entries.insert_one(jr)
+            jr = {
+                "id": f"jr_{uuid.uuid4().hex[:12]}",
+                "user_id": current.user_id,
+                "date": _date.today().isoformat(),
+                "raw_text": payload.content,
+                "cleaned_text": visible_answer,
+                "title": (meta or {}).get("title", ""),
+                "mood": (meta or {}).get("mood", ""),
+                "tags": (meta or {}).get("tags", []),
+                "highlights": (meta or {}).get("highlights", []),
+                "images": valid_images,
+                "documents": valid_documents,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "source_conv": conv_id,
+            }
+            await db.journal_entries.insert_one(jr)
 
-                # Best-effort backup copy on Drive (Diario subfolder) when connected - the
-                # app itself always displays the images straight from `jr["images"]` above,
-                # this is purely for the user's own organization/backup on Drive.
-                if valid_images:
-                    try:
-                        creds = await gi.get_credentials(db, current.user_id)
-                        if creds:
-                            folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, "Diario")
-                            import base64 as _b64
-                            for idx, img in enumerate(valid_images):
-                                header, b64_part = img.split(",", 1)
-                                content_type = header.split(":", 1)[1].split(";", 1)[0] or "image/jpeg"
-                                ext = content_type.split("/", 1)[-1] or "jpg"
-                                raw = _b64.b64decode(b64_part)
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-                                    tmp.write(raw)
-                                    tmp_path = tmp.name
-                                try:
-                                    gi.upload_file_to_folder(creds, folder_id, tmp_path, f"diario_{jr['date']}_{idx + 1}.{ext}", content_type)
-                                finally:
-                                    try: os.unlink(tmp_path)
-                                    except Exception: pass
-                    except Exception:
-                        logger.exception("Drive backup of journal images failed")
+            # Best-effort backup copy on Drive (Diario subfolder) when connected - the
+            # app itself always displays the images straight from `jr["images"]` above,
+            # this is purely for the user's own organization/backup on Drive.
+            if valid_images:
+                try:
+                    creds = await gi.get_credentials(db, current.user_id)
+                    if creds:
+                        folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, "Diario")
+                        import base64 as _b64
+                        for idx, img in enumerate(valid_images):
+                            header, b64_part = img.split(",", 1)
+                            content_type = header.split(":", 1)[1].split(";", 1)[0] or "image/jpeg"
+                            ext = content_type.split("/", 1)[-1] or "jpg"
+                            raw = _b64.b64decode(b64_part)
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+                                tmp.write(raw)
+                                tmp_path = tmp.name
+                            try:
+                                gi.upload_file_to_folder(creds, folder_id, tmp_path, f"diario_{jr['date']}_{idx + 1}.{ext}", content_type)
+                            finally:
+                                try: os.unlink(tmp_path)
+                                except Exception: pass
+                except Exception:
+                    logger.exception("Drive backup of journal images failed")
 
         yield _json.dumps({"type": "done", "conv_id": conv_id}) + "\n"
 
@@ -1753,6 +1767,50 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
             "source_conv": conv_id,
         }
         await db.todos.insert_one(doc)
+
+
+async def _find_created_in_conv(conv_id: str) -> Optional[tuple]:
+    """Whatever task/todo has already been created within this chat thread, if any - so a
+    follow-up "task_todo" turn updates it in place instead of creating a duplicate, or
+    (the bug this fixes) instead of being silently dropped just because it isn't the first
+    message of the thread."""
+    t = await db.tasks.find_one({"source_conv": conv_id}, {"_id": 0})
+    if t:
+        return ("task", t)
+    td = await db.todos.find_one({"source_conv": conv_id}, {"_id": 0})
+    if td:
+        return ("todo", td)
+    return None
+
+
+async def _update_task_or_todo_from_meta(kind: str, doc_id: str, meta: dict):
+    """Applies a follow-up task_todo turn's META as an update to the task/todo already
+    created in this thread - same field set _create_task_or_todo uses, minus the fields
+    that only make sense at creation time (calendar_synced, reminder_sent, etc.)."""
+    fields: dict = {}
+    if meta.get("title"): fields["title"] = meta["title"]
+    if meta.get("description"): fields["description"] = meta["description"]
+    if meta.get("notes"): fields["notes"] = meta["notes"]
+    if meta.get("priority"): fields["priority"] = meta["priority"]
+    if meta.get("tags"): fields["tags"] = meta["tags"]
+    if kind == "task":
+        if meta.get("due_date"): fields["due_date"] = meta["due_date"]
+        if meta.get("due_time"): fields["due_time"] = meta["due_time"]
+        try:
+            if meta.get("duration_minutes"): fields["duration_minutes"] = int(meta["duration_minutes"])
+        except (TypeError, ValueError):
+            pass
+        try:
+            if meta.get("reminder_minutes_before"):
+                fields["reminder_offset_minutes"] = int(meta["reminder_minutes_before"])
+                fields["reminder_enabled"] = True
+        except (TypeError, ValueError):
+            pass
+    if not fields:
+        return
+    _clear_cached_embedding(fields, {"title", "description", "notes"})
+    coll = db.tasks if kind == "task" else db.todos
+    await coll.update_one({"id": doc_id}, {"$set": fields})
 
 
 async def interpret_task_command(text: str, catalog: List[dict], user_id: Optional[str] = None, channel: str = "web") -> Optional[dict]:
