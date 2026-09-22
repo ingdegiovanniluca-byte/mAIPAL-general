@@ -1,14 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
-import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { BookOpen, Trash2, Search, Star, Briefcase, PartyPopper, Palmtree, Home, HeartPulse, Users, Plane, X, Paperclip } from "lucide-react";
+import { BookOpen, Trash2, Star, Briefcase, PartyPopper, Palmtree, Home, HeartPulse, Users, Plane, X, Paperclip, Calendar } from "lucide-react";
 
 // Diario theme colors (from the design spec)
 const DIARY_TITLE_COLOR = "#D9D9D9";
 const DIARY_TEXT_COLOR = "#000000";
-const DIARY_CARD_BG = "rgba(178, 143, 142, 0.1)"; // #B28F8E @ 10%
+const DIARY_CARD_BG = "#B28F8E";
 const DIARY_DAY_COLOR = "#AC6C41";
 const DIARY_FAV_COLOR = "#FFC000";
 
@@ -28,8 +27,6 @@ const topicsForEntry = (entry) => {
   if (tags.length === 0) return [];
   return TOPIC_ICONS.filter((t) => tags.some((tag) => t.match.some((kw) => tag.includes(kw))));
 };
-
-const toISODate = (d) => d.toISOString().slice(0, 10);
 
 const IT_WEEKDAYS_LONG = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
 const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
@@ -60,37 +57,49 @@ const formatBadge = (iso) => {
 // masonry, but still reads as "a grid of photos" for 1/2/3 images.
 const imgGridClass = (n) => (n <= 1 ? "grid-cols-1" : n === 2 ? "grid-cols-2" : "grid-cols-3");
 
+const pad2 = (n) => String(n).padStart(2, "0");
+
 export default function JournalPage() {
   const [entries, setEntries] = useState([]);
 
-  // Filters, in the same order as the chat page's history search bar: periodo, ricerca,
-  // preferiti. `date` mirrors that bar's single date picker exactly - set it to look at
-  // one specific day, leave it empty for the default "ultimo mese" window.
-  const [date, setDate] = useState("");
-  const [q, setQ] = useState("");
-  const [favOnly, setFavOnly] = useState(false);
+  // Navigazione a calendario: mese mostrato (default il mese corrente) + giorno
+  // selezionato dentro quel mese (null = mostra tutto il mese, il default).
+  const today = new Date();
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth() + 1); // 1-indexato
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
 
   const [expandedId, setExpandedId] = useState(null);
 
-  const dateRange = useMemo(() => {
-    if (date) return { date_from: date, date_to: date };
-    const today = new Date();
-    const from = new Date(today);
-    from.setDate(from.getDate() - 29);
-    return { date_from: toISODate(from), date_to: toISODate(today) };
-  }, [date]);
+  const daysInMonth = useMemo(() => new Date(viewYear, viewMonth, 0).getDate(), [viewYear, viewMonth]);
+  const monthRange = useMemo(() => ({
+    date_from: `${viewYear}-${pad2(viewMonth)}-01`,
+    date_to: `${viewYear}-${pad2(viewMonth)}-${pad2(daysInMonth)}`,
+  }), [viewYear, viewMonth, daysInMonth]);
 
   const load = async () => {
-    const params = {};
-    if (q.trim()) params.q = q.trim();
-    if (favOnly) params.favorite = true;
-    if (dateRange.date_from) params.date_from = dateRange.date_from;
-    if (dateRange.date_to) params.date_to = dateRange.date_to;
-    const r = await api.get("/journal", { params });
+    const r = await api.get("/journal", { params: monthRange });
     setEntries(r.data);
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [q, favOnly, dateRange.date_from, dateRange.date_to]);
+  useEffect(() => { load(); }, [monthRange.date_from, monthRange.date_to]);
+
+  const daysWithEntries = useMemo(() => {
+    const s = new Set();
+    entries.forEach((e) => { const p = parseIsoDate(e.date); if (p) s.add(p.d); });
+    return s;
+  }, [entries]);
+  const visibleEntries = useMemo(
+    () => (selectedDay ? entries.filter((e) => parseIsoDate(e.date)?.d === selectedDay) : entries),
+    [entries, selectedDay]
+  );
+
+  const onMonthPick = (e) => {
+    const [y, m] = (e.target.value || "").split("-").map(Number);
+    if (y && m) { setViewYear(y); setViewMonth(m); setSelectedDay(null); }
+    setMonthPickerOpen(false);
+  };
 
   const toggleFav = async (id, currentVal) => {
     setEntries((es) => es.map((e) => (e.id === id ? { ...e, favorite: !currentVal } : e)));
@@ -136,51 +145,70 @@ export default function JournalPage() {
         </div>
       </div>
 
-      {/* Filtri: periodo, ricerca, preferiti - stessa barra/stile della ricerca chat */}
-      <div className="flex items-center gap-1.5 md:gap-2 flex-nowrap overflow-x-auto no-scrollbar p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0">
-        <input
-          data-testid="journal-date"
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="shrink-0 h-8 md:h-9 w-28 md:w-32 rounded-full bg-white/10 text-white px-2 text-[10px] md:text-[11px]"
-        />
-        <div className="relative shrink-0 w-32 md:w-40 lg:w-48">
-          <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60" />
-          <Input
-            data-testid="journal-search"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Cerca…"
-            className="pl-8 h-8 md:h-9 text-xs md:text-sm rounded-full bg-white/10 text-white placeholder:text-white/60"
-          />
-        </div>
-        <button
-          data-testid="journal-fav-filter"
-          onClick={() => setFavOnly((v) => !v)}
-          title="Solo preferiti"
-          aria-label="Solo preferiti"
-          style={{
-            backgroundColor: favOnly ? "#F5B942" : "transparent",
-            color: favOnly ? "#403A3C" : "#CECAD0",
-            opacity: favOnly ? 1 : 0.5,
-            borderColor: favOnly ? "#F5B942" : "rgba(206,202,208,0.25)",
-          }}
-          className="shrink-0 h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100"
-        >
-          <Star size={15} className={favOnly ? "fill-current" : ""} />
-        </button>
-        {date && (
-          <button onClick={() => setDate("")} className="text-[10px] text-white/40 hover:text-white/70 px-1.5 shrink-0 whitespace-nowrap">
-            ✕ torna all'ultimo mese
+      {/* Navigazione: mese al centro in alto, sotto tutti i giorni del mese in una riga -
+          colorati se c'è una voce di diario quel giorno. Il mese mostra tutte le voci del
+          mese (default); un giorno specifico filtra solo quello. */}
+      <div className="flex flex-col items-center gap-3 mb-6">
+        <div className="flex items-center gap-2">
+          <button
+            data-testid="journal-month-label"
+            onClick={() => setSelectedDay(null)}
+            title="Mostra tutto il mese"
+            className="text-xl font-semibold tracking-tight hover:opacity-80 transition-opacity"
+            style={{ color: DIARY_TITLE_COLOR }}
+          >
+            {cap(IT_MONTHS_LONG[viewMonth - 1])} {viewYear}
           </button>
-        )}
+          <div className="relative">
+            <button
+              data-testid="journal-month-picker-toggle"
+              onClick={() => setMonthPickerOpen((v) => !v)}
+              title="Cambia mese"
+              className="liquid-glass-btn p-1.5 rounded-full text-white/70 hover:text-white"
+            >
+              <Calendar size={16} />
+            </button>
+            {monthPickerOpen && (
+              <input
+                data-testid="journal-month-picker"
+                type="month"
+                autoFocus
+                value={`${viewYear}-${pad2(viewMonth)}`}
+                onChange={onMonthPick}
+                onBlur={() => setMonthPickerOpen(false)}
+                className="absolute z-10 top-full left-1/2 -translate-x-1/2 mt-1 rounded-lg bg-[#403A3C] text-white px-2 py-1 text-xs shadow-lg"
+              />
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full px-1 py-1">
+          {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
+            const has = daysWithEntries.has(d);
+            const isSelected = selectedDay === d;
+            return (
+              <button
+                key={d}
+                data-testid={`journal-day-${d}`}
+                onClick={() => setSelectedDay(d)}
+                title={has ? "Apri questa giornata" : undefined}
+                className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${isSelected ? "ring-2 ring-white" : ""}`}
+                style={{ backgroundColor: has ? DIARY_CARD_BG : "rgba(255,255,255,0.06)", color: has ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
+              >
+                {d}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Giornate: solo i riquadri, nessun grafico/umore - la scrittura avviene dalla chat */}
       <div className="mt-6 space-y-3">
-        {entries.length === 0 && <div className="text-white/60 text-sm">Nessuna voce trovata con questi filtri.</div>}
-        {entries.map((e) => {
+        {visibleEntries.length === 0 && (
+          <div className="text-white/60 text-sm text-center">
+            {selectedDay ? "Nessuna voce in questo giorno." : "Nessuna voce in questo mese."}
+          </div>
+        )}
+        {visibleEntries.map((e) => {
           const { day, monYear } = formatBadge(e.date);
           const images = (e.images || []).slice(0, 3);
           const subtitle = (e.tags || []).length > 0 ? `Argomenti: ${e.tags.join(", ")}` : "";
