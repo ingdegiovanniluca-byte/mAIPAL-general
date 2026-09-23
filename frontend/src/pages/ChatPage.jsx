@@ -171,7 +171,7 @@ export default function ChatPage() {
     setThread({ conv_id: conv.conv_id, action: conv.action, messages, liveAnswer: "" });
     setActive(conv.action);
   };
-  const closeThread = () => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); };
+  const closeThread = () => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); setMobileReplyTo(null); };
 
   const startRec = async () => {
     try {
@@ -377,9 +377,10 @@ export default function ChatPage() {
     }
   };
 
-  // Mobile-only reply flow (spec 5.6): posts straight to the conversation the user tapped,
-  // bypassing the desktop thread-overlay state entirely - the history list (and that card's
-  // preview, via load()) is the only place the reply shows up.
+  // Mobile-only reply flow (spec 5.6, esteso): posta sulla conversazione toccata dall'utente
+  // - la card in cronologia è sostituita dalla vista dell'intera conversazione (caricata via
+  // openThread quando la card viene toccata), che questa funzione tiene aggiornata in diretta
+  // con lo stesso pattern ottimistico/streaming usato da send() sul thread desktop.
   const sendMobileReply = async () => {
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     let voiceText = "";
@@ -396,10 +397,21 @@ export default function ChatPage() {
     setStreaming(true);
     setText("");
     const replyTarget = mobileReplyTo;
+    setThread((th) => (th && th.conv_id === replyTarget.conv_id)
+      ? { ...th, messages: [...th.messages, { role: "user", content }], liveAnswer: "" }
+      : th);
     await streamChat(
       { action: replyTarget.action, content, conv_id: replyTarget.conv_id },
-      () => {},
-      async () => { setStreaming(false); await load(); },
+      (delta) => setThread((th) => (th && th.conv_id === replyTarget.conv_id) ? { ...th, liveAnswer: (th.liveAnswer || "") + delta } : th),
+      async () => {
+        setStreaming(false);
+        setThread((th) => {
+          if (!th || th.conv_id !== replyTarget.conv_id) return th;
+          const finalized = th.liveAnswer || "";
+          return { ...th, messages: [...th.messages, { role: "assistant", content: finalized }], liveAnswer: "" };
+        });
+        await load();
+      },
       (err) => { setStreaming(false); toast.error("Errore: " + err.message); }
     );
   };
@@ -721,8 +733,10 @@ export default function ChatPage() {
                 );
               })}
           </div>
-          <div className="flex items-center justify-between px-2 mt-4 shrink-0">
-            <div className="text-xs font-bold uppercase tracking-wider text-white hidden md:block">nuovo messaggio</div>
+          {/* Nascosto su mobile: l'azione selezionata è già indicata dentro la card della
+              chat (kicker "· ...") subito sotto, ripeterla qui sopra è ridondante. */}
+          <div className="hidden md:flex items-center justify-between px-2 mt-4 shrink-0">
+            <div className="text-xs font-bold uppercase tracking-wider text-white">nuovo messaggio</div>
             <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
           </div>
           {isMobile && mobileReplyTo && (
@@ -925,7 +939,7 @@ export default function ChatPage() {
                   <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
                     {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {focusMode ? "esci focus" : "focus"}
                   </button>
-                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); }} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1">
+                  <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); setMobileReplyTo(null); }} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1">
                     <MessageSquarePlus size={12} /> nuova
                   </button>
                   <button data-testid="close-thread-btn" onClick={closeThread} className="p-1.5 rounded-full hover:bg-white/10 text-white"><X size={14} /></button>
@@ -1026,7 +1040,17 @@ export default function ChatPage() {
                     isReplying={mobileReplyTo?.conv_id === c.conv_id}
                     onOpen={() => {
                       if (isMobile) {
-                        setMobileReplyTo((cur) => (cur?.conv_id === c.conv_id ? null : { conv_id: c.conv_id, action: c.action, label: formatReplyLabel(c) }));
+                        if (mobileReplyTo?.conv_id === c.conv_id) {
+                          setMobileReplyTo(null);
+                          setThread(null);
+                        } else {
+                          // Sul mobile toccare una card sia lega il composer a quella
+                          // conversazione (pillola "Rispondi a: ...") sia apre sotto la
+                          // conversazione intera (stesso thread usato su desktop), al posto
+                          // della sola lista.
+                          setMobileReplyTo({ conv_id: c.conv_id, action: c.action, label: formatReplyLabel(c) });
+                          openThread(c.conv_id);
+                        }
                       } else {
                         openThread(c.conv_id);
                       }

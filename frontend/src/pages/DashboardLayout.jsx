@@ -190,15 +190,17 @@ export default function DashboardLayout() {
           </div>
         </header>
 
-        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-24 md:pb-8 w-full">
+        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-6 md:pb-8 w-full">
           <Outlet />
         </main>
 
-        {/* ===== Mobile bottom navigation bar (<768px) ===== */}
+        {/* ===== Mobile bottom navigation bar (<768px) — same translucent glass surface as
+            the top bars, so scrolled content is visible/blurred underneath it instead of
+            disappearing behind a flat opaque strip. ===== */}
         {!keyboardOpen && (
           <nav
             data-testid="mobile-bottom-nav"
-            className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-stretch bg-[#3A3638]/95 backdrop-blur-xl border-t border-white/10"
+            className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-stretch bg-white/5 backdrop-blur-xl"
             style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
           >
             {primaryItems.map((item) => {
