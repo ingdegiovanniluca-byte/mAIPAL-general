@@ -24,7 +24,6 @@ const DOT_HAS = "#826556";
 const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#8ED973";
-const DOT_DONE_ALPHA = 0.2;
 const MUTED_TEXT = "#D9D9D9";
 
 function withAlpha(hex, alpha) {
@@ -266,11 +265,9 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                           const hasBg = isSelected || !!dotColor;
                           const cellBg = isSelected
                             ? withAlpha("#00B0F0", 0.9)
-                            : dotColor === DOT_DONE
-                              ? withAlpha(DOT_DONE, DOT_DONE_ALPHA)
-                              : dotColor
-                                ? withAlpha(dotColor, 0.9)
-                                : "transparent";
+                            : dotColor
+                              ? withAlpha(dotColor, 0.9)
+                              : "transparent";
                           const cell = (
                             <div
                               onClick={() => onSelectDate && onSelectDate(key)}

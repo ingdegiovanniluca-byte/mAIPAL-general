@@ -87,7 +87,7 @@ export default function DashboardLayout() {
             (see spec 3.1: the menu stays visible everywhere, not just on mobile). A subtle
             backdrop is required for that (a sticky header with no backing would let content
             show through as the page scrolls under it); nothing else about it changes. ===== */}
-        <header className="hidden md:block sticky top-0 z-40 px-8 md:px-14 pt-8 pb-8 bg-[#4E4F57]/85 backdrop-blur-xl">
+        <header className="hidden md:block sticky top-0 z-40 px-8 md:px-14 pt-8 pb-8 bg-white/5 backdrop-blur-xl">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
               <div
@@ -143,7 +143,7 @@ export default function DashboardLayout() {
 
         {/* ===== Mobile top bar (<768px): logo · section name · avatar, fixed, thin ===== */}
         <header
-          className="md:hidden sticky top-0 z-40 flex items-center justify-between gap-3 px-4 h-14 bg-[#4E4F57]/90 backdrop-blur-xl border-b border-white/10"
+          className="md:hidden sticky top-0 z-40 flex items-center justify-between gap-3 px-4 h-14 bg-white/5 backdrop-blur-xl"
           style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
         >
           <div className="h-8 w-8 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">

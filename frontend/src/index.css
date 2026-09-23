@@ -142,7 +142,7 @@ body {
 .priority-med  { border-left: 3px solid #DD772F; }
 .priority-low  { border-left: 3px solid #7C6A7D; }
 
-.column-tint-high, .column-tint-med, .column-tint-low { background: rgba(237, 235, 235, 0.2); }
+.column-tint-high, .column-tint-med, .column-tint-low { background: rgba(237, 235, 235, 0.1); }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

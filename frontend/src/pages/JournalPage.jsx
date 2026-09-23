@@ -548,44 +548,74 @@ export default function JournalPage() {
               </div>
             </DialogHeader>
 
-            {(expandedEntry.images || []).length > 0 && (
-              <div className={`grid gap-1.5 rounded-2xl overflow-hidden ${imgGridClass(expandedEntry.images.length)}`}>
-                {expandedEntry.images.map((src, i) => (
-                  <div key={i} className="relative group">
-                    <img src={src} alt="" className="w-full h-48 md:h-56 object-cover" />
-                    <button
-                      data-testid="journal-image-delete"
-                      onClick={() => delImage(expandedEntry, i)}
-                      title="Elimina immagine"
-                      className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            {(() => {
+              const allImages = expandedEntry.images || [];
+              // Con più di 3 immagini: le prime 3 restano in alto (come prima), il testo
+              // segue subito dopo e le rimanenti immagini si spostano in fondo, invece di
+              // allungare un'unica griglia sopra al testo.
+              const topImages = allImages.length > 3 ? allImages.slice(0, 3) : allImages;
+              const bottomImages = allImages.length > 3 ? allImages.slice(3) : [];
+              return (
+                <>
+                  {topImages.length > 0 && (
+                    <div className={`grid gap-1.5 rounded-2xl overflow-hidden ${imgGridClass(topImages.length)}`}>
+                      {topImages.map((src, i) => (
+                        <div key={i} className="relative group">
+                          <img src={src} alt="" className="w-full h-48 md:h-56 object-cover" />
+                          <button
+                            data-testid="journal-image-delete"
+                            onClick={() => delImage(expandedEntry, i)}
+                            title="Elimina immagine"
+                            className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-            <div className="font-serif-italic text-sm text-white/60 mt-1">{formatDiaryDate(expandedEntry.date)}</div>
-            {(expandedEntry.tags || []).length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {expandedEntry.tags.map((t, i) => (
-                  <span key={i} className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-white/10 text-white/60">{t}</span>
-                ))}
-              </div>
-            )}
-            <div className="mt-3 pt-3 border-t border-white/15 prose-answer whitespace-pre-wrap text-[15px] text-white">
-              {expandedEntry.cleaned_text}
-            </div>
-            {(expandedEntry.documents || []).length > 0 && (
-              <div className="mt-3 pt-3 border-t border-white/15 space-y-1.5">
-                {expandedEntry.documents.map((d, i) => (
-                  <a key={i} href={d.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm text-white/80 hover:text-white">
-                    <Paperclip size={13} className="shrink-0" /> <span className="truncate">{d.name}</span>
-                  </a>
-                ))}
-              </div>
-            )}
+                  <div className="font-serif-italic text-sm text-white/60 mt-1">{formatDiaryDate(expandedEntry.date)}</div>
+                  {(expandedEntry.tags || []).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {expandedEntry.tags.map((t, i) => (
+                        <span key={i} className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-white/10 text-white/60">{t}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-3 pt-3 border-t border-white/15 prose-answer whitespace-pre-wrap text-[15px] text-white">
+                    {expandedEntry.cleaned_text}
+                  </div>
+                  {(expandedEntry.documents || []).length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-white/15 space-y-1.5">
+                      {expandedEntry.documents.map((d, i) => (
+                        <a key={i} href={d.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm text-white/80 hover:text-white">
+                          <Paperclip size={13} className="shrink-0" /> <span className="truncate">{d.name}</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+
+                  {bottomImages.length > 0 && (
+                    <div className={`grid gap-1.5 rounded-2xl overflow-hidden mt-3 pt-3 border-t border-white/15 ${imgGridClass(bottomImages.length)}`}>
+                      {bottomImages.map((src, i) => (
+                        <div key={i} className="relative group">
+                          <img src={src} alt="" className="w-full h-48 md:h-56 object-cover" />
+                          <button
+                            data-testid="journal-image-delete"
+                            onClick={() => delImage(expandedEntry, i + 3)}
+                            title="Elimina immagine"
+                            className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </DialogContent>
         </Dialog>
       )}
