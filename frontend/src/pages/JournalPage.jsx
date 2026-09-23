@@ -134,7 +134,7 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
   const settleTimerRef = useRef(null);
   const draggingRef = useRef(false);
   const dragMovedRef = useRef(false);
-  const dragStartRef = useRef({ x: 0, scrollLeft: 0 });
+  const dragStartRef = useRef(null);
 
   const [cardW, setCardW] = useState(300);
   useEffect(() => {
@@ -230,30 +230,41 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerRequest.nonce]);
 
-  // Drag-to-scroll per mouse desktop (il touch ha già lo scroll nativo fluido)
+  // Drag-to-scroll per mouse desktop (il touch ha già lo scroll nativo fluido). Il
+  // puntatore NON viene catturato subito al pointerdown: se catturato da subito, un
+  // semplice click (nessun movimento) veniva "rubato" dal meccanismo di trascinamento e il
+  // click nativo non raggiungeva mai la card sotto, impedendo di aprire la giornata. La
+  // cattura scatta solo quando onPointerMove rileva un movimento reale oltre la soglia -
+  // altrimenti il gesto resta un click ordinario, mai intercettato.
   const onPointerDown = (e) => {
     if (e.pointerType === "touch") return;
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    draggingRef.current = true;
     dragMovedRef.current = false;
-    dragStartRef.current = { x: e.clientX, scrollLeft: scroller.scrollLeft };
-    scroller.style.scrollSnapType = "none";
-    scroller.setPointerCapture(e.pointerId);
+    dragStartRef.current = { x: e.clientX, scrollLeft: scroller.scrollLeft, pointerId: e.pointerId };
   };
   const onPointerMove = (e) => {
-    if (!draggingRef.current) return;
+    const start = dragStartRef.current;
+    if (!start) return;
     const scroller = scrollerRef.current;
-    const dx = e.clientX - dragStartRef.current.x;
-    if (Math.abs(dx) > CLICK_DRAG_THRESHOLD) dragMovedRef.current = true;
-    scroller.scrollLeft = dragStartRef.current.scrollLeft - dx;
+    if (!scroller) return;
+    const dx = e.clientX - start.x;
+    if (!draggingRef.current) {
+      if (Math.abs(dx) <= CLICK_DRAG_THRESHOLD) return;
+      draggingRef.current = true;
+      dragMovedRef.current = true;
+      scroller.style.scrollSnapType = "none";
+      try { scroller.setPointerCapture(start.pointerId); } catch { /* ignore */ }
+    }
+    scroller.scrollLeft = start.scrollLeft - dx;
     scheduleFrame();
   };
   const endDrag = () => {
-    if (!draggingRef.current) return;
+    const wasDragging = draggingRef.current;
     draggingRef.current = false;
+    dragStartRef.current = null;
     const scroller = scrollerRef.current;
-    if (!scroller) return;
+    if (!scroller || !wasDragging) return;
     scroller.style.scrollSnapType = "x mandatory";
     // Lo snap CSS non si riapplica retroattivamente dopo il drag: agganciamo esplicitamente
     // alla card più vicina.

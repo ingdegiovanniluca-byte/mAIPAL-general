@@ -182,7 +182,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
     """Execute one action against a specific conv_id (new if None). Returns (answer, conv_id)."""
     from server import (
         build_system_prompt, _parse_task_json, _create_task_or_todo, _extract_meta, retrieve_kb,
-        _find_created_in_conv, _update_task_or_todo_from_meta,
+        _find_created_in_conv, _update_task_or_todo_from_meta, _resolve_journal_date, _save_journal_entry,
     )
 
     new_conv = conv_id is None
@@ -306,19 +306,10 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
                 kind, existing_doc = existing
                 await _update_task_or_todo_from_meta(kind, existing_doc["id"], parsed)
     elif action == "journal":
-        from datetime import date as _date
-        await db.journal_entries.insert_one({
-            "id": f"jr_{uuid.uuid4().hex[:12]}",
-            "user_id": user_doc["user_id"],
-            "date": _date.today().isoformat(),
-            "raw_text": content,
-            "cleaned_text": visible,
-            "title": (meta or {}).get("title", ""),
-            "mood": (meta or {}).get("mood", ""),
-            "highlights": (meta or {}).get("highlights", []),
-            "created_at": now_iso,
-            "source_conv": conv_id,
-        })
+        # Same date resolution + append-or-create as the web chat: the entry lands on the
+        # day the user is actually talking about (e.g. "ieri"), not always on today's page.
+        target_date = _resolve_journal_date(meta)
+        await _save_journal_entry(user_doc["user_id"], target_date, content, visible, meta, conv_id)
 
     ut.fire_and_forget_feature_event(
         user_id=user_doc["user_id"], feature=_TG_ACTION_TO_FEATURE.get(action, "altro"),

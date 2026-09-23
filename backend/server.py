@@ -1034,10 +1034,17 @@ def build_system_prompt(user: User, action: str) -> str:
             "REGOLA CRITICA: non aggiungere MAI fatti, dettagli, emozioni o commenti sullo stato d'animo non esplicitamente "
             "scritti dall'utente (es. non scrivere 'sono molto felice' o 'è stata una giornata dura' se l'utente non lo ha "
             "detto lui stesso) - riscrivi solo ciò che c'è, non interpretarlo né arricchirlo. "
-            "Rispondi con il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:'). "
+            "REGOLA SULLA DATA: la voce va salvata sul giorno a cui il racconto si riferisce, non necessariamente oggi. "
+            "Se il testo indica chiaramente un giorno diverso da oggi (es. 'ieri', 'l'altro ieri', 'domenica scorsa', "
+            "'il 19 settembre'), calcola quella data (usando SEMPRE oggi come riferimento, come indicato sopra) e "
+            "includila come \"date\": \"YYYY-MM-DD\" nei metadati. Se il testo non specifica alcun giorno (l'utente sta "
+            "semplicemente raccontando senza riferimenti temporali), ometti del tutto la chiave \"date\" - il sistema userà oggi. "
+            "Rispondi con il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:' e senza menzionare la data, "
+            "che è già evidente da dove viene salvata la voce). "
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", "
             "\"summary\": \"riassunto in 1 riga max 140 caratteri\", "
+            "\"date\": \"YYYY-MM-DD, SOLO se un giorno specifico diverso da oggi è chiaramente indicato nel testo\", "
             "\"mood\": \"parola singola dedotta dal testo, SOLO per uso interno (non va scritta nel diario): "
             "felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
             "\"tags\": [\"1-3 parole chiave che riassumono gli argomenti della giornata, es. lavoro, famiglia, sport, salute\"], "
@@ -1663,7 +1670,6 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         # journal: side-effect only on first exchange - a follow-up turn is normally a
         # refinement of the SAME entry, not a brand new one.
         elif not prior_messages and action == "journal":
-            from datetime import date as _date
             # Each image is a "data:image/...;base64,..." URI, already size-checked
             # client-side - re-checked here (max 5, ~2MB decoded each) since the app
             # always renders straight from this field, independent of Google Drive.
@@ -1686,22 +1692,11 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                 if isinstance(d, dict) and d.get("url")
             ]
 
-            jr = {
-                "id": f"jr_{uuid.uuid4().hex[:12]}",
-                "user_id": current.user_id,
-                "date": _date.today().isoformat(),
-                "raw_text": payload.content,
-                "cleaned_text": visible_answer,
-                "title": (meta or {}).get("title", ""),
-                "mood": (meta or {}).get("mood", ""),
-                "tags": (meta or {}).get("tags", []),
-                "highlights": (meta or {}).get("highlights", []),
-                "images": valid_images,
-                "documents": valid_documents,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "source_conv": conv_id,
-            }
-            await db.journal_entries.insert_one(jr)
+            target_date = _resolve_journal_date(meta)
+            jr = await _save_journal_entry(
+                current.user_id, target_date, payload.content, visible_answer, meta, conv_id,
+                images=valid_images, documents=valid_documents,
+            )
 
             # Best-effort backup copy on Drive (Diario subfolder) when connected - the
             # app itself always displays the images straight from `jr["images"]` above,
@@ -1800,6 +1795,62 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
             "source_conv": conv_id,
         }
         await db.todos.insert_one(doc)
+
+
+def _resolve_journal_date(meta: Optional[dict]) -> str:
+    """The calendar date a journal entry belongs to: the date the model identified in META
+    (validated YYYY-MM-DD, computed from the same "Oggi è ..." reference date it was given -
+    see build_system_prompt's journal instructions), or today if none was given / it was
+    invalid. The entry is saved on the day the user is actually talking about (e.g. "ieri",
+    "il 19 settembre"), not always on today's page."""
+    raw = (meta or {}).get("date")
+    if raw:
+        try:
+            datetime.strptime(str(raw), "%Y-%m-%d")
+            return str(raw)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+async def _save_journal_entry(
+    user_id: str, target_date: str, raw_text: str, cleaned_text: str, meta: Optional[dict], conv_id: str,
+    images: Optional[List[str]] = None, documents: Optional[List[dict]] = None,
+) -> dict:
+    """Creates a new entry for `target_date`, or appends to the one already there. The user
+    may write about a specific day (e.g. "ieri") across more than one message/conversation,
+    and each should land on that SAME day's page rather than creating a second one for it -
+    "aggiunto il testo o creata se non esiste la pagina di quella giornata"."""
+    existing = await db.journal_entries.find_one({"user_id": user_id, "date": target_date}, {"_id": 0})
+    if existing:
+        fields = {
+            "raw_text": f"{existing.get('raw_text', '')}\n\n{raw_text}".strip(),
+            "cleaned_text": f"{existing.get('cleaned_text', '')}\n\n{cleaned_text}".strip(),
+            "tags": list(dict.fromkeys((existing.get("tags") or []) + ((meta or {}).get("tags") or []))),
+            "highlights": ((existing.get("highlights") or []) + ((meta or {}).get("highlights") or []))[:6],
+            "images": ((existing.get("images") or []) + (images or []))[:5],
+            "documents": (existing.get("documents") or []) + (documents or []),
+        }
+        await db.journal_entries.update_one({"id": existing["id"]}, {"$set": fields})
+        existing.update(fields)
+        return existing
+    jr = {
+        "id": f"jr_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "date": target_date,
+        "raw_text": raw_text,
+        "cleaned_text": cleaned_text,
+        "title": (meta or {}).get("title", ""),
+        "mood": (meta or {}).get("mood", ""),
+        "tags": (meta or {}).get("tags", []),
+        "highlights": (meta or {}).get("highlights", []),
+        "images": images or [],
+        "documents": documents or [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_conv": conv_id,
+    }
+    await db.journal_entries.insert_one(jr)
+    return jr
 
 
 async def _find_created_in_conv(conv_id: str) -> Optional[tuple]:
