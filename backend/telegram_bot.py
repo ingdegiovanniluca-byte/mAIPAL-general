@@ -178,8 +178,10 @@ def _state_is_fresh(state: dict) -> bool:
 
 
 # ============ ACTION EXECUTION ============
-async def _process_action(db, user_doc: dict, action: str, content: str, conv_id: str | None) -> tuple[str, str]:
-    """Execute one action against a specific conv_id (new if None). Returns (answer, conv_id)."""
+async def _process_action(db, user_doc: dict, action: str, content: str, conv_id: str | None, images: Optional[list] = None) -> tuple[str, str]:
+    """Execute one action against a specific conv_id (new if None). Returns (answer, conv_id).
+    `images` (data URIs) is only used when action == "journal" - a photo attached to a diary
+    entry from Telegram (see _msg_photo)."""
     from server import (
         build_system_prompt, _parse_task_json, _create_task_or_todo, _extract_meta, retrieve_kb,
         _find_created_in_conv, _update_task_or_todo_from_meta, _resolve_journal_date, _save_journal_entry,
@@ -309,7 +311,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         # Same date resolution + append-or-create as the web chat: the entry lands on the
         # day the user is actually talking about (e.g. "ieri"), not always on today's page.
         target_date = _resolve_journal_date(meta)
-        await _save_journal_entry(user_doc["user_id"], target_date, content, visible, meta, conv_id)
+        await _save_journal_entry(user_doc["user_id"], target_date, content, visible, meta, conv_id, images=images)
 
     ut.fire_and_forget_feature_event(
         user_id=user_doc["user_id"], feature=_TG_ACTION_TO_FEATURE.get(action, "altro"),
@@ -401,7 +403,7 @@ async def _cmd_end(update: Update, ctx):
     await update.message.reply_text("✅ Conversazione chiusa. Scrivi pure quando vuoi.", reply_markup=_reply_keyboard(None))
 
 
-async def _run_and_reply(update_or_query, ctx, db, user, action, content, force_new=False):
+async def _run_and_reply(update_or_query, ctx, db, user, action, content, force_new=False, images=None):
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     state = await _get_state(db, user["user_id"], chat_id)
     reuse = (not force_new) and _state_is_fresh(state) and state.get("current_conv_id") and state.get("current_action") == action
@@ -411,7 +413,7 @@ async def _run_and_reply(update_or_query, ctx, db, user, action, content, force_
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     try:
-        answer, new_conv_id = await _process_action(db, user, action, content, conv_id)
+        answer, new_conv_id = await _process_action(db, user, action, content, conv_id, images=images)
     except Exception as e:
         logger.exception("tg process error")
         await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Errore: {str(e)[:200]}")
@@ -852,7 +854,7 @@ async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, te
 
 
 async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    from server import db, _drive_smart_upload_core
+    from server import db, _drive_smart_upload_core, _image_bytes_to_journal_data_uri
     chat_id = update.effective_chat.id
     user = await _get_user_by_chat(db, chat_id)
     if not user:
@@ -863,6 +865,28 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await ctx.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
     caption = (update.message.caption or "").strip()
+
+    # Se la conversazione attiva è "diario", la foto va allegata alla voce di diario (non
+    # su Drive) - prima era instradata SEMPRE su Drive, indipendentemente dall'azione in
+    # corso, quindi una foto mandata mentre si scrive il diario non finiva mai nella voce
+    # (e falliva del tutto se Google Drive non era collegato).
+    state = await _get_state(db, user["user_id"], chat_id)
+    if _state_is_fresh(state) and state.get("current_action") == "journal":
+        try:
+            tg_file = await ctx.bot.get_file(photos[-1].file_id)  # last = highest resolution
+            raw = await tg_file.download_as_bytearray()
+            data_uri = _image_bytes_to_journal_data_uri(bytes(raw))
+        except Exception as e:
+            logger.exception("tg journal photo download/compress failed")
+            await update.message.reply_text(f"⚠️ Errore con la foto: {str(e)[:200]}")
+            return
+        await _run_and_reply(
+            update, ctx, db, user, "journal",
+            caption or "[foto allegata, nessun testo]",
+            images=[data_uri],
+        )
+        return
+
     current = _to_user_pydantic(user)
     try:
         tg_file = await ctx.bot.get_file(photos[-1].file_id)  # last = highest resolution

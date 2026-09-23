@@ -1034,17 +1034,23 @@ def build_system_prompt(user: User, action: str) -> str:
             "REGOLA CRITICA: non aggiungere MAI fatti, dettagli, emozioni o commenti sullo stato d'animo non esplicitamente "
             "scritti dall'utente (es. non scrivere 'sono molto felice' o 'è stata una giornata dura' se l'utente non lo ha "
             "detto lui stesso) - riscrivi solo ciò che c'è, non interpretarlo né arricchirlo. "
-            "REGOLA SULLA DATA: la voce va salvata sul giorno a cui il racconto si riferisce, non necessariamente oggi. "
-            "Se il testo indica chiaramente un giorno diverso da oggi (es. 'ieri', 'l'altro ieri', 'domenica scorsa', "
-            "'il 19 settembre'), calcola quella data (usando SEMPRE oggi come riferimento, come indicato sopra) e "
-            "includila come \"date\": \"YYYY-MM-DD\" nei metadati. Se il testo non specifica alcun giorno (l'utente sta "
-            "semplicemente raccontando senza riferimenti temporali), ometti del tutto la chiave \"date\" - il sistema userà oggi. "
+            "REGOLA SULLA DATA (IMPORTANTE, controlla SEMPRE): la voce va salvata sul giorno a cui il racconto si "
+            "riferisce, non sempre oggi. Prima di rispondere, controlla se il testo contiene un riferimento temporale "
+            "diverso da oggi, anche implicito (es. 'ieri', 'l'altro ieri', 'stamattina presto' se ora è sera inoltrata, "
+            "'domenica scorsa', 'il 19 settembre', 'tre giorni fa', un giorno della settimana passato senza 'prossimo'). "
+            "Se lo trovi, calcola la data esatta (usando SEMPRE oggi come riferimento, come indicato all'inizio di "
+            "questo messaggio) e mettila nei metadati come \"date\": \"YYYY-MM-DD\" - esempio: se oggi è martedì 23 "
+            "settembre 2026 e l'utente scrive 'ieri sono andato al mare', il campo deve essere \"date\": \"2026-09-22\". "
+            "Questo passaggio non è facoltativo: se c'è un riferimento temporale e lo ometti, la voce finisce sul "
+            "giorno sbagliato. Se invece il testo NON specifica alcun riferimento temporale (racconta senza dire "
+            "quando è successo), ometti del tutto la chiave \"date\" - il sistema userà oggi automaticamente. "
             "Rispondi con il diario riscritto in modo naturale (senza intestazioni tipo 'Diario:' e senza menzionare la data, "
             "che è già evidente da dove viene salvata la voce). "
             "Poi in coda, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"titolo breve della giornata (max 6 parole)\", "
             "\"summary\": \"riassunto in 1 riga max 140 caratteri\", "
-            "\"date\": \"YYYY-MM-DD, SOLO se un giorno specifico diverso da oggi è chiaramente indicato nel testo\", "
+            "\"date\": \"YYYY-MM-DD - includi questa chiave SOLO se hai individuato un riferimento temporale diverso da "
+            "oggi come spiegato sopra, altrimenti ometti del tutto la chiave\", "
             "\"mood\": \"parola singola dedotta dal testo, SOLO per uso interno (non va scritta nel diario): "
             "felice|neutro|stressato|riflessivo|energico|stanco|grato\", "
             "\"tags\": [\"1-3 parole chiave che riassumono gli argomenti della giornata, es. lavoro, famiglia, sport, salute\"], "
@@ -1802,15 +1808,49 @@ def _resolve_journal_date(meta: Optional[dict]) -> str:
     (validated YYYY-MM-DD, computed from the same "Oggi è ..." reference date it was given -
     see build_system_prompt's journal instructions), or today if none was given / it was
     invalid. The entry is saved on the day the user is actually talking about (e.g. "ieri",
-    "il 19 settembre"), not always on today's page."""
+    "il 19 settembre"), not always on today's page.
+
+    The raw value is matched for a YYYY-MM-DD substring rather than requiring the whole
+    string to be exactly that (instead of a strict strptime on the full value) - the model
+    occasionally wraps the date in a few extra words or a time suffix despite the prompt
+    asking for a bare date, and a strict full-string match silently discarded those and fell
+    back to today instead of the day the user actually meant."""
+    import re as _re
     raw = (meta or {}).get("date")
     if raw:
-        try:
-            datetime.strptime(str(raw), "%Y-%m-%d")
-            return str(raw)
-        except ValueError:
-            pass
+        m = _re.search(r"\d{4}-\d{2}-\d{2}", str(raw))
+        if m:
+            try:
+                datetime.strptime(m.group(0), "%Y-%m-%d")
+                return m.group(0)
+            except ValueError:
+                pass
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def _image_bytes_to_journal_data_uri(contents: bytes, max_dim: int = 1600, max_bytes: int = 2 * 1024 * 1024) -> str:
+    """Downscales/re-encodes raw image bytes into a "data:image/jpeg;base64,..." URI sized
+    like the web app's own client-side compression for diary photos (fileToJournalImageDataUri
+    in ChatPage.jsx: max ~1600px, JPEG, under ~2MB) - used for photos attached to a diary
+    entry from Telegram, which arrive as full-resolution originals with no client-side
+    compression of their own."""
+    from PIL import Image
+    from io import BytesIO
+    import base64 as _b64
+    img = Image.open(BytesIO(contents))
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    if max(img.size) > max_dim:
+        scale = max_dim / max(img.size)
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.LANCZOS)
+    quality = 85
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    while len(buf.getvalue()) > max_bytes and quality > 40:
+        quality -= 10
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=quality)
+    return "data:image/jpeg;base64," + _b64.b64encode(buf.getvalue()).decode("ascii")
 
 
 async def _save_journal_entry(
@@ -1844,7 +1884,7 @@ async def _save_journal_entry(
         "mood": (meta or {}).get("mood", ""),
         "tags": (meta or {}).get("tags", []),
         "highlights": (meta or {}).get("highlights", []),
-        "images": images or [],
+        "images": (images or [])[:5],
         "documents": documents or [],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_conv": conv_id,
