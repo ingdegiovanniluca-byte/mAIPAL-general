@@ -1,16 +1,23 @@
 import React, { useMemo, useRef, useEffect } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const IT_DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
 const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
 const WEEKS_BEFORE = 26;
 const WEEKS_AFTER = 26;
 
-const DAY_LABEL_COL_WIDTH = 36; // px
-const COL_WIDTH = 44; // px, per-week column
-const COL_GAP = 20; // px
-const COL_STRIDE = COL_WIDTH + COL_GAP;
+// Desktop keeps its original fixed sizing untouched. Mobile uses narrower columns so
+// several weeks fit the screen width without any column being cut off (the reported bug:
+// with the desktop-sized columns, the flex row could grow wider than the viewport with no
+// `min-w-0` on the scrollable child to force it to respect its own bounds - fixed below too).
+const DAY_LABEL_COL_WIDTH_DESKTOP = 36; // px
+const COL_WIDTH_DESKTOP = 44; // px, per-week column
+const COL_GAP_DESKTOP = 20; // px
+const DAY_LABEL_COL_WIDTH_MOBILE = 26;
+const COL_WIDTH_MOBILE = 46;
+const COL_GAP_MOBILE = 8;
 const MONTH_ROW_HEIGHT = 18; // px
 
 const DOT_HAS = "#826556";
@@ -62,6 +69,12 @@ function weekMonthKey(monday) {
 const DRAG_THRESHOLD = 4; // px of movement before a mousedown counts as a drag, not a click
 
 export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek }) {
+  const isMobile = useIsMobile();
+  const DAY_LABEL_COL_WIDTH = isMobile ? DAY_LABEL_COL_WIDTH_MOBILE : DAY_LABEL_COL_WIDTH_DESKTOP;
+  const COL_WIDTH = isMobile ? COL_WIDTH_MOBILE : COL_WIDTH_DESKTOP;
+  const COL_GAP = isMobile ? COL_GAP_MOBILE : COL_GAP_DESKTOP;
+  const COL_STRIDE = COL_WIDTH + COL_GAP;
+
   const scrollRef = useRef(null);
   const draggingRef = useRef(false);
   const dragMovedRef = useRef(false);
@@ -159,6 +172,10 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   }, []);
 
   const totalWidth = weeks.length * COL_STRIDE - COL_GAP;
+  const scrollByWeeks = (n) => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollBy({ left: n * COL_STRIDE * 3, behavior: "smooth" });
+  };
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -173,7 +190,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
             <CalendarDays size={16} />
           </button>
           {!collapsed && (
-            <div className="flex items-center gap-3 flex-wrap text-[11px] text-white/60 ml-6">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] md:flex md:items-center md:gap-3 md:text-[11px] text-white/60 ml-2 md:ml-6">
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_FAV }} />preferiti</span>
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_OVERDUE }} />scaduti</span>
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_DONE }} />tutti conclusi</span>
@@ -189,11 +206,21 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                 <div key={d} className="h-8 flex items-center text-[10px] uppercase tracking-wide text-white">{d}</div>
               ))}
             </div>
+            {isMobile && (
+              <button
+                data-testid="calendar-prev-weeks"
+                onClick={() => scrollByWeeks(-1)}
+                className="shrink-0 self-stretch flex items-center px-0.5 text-white/40 hover:text-white/80"
+                title="Settimane precedenti"
+              >
+                <ChevronLeft size={16} />
+              </button>
+            )}
             <div
               ref={scrollRef}
               onWheel={onWheel}
               onMouseDown={onMouseDown}
-              className="flex-1 overflow-x-auto no-scrollbar select-none cursor-grab active:cursor-grabbing"
+              className="flex-1 min-w-0 overflow-x-auto no-scrollbar select-none cursor-grab active:cursor-grabbing"
             >
               <div style={{ position: "relative", width: totalWidth }}>
                 <div style={{ position: "relative", height: MONTH_ROW_HEIGHT }}>
@@ -279,6 +306,16 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
                 </div>
               </div>
             </div>
+            {isMobile && (
+              <button
+                data-testid="calendar-next-weeks"
+                onClick={() => scrollByWeeks(1)}
+                className="shrink-0 self-stretch flex items-center px-0.5 text-white/40 hover:text-white/80"
+                title="Settimane successive"
+              >
+                <ChevronRight size={16} />
+              </button>
+            )}
           </div>
         )}
       </div>

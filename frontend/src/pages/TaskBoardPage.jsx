@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2 } from "lucide-react";
+import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, ChevronDown } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import TaskCalendar from "@/pages/TaskCalendar";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const COLS = [
   { key: "alta", label: "Alta priorità", tint: "column-tint-high", dot: "bg-[color:var(--high)]", side: "priority-high" },
@@ -31,6 +32,7 @@ const isTaskOverdue = (t) => {
 
 export default function TaskBoardPage() {
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   const [tasks, setTasks] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showCompleted, setShowCompleted] = useState(false);
@@ -40,6 +42,9 @@ export default function TaskBoardPage() {
   const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
   const [tagFilters, setTagFilters] = useState([]);
   const [orgMembers, setOrgMembers] = useState([]);
+  // Priority columns collapse on mobile only (desktop's kanban always shows all three) -
+  // all start open so every task is reachable without an extra tap.
+  const [collapsedCols, setCollapsedCols] = useState({});
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -159,7 +164,7 @@ export default function TaskBoardPage() {
   const selectedTask = tasks.find((t) => t.id === selected) || null;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-17rem)]">
+    <div className="flex flex-col md:h-[calc(100vh-17rem)]">
       <TaskCalendar
         tasks={tasks}
         collapsed={calendarCollapsed}
@@ -228,13 +233,13 @@ export default function TaskBoardPage() {
           )}
         </button>
         {allTags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap ml-4">
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar md:flex-wrap md:overflow-visible ml-2 md:ml-4 max-w-full">
             {allTags.map((tag) => (
               <button
                 key={tag}
                 data-testid={`tag-filter-${tag}`}
                 onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
-                className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
+                className={`shrink-0 text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
               >
                 #{tag}
               </button>
@@ -242,11 +247,13 @@ export default function TaskBoardPage() {
           </div>
         )}
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-2 flex-1 min-h-0">
-        {grouped.map((c) => (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mt-2 md:flex-1 md:min-h-0">
+        {grouped.map((c) => {
+          const isCollapsed = isMobile && !!collapsedCols[c.key];
+          return (
           <div
             key={c.key}
-            className={`rounded-2xl p-5 ${c.tint} transition-[filter] flex flex-col min-h-0 ${dragOverCol === c.key ? "brightness-125" : ""}`}
+            className={`rounded-2xl p-4 md:p-5 ${c.tint} transition-[filter] flex flex-col min-h-0 ${dragOverCol === c.key ? "brightness-125" : ""}`}
             data-testid={`col-${c.key}`}
             onDragOver={(e) => { e.preventDefault(); setDragOverCol(c.key); }}
             onDragLeave={() => setDragOverCol((v) => (v === c.key ? null : v))}
@@ -258,10 +265,15 @@ export default function TaskBoardPage() {
             }}
           >
             <div className="flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
+              <button
+                data-testid={`col-toggle-${c.key}`}
+                onClick={() => setCollapsedCols((v) => ({ ...v, [c.key]: !v[c.key] }))}
+                className="md:pointer-events-none flex items-center gap-2"
+              >
                 <span className={`w-2 h-2 rounded-full ${c.dot}`} />
                 <div className="kicker">{c.label}</div>
-              </div>
+                <ChevronDown size={14} className={`md:hidden text-white/50 transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
+              </button>
               <div className="flex items-center gap-2">
                 <button
                   data-testid={`filter-overdue-${c.key}`}
@@ -282,24 +294,27 @@ export default function TaskBoardPage() {
                 <div className="liquid-glass-btn h-7 w-7 rounded-full flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
               </div>
             </div>
-            <div className="mt-5 space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
-              {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
-              {c.items.map((t) => (
-                <TaskCard
-                  key={t.id}
-                  task={t}
-                  orgMembers={orgMembers}
-                  onClick={() => setSelected(t.id)}
-                  onToggleFav={() => toggleFav(t.id, !!t.favorite)}
-                  onToggleDone={() => toggleDone(t.id, !!t.completed)}
-                  onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
-                  onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
-                  onDelete={() => del(t.id)}
-                />
-              ))}
-            </div>
+            {!isCollapsed && (
+              <div className="mt-4 md:mt-5 space-y-3 md:flex-1 md:min-h-0 md:overflow-y-auto md:pr-1">
+                {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
+                {c.items.map((t) => (
+                  <TaskCard
+                    key={t.id}
+                    task={t}
+                    orgMembers={orgMembers}
+                    onClick={() => setSelected(t.id)}
+                    onToggleFav={() => toggleFav(t.id, !!t.favorite)}
+                    onToggleDone={() => toggleDone(t.id, !!t.completed)}
+                    onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
+                    onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
+                    onDelete={() => del(t.id)}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {selectedTask && (
@@ -324,7 +339,7 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
       data-testid={`task-${task.id}`}
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", task.id)}
-      className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}
+      className={`w-full flex flex-wrap items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}
       style={{ background: bg }}
     >
       <button
@@ -337,7 +352,7 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
       </button>
 
       <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
-        <div className={`font-semibold text-sm truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
+        <div className={`font-semibold text-sm break-words md:truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
           {task.title}
           {task.visibility === "org" && <Users size={11} className="text-white/45 shrink-0" title="Condiviso col team" />}
           {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
@@ -350,7 +365,9 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
         )}
       </button>
 
-      <div className="shrink-0 flex items-center gap-1 pr-3">
+      {/* On mobile this drops to its own full-width row (flex-wrap on the card root)
+          instead of squeezing next to a long title; on desktop it stays inline. */}
+      <div className="w-full md:w-auto shrink-0 flex items-center justify-end gap-1 px-3 pb-2 md:pb-0 md:pr-3">
         {!!task.notes && (
           <span className="p-1.5 text-white/40" title="Questo task ha delle note">
             <StickyNote size={14} />
@@ -601,7 +618,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-4 mt-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
           <div>
             <div className="text-[11px] uppercase tracking-wide" style={{ color: "#ACA6A3" }}>Data Creazione</div>
             <div className="text-sm text-white mt-1">{formatCreatedAt(task.created_at)}</div>

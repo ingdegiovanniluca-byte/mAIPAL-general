@@ -1,10 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+
+const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista" };
+const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
+const formatReplyLabel = (conv) => {
+  const d = conv.created_at ? new Date(conv.created_at) : null;
+  const when = d ? `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "";
+  return `${ACTION_LABELS_IT[conv.action] || conv.action}${when ? ` · ${when}` : ""}`;
+};
 
 const ACTIONS = [
   {
@@ -82,6 +91,7 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
 });
 
 export default function ChatPage() {
+  const isMobile = useIsMobile();
   const [active, setActive] = useState("info_request");
   const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
@@ -101,10 +111,29 @@ export default function ChatPage() {
   const chunksRef = useRef([]);
   const recStartRef = useRef(0);
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
 
   const [thread, setThread] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
   const threadEndRef = useRef(null);
+
+  // Mobile only (spec 5.6): tapping a history card binds the composer to that existing
+  // conversation instead of opening the full thread overlay - the card list stays visible,
+  // a follow-up message is appended to it, and the card's own preview picks up the reply
+  // once `load()` refreshes it. Desktop keeps its existing "open the big thread" behaviour.
+  const [mobileReplyTo, setMobileReplyTo] = useState(null); // { conv_id, action, label }
+
+  // Auto-growing composer textarea on mobile (spec 5.2): starts at 1-2 lines, grows with
+  // content up to ~50% of the viewport height, then scrolls internally. Desktop keeps its
+  // existing fixed-size box untouched.
+  useEffect(() => {
+    if (!isMobile) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const max = window.innerHeight * 0.5;
+    el.style.height = Math.min(el.scrollHeight, max) + "px";
+  }, [text, isMobile]);
 
   const [visitType, setVisitType] = useState("imaging"); // 'imaging' | 'general' | id template personalizzato
   const [vetTemplates, setVetTemplates] = useState({ builtin: [], custom: [] });
@@ -348,7 +377,35 @@ export default function ChatPage() {
     }
   };
 
+  // Mobile-only reply flow (spec 5.6): posts straight to the conversation the user tapped,
+  // bypassing the desktop thread-overlay state entirely - the history list (and that card's
+  // preview, via load()) is the only place the reply shows up.
+  const sendMobileReply = async () => {
+    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    let voiceText = "";
+    if (pendingVoice) {
+      setTranscribing(true);
+      try { voiceText = await transcribeBlob(pendingVoice.blob); }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    const content = [text.trim(), voiceText].filter(Boolean).join(" ").trim();
+    if (!content) return;
+    if (streaming || transcribing) return;
+    setStreaming(true);
+    setText("");
+    const replyTarget = mobileReplyTo;
+    await streamChat(
+      { action: replyTarget.action, content, conv_id: replyTarget.conv_id },
+      () => {},
+      async () => { setStreaming(false); await load(); },
+      (err) => { setStreaming(false); toast.error("Errore: " + err.message); }
+    );
+  };
+
   const send = async () => {
+    if (isMobile && mobileReplyTo) { await sendMobileReply(); return; }
     if (active === "vet_report") { await sendVetReport(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
@@ -634,18 +691,18 @@ export default function ChatPage() {
 
   return (
     <div className="relative w-full">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full h-[calc(100vh-15rem)]">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 w-full lg:h-[calc(100vh-15rem)]">
         {/* LEFT 1/3 — action icons + input area */}
-        <aside className={`lg:col-span-1 flex flex-col overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
+        <aside className={`lg:col-span-1 flex flex-col lg:overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
-          <div className="flex items-center gap-1.5 md:gap-2 p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0">
+          <div className="flex items-center gap-1.5 md:gap-2 p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0 overflow-x-auto no-scrollbar">
               {ACTIONS.map((a) => {
                 const selected = a.id === active;
                 return (
                   <button
                     key={a.id}
                     data-testid={`action-${a.key}`}
-                    onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); }}
+                    onClick={() => { setActive(a.id); if (thread && thread.action !== a.id) setThread(null); setMobileReplyTo(null); }}
                     title={a.title}
                     aria-label={a.title}
                     style={{
@@ -665,10 +722,19 @@ export default function ChatPage() {
               })}
           </div>
           <div className="flex items-center justify-between px-2 mt-4 shrink-0">
-            <div className="text-xs font-bold uppercase tracking-wider text-white">nuovo messaggio</div>
+            <div className="text-xs font-bold uppercase tracking-wider text-white hidden md:block">nuovo messaggio</div>
             <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
           </div>
-          <div className="chat-input-card p-5 rounded-2xl shadow-lg mt-2 min-h-[340px] flex flex-col" data-testid="chat-input-card">
+          {isMobile && mobileReplyTo && (
+            <div data-testid="mobile-reply-pill" className="flex items-center gap-2 mt-2 px-3 py-2 rounded-xl bg-white/10 text-white/85 text-xs">
+              <Reply size={13} className="shrink-0" />
+              <span className="flex-1 min-w-0 truncate">Rispondi a: {mobileReplyTo.label}</span>
+              <button data-testid="mobile-reply-clear" onClick={() => setMobileReplyTo(null)} className="shrink-0 p-0.5 rounded-full hover:bg-white/10">
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          <div className="chat-input-card p-4 md:p-5 rounded-2xl shadow-lg mt-2 md:min-h-[340px] flex flex-col" data-testid="chat-input-card">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
               {active === "info_request" && !thread && (
@@ -728,11 +794,13 @@ export default function ChatPage() {
             </div>
             <Textarea
               data-testid="chat-textarea"
+              ref={textareaRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send(); }}
-              placeholder={thread ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
-              className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 min-h-[200px] px-0 resize-none text-white placeholder:text-white/60"
+              placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
+              rows={isMobile ? 1 : undefined}
+              className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 md:min-h-[200px] px-0 resize-none text-white placeholder:text-white/60 overflow-y-auto"
             />
             {pendingDriveUpload && (
               <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">
@@ -789,8 +857,9 @@ export default function ChatPage() {
               </div>
               <button data-testid="send-btn" onClick={send}
                 disabled={streaming || transcribing || uploadingFiles.length > 0 || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#CECAD0] text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white text-sm">
-                <Send size={14} /> {streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : uploadingFiles.length > 0 ? "Carico…" : recording ? "Ferma & invia" : "Invia"}
+                className="shrink-0 inline-flex items-center gap-2 p-2.5 md:px-4 md:py-2 rounded-full bg-[#CECAD0] text-[#403A3C] font-medium disabled:opacity-50 hover:bg-white text-sm">
+                <Send size={14} />
+                <span className="hidden md:inline">{streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : uploadingFiles.length > 0 ? "Carico…" : recording ? "Ferma & invia" : "Invia"}</span>
               </button>
             </div>
             <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : undefined} data-testid="file-input" />
@@ -954,7 +1023,14 @@ export default function ChatPage() {
                     key={c.conv_id}
                     conv={c}
                     index={idx}
-                    onOpen={() => openThread(c.conv_id)}
+                    isReplying={mobileReplyTo?.conv_id === c.conv_id}
+                    onOpen={() => {
+                      if (isMobile) {
+                        setMobileReplyTo((cur) => (cur?.conv_id === c.conv_id ? null : { conv_id: c.conv_id, action: c.action, label: formatReplyLabel(c) }));
+                      } else {
+                        openThread(c.conv_id);
+                      }
+                    }}
                     onToggleFav={() => toggleFavorite(c.conv_id, !!c.favorite)}
                     onDelete={() => deleteConv(c.conv_id)}
                   />
@@ -1029,7 +1105,7 @@ function VetTemplateUploadDialog({ onClose, onUploaded }) {
   );
 }
 
-function HistoryCard({ conv, index = 0, onOpen, onToggleFav, onDelete }) {
+function HistoryCard({ conv, index = 0, isReplying = false, onOpen, onToggleFav, onDelete }) {
   const actionLabels = {
     info_upload: "Caricamento Informazioni",
     info_request: "Richiesta Informazioni",
@@ -1048,7 +1124,7 @@ function HistoryCard({ conv, index = 0, onOpen, onToggleFav, onDelete }) {
 
   return (
     <div
-      className="p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm card-hover card-enter"
+      className={`p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm card-hover card-enter ${isReplying ? "ring-2 ring-white/60" : ""}`}
       style={{ ["--i"]: index }}
       data-testid="history-card"
     >
