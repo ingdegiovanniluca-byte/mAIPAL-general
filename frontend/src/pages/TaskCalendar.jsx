@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useEffect, useState } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
-import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarDays } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const IT_DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
@@ -149,6 +149,44 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   );
   const mobileMonthYear = weekMonthKey(mobileMonday);
 
+  // Swipe col dito sulla riga dei giorni per cambiare settimana (niente frecce) - stesso
+  // schema del carosello del diario: la cattura/il cambio settimana scatta solo oltre una
+  // soglia di movimento reale, e un listener "click" in fase di cattura sopprime il click
+  // nativo che altrimenti aprirebbe a caso il giorno sotto il dito al rilascio dello swipe.
+  const weekGridRef = useRef(null);
+  const weekDragRef = useRef(null);
+  const weekDragMovedRef = useRef(false);
+  const SWIPE_MOVE_THRESHOLD = 8;
+  const SWIPE_CHANGE_THRESHOLD = 40;
+
+  useEffect(() => {
+    const el = weekGridRef.current;
+    if (!el) return undefined;
+    const suppressClickAfterSwipe = (e) => {
+      if (weekDragMovedRef.current) { e.preventDefault(); e.stopPropagation(); }
+    };
+    el.addEventListener("click", suppressClickAfterSwipe, true);
+    return () => el.removeEventListener("click", suppressClickAfterSwipe, true);
+  }, []);
+
+  const onWeekPointerDown = (e) => {
+    weekDragMovedRef.current = false;
+    weekDragRef.current = { x: e.clientX };
+  };
+  const onWeekPointerMove = (e) => {
+    const start = weekDragRef.current;
+    if (!start) return;
+    if (!weekDragMovedRef.current && Math.abs(e.clientX - start.x) > SWIPE_MOVE_THRESHOLD) weekDragMovedRef.current = true;
+  };
+  const onWeekPointerUp = (e) => {
+    const start = weekDragRef.current;
+    weekDragRef.current = null;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    if (Math.abs(dx) > SWIPE_CHANGE_THRESHOLD) goMobileWeek(dx < 0 ? 1 : -1);
+    setTimeout(() => { weekDragMovedRef.current = false; }, 0);
+  };
+
   useEffect(() => {
     if (!collapsed && scrollRef.current) {
       const el = scrollRef.current.querySelector('[data-current-week="true"]');
@@ -195,16 +233,21 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   return (
     <TooltipProvider delayDuration={150}>
       <div className="mb-8 shrink-0">
-        <div className="flex items-center gap-3 mb-2 flex-wrap">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
           <button
             data-testid="calendar-toggle"
             onClick={onToggleCollapse}
-            className={`p-1.5 rounded-full transition-colors ${collapsed ? "text-white/40 hover:text-white/70" : "text-white/80 hover:text-white bg-white/10"}`}
+            className={`rounded-full transition-colors ${isMobile ? "p-1" : "p-1.5"} ${collapsed ? "text-white/40 hover:text-white/70" : isMobile ? "text-white/90 hover:text-white" : "text-white/80 hover:text-white bg-white/10"}`}
             title={collapsed ? "Mostra calendario" : "Nascondi calendario"}
           >
-            <CalendarDays size={16} />
+            <CalendarDays size={isMobile ? 14 : 16} />
           </button>
-          {!collapsed && (
+          {!collapsed && isMobile && (
+            <div className="text-[11px] font-medium capitalize text-white/60">
+              {IT_MONTHS_LONG[mobileMonthYear.month]} {mobileMonthYear.year}
+            </div>
+          )}
+          {!collapsed && !isMobile && (
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] md:flex md:items-center md:gap-3 md:text-[11px] text-white/60 ml-2 md:ml-6">
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_FAV }} />preferiti</span>
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_OVERDUE }} />scaduti</span>
@@ -216,36 +259,26 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
 
         {!collapsed && isMobile && (
           <div className="flex flex-col gap-1.5" data-testid="calendar-mobile-week">
-            <div className="text-[11px] font-medium capitalize text-white/60 px-1">
-              {IT_MONTHS_LONG[mobileMonthYear.month]} {mobileMonthYear.year}
-            </div>
             <div
               onClick={() => onSelectWeek && onSelectWeek(isoDate(mobileMonday))}
               className="flex items-center justify-between px-1.5 py-1 rounded-xl cursor-pointer"
               style={{ background: selectedWeekStart === isoDate(mobileMonday) ? "rgba(0, 176, 240, 0.18)" : "transparent" }}
             >
-              <button
-                data-testid="calendar-prev-weeks"
-                onClick={(e) => { e.stopPropagation(); goMobileWeek(-1); }}
-                className="p-1.5 -ml-1.5 text-white/50 hover:text-white/90 shrink-0"
-                title="Settimana precedente"
-              >
-                <ChevronLeft size={18} />
-              </button>
               <span className="text-xs font-bold uppercase tracking-[0.2em] text-white">Week</span>
               <span className="text-4xl font-light leading-none tabular-nums" style={{ color: MUTED_TEXT }}>
                 {isoWeekNumber(mobileMonday)}
               </span>
-              <button
-                data-testid="calendar-next-weeks"
-                onClick={(e) => { e.stopPropagation(); goMobileWeek(1); }}
-                className="p-1.5 -mr-1.5 text-white/50 hover:text-white/90 shrink-0"
-                title="Settimana successiva"
-              >
-                <ChevronRight size={18} />
-              </button>
             </div>
-            <div className="grid grid-cols-7 gap-1">
+            {/* Scorrimento a dito per cambiare settimana, niente frecce - touch-pan-y lascia
+                allo swipe orizzontale il gesto, allo scroll verticale della pagina il resto. */}
+            <div
+              ref={weekGridRef}
+              onPointerDown={onWeekPointerDown}
+              onPointerMove={onWeekPointerMove}
+              onPointerUp={onWeekPointerUp}
+              onPointerCancel={onWeekPointerUp}
+              className="grid grid-cols-7 gap-1 touch-pan-y"
+            >
               {mobileDays.map((day, di) => {
                 const key = isoDate(day);
                 const isSelected = selectedDate === key;
