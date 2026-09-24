@@ -97,10 +97,6 @@ export default function TaskBoardPage() {
 
   const grouped = COLS.map((c) => {
     const colTasks = visible.filter((t) => t.priority === c.key);
-    const totalCount = colTasks.length;
-    const overdueCount = colTasks.filter(isTaskOverdue).length;
-    const notOverdueCount = colTasks.filter(isTaskNotOverdue).length;
-    const favCount = colTasks.filter((t) => !!t.favorite).length;
     const f = filters[c.key] || { fav: false, overdue: false, notOverdue: false };
     let filtered = colTasks;
     if (f.overdue) filtered = filtered.filter(isTaskOverdue);
@@ -110,7 +106,7 @@ export default function TaskBoardPage() {
     else if (calendarFilter?.type === "week") filtered = filtered.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
     if (tagFilters.length > 0) filtered = filtered.filter((t) => (t.tags || []).some((tag) => tagFilters.includes(tag)));
     if (searchQuery) filtered = filtered.filter((t) => (t.title || "").toLowerCase().includes(searchQuery) || (t.tags || []).some((tag) => tag.toLowerCase().includes(searchQuery)));
-    return { ...c, items: sortTasks(filtered), totalCount, overdueCount, notOverdueCount, favCount, filterState: f };
+    return { ...c, items: sortTasks(filtered), filterState: f };
   });
 
   const toggleFav = async (id, cur) => {
@@ -379,39 +375,43 @@ export default function TaskBoardPage() {
                 className="md:pointer-events-none flex items-center gap-1.5 md:gap-2 min-w-0"
               >
                 <span className={`w-2 h-2 rounded-full shrink-0 ${c.dot}`} />
-                {/* Su smartphone testo e spaziatura un po' più stretti: con i tre filtri accanto,
-                    "MEDIA PRIORITÀ" andava a capo sugli schermi da 360px. */}
-                <div className="kicker whitespace-nowrap !text-[10px] !tracking-[0.12em] md:!text-[11px] md:!tracking-[0.18em]">{c.label}</div>
+                <div className="kicker whitespace-nowrap">{c.label}</div>
                 <ChevronDown size={14} className={`md:hidden text-white/50 transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
               </button>
-              <div className="flex items-center gap-1 md:gap-2 shrink-0">
+              {/* Filtri come sole icone, senza area né numero: lo stato attivo si riconosce dal
+                  colore. Il numero a destra conta i task effettivamente mostrati nel riquadro,
+                  quindi cambia con filtri, tag, ricerca e giorno/settimana selezionati. */}
+              <div className="flex items-center gap-1 md:gap-1.5 shrink-0">
                 <button
                   data-testid={`filter-overdue-${c.key}`}
                   onClick={() => toggleFilter(c.key, "overdue")}
                   title="Filtra scaduti"
-                  className={`h-7 px-1.5 md:px-2 rounded-full flex items-center gap-0.5 md:gap-1 text-[11px] font-bold transition-colors ${c.filterState.overdue ? "bg-[#76280E] text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                  aria-pressed={!!c.filterState.overdue}
+                  className={`p-1 transition-colors ${c.filterState.overdue ? "text-[#E0703A]" : "text-white/50 hover:text-white/80"}`}
                 >
-                  <Hourglass size={12} /> {c.overdueCount}
+                  <Hourglass size={16} strokeWidth={c.filterState.overdue ? 2.5 : 2} />
                 </button>
                 <button
                   data-testid={`filter-not-overdue-${c.key}`}
                   onClick={() => toggleFilter(c.key, "notOverdue")}
                   title="Filtra non scaduti"
-                  className={`h-7 px-1.5 md:px-2 rounded-full flex items-center gap-0.5 md:gap-1 text-[11px] font-bold transition-colors ${c.filterState.notOverdue ? "bg-[#2E5F7D] text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                  aria-pressed={!!c.filterState.notOverdue}
+                  className={`p-1 transition-colors ${c.filterState.notOverdue ? "text-[#4E95D9]" : "text-white/50 hover:text-white/80"}`}
                 >
-                  <CalendarClock size={12} /> {c.notOverdueCount}
+                  <CalendarClock size={16} strokeWidth={c.filterState.notOverdue ? 2.5 : 2} />
                 </button>
                 <button
                   data-testid={`filter-fav-${c.key}`}
                   onClick={() => toggleFilter(c.key, "fav")}
                   title="Filtra preferiti"
-                  className={`h-7 px-1.5 md:px-2 rounded-full flex items-center gap-0.5 md:gap-1 text-[11px] font-bold transition-colors ${c.filterState.fav ? "bg-amber-400 text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                  aria-pressed={!!c.filterState.fav}
+                  className={`p-1 transition-colors ${c.filterState.fav ? "text-amber-400" : "text-white/50 hover:text-white/80"}`}
                 >
-                  <Star size={12} className={c.filterState.fav ? "fill-current" : ""} /> {c.favCount}
+                  <Star size={16} className={c.filterState.fav ? "fill-current" : ""} />
                 </button>
                 {/* liquid-glass-panel invece di liquid-glass-btn: stesso effetto vetro,
-                    ma senza l'onda di colore animata (richiesta: contatore fermo). */}
-                <div className="liquid-glass-panel h-7 w-7 rounded-full flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
+                    ma senza l'onda di colore animata (contatore fermo). */}
+                <div data-testid={`col-count-${c.key}`} className="liquid-glass-panel h-7 min-w-[1.75rem] px-1 ml-1 rounded-full flex items-center justify-center text-sm font-bold">{c.items.length}</div>
               </div>
             </div>
             {!isCollapsed && (
