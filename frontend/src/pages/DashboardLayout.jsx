@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
-  LogOut, Settings, MoreHorizontal, MessageSquare, CheckSquare, ListChecks, BookOpen,
+  LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
   Newspaper, List, FileText, Dumbbell,
 } from "lucide-react";
 import logo3 from "@/assets/logo3.png";
@@ -66,7 +66,9 @@ export default function DashboardLayout() {
 
   const visibleItems = NAV_ITEMS.filter((item) => (!item.adminOnly || user?.role === "admin") && (!item.vertical || user?.business_vertical === item.vertical));
   const primaryItems = visibleItems.filter((item) => MOBILE_PRIMARY.includes(item.to));
-  const moreItems = visibleItems.filter((item) => !MOBILE_PRIMARY.includes(item.to) && item.to !== "/dashboard/settings");
+  // Everything not in the bottom pill lives behind its "+" button - Impostazioni included,
+  // so it is reachable from there as well as from the avatar menu.
+  const moreItems = visibleItems.filter((item) => !MOBILE_PRIMARY.includes(item.to));
   const currentItem = visibleItems.find((item) => location.pathname.startsWith(item.to));
   const isMoreActive = !!currentItem && moreItems.some((item) => item.to === currentItem.to);
 
@@ -190,43 +192,52 @@ export default function DashboardLayout() {
           </div>
         </header>
 
-        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-6 md:pb-8 w-full">
+        {/* Mobile bottom padding clears the floating menu below, so the last element of a
+            page can always be scrolled fully into view above it (content still passes
+            under the glass while scrolling). */}
+        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-[calc(env(safe-area-inset-bottom,0px)+6.5rem)] md:pb-8 w-full">
           <Outlet />
         </main>
 
-        {/* ===== Mobile bottom navigation bar (<768px) — same translucent glass surface as
-            the top bars, so scrolled content is visible/blurred underneath it instead of
-            disappearing behind a flat opaque strip. ===== */}
+        {/* ===== Mobile bottom navigation (<768px): a floating liquid-glass pill, only as
+            wide as its four sections and lifted off the bottom edge, plus a separate round
+            "+" button for everything else (News, Liste, Documenti, Impostazioni...). ===== */}
         {!keyboardOpen && (
-          <nav
-            data-testid="mobile-bottom-nav"
-            className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-stretch bg-white/5 backdrop-blur-xl"
-            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+          <div
+            className="md:hidden fixed left-0 right-0 z-40 flex items-center justify-center gap-2 px-3 pointer-events-none"
+            style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)" }}
           >
-            {primaryItems.map((item) => {
-              const active = currentItem?.to === item.to;
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.to}
-                  data-testid={item.testid}
-                  onClick={() => goTo(item.to)}
-                  className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors ${active ? "text-white" : "text-white/50"}`}
-                >
-                  <Icon size={20} />
-                  <span className="text-[10px] leading-none">{item.label}</span>
-                </button>
-              );
-            })}
+            <nav
+              data-testid="mobile-bottom-nav"
+              className="pointer-events-auto liquid-glass-panel rounded-full flex items-center gap-0.5 p-1.5"
+            >
+              {primaryItems.map((item) => {
+                const active = currentItem?.to === item.to;
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.to}
+                    data-testid={item.testid}
+                    onClick={() => goTo(item.to)}
+                    aria-current={active ? "page" : undefined}
+                    className={`min-w-[62px] flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-full transition-colors ${active ? "bg-white/20 text-white" : "text-white/60"}`}
+                  >
+                    <Icon size={19} />
+                    <span className="text-[10px] font-medium leading-none">{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
             <button
               data-testid="tab-more"
               onClick={() => setMoreOpen(true)}
-              className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors ${isMoreActive ? "text-white" : "text-white/50"}`}
+              title="Altre sezioni"
+              aria-label="Altre sezioni"
+              className={`pointer-events-auto liquid-glass-panel h-[58px] w-[58px] shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white ring-1 ring-white/60" : "text-white/85"}`}
             >
-              <MoreHorizontal size={20} />
-              <span className="text-[10px] leading-none">Altro</span>
+              <Plus size={24} />
             </button>
-          </nav>
+          </div>
         )}
 
         {/* ===== "Altro" panel (remaining sections), from the bottom ===== */}
