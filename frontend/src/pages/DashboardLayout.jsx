@@ -201,7 +201,8 @@ export default function DashboardLayout() {
 
         {/* ===== Mobile bottom navigation (<768px): a floating liquid-glass pill, only as
             wide as its four sections and lifted off the bottom edge, plus a separate round
-            "+" button for everything else (News, Liste, Documenti, Impostazioni...). ===== */}
+            "+" button for everything else (News, Liste, Documenti, Impostazioni...). No
+            border or bright rim on either: the glass itself is the only edge. ===== */}
         {!keyboardOpen && (
           <div
             className="md:hidden fixed left-0 right-0 z-40 flex items-center justify-center gap-2 px-3 pointer-events-none"
@@ -209,7 +210,7 @@ export default function DashboardLayout() {
           >
             <nav
               data-testid="mobile-bottom-nav"
-              className="pointer-events-auto liquid-glass-panel rounded-full flex items-center gap-0.5 p-1.5"
+              className="pointer-events-auto liquid-glass-panel !border-0 !shadow-[0_8px_30px_rgba(0,0,0,0.25)] rounded-full flex items-center gap-0.5 p-1.5"
             >
               {primaryItems.map((item) => {
                 const active = currentItem?.to === item.to;
@@ -233,7 +234,7 @@ export default function DashboardLayout() {
               onClick={() => setMoreOpen(true)}
               title="Altre sezioni"
               aria-label="Altre sezioni"
-              className={`pointer-events-auto liquid-glass-panel h-[58px] w-[58px] shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white ring-1 ring-white/60" : "text-white/85"}`}
+              className={`pointer-events-auto liquid-glass-panel !border-0 !shadow-[0_8px_30px_rgba(0,0,0,0.25)] h-[58px] w-[58px] shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white bg-white/20" : "text-white/85"}`}
             >
               <Plus size={24} />
             </button>

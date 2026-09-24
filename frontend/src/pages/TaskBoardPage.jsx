@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, CalendarDays, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, ChevronDown, Search, X } from "lucide-react";
+import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, ChevronDown, Search, X } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -181,104 +181,95 @@ export default function TaskBoardPage() {
   const completedCount = tasks.filter((t) => !!t.completed).length;
   const selectedTask = tasks.find((t) => t.id === selected) || null;
 
-  return (
-    <div className="flex flex-col md:h-[calc(100vh-17rem)]">
-      {/* ===== Mobile (<768px): riga di icone (calendario, attivi/archiviati, lente) +
-          pannello ricerca/tag dietro la lente, al posto della barra desktop. I filtri
-          scaduti/non scaduti/preferiti restano nell'intestazione di ogni riquadro. ===== */}
-      {isMobile && (
-        <div className="mb-2 shrink-0">
-          <div className="flex items-center gap-2 p-2 rounded-2xl bg-white/5 backdrop-blur-xl" data-testid="mobile-task-filter-bar">
-            <button
-              data-testid="calendar-toggle-mobile"
-              onClick={() => setCalendarCollapsed((v) => !v)}
-              title={calendarCollapsed ? "Mostra calendario" : "Nascondi calendario"}
-              className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${!calendarCollapsed ? "text-white" : "text-white/55"}`}
-            >
-              <CalendarDays size={16} />
-            </button>
-            {/* Badge fuori dal pulsante: .liquid-glass-btn ha overflow:hidden e lo taglierebbe. */}
-            <div className="relative shrink-0">
+  // Mobile: niente barra dedicata in alto. Attivi/archiviati e la lente sono due icone
+  // semplici a destra della riga icona-calendario + mese; sotto quella riga compaiono il
+  // filtro giorno/settimana attivo e, se aperto, il pannello ricerca/hashtag.
+  const badge = "pointer-events-none absolute -top-1.5 -right-2 text-[9px] font-bold bg-[#00B0F0] text-white rounded-full min-w-[15px] h-[15px] px-1 flex items-center justify-center";
+  const mobileHeaderRight = isMobile ? (
+    <>
+      <div className="relative">
+        <button
+          data-testid="filter-active-toggle-mobile"
+          onClick={() => setShowCompleted((v) => !v)}
+          title={showCompleted ? "Stai vedendo gli archiviati · tocca per gli attivi" : "Stai vedendo gli attivi · tocca per gli archiviati"}
+          className={`p-0.5 transition-colors ${showCompleted ? "text-white" : "text-white/80"}`}
+        >
+          {showCompleted ? <Archive size={18} /> : <CircleCheck size={18} />}
+        </button>
+        {!showCompleted && activeCount > 0 && <span className={badge}>{activeCount}</span>}
+      </div>
+      <div className="relative">
+        <button
+          data-testid="search-panel-toggle"
+          onClick={() => setSearchPanelOpen((v) => !v)}
+          title="Cerca task o tag"
+          className={`p-0.5 transition-colors ${searchPanelOpen ? "text-white" : "text-white/80"}`}
+        >
+          {searchPanelOpen ? <X size={18} /> : <Search size={18} />}
+        </button>
+        {activeFilterBadge > 0 && <span data-testid="search-active-badge" className={badge}>{activeFilterBadge}</span>}
+      </div>
+    </>
+  ) : null;
+  const mobileBelowHeader = isMobile ? (
+    <>
+      {calendarFilter && (
+        <button
+          data-testid="calendar-filter-pill"
+          onClick={() => setCalendarFilter(null)}
+          className="mb-2 rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
+        >
+          {calendarFilter.type === "day"
+            ? formatDayMonth(calendarFilter.date)
+            : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
+        </button>
+      )}
+      {searchPanelOpen && (
+        <div className="mb-3 p-3 rounded-2xl bg-white/5 backdrop-blur-xl" data-testid="task-search-panel">
+          <div className="relative">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50" />
+            <Input
+              data-testid="task-search-input"
+              value={taskSearch}
+              onChange={(e) => setTaskSearch(e.target.value)}
+              placeholder="Cerca task o tag…"
+              className="pl-8 h-9 text-sm rounded-full bg-white/10 text-white placeholder:text-white/50"
+            />
+            {(taskSearch || tagFilters.length > 0) && (
               <button
-                data-testid="filter-active-toggle-mobile"
-                onClick={() => setShowCompleted((v) => !v)}
-                title={showCompleted ? "Stai vedendo gli archiviati · tocca per gli attivi" : "Stai vedendo gli attivi · tocca per gli archiviati"}
-                className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center text-white ${showCompleted ? "ring-1 ring-white/60" : ""}`}
+                data-testid="search-panel-clear"
+                onClick={() => { setTaskSearch(""); setTagFilters([]); }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-white/50 hover:text-white/90"
+                title="Pulisci ricerca e tag"
               >
-                {showCompleted ? <Archive size={16} /> : <CircleCheck size={16} />}
+                <X size={14} />
               </button>
-              {!showCompleted && activeCount > 0 && (
-                <span className="pointer-events-none absolute -top-1 -right-1 text-[9px] font-bold bg-[#00B0F0] text-white rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{activeCount}</span>
-              )}
-            </div>
-            <div className="relative shrink-0 ml-auto">
-              <button
-                data-testid="search-panel-toggle"
-                onClick={() => setSearchPanelOpen((v) => !v)}
-                title="Cerca task o tag"
-                className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center ${searchPanelOpen ? "text-white" : "text-white/55"}`}
-              >
-                {searchPanelOpen ? <X size={16} /> : <Search size={16} />}
-              </button>
-              {activeFilterBadge > 0 && (
-                <span data-testid="search-active-badge" className="pointer-events-none absolute -top-1 -right-1 text-[9px] font-bold bg-[#00B0F0] text-white rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{activeFilterBadge}</span>
-              )}
-            </div>
+            )}
           </div>
-
-          {calendarFilter && (
-            <button
-              data-testid="calendar-filter-pill"
-              onClick={() => setCalendarFilter(null)}
-              className="mt-2 rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
-            >
-              {calendarFilter.type === "day"
-                ? formatDayMonth(calendarFilter.date)
-                : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
-            </button>
-          )}
-
-          {searchPanelOpen && (
-            <div className="mt-2 p-3 rounded-2xl bg-white/5 backdrop-blur-xl" data-testid="task-search-panel">
-              <div className="relative">
-                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50" />
-                <Input
-                  data-testid="task-search-input"
-                  value={taskSearch}
-                  onChange={(e) => setTaskSearch(e.target.value)}
-                  placeholder="Cerca task o tag…"
-                  className="pl-8 h-9 text-sm rounded-full bg-white/10 text-white placeholder:text-white/50"
-                />
-                {(taskSearch || tagFilters.length > 0) && (
-                  <button
-                    data-testid="search-panel-clear"
-                    onClick={() => { setTaskSearch(""); setTagFilters([]); }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-white/50 hover:text-white/90"
-                    title="Pulisci ricerca e tag"
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-              {allTags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-3">
-                  {allTags.map((tag) => (
-                    <button
-                      key={tag}
-                      data-testid={`tag-filter-${tag}`}
-                      onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
-                      className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
-                    >
-                      #{tag}
-                    </button>
-                  ))}
-                </div>
-              )}
+          {allTags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  data-testid={`tag-filter-${tag}`}
+                  onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
+                  className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
+                >
+                  #{tag}
+                </button>
+              ))}
             </div>
           )}
         </div>
       )}
+    </>
+  ) : null;
+
+  return (
+    <div className="flex flex-col md:h-[calc(100vh-17rem)]">
       <TaskCalendar
+        mobileHeaderRight={mobileHeaderRight}
+        mobileBelowHeader={mobileBelowHeader}
         tasks={tasks}
         collapsed={calendarCollapsed}
         onToggleCollapse={() => setCalendarCollapsed((v) => !v)}

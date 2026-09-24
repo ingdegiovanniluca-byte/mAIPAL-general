@@ -369,6 +369,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         0 12px 30px rgba(0, 0, 0, 0.3);
 }
 .liquid-glass-btn:active { transform: translateY(0) scale(0.98); }
+/* Same glass and color wave, frozen: used where only the selected button of a group should move. */
+.liquid-glass-btn.liquid-still::before { animation: none; }
 
 /* Logo mark: the PNG is used as a mask so the same moving rainbow wave used
    elsewhere (buttons, "mAIPAL" text) shows through the logo's own shape. */

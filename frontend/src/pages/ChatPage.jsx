@@ -129,6 +129,8 @@ export default function ChatPage() {
   // then scrolls internally. With no conversation on screen the box starts taller (~30% of
   // the viewport) so it is the centre of the page (spec v2 §3.1); once a conversation is shown
   // below it shrinks back to 1-2 lines to leave room for the messages. Desktop untouched.
+  // (The textarea's flex-1 is desktop-only: in the mobile card, which has no fixed height,
+  // flex-basis 0 overrode this inline height and pinned the box at its 60px minimum.)
   useEffect(() => {
     if (!isMobile) return;
     const el = textareaRef.current;
@@ -740,7 +742,7 @@ export default function ChatPage() {
                       opacity: selected ? 1 : 0.5,
                       borderColor: selected ? a.color : "rgba(206,202,208,0.25)",
                     }}
-                    className="liquid-glass-btn group relative h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:shadow-md"
+                    className={`liquid-glass-btn ${selected ? "" : "liquid-still"} group relative h-8 w-8 md:h-9 md:w-9 rounded-full border shadow-sm flex items-center justify-center transition-all duration-200 hover:opacity-100 hover:shadow-md`}
                   >
                     {React.cloneElement(a.icon, { size: 15 })}
                     <span className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#403A3C] text-white text-[11px] font-medium px-2.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg z-30">
@@ -759,7 +761,7 @@ export default function ChatPage() {
                       onClick={startNewMobileConversation}
                       title="Nuova conversazione"
                       aria-label="Nuova conversazione"
-                      className="liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white/85"
+                      className="liquid-glass-btn liquid-still h-8 w-8 rounded-full flex items-center justify-center text-white/85"
                     >
                       <MessageSquarePlus size={15} />
                     </button>
@@ -769,7 +771,7 @@ export default function ChatPage() {
                     onClick={() => setMobileView("history")}
                     title="Messaggi precedenti"
                     aria-label="Messaggi precedenti"
-                    className="liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white/85"
+                    className="liquid-glass-btn liquid-still h-8 w-8 rounded-full flex items-center justify-center text-white/85"
                   >
                     <History size={15} />
                   </button>
@@ -792,63 +794,66 @@ export default function ChatPage() {
             </div>
           )}
           <div className="chat-input-card p-4 md:p-5 rounded-2xl shadow-lg mt-2 md:min-h-[340px] flex flex-col" data-testid="chat-input-card">
-            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-              <div className="kicker-p text-white/85">· {thread ? "continua la conversazione" : activeAction.title.toLowerCase()}</div>
-              {active === "info_request" && !thread && (
-                <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="scope-selector">
-                  <button
-                    data-testid="scope-all"
-                    onClick={() => setScope("all")}
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 transition-all ${scope === "all" ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
-                    title="Cerca su Task, To-Do, Knowledge Base e Diario"
-                  >
-                    <Layers size={11} /> tutto
-                  </button>
-                  <button
-                    data-testid="scope-kb"
-                    onClick={() => setScope("kb")}
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 transition-all ${scope === "kb" ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
-                    title="Cerca solo nella Knowledge Base"
-                  >
-                    <Database size={11} /> solo kb
-                  </button>
-                </div>
-              )}
-              {active === "vet_report" && !thread && (
-                <div className="flex items-center gap-1 flex-wrap" data-testid="visit-type-selector">
-                  <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
-                    {vetTemplates.builtin.map((t) => (
-                      <button
-                        key={t.key}
-                        data-testid={`visit-type-${t.key}`}
-                        onClick={() => setVisitType(t.key)}
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.key ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
-                      >
-                        {t.name}
-                      </button>
-                    ))}
-                    {vetTemplates.custom.map((t) => (
-                      <button
-                        key={t.id}
-                        data-testid={`visit-type-${t.id}`}
-                        onClick={() => setVisitType(t.id)}
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.id ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
-                      >
-                        {t.name}
-                      </button>
-                    ))}
+            {/* The selected action is already shown by the highlighted icon above - no title in the box;
+                this row only exists for the per-action selectors. */}
+            {(active === "info_request" || active === "vet_report") && !thread && (
+              <div className="flex items-center mb-3 gap-2 flex-wrap">
+                {active === "info_request" && !thread && (
+                  <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="scope-selector">
+                    <button
+                      data-testid="scope-all"
+                      onClick={() => setScope("all")}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 transition-all ${scope === "all" ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                      title="Cerca su Task, To-Do, Knowledge Base e Diario"
+                    >
+                      <Layers size={11} /> tutto
+                    </button>
+                    <button
+                      data-testid="scope-kb"
+                      onClick={() => setScope("kb")}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 transition-all ${scope === "kb" ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                      title="Cerca solo nella Knowledge Base"
+                    >
+                      <Database size={11} /> solo kb
+                    </button>
                   </div>
-                  <button
-                    data-testid="upload-vet-template-btn"
-                    onClick={() => setShowTemplateUpload(true)}
-                    title="Carica un tuo template di report"
-                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white/80"
-                  >
-                    <UploadCloud size={13} />
-                  </button>
-                </div>
-              )}
-            </div>
+                )}
+                {active === "vet_report" && !thread && (
+                  <div className="flex items-center gap-1 flex-wrap" data-testid="visit-type-selector">
+                    <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
+                      {vetTemplates.builtin.map((t) => (
+                        <button
+                          key={t.key}
+                          data-testid={`visit-type-${t.key}`}
+                          onClick={() => setVisitType(t.key)}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.key ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                        >
+                          {t.name}
+                        </button>
+                      ))}
+                      {vetTemplates.custom.map((t) => (
+                        <button
+                          key={t.id}
+                          data-testid={`visit-type-${t.id}`}
+                          onClick={() => setVisitType(t.id)}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.id ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                        >
+                          {t.name}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      data-testid="upload-vet-template-btn"
+                      onClick={() => setShowTemplateUpload(true)}
+                      title="Carica un tuo template di report"
+                      className="p-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white/80"
+                    >
+                      <UploadCloud size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <Textarea
               data-testid="chat-textarea"
               ref={textareaRef}
@@ -857,7 +862,7 @@ export default function ChatPage() {
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send(); }}
               placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
               rows={isMobile ? 1 : undefined}
-              className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base flex-1 md:min-h-[200px] px-0 resize-none text-white placeholder:text-white/60 overflow-y-auto"
+              className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base md:flex-1 md:min-h-[200px] px-0 resize-none text-white placeholder:text-white/60 overflow-y-auto"
             />
             {pendingDriveUpload && (
               <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">

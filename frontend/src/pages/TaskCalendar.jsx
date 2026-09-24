@@ -63,7 +63,9 @@ function weekMonthKey(monday) {
 
 const DRAG_THRESHOLD = 4; // px of movement before a mousedown counts as a drag, not a click
 
-export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek }) {
+// mobileHeaderRight / mobileBelowHeader: extra controls the Task page places on the mobile
+// calendar row (right side) and right under it - so the page needs no separate toolbar.
+export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek, mobileHeaderRight = null, mobileBelowHeader = null }) {
   const isMobile = useIsMobile();
   const DAY_LABEL_COL_WIDTH = DAY_LABEL_COL_WIDTH_DESKTOP;
   const COL_WIDTH = COL_WIDTH_DESKTOP;
@@ -233,31 +235,29 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
 
   const totalWidth = weeks.length * COL_STRIDE - COL_GAP;
 
-  // Su smartphone il pulsante mostra/nascondi vive nella riga di icone della pagina Task
-  // (spec v2 §2.1): a calendario chiuso qui non resta nulla da mostrare, e lo spazio tra
-  // la riga dei filtri e i riquadri resta quello di prima (§2.4).
-  if (isMobile && collapsed) return null;
-
   return (
     <TooltipProvider delayDuration={150}>
-      {/* mb-14 su mobile: stacco tra calendario e riquadri di priorità circa doppio (§2.4) */}
-      <div className={`shrink-0 ${isMobile ? "mb-14" : "mb-8"}`}>
+      {/* Mobile: stacco ampio tra calendario aperto e riquadri di priorità; a calendario
+          chiuso resta solo la riga dell'icona, con lo spazio di sempre sotto. */}
+      <div className={`shrink-0 ${isMobile ? (collapsed ? "mb-2" : "mb-14") : "mb-8"}`}>
         <div className="flex items-center gap-2 mb-2 flex-wrap">
-          {!isMobile && (
-            <button
-              data-testid="calendar-toggle"
-              onClick={onToggleCollapse}
-              className={`rounded-full transition-colors p-1.5 ${collapsed ? "text-white/40 hover:text-white/70" : "text-white/80 hover:text-white bg-white/10"}`}
-              title={collapsed ? "Mostra calendario" : "Nascondi calendario"}
-            >
-              <CalendarDays size={16} />
-            </button>
-          )}
-          {isMobile && (
-            <div className="text-[11px] font-medium capitalize text-white/60 px-1">
+          <button
+            data-testid="calendar-toggle"
+            onClick={onToggleCollapse}
+            className={isMobile
+              // Su smartphone solo l'icona, senza area/cerchio attorno, a sinistra del mese.
+              ? `p-0.5 -ml-0.5 transition-colors ${collapsed ? "text-white/50" : "text-white/90"}`
+              : `rounded-full transition-colors p-1.5 ${collapsed ? "text-white/40 hover:text-white/70" : "text-white/80 hover:text-white bg-white/10"}`}
+            title={collapsed ? "Mostra calendario" : "Nascondi calendario"}
+          >
+            <CalendarDays size={isMobile ? 18 : 16} />
+          </button>
+          {isMobile && !collapsed && (
+            <div className="text-[11px] font-medium capitalize text-white/60">
               {IT_MONTHS_LONG[mobileMonthYear.month]} {mobileMonthYear.year}
             </div>
           )}
+          {isMobile && mobileHeaderRight && <div className="ml-auto flex items-center gap-3">{mobileHeaderRight}</div>}
           {!collapsed && !isMobile && (
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] md:flex md:items-center md:gap-3 md:text-[11px] text-white/60 ml-2 md:ml-6">
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_FAV }} />preferiti</span>
@@ -267,6 +267,8 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
             </div>
           )}
         </div>
+
+        {isMobile && mobileBelowHeader}
 
         {!collapsed && isMobile && (
           <div className="flex flex-col gap-1.5" data-testid="calendar-mobile-week">
