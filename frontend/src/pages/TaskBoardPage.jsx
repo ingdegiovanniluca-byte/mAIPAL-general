@@ -311,7 +311,7 @@ export default function TaskBoardPage() {
                   aria-pressed={!!c.filterState.overdue}
                   className={`p-1 transition-colors ${c.filterState.overdue ? "text-[#E0703A]" : "text-white/50 hover:text-white/80"}`}
                 >
-                  <Hourglass size={16} strokeWidth={c.filterState.overdue ? 2.5 : 2} />
+                  <Hourglass size={13} strokeWidth={c.filterState.overdue ? 2.5 : 2} />
                 </button>
                 <button
                   data-testid={`filter-not-overdue-${c.key}`}
@@ -320,7 +320,7 @@ export default function TaskBoardPage() {
                   aria-pressed={!!c.filterState.notOverdue}
                   className={`p-1 transition-colors ${c.filterState.notOverdue ? "text-[#4E95D9]" : "text-white/50 hover:text-white/80"}`}
                 >
-                  <CalendarClock size={16} strokeWidth={c.filterState.notOverdue ? 2.5 : 2} />
+                  <CalendarClock size={13} strokeWidth={c.filterState.notOverdue ? 2.5 : 2} />
                 </button>
                 <button
                   data-testid={`filter-fav-${c.key}`}
@@ -329,7 +329,7 @@ export default function TaskBoardPage() {
                   aria-pressed={!!c.filterState.fav}
                   className={`p-1 transition-colors ${c.filterState.fav ? "text-amber-400" : "text-white/50 hover:text-white/80"}`}
                 >
-                  <Star size={16} className={c.filterState.fav ? "fill-current" : ""} />
+                  <Star size={13} className={c.filterState.fav ? "fill-current" : ""} />
                 </button>
                 {/* liquid-glass-panel invece di liquid-glass-btn: stesso effetto vetro,
                     ma senza l'onda di colore animata (contatore fermo). */}
