@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, ChevronDown } from "lucide-react";
+import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,6 +14,15 @@ const COLS = [
   { key: "media", label: "Media priorità", tint: "column-tint-med", dot: "bg-[color:var(--med)]", side: "priority-med" },
   { key: "bassa", label: "Bassa priorità", tint: "column-tint-low", dot: "bg-[color:var(--low)]", side: "priority-low" },
 ];
+
+// Mobile shows one chronological list instead of the three priority areas, so each card
+// carries its own priority marker - these colors stay readable on the dark glass cards.
+const PRIORITY_RANK = { alta: 0, media: 1, bassa: 2 };
+const PRIORITY_META = {
+  alta: { label: "Alta", color: "#E8663F" },
+  media: { label: "Media", color: "#F2B640" },
+  bassa: { label: "Bassa", color: "#8FB3C9" },
+};
 
 const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
 
@@ -45,9 +54,6 @@ export default function TaskBoardPage() {
   const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
   const [tagFilters, setTagFilters] = useState([]);
   const [orgMembers, setOrgMembers] = useState([]);
-  // Priority columns collapse on mobile only (desktop's kanban always shows all three) -
-  // all start open so every task is reachable without an extra tap.
-  const [collapsedCols, setCollapsedCols] = useState({});
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -100,6 +106,32 @@ export default function TaskBoardPage() {
     if (tagFilters.length > 0) filtered = filtered.filter((t) => (t.tags || []).some((tag) => tagFilters.includes(tag)));
     return { ...c, items: sortTasks(filtered), filterState: f };
   });
+
+  // ===== Mobile: niente aree di priorità - un'unica lista in ordine cronologico (per data di
+  // scadenza, quelli senza data in fondo); a parità di data prima la priorità più alta, poi
+  // l'ora. Un solo gruppo di filtri (stato "all") vale per tutta la lista. =====
+  const mobileFilterState = filters.all || { fav: false, overdue: false, notOverdue: false };
+  const mobileList = (() => {
+    let list = visible;
+    const f = mobileFilterState;
+    if (f.overdue) list = list.filter(isTaskOverdue);
+    else if (f.notOverdue) list = list.filter(isTaskNotOverdue);
+    if (f.fav) list = list.filter((t) => !!t.favorite);
+    if (calendarFilter?.type === "day") list = list.filter((t) => t.due_date === calendarFilter.date);
+    else if (calendarFilter?.type === "week") list = list.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
+    return [...list].sort((a, b) => {
+      const da = a.due_date || "9999-12-31";
+      const db_ = b.due_date || "9999-12-31";
+      if (da !== db_) return da.localeCompare(db_);
+      const pa = PRIORITY_RANK[a.priority] ?? 3;
+      const pb = PRIORITY_RANK[b.priority] ?? 3;
+      if (pa !== pb) return pa - pb;
+      const ta = a.due_time || "99:99";
+      const tb = b.due_time || "99:99";
+      if (ta !== tb) return ta.localeCompare(tb);
+      return (b.created_at || "").localeCompare(a.created_at || "");
+    });
+  })();
 
   const toggleFav = async (id, cur) => {
     setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: !cur } : t)));
@@ -273,9 +305,64 @@ export default function TaskBoardPage() {
         </div>
       )}
 
+      {isMobile && (
+        <div data-testid="mobile-task-list">
+          {/* Un solo menu di filtro, all'altezza dove prima c'era "Alta priorità". */}
+          <div className="flex items-center justify-between px-1 mb-4">
+            <div className="kicker whitespace-nowrap">tutti i task</div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                data-testid="filter-overdue-all"
+                onClick={() => toggleFilter("all", "overdue")}
+                title="Filtra scaduti"
+                aria-pressed={!!mobileFilterState.overdue}
+                className={`p-1 transition-colors ${mobileFilterState.overdue ? "text-[#E0703A]" : "text-white/50"}`}
+              >
+                <Hourglass size={13} strokeWidth={mobileFilterState.overdue ? 2.5 : 2} />
+              </button>
+              <button
+                data-testid="filter-not-overdue-all"
+                onClick={() => toggleFilter("all", "notOverdue")}
+                title="Filtra non scaduti"
+                aria-pressed={!!mobileFilterState.notOverdue}
+                className={`p-1 transition-colors ${mobileFilterState.notOverdue ? "text-[#4E95D9]" : "text-white/50"}`}
+              >
+                <CalendarClock size={13} strokeWidth={mobileFilterState.notOverdue ? 2.5 : 2} />
+              </button>
+              <button
+                data-testid="filter-fav-all"
+                onClick={() => toggleFilter("all", "fav")}
+                title="Filtra preferiti"
+                aria-pressed={!!mobileFilterState.fav}
+                className={`p-1 transition-colors ${mobileFilterState.fav ? "text-amber-400" : "text-white/50"}`}
+              >
+                <Star size={13} className={mobileFilterState.fav ? "fill-current" : ""} />
+              </button>
+              <div data-testid="count-all" className="liquid-glass-panel h-7 min-w-[1.75rem] px-1 ml-1 rounded-full flex items-center justify-center text-sm font-bold">{mobileList.length}</div>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {mobileList.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
+            {mobileList.map((t) => (
+              <TaskCard
+                key={t.id}
+                task={t}
+                orgMembers={orgMembers}
+                onClick={() => setSelected(t.id)}
+                onToggleFav={() => toggleFav(t.id, !!t.favorite)}
+                onToggleDone={() => toggleDone(t.id, !!t.completed)}
+                onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
+                onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
+                onDelete={() => del(t.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isMobile && (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mt-2 md:flex-1 md:min-h-0">
         {grouped.map((c) => {
-          const isCollapsed = isMobile && !!collapsedCols[c.key];
           return (
           <div
             key={c.key}
@@ -291,15 +378,10 @@ export default function TaskBoardPage() {
             }}
           >
             <div className="flex items-center justify-between shrink-0">
-              <button
-                data-testid={`col-toggle-${c.key}`}
-                onClick={() => setCollapsedCols((v) => ({ ...v, [c.key]: !v[c.key] }))}
-                className="md:pointer-events-none flex items-center gap-1.5 md:gap-2 min-w-0"
-              >
+              <div className="flex items-center gap-2 min-w-0">
                 <span className={`w-2 h-2 rounded-full shrink-0 ${c.dot}`} />
                 <div className="kicker whitespace-nowrap">{c.label}</div>
-                <ChevronDown size={14} className={`md:hidden text-white/50 transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
-              </button>
+              </div>
               {/* Filtri come sole icone, senza area né numero: lo stato attivo si riconosce dal
                   colore. Il numero a destra conta i task effettivamente mostrati nel riquadro,
                   quindi cambia con filtri, tag, ricerca e giorno/settimana selezionati. */}
@@ -336,28 +418,27 @@ export default function TaskBoardPage() {
                 <div data-testid={`col-count-${c.key}`} className="liquid-glass-panel h-7 min-w-[1.75rem] px-1 ml-1 rounded-full flex items-center justify-center text-sm font-bold">{c.items.length}</div>
               </div>
             </div>
-            {!isCollapsed && (
-              <div className="mt-4 md:mt-5 space-y-3 md:flex-1 md:min-h-0 md:overflow-y-auto md:pr-1">
-                {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
-                {c.items.map((t) => (
-                  <TaskCard
-                    key={t.id}
-                    task={t}
-                    orgMembers={orgMembers}
-                    onClick={() => setSelected(t.id)}
-                    onToggleFav={() => toggleFav(t.id, !!t.favorite)}
-                    onToggleDone={() => toggleDone(t.id, !!t.completed)}
-                    onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
-                    onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
-                    onDelete={() => del(t.id)}
-                  />
-                ))}
-              </div>
-            )}
+            <div className="mt-4 md:mt-5 space-y-3 md:flex-1 md:min-h-0 md:overflow-y-auto md:pr-1">
+              {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
+              {c.items.map((t) => (
+                <TaskCard
+                  key={t.id}
+                  task={t}
+                  orgMembers={orgMembers}
+                  onClick={() => setSelected(t.id)}
+                  onToggleFav={() => toggleFav(t.id, !!t.favorite)}
+                  onToggleDone={() => toggleDone(t.id, !!t.completed)}
+                  onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
+                  onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
+                  onDelete={() => del(t.id)}
+                />
+              ))}
+            </div>
           </div>
           );
         })}
       </div>
+      )}
 
       {selectedTask && (
         <TaskDialog task={selectedTask} orgMembers={orgMembers} onClose={() => setSelected(null)} onUpdated={async () => { await load(); }} />
@@ -374,10 +455,12 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
   const isCal = !!task.calendar_synced;
   const isReminder = !!task.reminder_enabled;
   const overdue = isTaskOverdue(task);
-  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "rgba(218, 221, 214, 0.7)";
-  // Non-overdue cards are light (#DADDD6 at 30% transparency), so their text and icons switch to a dark ink -
-  // white on that grey would be unreadable. Overdue cards keep the dark red + white text.
-  const light = !overdue;
+  // Overdue: dark red. Otherwise desktop uses a light #DADDD6 (30% transparent) card with dark
+  // ink, while mobile uses the same glass as the diary's day cards (card-soft) with white ink.
+  const glass = !overdue && isMobile;
+  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : glass ? undefined : "rgba(218, 221, 214, 0.7)";
+  const light = !overdue && !glass;
+  const prio = PRIORITY_META[task.priority];
   const ink = light ? "text-[#2B2A2E]" : "text-white";
   const inkMuted = light ? "text-[#2B2A2E]/60" : "text-white/60";
   const iconIdle = light ? "text-[#2B2A2E]/45 hover:text-[#2B2A2E]/80" : "text-white/40 hover:text-white/70";
@@ -401,7 +484,16 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
         {task.visibility === "org" && <Users size={11} className={`${light ? "text-[#2B2A2E]/45" : "text-white/45"} shrink-0`} title="Condiviso col team" />}
         {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
       </div>
-      {task.due_date && (
+      {isMobile ? (
+        (prio || task.due_date) && (
+          <div className={`text-[11px] ${inkMuted} mt-1 flex items-center gap-1.5`}>
+            {prio && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: prio.color }} />}
+            {prio && <span>{prio.label}</span>}
+            {prio && task.due_date && <span>·</span>}
+            {task.due_date && <span>{formatDayMonth(task.due_date, task.due_time)}</span>}
+          </div>
+        )
+      ) : task.due_date && (
         <div className={`text-[11px] ${inkMuted} mt-1`}>{formatDayMonth(task.due_date, task.due_time)}</div>
       )}
       {assigneeName && (
@@ -447,7 +539,7 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
     // sinistra: pl-2.5 del contenitore + p-1.5 di ogni pulsante = 16px, lo stesso px-4 del
     // titolo, così il primo glifo è esattamente in linea con l'inizio del testo.
     return (
-      <div {...rootProps} className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}>
+      <div {...rootProps} className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${glass ? "card-soft" : ""} ${isDone ? "opacity-60" : ""}`}>
         {favBand}
         <div className="flex-1 min-w-0 flex flex-col">
           {titleBlock}

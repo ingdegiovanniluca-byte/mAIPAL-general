@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, ArrowLeft } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -932,28 +932,6 @@ export default function ChatPage() {
             on screen (chat view - nothing at all before the first message is sent) or the
             history of old conversations (history view), never both. */}
         <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden ${mobileChatView && !thread ? "hidden" : ""}`}>
-          {mobileHistoryView && (
-            <div className="flex items-center gap-2 mb-3 shrink-0" data-testid="mobile-history-header">
-              <button
-                data-testid="mobile-history-back"
-                onClick={() => setMobileView("chat")}
-                title="Torna alla chat"
-                aria-label="Torna alla chat"
-                className="liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white/85"
-              >
-                <ArrowLeft size={15} />
-              </button>
-              <div className="text-xs font-bold uppercase tracking-wider text-white">messaggi precedenti</div>
-              <button
-                onClick={() => setMobileView("chat")}
-                title="Torna alla chat"
-                aria-label="Torna alla chat"
-                className="ml-auto liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white ring-1 ring-white/50"
-              >
-                <History size={15} />
-              </button>
-            </div>
-          )}
           {/* Filters (hidden in focus mode when a thread is open; on mobile only in the history view) */}
           {(isMobile ? mobileHistoryView : !(focusMode && thread)) && (
             <div className="flex items-center gap-1.5 md:gap-2 flex-nowrap overflow-x-auto no-scrollbar p-3 md:p-3.5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
@@ -1099,6 +1077,47 @@ export default function ChatPage() {
                 <div ref={threadEndRef} />
               </div>
             </div>
+          ) : mobileHistoryView ? (
+            // Mobile history (spec: note-style grid): search/filters stay on top, then two
+            // columns of tiles - first the "+" tile back to a new chat, then one tile per
+            // conversation colored by its action. Tapping a tile reopens that conversation
+            // in the chat view, ready to be continued.
+            // Two flex columns filled alternately (tile 0 left, 1 right, 2 left...) rather than
+            // CSS columns, which fill the whole left column first: this way the conversations
+            // read row by row, in the same order as the list, like a notes app.
+            (() => {
+              const tiles = [
+                <button
+                  key="__new"
+                  data-testid="history-new-chat"
+                  onClick={startNewMobileConversation}
+                  title="Torna alla chat"
+                  aria-label="Torna alla chat"
+                  className="w-full h-36 rounded-3xl flex items-center justify-center bg-white/20 backdrop-blur-xl text-white shadow-md"
+                >
+                  <Plus size={44} strokeWidth={1.5} />
+                </button>,
+                ...filtered.map((c) => (
+                  <MobileHistoryCard
+                    key={c.conv_id}
+                    conv={c}
+                    isReplying={mobileReplyTo?.conv_id === c.conv_id}
+                    onOpen={() => resumeMobileConversation(c)}
+                    onToggleFav={() => toggleFavorite(c.conv_id, !!c.favorite)}
+                    onDelete={() => deleteConv(c.conv_id)}
+                  />
+                )),
+              ];
+              return (
+                <div className="flex gap-3 mt-4 items-start" data-testid="mobile-history-grid">
+                  {[0, 1].map((col) => (
+                    <div key={col} className="flex-1 min-w-0 flex flex-col gap-3">
+                      {tiles.filter((_, i) => i % 2 === col)}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()
           ) : (
             <>
               <div className="flex items-center justify-between px-2 mt-4 shrink-0">
@@ -1113,12 +1132,7 @@ export default function ChatPage() {
                     conv={c}
                     index={idx}
                     isReplying={mobileReplyTo?.conv_id === c.conv_id}
-                    onOpen={() => {
-                      // Mobile: torna alla chat su quella conversazione, con il composer
-                      // agganciato (spec v2 §3.4). Desktop: apre il thread come prima.
-                      if (isMobile) resumeMobileConversation(c);
-                      else openThread(c.conv_id);
-                    }}
+                    onOpen={() => openThread(c.conv_id)}
                     onToggleFav={() => toggleFavorite(c.conv_id, !!c.favorite)}
                     onDelete={() => deleteConv(c.conv_id)}
                   />
@@ -1190,6 +1204,53 @@ function VetTemplateUploadDialog({ onClose, onUploaded }) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const hexToRgba = (hex, alpha) => {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}, ${alpha})`;
+};
+
+function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDelete }) {
+  const d = conv.created_at ? new Date(conv.created_at) : null;
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateLabel = d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}` : "";
+  const timeLabel = d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : "";
+  const title = conv.title || (conv.meta && conv.meta.title) || "";
+  const preview = (conv.messages && conv.messages[0]?.content) || conv.user_message || "";
+  const isFav = !!conv.favorite;
+  const color = ACTION_COLOR[conv.action] || "#6D6181";
+  const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
+      data-testid="history-card"
+      className={`rounded-3xl p-4 text-white cursor-pointer shadow-md ${isReplying ? "ring-2 ring-white/70" : ""}`}
+      style={{ background: hexToRgba(color, 0.85) }}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xl font-semibold leading-none tabular-nums">{dateLabel}</div>
+        <button data-testid="fav-btn" onClick={stop(onToggleFav)} title={isFav ? "Rimuovi preferito" : "Preferito"}
+          className={`-mt-1 -mr-1 p-1 ${isFav ? "text-amber-300" : "text-white/60"}`}>
+          <Star size={15} className={isFav ? "fill-current" : ""} />
+        </button>
+      </div>
+      {title && <div className="mt-3 text-sm font-semibold leading-snug" data-testid="conv-title">{title}</div>}
+      {preview && <div className="mt-2 text-xs text-white/80 leading-relaxed line-clamp-5">{preview}</div>}
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="text-[10px] px-2 py-0.5 rounded-md border border-white/35 text-white/90 truncate">{ACTION_LABELS_IT[conv.action] || conv.action}</span>
+        <div className="flex items-center gap-1 shrink-0 text-[10px] text-white/75">
+          {timeLabel}
+          <button data-testid="delete-conv-btn" onClick={stop(onDelete)} title="Elimina" className="p-1 -mr-1 text-white/60">
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
