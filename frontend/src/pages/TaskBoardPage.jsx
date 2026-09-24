@@ -374,29 +374,35 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
   const isCal = !!task.calendar_synced;
   const isReminder = !!task.reminder_enabled;
   const overdue = isTaskOverdue(task);
-  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "rgba(131, 108, 96, 0.9)";
+  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "#DADDD6";
+  // Non-overdue cards are light (#DADDD6), so their text and icons switch to a dark ink -
+  // white on that grey would be unreadable. Overdue cards keep the dark red + white text.
+  const light = !overdue;
+  const ink = light ? "text-[#2B2A2E]" : "text-white";
+  const inkMuted = light ? "text-[#2B2A2E]/60" : "text-white/60";
+  const iconIdle = light ? "text-[#2B2A2E]/45 hover:text-[#2B2A2E]/80" : "text-white/40 hover:text-white/70";
   const assigneeName = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to)?.name : null;
 
   const favBand = (
     <button
       data-testid="task-fav"
       onClick={stop(onToggleFav)}
-      className={`shrink-0 w-12 flex items-center justify-center transition-colors ${isFav ? "bg-amber-400" : "bg-white/10 hover:bg-white/15"}`}
+      className={`shrink-0 w-12 flex items-center justify-center transition-colors ${isFav ? "bg-amber-400" : light ? "bg-black/5 hover:bg-black/10" : "bg-white/10 hover:bg-white/15"}`}
       title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
     >
-      <Star size={18} className={isFav ? "text-white fill-white" : "text-white/50"} />
+      <Star size={18} className={isFav ? "text-white fill-white" : light ? "text-[#2B2A2E]/40" : "text-white/50"} />
     </button>
   );
 
   const titleBlock = (
     <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
-      <div className={`font-semibold text-sm break-words md:truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
+      <div className={`font-semibold text-sm break-words md:truncate flex items-center gap-1.5 ${ink} ${isDone ? "line-through" : ""}`}>
         {task.title}
-        {task.visibility === "org" && <Users size={11} className="text-white/45 shrink-0" title="Condiviso col team" />}
+        {task.visibility === "org" && <Users size={11} className={`${light ? "text-[#2B2A2E]/45" : "text-white/45"} shrink-0`} title="Condiviso col team" />}
         {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
       </div>
       {task.due_date && (
-        <div className="text-[11px] text-white/60 mt-1">{formatDayMonth(task.due_date, task.due_time)}</div>
+        <div className={`text-[11px] ${inkMuted} mt-1`}>{formatDayMonth(task.due_date, task.due_time)}</div>
       )}
       {assigneeName && (
         <div className="text-[11px] text-[#4E95D9]/80 mt-0.5 truncate">→ {assigneeName}</div>
@@ -407,20 +413,20 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
   const actionIcons = (
     <>
       {!!task.notes && (
-        <span className="p-1.5 text-white/40" title="Questo task ha delle note">
+        <span className={`p-1.5 ${light ? "text-[#2B2A2E]/45" : "text-white/40"}`} title="Questo task ha delle note">
           <StickyNote size={14} />
         </span>
       )}
-      <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
+      <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? (light ? "text-purple-600" : "text-purple-300") : iconIdle}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
         {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
       </button>
-      <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+      <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? (light ? "text-[#2F6FB0]" : "text-[#4E95D9]") : iconIdle}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
         <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
       </button>
-      <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+      <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? (light ? "text-[#4E8A22]" : "text-[#92D050]") : iconIdle}`} title={isDone ? "Riapri" : "Segna come fatto"}>
         <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
       </button>
-      <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
+      <button data-testid="task-delete" onClick={stop(onDelete)} className={`p-1.5 rounded-full ${light ? "text-[#2B2A2E]/45 hover:text-red-600" : "text-white/40 hover:text-red-400"}`} title="Elimina">
         <Trash2 size={14} />
       </button>
     </>
