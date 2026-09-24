@@ -159,6 +159,9 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   const SWIPE_MOVE_THRESHOLD = 8;
   const SWIPE_CHANGE_THRESHOLD = 40;
 
+  // Re-run when the grid remounts (calendar collapsed/reopened, or the mobile/desktop switch):
+  // the listener lives on that specific DOM node, so a one-shot [] effect lost it after the
+  // first collapse.
   useEffect(() => {
     const el = weekGridRef.current;
     if (!el) return undefined;
@@ -167,7 +170,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
     };
     el.addEventListener("click", suppressClickAfterSwipe, true);
     return () => el.removeEventListener("click", suppressClickAfterSwipe, true);
-  }, []);
+  }, [collapsed, isMobile]);
 
   const onWeekPointerDown = (e) => {
     weekDragMovedRef.current = false;
@@ -230,20 +233,28 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
 
   const totalWidth = weeks.length * COL_STRIDE - COL_GAP;
 
+  // Su smartphone il pulsante mostra/nascondi vive nella riga di icone della pagina Task
+  // (spec v2 §2.1): a calendario chiuso qui non resta nulla da mostrare, e lo spazio tra
+  // la riga dei filtri e i riquadri resta quello di prima (§2.4).
+  if (isMobile && collapsed) return null;
+
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="mb-8 shrink-0">
+      {/* mb-14 su mobile: stacco tra calendario e riquadri di priorità circa doppio (§2.4) */}
+      <div className={`shrink-0 ${isMobile ? "mb-14" : "mb-8"}`}>
         <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <button
-            data-testid="calendar-toggle"
-            onClick={onToggleCollapse}
-            className={`rounded-full transition-colors ${isMobile ? "p-1" : "p-1.5"} ${collapsed ? "text-white/40 hover:text-white/70" : isMobile ? "text-white/90 hover:text-white" : "text-white/80 hover:text-white bg-white/10"}`}
-            title={collapsed ? "Mostra calendario" : "Nascondi calendario"}
-          >
-            <CalendarDays size={isMobile ? 14 : 16} />
-          </button>
-          {!collapsed && isMobile && (
-            <div className="text-[11px] font-medium capitalize text-white/60">
+          {!isMobile && (
+            <button
+              data-testid="calendar-toggle"
+              onClick={onToggleCollapse}
+              className={`rounded-full transition-colors p-1.5 ${collapsed ? "text-white/40 hover:text-white/70" : "text-white/80 hover:text-white bg-white/10"}`}
+              title={collapsed ? "Mostra calendario" : "Nascondi calendario"}
+            >
+              <CalendarDays size={16} />
+            </button>
+          )}
+          {isMobile && (
+            <div className="text-[11px] font-medium capitalize text-white/60 px-1">
               {IT_MONTHS_LONG[mobileMonthYear.month]} {mobileMonthYear.year}
             </div>
           )}

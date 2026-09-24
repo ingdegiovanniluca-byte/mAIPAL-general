@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, ArrowLeft } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -117,23 +117,27 @@ export default function ChatPage() {
   const [focusMode, setFocusMode] = useState(false);
   const threadEndRef = useRef(null);
 
-  // Mobile only (spec 5.6): tapping a history card binds the composer to that existing
-  // conversation instead of opening the full thread overlay - the card list stays visible,
-  // a follow-up message is appended to it, and the card's own preview picks up the reply
-  // once `load()` refreshes it. Desktop keeps its existing "open the big thread" behaviour.
+  // Mobile only: tapping a history card binds the composer to that existing conversation
+  // (pill "Rispondi a: ...") and shows it in full below; a follow-up message is appended to
+  // it instead of starting a new one. Desktop keeps its existing "open the big thread" flow.
   const [mobileReplyTo, setMobileReplyTo] = useState(null); // { conv_id, action, label }
+  // Mobile only (spec v2 §3.1/3.3): the chat opens on the composer alone; the history of old
+  // conversations is a separate view reached from the clock button, not shown by default.
+  const [mobileView, setMobileView] = useState("chat"); // "chat" | "history"
 
-  // Auto-growing composer textarea on mobile (spec 5.2): starts at 1-2 lines, grows with
-  // content up to ~50% of the viewport height, then scrolls internally. Desktop keeps its
-  // existing fixed-size box untouched.
+  // Auto-growing composer textarea on mobile: grows with content up to ~50% of the viewport,
+  // then scrolls internally. With no conversation on screen the box starts taller (~30% of
+  // the viewport) so it is the centre of the page (spec v2 §3.1); once a conversation is shown
+  // below it shrinks back to 1-2 lines to leave room for the messages. Desktop untouched.
   useEffect(() => {
     if (!isMobile) return;
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
     const max = window.innerHeight * 0.5;
-    el.style.height = Math.min(el.scrollHeight, max) + "px";
-  }, [text, isMobile]);
+    const min = thread ? 0 : window.innerHeight * 0.3;
+    el.style.height = Math.max(min, Math.min(el.scrollHeight, max)) + "px";
+  }, [text, isMobile, thread]);
 
   const [visitType, setVisitType] = useState("imaging"); // 'imaging' | 'general' | id template personalizzato
   const [vetTemplates, setVetTemplates] = useState({ builtin: [], custom: [] });
@@ -172,6 +176,16 @@ export default function ChatPage() {
     setActive(conv.action);
   };
   const closeThread = () => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); setMobileReplyTo(null); };
+  // "Nuova conversazione" on mobile (spec v2 §3.2): empties the view back to the bare
+  // composer - whatever the user already typed stays in the box.
+  const startNewMobileConversation = () => { closeThread(); setMobileView("chat"); };
+  // Spec v2 §3.4: picking an old conversation from the history goes back to the chat view,
+  // showing that conversation with the composer bound to it.
+  const resumeMobileConversation = (conv) => {
+    setMobileReplyTo({ conv_id: conv.conv_id, action: conv.action, label: formatReplyLabel(conv) });
+    openThread(conv.conv_id);
+    setMobileView("chat");
+  };
 
   const startRec = async () => {
     try {
@@ -701,11 +715,14 @@ export default function ChatPage() {
     });
   };
 
+  const mobileChatView = isMobile && mobileView === "chat";
+  const mobileHistoryView = isMobile && mobileView === "history";
+
   return (
     <div className="relative w-full">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 w-full lg:h-[calc(100vh-15rem)]">
         {/* LEFT 1/3 — action icons + input area */}
-        <aside className={`lg:col-span-1 flex flex-col lg:overflow-y-auto pr-1 ${focusMode ? "hidden" : ""}`}>
+        <aside className={`lg:col-span-1 flex flex-col lg:overflow-y-auto pr-1 ${focusMode || (isMobile && mobileView === "history") ? "hidden" : ""}`}>
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
           <div className="flex items-center gap-1.5 md:gap-2 p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0 overflow-x-auto no-scrollbar">
               {ACTIONS.map((a) => {
@@ -732,6 +749,32 @@ export default function ChatPage() {
                   </button>
                 );
               })}
+              {/* Mobile (spec v2 §3.2/3.3): "nuova conversazione" (solo quando ce n'è una a
+                  schermo) e l'accesso alla cronologia, nella stessa riga delle azioni. */}
+              {isMobile && (
+                <div className="ml-auto flex items-center gap-1.5 pl-2 border-l border-white/10 shrink-0">
+                  {(thread || mobileReplyTo) && (
+                    <button
+                      data-testid="mobile-new-conversation"
+                      onClick={startNewMobileConversation}
+                      title="Nuova conversazione"
+                      aria-label="Nuova conversazione"
+                      className="liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white/85"
+                    >
+                      <MessageSquarePlus size={15} />
+                    </button>
+                  )}
+                  <button
+                    data-testid="mobile-history-toggle"
+                    onClick={() => setMobileView("history")}
+                    title="Messaggi precedenti"
+                    aria-label="Messaggi precedenti"
+                    className="liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white/85"
+                  >
+                    <History size={15} />
+                  </button>
+                </div>
+              )}
           </div>
           {/* Nascosto su mobile: l'azione selezionata è già indicata dentro la card della
               chat (kicker "· ...") subito sotto, ripeterla qui sopra è ridondante. */}
@@ -743,7 +786,7 @@ export default function ChatPage() {
             <div data-testid="mobile-reply-pill" className="flex items-center gap-2 mt-2 px-3 py-2 rounded-xl bg-white/10 text-white/85 text-xs">
               <Reply size={13} className="shrink-0" />
               <span className="flex-1 min-w-0 truncate">Rispondi a: {mobileReplyTo.label}</span>
-              <button data-testid="mobile-reply-clear" onClick={() => setMobileReplyTo(null)} className="shrink-0 p-0.5 rounded-full hover:bg-white/10">
+              <button data-testid="mobile-reply-clear" onClick={startNewMobileConversation} title="Torna a un nuovo messaggio" className="shrink-0 p-0.5 rounded-full hover:bg-white/10">
                 <X size={13} />
               </button>
             </div>
@@ -880,10 +923,34 @@ export default function ChatPage() {
           </div>
         </aside>
 
-        {/* RIGHT 2/3 — scrolls */}
-        <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden`}>
-          {/* Filters (hidden in focus mode when a thread is open) */}
-          {!(focusMode && thread) && (
+        {/* RIGHT 2/3 — scrolls. On mobile (spec v2 §3) this area is either the conversation
+            on screen (chat view - nothing at all before the first message is sent) or the
+            history of old conversations (history view), never both. */}
+        <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden ${mobileChatView && !thread ? "hidden" : ""}`}>
+          {mobileHistoryView && (
+            <div className="flex items-center gap-2 mb-3 shrink-0" data-testid="mobile-history-header">
+              <button
+                data-testid="mobile-history-back"
+                onClick={() => setMobileView("chat")}
+                title="Torna alla chat"
+                aria-label="Torna alla chat"
+                className="liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white/85"
+              >
+                <ArrowLeft size={15} />
+              </button>
+              <div className="text-xs font-bold uppercase tracking-wider text-white">messaggi precedenti</div>
+              <button
+                onClick={() => setMobileView("chat")}
+                title="Torna alla chat"
+                aria-label="Torna alla chat"
+                className="ml-auto liquid-glass-btn h-8 w-8 rounded-full flex items-center justify-center text-white ring-1 ring-white/50"
+              >
+                <History size={15} />
+              </button>
+            </div>
+          )}
+          {/* Filters (hidden in focus mode when a thread is open; on mobile only in the history view) */}
+          {(isMobile ? mobileHistoryView : !(focusMode && thread)) && (
             <div className="flex items-center gap-1.5 md:gap-2 flex-nowrap overflow-x-auto no-scrollbar p-3 md:p-3.5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
             <div className="relative shrink-0 w-32 md:w-40 lg:w-48">
               <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60" />
@@ -925,7 +992,7 @@ export default function ChatPage() {
           )}
 
           {/* Thread view (replaces list when open) */}
-          {thread ? (
+          {thread && !mobileHistoryView ? (
             <div className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden" data-testid="thread-card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
@@ -936,9 +1003,12 @@ export default function ChatPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
-                    {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {focusMode ? "esci focus" : "focus"}
-                  </button>
+                  {/* No focus mode on mobile: it hides the composer, which must stay available (spec v2 §3.2). */}
+                  {!isMobile && (
+                    <button data-testid="focus-mode-btn" onClick={() => setFocusMode((v) => !v)} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1" title={focusMode ? "Esci focus" : "Modalità focus"}>
+                      {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {focusMode ? "esci focus" : "focus"}
+                    </button>
+                  )}
                   <button data-testid="new-thread-btn" onClick={() => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); setMobileReplyTo(null); }} className="kicker px-3 py-1.5 rounded-full  bg-white/10 text-white hover: inline-flex items-center gap-1">
                     <MessageSquarePlus size={12} /> nuova
                   </button>
@@ -1039,21 +1109,10 @@ export default function ChatPage() {
                     index={idx}
                     isReplying={mobileReplyTo?.conv_id === c.conv_id}
                     onOpen={() => {
-                      if (isMobile) {
-                        if (mobileReplyTo?.conv_id === c.conv_id) {
-                          setMobileReplyTo(null);
-                          setThread(null);
-                        } else {
-                          // Sul mobile toccare una card sia lega il composer a quella
-                          // conversazione (pillola "Rispondi a: ...") sia apre sotto la
-                          // conversazione intera (stesso thread usato su desktop), al posto
-                          // della sola lista.
-                          setMobileReplyTo({ conv_id: c.conv_id, action: c.action, label: formatReplyLabel(c) });
-                          openThread(c.conv_id);
-                        }
-                      } else {
-                        openThread(c.conv_id);
-                      }
+                      // Mobile: torna alla chat su quella conversazione, con il composer
+                      // agganciato (spec v2 §3.4). Desktop: apre il thread come prima.
+                      if (isMobile) resumeMobileConversation(c);
+                      else openThread(c.conv_id);
                     }}
                     onToggleFav={() => toggleFavorite(c.conv_id, !!c.favorite)}
                     onDelete={() => deleteConv(c.conv_id)}

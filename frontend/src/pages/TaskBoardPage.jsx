@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, ChevronDown } from "lucide-react";
+import { Calendar, CalendarCheck, CalendarDays, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, ChevronDown, Search, X } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import TaskCalendar from "@/pages/TaskCalendar";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -29,6 +30,9 @@ const isTaskOverdue = (t) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   return !!t.due_date && !t.completed && t.due_date < todayStr;
 };
+// "Non scaduti": la scadenza non è ancora passata, compresi i task senza scadenza - il
+// complemento diretto di isTaskOverdue.
+const isTaskNotOverdue = (t) => !isTaskOverdue(t);
 
 export default function TaskBoardPage() {
   const { user } = useAuth();
@@ -45,6 +49,10 @@ export default function TaskBoardPage() {
   // Priority columns collapse on mobile only (desktop's kanban always shows all three) -
   // all start open so every task is reachable without an extra tap.
   const [collapsedCols, setCollapsedCols] = useState({});
+  // Mobile-only (spec v2 §2.2): hashtags/ricerca testuale stanno dietro la lente invece di
+  // essere sempre visibili - desktop non usa questi due stati.
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [taskSearch, setTaskSearch] = useState("");
 
   const load = async () => {
     const r = await api.get("/tasks");
@@ -72,27 +80,57 @@ export default function TaskBoardPage() {
 
   const allTags = Array.from(new Set(tasks.flatMap((t) => t.tags || []))).sort((a, b) => a.localeCompare(b));
 
+  // "scaduti" e "non scaduti" si escludono a vicenda dentro la stessa colonna: attivandone
+  // uno si disattiva automaticamente l'altro.
   const toggleFilter = (colKey, kind) => {
     setFilters((f) => {
-      const cur = f[colKey] || { fav: false, overdue: false };
-      return { ...f, [colKey]: { ...cur, [kind]: !cur[kind] } };
+      const cur = f[colKey] || { fav: false, overdue: false, notOverdue: false };
+      const next = { ...cur, [kind]: !cur[kind] };
+      if (kind === "overdue" && next.overdue) next.notOverdue = false;
+      if (kind === "notOverdue" && next.notOverdue) next.overdue = false;
+      return { ...f, [colKey]: next };
     });
   };
+
+  // Solo mobile (spec v2 §2.1/2.3): la riga unica di icone filtra TUTTE le colonne insieme
+  // invece di una alla volta - usa lo stato della colonna "alta" come riferimento per decidere
+  // se il tocco sta attivando o disattivando il filtro, poi lo applica identico a tutte e tre.
+  const toggleGlobalFilter = (kind) => {
+    setFilters((f) => {
+      const ref = f["alta"] || { fav: false, overdue: false, notOverdue: false };
+      const turningOn = !ref[kind];
+      const next = { ...f };
+      for (const key of COLS.map((c) => c.key)) {
+        const cur = f[key] || { fav: false, overdue: false, notOverdue: false };
+        const colNext = { ...cur, [kind]: turningOn };
+        if (kind === "overdue" && turningOn) colNext.notOverdue = false;
+        if (kind === "notOverdue" && turningOn) colNext.overdue = false;
+        next[key] = colNext;
+      }
+      return next;
+    });
+  };
+  const globalFilterState = filters["alta"] || { fav: false, overdue: false, notOverdue: false };
+
+  const searchQuery = taskSearch.trim().toLowerCase();
+  const activeFilterBadge = tagFilters.length + (searchQuery ? 1 : 0);
 
   const grouped = COLS.map((c) => {
     const colTasks = visible.filter((t) => t.priority === c.key);
     const totalCount = colTasks.length;
     const overdueCount = colTasks.filter(isTaskOverdue).length;
+    const notOverdueCount = colTasks.filter(isTaskNotOverdue).length;
     const favCount = colTasks.filter((t) => !!t.favorite).length;
-    const f = filters[c.key] || { fav: false, overdue: false };
+    const f = filters[c.key] || { fav: false, overdue: false, notOverdue: false };
     let filtered = colTasks;
-    if (f.fav && f.overdue) filtered = colTasks.filter((t) => !!t.favorite && isTaskOverdue(t));
-    else if (f.fav) filtered = colTasks.filter((t) => !!t.favorite);
-    else if (f.overdue) filtered = colTasks.filter(isTaskOverdue);
+    if (f.overdue) filtered = filtered.filter(isTaskOverdue);
+    else if (f.notOverdue) filtered = filtered.filter(isTaskNotOverdue);
+    if (f.fav) filtered = filtered.filter((t) => !!t.favorite);
     if (calendarFilter?.type === "day") filtered = filtered.filter((t) => t.due_date === calendarFilter.date);
     else if (calendarFilter?.type === "week") filtered = filtered.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
     if (tagFilters.length > 0) filtered = filtered.filter((t) => (t.tags || []).some((tag) => tagFilters.includes(tag)));
-    return { ...c, items: sortTasks(filtered), totalCount, overdueCount, favCount, filterState: f };
+    if (searchQuery) filtered = filtered.filter((t) => (t.title || "").toLowerCase().includes(searchQuery) || (t.tags || []).some((tag) => tag.toLowerCase().includes(searchQuery)));
+    return { ...c, items: sortTasks(filtered), totalCount, overdueCount, notOverdueCount, favCount, filterState: f };
   });
 
   const toggleFav = async (id, cur) => {
@@ -165,6 +203,124 @@ export default function TaskBoardPage() {
 
   return (
     <div className="flex flex-col md:h-[calc(100vh-17rem)]">
+      {/* ===== Mobile (<768px): un'unica riga di icone (spec v2 §2.1) + pannello
+          ricerca/tag dietro la lente (§2.2), al posto della barra desktop ===== */}
+      {isMobile && (
+        <div className="mb-2 shrink-0">
+          <div className="flex items-center justify-between gap-1 p-2 rounded-2xl bg-white/5 backdrop-blur-xl" data-testid="mobile-task-filter-bar">
+            <button
+              data-testid="calendar-toggle-mobile"
+              onClick={() => setCalendarCollapsed((v) => !v)}
+              title={calendarCollapsed ? "Mostra calendario" : "Nascondi calendario"}
+              className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${!calendarCollapsed ? "text-white" : "text-white/55"}`}
+            >
+              <CalendarDays size={16} />
+            </button>
+            {/* Badge fuori dal pulsante: .liquid-glass-btn ha overflow:hidden e lo taglierebbe. */}
+            <div className="relative shrink-0">
+              <button
+                data-testid="filter-active-toggle-mobile"
+                onClick={() => setShowCompleted((v) => !v)}
+                title={showCompleted ? "Stai vedendo gli archiviati · tocca per gli attivi" : "Stai vedendo gli attivi · tocca per gli archiviati"}
+                className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center text-white ${showCompleted ? "ring-1 ring-white/60" : ""}`}
+              >
+                {showCompleted ? <Archive size={16} /> : <CircleCheck size={16} />}
+              </button>
+              {!showCompleted && activeCount > 0 && (
+                <span className="pointer-events-none absolute -top-1 -right-1 text-[9px] font-bold bg-[#00B0F0] text-white rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{activeCount}</span>
+              )}
+            </div>
+            <button
+              data-testid="filter-overdue-global"
+              onClick={() => toggleGlobalFilter("overdue")}
+              title="Scaduti"
+              className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${globalFilterState.overdue ? "text-[#DD772F]" : "text-white/55"}`}
+            >
+              <Hourglass size={16} />
+            </button>
+            <button
+              data-testid="filter-not-overdue-global"
+              onClick={() => toggleGlobalFilter("notOverdue")}
+              title="Non scaduti"
+              className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${globalFilterState.notOverdue ? "text-[#4E95D9]" : "text-white/55"}`}
+            >
+              <CalendarClock size={16} />
+            </button>
+            <button
+              data-testid="filter-fav-global"
+              onClick={() => toggleGlobalFilter("fav")}
+              title="Preferiti"
+              className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${globalFilterState.fav ? "text-amber-400" : "text-white/55"}`}
+            >
+              <Star size={16} className={globalFilterState.fav ? "fill-current" : ""} />
+            </button>
+            <div className="relative shrink-0">
+              <button
+                data-testid="search-panel-toggle"
+                onClick={() => setSearchPanelOpen((v) => !v)}
+                title="Cerca task o tag"
+                className={`liquid-glass-btn h-9 w-9 rounded-full flex items-center justify-center ${searchPanelOpen ? "text-white" : "text-white/55"}`}
+              >
+                {searchPanelOpen ? <X size={16} /> : <Search size={16} />}
+              </button>
+              {activeFilterBadge > 0 && (
+                <span data-testid="search-active-badge" className="pointer-events-none absolute -top-1 -right-1 text-[9px] font-bold bg-[#00B0F0] text-white rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{activeFilterBadge}</span>
+              )}
+            </div>
+          </div>
+
+          {calendarFilter && (
+            <button
+              data-testid="calendar-filter-pill"
+              onClick={() => setCalendarFilter(null)}
+              className="mt-2 rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
+            >
+              {calendarFilter.type === "day"
+                ? formatDayMonth(calendarFilter.date)
+                : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
+            </button>
+          )}
+
+          {searchPanelOpen && (
+            <div className="mt-2 p-3 rounded-2xl bg-white/5 backdrop-blur-xl" data-testid="task-search-panel">
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50" />
+                <Input
+                  data-testid="task-search-input"
+                  value={taskSearch}
+                  onChange={(e) => setTaskSearch(e.target.value)}
+                  placeholder="Cerca task o tag…"
+                  className="pl-8 h-9 text-sm rounded-full bg-white/10 text-white placeholder:text-white/50"
+                />
+                {(taskSearch || tagFilters.length > 0) && (
+                  <button
+                    data-testid="search-panel-clear"
+                    onClick={() => { setTaskSearch(""); setTagFilters([]); }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-white/50 hover:text-white/90"
+                    title="Pulisci ricerca e tag"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {allTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      data-testid={`tag-filter-${tag}`}
+                      onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
+                      className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
+                    >
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <TaskCalendar
         tasks={tasks}
         collapsed={calendarCollapsed}
@@ -182,71 +338,75 @@ export default function TaskBoardPage() {
           });
         }}
       />
-      <div className="flex items-center gap-2 mb-2 shrink-0 flex-wrap">
-        {calendarFilter && (
+      {/* ===== Desktop (>=768px): barra filtri invariata ===== */}
+      {!isMobile && (
+        <div className="flex items-center gap-2 mb-2 shrink-0 flex-wrap">
+          {calendarFilter && (
+            <button
+              data-testid="calendar-filter-pill"
+              onClick={() => setCalendarFilter(null)}
+              className="rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
+            >
+              {calendarFilter.type === "day"
+                ? formatDayMonth(calendarFilter.date)
+                : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
+            </button>
+          )}
           <button
-            data-testid="calendar-filter-pill"
-            onClick={() => setCalendarFilter(null)}
-            className="rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
+            data-testid="filter-active"
+            onClick={() => setShowCompleted(false)}
+            title="Attivi"
+            className={`rounded-full inline-flex items-center transition-all duration-200 ${!showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
           >
-            {calendarFilter.type === "day"
-              ? formatDayMonth(calendarFilter.date)
-              : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
+            {!showCompleted ? (
+              <>
+                <CircleCheck size={14} />
+                <span className="text-xs font-mono-tight uppercase tracking-widest">attivi</span>
+                <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{activeCount}</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                <CircleCheck size={13} />
+              </>
+            )}
           </button>
-        )}
-        <button
-          data-testid="filter-active"
-          onClick={() => setShowCompleted(false)}
-          title="Attivi"
-          className={`rounded-full inline-flex items-center transition-all duration-200 ${!showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
-        >
-          {!showCompleted ? (
-            <>
-              <CircleCheck size={14} />
-              <span className="text-xs font-mono-tight uppercase tracking-widest">attivi</span>
-              <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{activeCount}</span>
-            </>
-          ) : (
-            <>
-              <span className="w-1.5 h-1.5 rounded-full bg-current" />
-              <CircleCheck size={13} />
-            </>
+          <button
+            data-testid="filter-completed"
+            onClick={() => setShowCompleted(true)}
+            title="Completati"
+            className={`rounded-full inline-flex items-center transition-all duration-200 ${showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
+          >
+            {showCompleted ? (
+              <>
+                <Archive size={14} />
+                <span className="text-xs font-mono-tight uppercase tracking-widest">completati</span>
+                <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{completedCount}</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                <Archive size={13} />
+              </>
+            )}
+          </button>
+          {allTags.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar md:flex-wrap md:overflow-visible ml-2 md:ml-4 max-w-full">
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  data-testid={`tag-filter-${tag}`}
+                  onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
+                  className={`shrink-0 text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
           )}
-        </button>
-        <button
-          data-testid="filter-completed"
-          onClick={() => setShowCompleted(true)}
-          title="Completati"
-          className={`rounded-full inline-flex items-center transition-all duration-200 ${showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
-        >
-          {showCompleted ? (
-            <>
-              <Archive size={14} />
-              <span className="text-xs font-mono-tight uppercase tracking-widest">completati</span>
-              <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{completedCount}</span>
-            </>
-          ) : (
-            <>
-              <span className="w-1.5 h-1.5 rounded-full bg-current" />
-              <Archive size={13} />
-            </>
-          )}
-        </button>
-        {allTags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar md:flex-wrap md:overflow-visible ml-2 md:ml-4 max-w-full">
-            {allTags.map((tag) => (
-              <button
-                key={tag}
-                data-testid={`tag-filter-${tag}`}
-                onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
-                className={`shrink-0 text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
-              >
-                #{tag}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mt-2 md:flex-1 md:min-h-0">
         {grouped.map((c) => {
           const isCollapsed = isMobile && !!collapsedCols[c.key];
@@ -279,19 +439,29 @@ export default function TaskBoardPage() {
                   data-testid={`filter-overdue-${c.key}`}
                   onClick={() => toggleFilter(c.key, "overdue")}
                   title="Filtra scaduti"
-                  className={`h-7 px-2 rounded-full flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.overdue ? "bg-[#76280E] text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                  className={`h-7 px-2 rounded-full hidden md:flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.overdue ? "bg-[#76280E] text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
                 >
                   <Hourglass size={12} /> {c.overdueCount}
+                </button>
+                <button
+                  data-testid={`filter-not-overdue-${c.key}`}
+                  onClick={() => toggleFilter(c.key, "notOverdue")}
+                  title="Filtra non scaduti"
+                  className={`h-7 px-2 rounded-full hidden md:flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.notOverdue ? "bg-[#2E5F7D] text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                >
+                  <CalendarClock size={12} /> {c.notOverdueCount}
                 </button>
                 <button
                   data-testid={`filter-fav-${c.key}`}
                   onClick={() => toggleFilter(c.key, "fav")}
                   title="Filtra preferiti"
-                  className={`h-7 px-2 rounded-full flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.fav ? "bg-amber-400 text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
+                  className={`h-7 px-2 rounded-full hidden md:flex items-center gap-1 text-[11px] font-bold transition-colors ${c.filterState.fav ? "bg-amber-400 text-white" : "bg-white/10 text-white/55 hover:bg-white/15"}`}
                 >
                   <Star size={12} className={c.filterState.fav ? "fill-current" : ""} /> {c.favCount}
                 </button>
-                <div className="liquid-glass-btn h-7 w-7 rounded-full flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
+                {/* liquid-glass-panel invece di liquid-glass-btn: stesso effetto vetro,
+                    ma senza l'onda di colore animata (richiesta: contatore fermo). */}
+                <div className="liquid-glass-panel h-7 w-7 rounded-full flex items-center justify-center text-sm font-bold">{c.totalCount}</div>
               </div>
             </div>
             {!isCollapsed && (
@@ -325,6 +495,7 @@ export default function TaskBoardPage() {
 }
 
 function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onToggleCal, onToggleReminder, onDelete }) {
+  const isMobile = useIsMobile();
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   const isFav = !!task.favorite;
   const isDone = !!task.completed;
@@ -334,57 +505,88 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
   const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "rgba(131, 108, 96, 0.9)";
   const assigneeName = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to)?.name : null;
 
-  return (
-    <div
-      data-testid={`task-${task.id}`}
-      draggable
-      onDragStart={(e) => e.dataTransfer.setData("text/plain", task.id)}
-      className={`w-full flex flex-wrap items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}
-      style={{ background: bg }}
+  const favBand = (
+    <button
+      data-testid="task-fav"
+      onClick={stop(onToggleFav)}
+      className={`shrink-0 w-12 flex items-center justify-center transition-colors ${isFav ? "bg-amber-400" : "bg-white/10 hover:bg-white/15"}`}
+      title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
     >
-      <button
-        data-testid="task-fav"
-        onClick={stop(onToggleFav)}
-        className={`shrink-0 w-12 flex items-center justify-center transition-colors ${isFav ? "bg-amber-400" : "bg-white/10 hover:bg-white/15"}`}
-        title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
-      >
-        <Star size={18} className={isFav ? "text-white fill-white" : "text-white/50"} />
-      </button>
+      <Star size={18} className={isFav ? "text-white fill-white" : "text-white/50"} />
+    </button>
+  );
 
-      <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
-        <div className={`font-semibold text-sm break-words md:truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
-          {task.title}
-          {task.visibility === "org" && <Users size={11} className="text-white/45 shrink-0" title="Condiviso col team" />}
-          {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
+  const titleBlock = (
+    <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
+      <div className={`font-semibold text-sm break-words md:truncate flex items-center gap-1.5 ${isDone ? "line-through" : ""}`}>
+        {task.title}
+        {task.visibility === "org" && <Users size={11} className="text-white/45 shrink-0" title="Condiviso col team" />}
+        {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
+      </div>
+      {task.due_date && (
+        <div className="text-[11px] text-white/60 mt-1">{formatDayMonth(task.due_date, task.due_time)}</div>
+      )}
+      {assigneeName && (
+        <div className="text-[11px] text-[#4E95D9]/80 mt-0.5 truncate">→ {assigneeName}</div>
+      )}
+    </button>
+  );
+
+  const actionIcons = (
+    <>
+      {!!task.notes && (
+        <span className="p-1.5 text-white/40" title="Questo task ha delle note">
+          <StickyNote size={14} />
+        </span>
+      )}
+      <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
+        {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
+      </button>
+      <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+        <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
+      </button>
+      <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+        <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
+      </button>
+      <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
+        <Trash2 size={14} />
+      </button>
+    </>
+  );
+
+  const rootProps = {
+    "data-testid": `task-${task.id}`,
+    draggable: true,
+    onDragStart: (e) => e.dataTransfer.setData("text/plain", task.id),
+    style: { background: bg },
+  };
+
+  if (isMobile) {
+    // Spec v2 §2.6: la fascia della stellina copre tutta l'altezza della scheda (titolo,
+    // data E riga delle azioni) - per questo titolo e azioni stanno in una colonna a parte
+    // accanto alla fascia, invece di essere tre elementi fratelli in una riga che va a capo
+    // (in quel caso la fascia si fermava all'altezza della prima riga). Le icone partono da
+    // sinistra: pl-2.5 del contenitore + p-1.5 di ogni pulsante = 16px, lo stesso px-4 del
+    // titolo, così il primo glifo è esattamente in linea con l'inizio del testo.
+    return (
+      <div {...rootProps} className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}>
+        {favBand}
+        <div className="flex-1 min-w-0 flex flex-col">
+          {titleBlock}
+          <div className="flex items-center justify-start gap-1 pl-2.5 pr-3 pb-2 -mt-1">
+            {actionIcons}
+          </div>
         </div>
-        {task.due_date && (
-          <div className="text-[11px] text-white/60 mt-1">{formatDayMonth(task.due_date, task.due_time)}</div>
-        )}
-        {assigneeName && (
-          <div className="text-[11px] text-[#4E95D9]/80 mt-0.5 truncate">→ {assigneeName}</div>
-        )}
-      </button>
+      </div>
+    );
+  }
 
-      {/* On mobile this drops to its own full-width row (flex-wrap on the card root)
-          instead of squeezing next to a long title; on desktop it stays inline. */}
-      <div className="w-full md:w-auto shrink-0 flex items-center justify-end gap-1 px-3 pb-2 md:pb-0 md:pr-3">
-        {!!task.notes && (
-          <span className="p-1.5 text-white/40" title="Questo task ha delle note">
-            <StickyNote size={14} />
-          </span>
-        )}
-        <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
-          {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
-        </button>
-        <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
-          <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
-        </button>
-        <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
-          <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
-        </button>
-        <button data-testid="task-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
-          <Trash2 size={14} />
-        </button>
+  return (
+    <div {...rootProps} className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}>
+      {favBand}
+      {titleBlock}
+      <div className="shrink-0 flex items-center justify-end gap-1 px-3">
+        {actionIcons}
       </div>
     </div>
   );
@@ -402,6 +604,7 @@ const formatCreatedAt = (iso) => {
 
 function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [thread, setThread] = useState([]);
@@ -541,6 +744,64 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
     ? `Assegnato a ${assignee.name}${assignee.user_id === user?.user_id ? " (io)" : ""}`
     : task.visibility === "org" ? "Organizzazione" : "Solo io";
 
+  const dateBlock = editingDate ? (
+    <div className="flex items-center gap-1.5 mt-1.5 text-sm flex-wrap" style={{ color: "#D9D9D9" }}>
+      <Calendar size={14} />
+      <input
+        type="date"
+        data-testid="task-due-date-input"
+        value={dateDraft}
+        onChange={(e) => setDateDraft(e.target.value)}
+        className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+      />
+      <input
+        type="time"
+        data-testid="task-due-time-input"
+        value={timeDraft}
+        onChange={(e) => setTimeDraft(e.target.value)}
+        disabled={!dateDraft}
+        className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 disabled:opacity-40"
+      />
+      <button data-testid="task-due-date-save" onClick={saveDueDate} disabled={savingDate} className="text-xs px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">
+        {savingDate ? "…" : "Salva"}
+      </button>
+      <button onClick={() => setEditingDate(false)} className="text-xs px-1.5 py-0.5 rounded-full text-white/50 hover:text-white/80">
+        Annulla
+      </button>
+    </div>
+  ) : (
+    <button
+      onClick={openDateEdit}
+      data-testid="task-due-date-display"
+      className="flex items-center gap-1.5 mt-1.5 text-sm hover:underline decoration-dotted underline-offset-2"
+      style={{ color: "#D9D9D9" }}
+      title="Modifica la data"
+    >
+      <Calendar size={14} />
+      {task.due_date ? formatDayMonth(task.due_date, task.due_time) : "Aggiungi data"}
+    </button>
+  );
+
+  const actionButtons = (
+    <>
+      <button data-testid="task-fav" onClick={toggleFav} className={`p-1.5 rounded-full ${isFav ? "text-amber-400" : "text-white/40 hover:text-white/70"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
+        <Star size={16} className={isFav ? "fill-current" : ""} />
+      </button>
+      <button data-testid="task-reminder" onClick={toggleReminder} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
+        {isReminder ? <BellRing size={16} /> : <Bell size={16} />}
+      </button>
+      <button data-testid="toggle-calendar" onClick={toggleCal} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
+        <CalendarCheck size={16} className={isCal ? "fill-current" : ""} />
+      </button>
+      <button data-testid="task-complete" onClick={toggleDone} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
+        <CircleCheck size={16} className={isDone ? "fill-current" : ""} />
+      </button>
+      <button data-testid="delete-task" onClick={del} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
+        <Trash2 size={16} />
+      </button>
+    </>
+  );
+
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent
@@ -548,67 +809,35 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
         data-testid="task-dialog"
       >
         <div className="max-h-full overflow-y-auto pr-1">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-bold text-white truncate">{task.title}</DialogTitle>
-            </DialogHeader>
-            {editingDate ? (
-              <div className="flex items-center gap-1.5 mt-1.5 text-sm flex-wrap" style={{ color: "#D9D9D9" }}>
-                <Calendar size={14} />
-                <input
-                  type="date"
-                  data-testid="task-due-date-input"
-                  value={dateDraft}
-                  onChange={(e) => setDateDraft(e.target.value)}
-                  className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-                />
-                <input
-                  type="time"
-                  data-testid="task-due-time-input"
-                  value={timeDraft}
-                  onChange={(e) => setTimeDraft(e.target.value)}
-                  disabled={!dateDraft}
-                  className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 disabled:opacity-40"
-                />
-                <button data-testid="task-due-date-save" onClick={saveDueDate} disabled={savingDate} className="text-xs px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">
-                  {savingDate ? "…" : "Salva"}
-                </button>
-                <button onClick={() => setEditingDate(false)} className="text-xs px-1.5 py-0.5 rounded-full text-white/50 hover:text-white/80">
-                  Annulla
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={openDateEdit}
-                data-testid="task-due-date-display"
-                className="flex items-center gap-1.5 mt-1.5 text-sm hover:underline decoration-dotted underline-offset-2"
-                style={{ color: "#D9D9D9" }}
-                title="Modifica la data"
-              >
-                <Calendar size={14} />
-                {task.due_date ? formatDayMonth(task.due_date, task.due_time) : "Aggiungi data"}
-              </button>
-            )}
+        {isMobile ? (
+          // Spec v2 §2.7: su smartphone le icone stanno nella prima riga in alto, allineate
+          // a sinistra (-ml-1.5 compensa il p-1.5 del primo pulsante, così il glifo parte
+          // esattamente dal bordo del testo sotto), e il titolo va a capo invece di essere
+          // troncato. La "x" di chiusura resta quella del Dialog, in alto a destra.
+          <div>
+            <div className="flex items-center gap-1 -ml-1.5 pr-8" data-testid="task-dialog-actions">
+              {actionButtons}
+            </div>
+            <div className="mt-2 min-w-0">
+              <DialogHeader>
+                <DialogTitle className="text-xl font-bold text-white break-words text-left leading-snug">{task.title}</DialogTitle>
+              </DialogHeader>
+              {dateBlock}
+            </div>
           </div>
-          <div className="flex items-center gap-1 shrink-0 pt-1">
-            <button data-testid="task-fav" onClick={toggleFav} className={`p-1.5 rounded-full ${isFav ? "text-amber-400" : "text-white/40 hover:text-white/70"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
-              <Star size={16} className={isFav ? "fill-current" : ""} />
-            </button>
-            <button data-testid="task-reminder" onClick={toggleReminder} className={`p-1.5 rounded-full ${isReminder ? "text-purple-300" : "text-white/40 hover:text-white/70"}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
-              {isReminder ? <BellRing size={16} /> : <Bell size={16} />}
-            </button>
-            <button data-testid="toggle-calendar" onClick={toggleCal} className={`p-1.5 rounded-full ${isCal ? "text-[#4E95D9]" : "text-white/40 hover:text-white/70"}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
-              <CalendarCheck size={16} className={isCal ? "fill-current" : ""} />
-            </button>
-            <button data-testid="task-complete" onClick={toggleDone} className={`p-1.5 rounded-full ${isDone ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={isDone ? "Riapri" : "Segna come fatto"}>
-              <CircleCheck size={16} className={isDone ? "fill-current" : ""} />
-            </button>
-            <button data-testid="delete-task" onClick={del} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina">
-              <Trash2 size={16} />
-            </button>
+        ) : (
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <DialogHeader>
+                <DialogTitle className="text-xl font-bold text-white truncate">{task.title}</DialogTitle>
+              </DialogHeader>
+              {dateBlock}
+            </div>
+            <div className="flex items-center gap-1 shrink-0 pt-1">
+              {actionButtons}
+            </div>
           </div>
-        </div>
+        )}
 
         {(task.tags || []).length > 0 && (
           <div className="flex flex-wrap gap-2 mt-4">
