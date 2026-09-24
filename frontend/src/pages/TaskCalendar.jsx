@@ -2,9 +2,11 @@ import React, { useMemo, useRef, useEffect, useState } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { CalendarDays } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useSetMobileTitleSuffix } from "@/lib/mobile-title";
 
 const IT_DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
 const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+const IT_MONTHS_SHORT = ["Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov", "Dic"];
 const WEEKS_BEFORE = 26;
 const WEEKS_AFTER = 26;
 
@@ -21,6 +23,7 @@ const DOT_FAV = "#FBBF24";
 const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#8ED973";
 const MUTED_TEXT = "#D9D9D9";
+const ACCENT = "#00B0F0"; // same cyan used for the selected day/week everywhere in the app
 
 function withAlpha(hex, alpha) {
   const h = hex.replace("#", "");
@@ -63,9 +66,9 @@ function weekMonthKey(monday) {
 
 const DRAG_THRESHOLD = 4; // px of movement before a mousedown counts as a drag, not a click
 
-// mobileHeaderRight / mobileBelowHeader: extra controls the Task page places on the mobile
-// calendar row (right side) and right under it - so the page needs no separate toolbar.
-export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek, mobileHeaderRight = null, mobileBelowHeader = null }) {
+// mobileBelowStrip: content the Task page shows right under the mobile day strip (the active
+// day/week filter).
+export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek, mobileBelowStrip = null }) {
   const isMobile = useIsMobile();
   const DAY_LABEL_COL_WIDTH = DAY_LABEL_COL_WIDTH_DESKTOP;
   const COL_WIDTH = COL_WIDTH_DESKTOP;
@@ -151,6 +154,16 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   );
   const mobileMonthYear = weekMonthKey(mobileMonday);
 
+  // The mobile top bar reads "Task <year>", following the week currently shown (the year of
+  // its Thursday, same rule as the month label) - cleared again when leaving the page.
+  const setTitleSuffix = useSetMobileTitleSuffix();
+  const shownYear = mobileMonthYear.year;
+  useEffect(() => {
+    if (!isMobile) return undefined;
+    setTitleSuffix(String(shownYear));
+    return () => setTitleSuffix("");
+  }, [isMobile, shownYear, setTitleSuffix]);
+
   // Swipe col dito sulla riga dei giorni per cambiare settimana (niente frecce) - stesso
   // schema del carosello del diario: la cattura/il cambio settimana scatta solo oltre una
   // soglia di movimento reale, e un listener "click" in fase di cattura sopprime il click
@@ -235,30 +248,101 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
 
   const totalWidth = weeks.length * COL_STRIDE - COL_GAP;
 
+  // ===== Mobile: stessa struttura del riferimento grafico - in alto a sinistra le prime tre
+  // lettere del mese (grande, con il punto colorato), a destra il numero della settimana;
+  // sotto i sette giorni, con l'evidenziazione solo attorno al numero. Il calendario è sempre
+  // aperto; si cambia settimana scorrendo col dito sui giorni. =====
+  if (isMobile) {
+    const weekKey = isoDate(mobileMonday);
+    const isWeekSelected = selectedWeekStart === weekKey;
+    return (
+      <TooltipProvider delayDuration={150}>
+        <div className="shrink-0 mb-12" data-testid="calendar-mobile-week">
+          <div className="flex items-end justify-between px-1 mt-4 mb-3">
+            <div className="text-[44px] font-bold leading-none tracking-tight text-white" data-testid="calendar-mobile-month">
+              {IT_MONTHS_SHORT[mobileMonthYear.month]}<span style={{ color: ACCENT }}>.</span>
+            </div>
+            <button
+              data-testid="calendar-mobile-weeknum"
+              onClick={() => onSelectWeek && onSelectWeek(weekKey)}
+              title={isWeekSelected ? "Mostra tutti i task" : "Mostra solo i task di questa settimana"}
+              className="text-[44px] font-light leading-none tabular-nums transition-colors"
+              style={{ color: isWeekSelected ? ACCENT : MUTED_TEXT }}
+            >
+              {isoWeekNumber(mobileMonday)}
+            </button>
+          </div>
+          {/* Scorrimento a dito per cambiare settimana - touch-pan-y lascia lo swipe orizzontale
+              al gesto e lo scroll verticale alla pagina. */}
+          <div
+            ref={weekGridRef}
+            onPointerDown={onWeekPointerDown}
+            onPointerMove={onWeekPointerMove}
+            onPointerUp={onWeekPointerUp}
+            onPointerCancel={onWeekPointerUp}
+            className="grid grid-cols-7 touch-pan-y"
+          >
+            {mobileDays.map((day, di) => {
+              const key = isoDate(day);
+              const isSelected = selectedDate === key;
+              const isToday = key === todayStr;
+              const stats = dayStats[key];
+              let dotColor = null;
+              if (stats) {
+                if (stats.overdue > 0) dotColor = DOT_OVERDUE;
+                else if (stats.fav > 0) dotColor = DOT_FAV;
+                else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
+                else dotColor = DOT_HAS;
+              }
+              const cellBg = isSelected ? withAlpha(ACCENT, 0.9) : dotColor ? withAlpha(dotColor, 0.9) : "transparent";
+              const cell = (
+                <div key={di} className="flex flex-col items-center gap-1.5">
+                  <div
+                    onClick={() => onSelectDate && onSelectDate(key)}
+                    className="h-8 w-8 flex items-center justify-center rounded-full cursor-pointer text-[13px] font-semibold text-white"
+                    style={{ background: cellBg }}
+                  >
+                    {day.getDate()}
+                  </div>
+                  <span
+                    className="text-[9px] font-semibold uppercase tracking-wide"
+                    style={{ color: isSelected ? ACCENT : isToday ? "#FFFFFF" : "rgba(255,255,255,0.45)" }}
+                  >
+                    {IT_DAYS_SHORT[di]}
+                  </span>
+                </div>
+              );
+              if (!stats) return cell;
+              const parts = [`${stats.count} task`];
+              if (stats.fav) parts.push(`${stats.fav} preferit${stats.fav !== 1 ? "i" : "o"}`);
+              if (stats.overdue) parts.push(`${stats.overdue} scadut${stats.overdue !== 1 ? "i" : "o"}`);
+              return (
+                <Tooltip key={di}>
+                  <TooltipTrigger asChild>{cell}</TooltipTrigger>
+                  <TooltipContent side="top">{parts.join(" · ")}</TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+          {mobileBelowStrip}
+        </div>
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider delayDuration={150}>
-      {/* Mobile: stacco ampio tra calendario aperto e riquadri di priorità; a calendario
-          chiuso resta solo la riga dell'icona, con lo spazio di sempre sotto. */}
-      <div className={`shrink-0 ${isMobile ? (collapsed ? "mb-2" : "mb-14") : "mb-8"}`}>
+      <div className="shrink-0 mb-8">
         <div className="flex items-center gap-2 mb-2 flex-wrap">
           <button
             data-testid="calendar-toggle"
             onClick={onToggleCollapse}
-            className={isMobile
-              // Su smartphone solo l'icona, senza area/cerchio attorno, a sinistra del mese.
-              ? `p-0.5 -ml-0.5 transition-colors ${collapsed ? "text-white/50" : "text-white/90"}`
-              : `rounded-full transition-colors p-1.5 ${collapsed ? "text-white/40 hover:text-white/70" : "text-white/80 hover:text-white bg-white/10"}`}
+            className={`rounded-full transition-colors p-1.5 ${collapsed ? "text-white/40 hover:text-white/70" : "text-white/80 hover:text-white bg-white/10"}`}
             title={collapsed ? "Mostra calendario" : "Nascondi calendario"}
           >
-            <CalendarDays size={isMobile ? 18 : 16} />
+            <CalendarDays size={16} />
           </button>
-          {isMobile && !collapsed && (
-            <div className="text-[11px] font-medium capitalize text-white/60">
-              {IT_MONTHS_LONG[mobileMonthYear.month]} {mobileMonthYear.year}
-            </div>
-          )}
-          {isMobile && mobileHeaderRight && <div className="ml-auto flex items-center gap-3">{mobileHeaderRight}</div>}
-          {!collapsed && !isMobile && (
+          {!collapsed && (
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] md:flex md:items-center md:gap-3 md:text-[11px] text-white/60 ml-2 md:ml-6">
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_FAV }} />preferiti</span>
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: DOT_OVERDUE }} />scaduti</span>
@@ -268,80 +352,7 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
           )}
         </div>
 
-        {isMobile && mobileBelowHeader}
-
-        {!collapsed && isMobile && (
-          <div className="flex flex-col gap-1.5" data-testid="calendar-mobile-week">
-            <div
-              onClick={() => onSelectWeek && onSelectWeek(isoDate(mobileMonday))}
-              className="flex items-center justify-between px-1.5 py-1 rounded-xl cursor-pointer"
-              style={{ background: selectedWeekStart === isoDate(mobileMonday) ? "rgba(0, 176, 240, 0.18)" : "transparent" }}
-            >
-              <span className="text-xs font-bold uppercase tracking-[0.2em] text-white">Week</span>
-              <span className="text-4xl font-light leading-none tabular-nums" style={{ color: MUTED_TEXT }}>
-                {isoWeekNumber(mobileMonday)}
-              </span>
-            </div>
-            {/* Scorrimento a dito per cambiare settimana, niente frecce - touch-pan-y lascia
-                allo swipe orizzontale il gesto, allo scroll verticale della pagina il resto. */}
-            <div
-              ref={weekGridRef}
-              onPointerDown={onWeekPointerDown}
-              onPointerMove={onWeekPointerMove}
-              onPointerUp={onWeekPointerUp}
-              onPointerCancel={onWeekPointerUp}
-              className="grid grid-cols-7 gap-1 touch-pan-y"
-            >
-              {mobileDays.map((day, di) => {
-                const key = isoDate(day);
-                const isSelected = selectedDate === key;
-                const isToday = key === todayStr;
-                const stats = dayStats[key];
-                let dotColor = null;
-                if (stats) {
-                  if (stats.overdue > 0) dotColor = DOT_OVERDUE;
-                  else if (stats.fav > 0) dotColor = DOT_FAV;
-                  else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
-                  else dotColor = DOT_HAS;
-                }
-                const cellBg = isSelected
-                  ? withAlpha("#00B0F0", 0.9)
-                  : dotColor
-                    ? withAlpha(dotColor, 0.9)
-                    : "transparent";
-                const cell = (
-                  <div key={di} className="flex flex-col items-center gap-1">
-                    <div
-                      onClick={() => onSelectDate && onSelectDate(key)}
-                      className="h-9 w-full flex items-center justify-center rounded-lg cursor-pointer text-[13px] font-semibold text-white"
-                      style={{ background: cellBg }}
-                    >
-                      {day.getDate()}
-                    </div>
-                    <span
-                      className="text-[9px] font-semibold uppercase tracking-wide"
-                      style={{ color: isSelected ? "#00B0F0" : isToday ? "#FFFFFF" : "rgba(255,255,255,0.45)" }}
-                    >
-                      {IT_DAYS_SHORT[di]}
-                    </span>
-                  </div>
-                );
-                if (!stats) return cell;
-                const parts = [`${stats.count} task`];
-                if (stats.fav) parts.push(`${stats.fav} preferit${stats.fav !== 1 ? "i" : "o"}`);
-                if (stats.overdue) parts.push(`${stats.overdue} scadut${stats.overdue !== 1 ? "i" : "o"}`);
-                return (
-                  <Tooltip key={di}>
-                    <TooltipTrigger asChild>{cell}</TooltipTrigger>
-                    <TooltipContent side="top">{parts.join(" · ")}</TooltipContent>
-                  </Tooltip>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {!collapsed && !isMobile && (
+        {!collapsed && (
           <div className="flex">
             <div className="flex flex-col shrink-0 pr-2.5" style={{ width: DAY_LABEL_COL_WIDTH, paddingTop: MONTH_ROW_HEIGHT + 24 }}>
               {IT_DAYS_SHORT.map((d) => (
