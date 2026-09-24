@@ -374,8 +374,8 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
   const isCal = !!task.calendar_synced;
   const isReminder = !!task.reminder_enabled;
   const overdue = isTaskOverdue(task);
-  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "#DADDD6";
-  // Non-overdue cards are light (#DADDD6), so their text and icons switch to a dark ink -
+  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : "rgba(218, 221, 214, 0.7)";
+  // Non-overdue cards are light (#DADDD6 at 30% transparency), so their text and icons switch to a dark ink -
   // white on that grey would be unreadable. Overdue cards keep the dark red + white text.
   const light = !overdue;
   const ink = light ? "text-[#2B2A2E]" : "text-white";
