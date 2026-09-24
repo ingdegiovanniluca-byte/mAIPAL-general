@@ -1828,29 +1828,118 @@ def _resolve_journal_date(meta: Optional[dict]) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _image_bytes_to_journal_data_uri(contents: bytes, max_dim: int = 1600, max_bytes: int = 2 * 1024 * 1024) -> str:
-    """Downscales/re-encodes raw image bytes into a "data:image/jpeg;base64,..." URI sized
-    like the web app's own client-side compression for diary photos (fileToJournalImageDataUri
-    in ChatPage.jsx: max ~1600px, JPEG, under ~2MB) - used for photos attached to a diary
-    entry from Telegram, which arrive as full-resolution originals with no client-side
-    compression of their own."""
+def _downscale_image_bytes(contents: bytes, max_dim: int = 2000, max_bytes: int = 4 * 1024 * 1024) -> bytes:
+    """Re-encodes raw image bytes as JPEG, downscaled/compressed if needed (also normalizes
+    HEIC/HEIF/WebP to a format every vision model accepts). A phone camera photo can be many
+    MB at full resolution with no client-side compression on some upload paths (e.g. a plain
+    file attachment, unlike the diary's own upload flow which already downsizes in the
+    browser) - sending that straight to an OCR/vision call can make the call fail outright
+    instead of just being slow, which is indistinguishable from a generic "upload error" to
+    the user."""
     from PIL import Image
     from io import BytesIO
-    import base64 as _b64
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except Exception:
+        pass
     img = Image.open(BytesIO(contents))
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
     if max(img.size) > max_dim:
         scale = max_dim / max(img.size)
         img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.LANCZOS)
-    quality = 85
+    quality = 88
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     while len(buf.getvalue()) > max_bytes and quality > 40:
         quality -= 10
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=quality)
-    return "data:image/jpeg;base64," + _b64.b64encode(buf.getvalue()).decode("ascii")
+    return buf.getvalue()
+
+
+def _image_bytes_to_journal_data_uri(contents: bytes, max_dim: int = 1600, max_bytes: int = 2 * 1024 * 1024) -> str:
+    """Downscales/re-encodes raw image bytes into a "data:image/jpeg;base64,..." URI sized
+    like the web app's own client-side compression for diary photos (fileToJournalImageDataUri
+    in ChatPage.jsx: max ~1600px, JPEG, under ~2MB) - used for photos attached to a diary
+    entry from Telegram, which arrive as full-resolution originals with no client-side
+    compression of their own."""
+    import base64 as _b64
+    jpeg_bytes = _downscale_image_bytes(contents, max_dim=max_dim, max_bytes=max_bytes)
+    return "data:image/jpeg;base64," + _b64.b64encode(jpeg_bytes).decode("ascii")
+
+
+async def _ocr_and_save_image_to_kb(
+    user_id: str, filename: str, contents: bytes, channel: str = "web", org_id: Optional[str] = None,
+) -> dict:
+    """Runs OCR on an image and persists the extracted text into the personal KB (kb_chunks +
+    kb_documents) - the image-handling half of /kb/upload, factored out so a photo sent on
+    Telegram while "salva informazioni" or "task/to-do" is the active action can be saved the
+    same way instead of always going to Google Drive (its only previous destination on
+    Telegram, regardless of the active action or whether Drive is even connected).
+    Raises ValueError if no text could be extracted (mirrors /kb/upload's 422 case)."""
+    ext = filename.rsplit(".", 1)[-1].lower() if filename and "." in filename else "jpg"
+    try:
+        send_bytes = _downscale_image_bytes(contents)
+    except Exception:
+        logger.exception("image downscale/transcode failed; using original bytes")
+        send_bytes = contents
+    text = (await _ocr_image_bytes(send_bytes, filename, user_id=user_id, channel=channel) or "").strip()
+    if not text:
+        raise ValueError("Nessun testo estraibile dall'immagine")
+
+    chunks = _chunk_text(text)
+    try:
+        embeddings = await emb.embed_texts(chunks)
+    except Exception:
+        logger.exception("kb image embedding failed")
+        embeddings = [None] * len(chunks)
+    classification = await _classify_document(text, user_id=user_id, channel=channel)
+
+    doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    docs = []
+    for i, (chunk, e) in enumerate(zip(chunks, embeddings)):
+        docs.append({
+            "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "text": chunk,
+            "title": filename,
+            "tags": [ext, "ocr", classification["category"]],
+            "summary": chunks[0][:140] if i == 0 else None,
+            "embedding": e,
+            "doc_id": doc_id,
+            "source_type": "image_ocr",
+            "source_name": filename,
+            "chunk_index": i,
+            "created_at": now,
+        })
+    if docs:
+        await db.kb_chunks.insert_many(docs)
+
+    await db.kb_documents.insert_one({
+        "doc_id": doc_id,
+        "user_id": user_id,
+        "name": filename,
+        "ext": ext,
+        "source_type": "image_ocr",
+        "category": classification["category"],
+        "keywords": classification["keywords"],
+        "chunks_count": len(docs),
+        "chars": len(text),
+        "size_bytes": len(contents),
+        "preview": text[:280],
+        "drive_link": None,
+        "created_at": now,
+    })
+
+    ut.fire_and_forget_feature_event(user_id=user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=org_id)
+    return {
+        "doc_id": doc_id, "name": filename, "size": len(contents), "chunks": len(docs), "chars": len(text),
+        "preview": text[:280], "source_type": "image_ocr", "category": classification["category"],
+        "keywords": classification["keywords"],
+    }
 
 
 async def _save_journal_entry(
@@ -3781,9 +3870,23 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
         raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
 
     subfolders = await gi.list_subfolders(db, current.user_id, creds)
-    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders], user_id=current.user_id, channel=channel)
+    existing_names = [f["name"] for f in subfolders]
+
+    # This message is a DIRECT reply to "in quale cartella la salvo?", not a fresh caption
+    # that may or may not mention a folder - a short answer (a few words, no question mark)
+    # IS the folder name itself, existing or new to create. Relying only on the LLM hint
+    # extractor here occasionally answered "NESSUNA" for a bare one/two-word reply (e.g. just
+    # "Scontrini"), which silently re-asked the same question instead of creating that folder.
+    _NON_ANSWERS = {"non lo so", "boh", "nessuna", "non saprei", "niente", "annulla", "no", "non importa"}
+    stripped = text.strip()
+    folder_name = None
+    if stripped and len(stripped) <= 60 and len(stripped.split()) <= 6 and not stripped.endswith("?") \
+            and stripped.lower() not in _NON_ANSWERS:
+        folder_name = stripped.rstrip(".,;:!")
     if not folder_name:
-        return {"status": "needs_folder", "pending_id": pending_id, "suggestions": [f["name"] for f in subfolders]}
+        folder_name = await _resolve_drive_folder_hint(text, existing_names, user_id=current.user_id, channel=channel)
+    if not folder_name:
+        return {"status": "needs_folder", "pending_id": pending_id, "suggestions": existing_names}
 
     import base64 as _b64
     contents = _b64.b64decode(doc["data_b64"])
@@ -3939,30 +4042,18 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
         tmp.write(contents)
         tmp_path = tmp.name
     try:
+        if ext in IMAGE_EXTS:
+            # Images are handled entirely by the shared helper (downscale + OCR + chunk +
+            # embed + persist) - same helper Telegram photos use, so both channels behave
+            # identically instead of Telegram only ever going to Drive.
+            try:
+                return await _ocr_and_save_image_to_kb(current.user_id, file.filename, contents, channel="web", org_id=current.org_id)
+            except ValueError as ve:
+                raise HTTPException(status_code=422, detail=str(ve))
+
         source_type = "file"
         try:
-            if ext in IMAGE_EXTS:
-                # HEIC/HEIF or exotic image: transcode to JPEG for Claude compatibility
-                send_bytes = contents
-                if ext in ("heic", "heif", "webp"):
-                    try:
-                        from PIL import Image
-                        try:
-                            import pillow_heif  # noqa: F401 - registers heif
-                            pillow_heif.register_heif_opener()
-                        except Exception:
-                            pass
-                        from io import BytesIO
-                        img = Image.open(BytesIO(contents))
-                        if img.mode not in ("RGB", "L"): img = img.convert("RGB")
-                        buf = BytesIO(); img.save(buf, format="JPEG", quality=88)
-                        send_bytes = buf.getvalue()
-                    except Exception:
-                        logger.exception("image transcode failed; using original bytes")
-                text = await _ocr_image_bytes(send_bytes, file.filename, user_id=current.user_id, channel="web")
-                source_type = "image_ocr"
-            else:
-                text = _extract_text_from_file(tmp_path, file.filename)
+            text = _extract_text_from_file(tmp_path, file.filename)
         except ValueError as ve:
             raise HTTPException(status_code=415, detail=str(ve))
         except HTTPException:
@@ -3995,7 +4086,7 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
                 "user_id": current.user_id,
                 "text": chunk,
                 "title": file.filename,
-                "tags": [ext] + (["ocr"] if source_type == "image_ocr" else []) + [classification["category"]],
+                "tags": [ext, classification["category"]],
                 "summary": chunks[0][:140] if i == 0 else None,
                 "embedding": e,
                 "doc_id": doc_id,

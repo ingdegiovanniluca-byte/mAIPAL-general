@@ -854,7 +854,7 @@ async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, te
 
 
 async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    from server import db, _drive_smart_upload_core, _image_bytes_to_journal_data_uri
+    from server import db, _drive_smart_upload_core, _image_bytes_to_journal_data_uri, _ocr_and_save_image_to_kb
     chat_id = update.effective_chat.id
     user = await _get_user_by_chat(db, chat_id)
     if not user:
@@ -885,6 +885,41 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             caption or "[foto allegata, nessun testo]",
             images=[data_uri],
         )
+        return
+
+    # Se la conversazione attiva è "salva informazioni" o "task/to-do", la foto va letta con
+    # l'OCR e salvata nella knowledge base personale (stesso percorso di /kb/upload sul web) -
+    # prima andava SEMPRE su Drive, quindi un'immagine tipo uno scontrino non veniva mai letta
+    # né diventava cercabile in chat, anche se il bot rispondeva "salvato" per un messaggio di
+    # testo scritto subito dopo (quello sì salvato, ma senza il contenuto reale della foto).
+    if _state_is_fresh(state) and state.get("current_action") in ("info_upload", "task_todo"):
+        action = state["current_action"]
+        try:
+            tg_file = await ctx.bot.get_file(photos[-1].file_id)  # last = highest resolution
+            raw = await tg_file.download_as_bytearray()
+            filename = f"foto_{uuid.uuid4().hex[:8]}.jpg"
+            kb_result = await _ocr_and_save_image_to_kb(user["user_id"], filename, bytes(raw), channel="telegram")
+        except ValueError as ve:
+            await update.message.reply_text(f"⚠️ {str(ve)}")
+            return
+        except Exception as e:
+            logger.exception("tg image OCR/KB save failed")
+            await update.message.reply_text(f"⚠️ Errore con la foto: {str(e)[:200]}")
+            return
+
+        if action == "info_upload":
+            await update.message.reply_text(
+                f"💾 Salvato\n\nHo letto la foto e salvato il testo nella knowledge base "
+                f"({kb_result['chunks']} sezione/i, {kb_result['chars']} caratteri).\n\n"
+                f"Anteprima: {kb_result['preview'][:300]}"
+            )
+        else:
+            # Lascia che sia il modello a leggere il contenuto appena salvato (scope="kb" in
+            # _process_action) e creare il/i task, stesso comportamento gia' disponibile per
+            # un documento allegato via web - qui il "messaggio" e' la didascalia se c'e',
+            # altrimenti un'istruzione di default a leggere quanto appena allegato.
+            prompt = caption or "Leggi il documento/immagine appena allegato e crea un task per ogni evento che contiene, se possibile."
+            await _run_and_reply(update, ctx, db, user, "task_todo", prompt)
         return
 
     current = _to_user_pydantic(user)
