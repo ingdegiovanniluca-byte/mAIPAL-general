@@ -1382,15 +1382,13 @@ const glowTileStyle = (color) => ({
   boxShadow: `inset 0 0 20px 3px ${hexToRgba(shadeHex(color, 0.6), 0.55)}, inset 0 1px 1px rgba(255, 255, 255, 0.35), 0 14px 32px -10px ${hexToRgba(color, 0.7)}`,
 });
 
-const IT_MONTHS_LONG_CHAT = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
-
-// Mobile history tile: one-word topic (white, bold) with the star beside it, the first
+// Mobile history tile: one-word topic (white) with the star beside it, the first
 // question in a lighter tint of the tile's own color (readable, but quieter than the
-// topic), a blank line as tall as that text, then "25 settembre 15:00" with the trash can.
+// topic), a blank line as tall as that text, then "25 set 15:00" with the trash can.
 function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDelete }) {
   const d = conv.created_at ? new Date(conv.created_at) : null;
   const pad = (n) => String(n).padStart(2, "0");
-  const dateLabel = d ? `${d.getDate()} ${IT_MONTHS_LONG_CHAT[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}` : "";
+  const dateLabel = d ? `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}` : "";
   const title = conv.title || (conv.meta && conv.meta.title) || "";
   const topic = conv.topic || (title ? title.split(/\s+/)[0] : "") || ACTION_LABELS_IT[conv.action] || "Chat";
   const question = (conv.messages && conv.messages.find((m) => m.role === "user")?.content) || conv.user_message || "";
@@ -1409,7 +1407,7 @@ function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDe
       style={glowTileStyle(color)}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="text-base font-bold leading-tight text-white break-words min-w-0" data-testid="conv-topic">{topic}</div>
+        <div className="text-base font-normal leading-tight text-white break-words min-w-0" data-testid="conv-topic">{topic}</div>
         <button data-testid="fav-btn" onClick={stop(onToggleFav)} title={isFav ? "Rimuovi preferito" : "Preferito"}
           className={`-mt-1 -mr-1 p-1 shrink-0 ${isFav ? "text-amber-300" : "text-white/70"}`}>
           <Star size={16} className={isFav ? "fill-current" : ""} />
