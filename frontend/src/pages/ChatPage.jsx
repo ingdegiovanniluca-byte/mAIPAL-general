@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { takeSharedPayload } from "@/lib/pwa";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
@@ -140,9 +141,14 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
 export default function ChatPage() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  const activeRef = useRef(null);
   const location = useLocation();
   // The Azioni section's "Nuova azione" opens the chat with that action already selected.
-  const [active, setActive] = useState(() => (ACTIONS.some((a) => a.id === location.state?.action) ? location.state.action : "info_request"));
+  // ...and the installed app's shortcuts (long-press on the icon) open it via ?action=
+  const [active, setActive] = useState(() => {
+    const wanted = location.state?.action || new URLSearchParams(location.search).get("action");
+    return ACTIONS.some((a) => a.id === wanted) ? wanted : "info_request";
+  });
   const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -204,6 +210,27 @@ export default function ChatPage() {
   useEffect(() => { if (active === "vet_report") loadVetTemplates(); }, [active]);
 
   const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
+  activeRef.current = active;
+
+  // Something shared to mAIPAL from another app (Android "Condividi" -> mAIPAL): it opens
+  // here with the files attached and the shared text/link in the box, as "Salva
+  // informazioni" - the user adds a word (e.g. which Drive folder) and sends.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const shared = await takeSharedPayload();
+      if (cancelled || !shared) return;
+      setActive("info_upload");
+      setThread(null);
+      const sharedText = [shared.title, shared.text, shared.url].filter((x, i, arr) => x && arr.indexOf(x) === i).join("\n");
+      if (sharedText) setText(sharedText);
+      if (shared.files.length) await ingestFiles(shared.files, "info_upload");
+      toast.success("Contenuto condiviso pronto: aggiungi cosa farne e invia");
+      if (location.search.includes("shared=1")) navigate(location.pathname, { replace: true });
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = async () => {
     try {
@@ -694,6 +721,12 @@ export default function ChatPage() {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     e.target.value = "";
+    await ingestFiles(files);
+  };
+  // `forAction` lets the share-target flow attach files right after switching action,
+  // before the `active` state update is visible here.
+  const ingestFiles = async (files, forAction) => {
+    const active = forAction || activeRef.current;
 
     // Diario: photos stay local (compressed into a data URI) instead of going through
     // KB/Drive - they're only sent to the backend once, embedded in the journal entry,

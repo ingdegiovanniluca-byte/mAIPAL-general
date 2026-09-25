@@ -279,7 +279,8 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
       <TooltipProvider delayDuration={150}>
         <div
           data-testid="calendar-mobile-week"
-          className={`shrink-0 sticky top-14 z-30 -mx-4 px-4 pt-4 pb-5 mb-7 transition-colors duration-200 ${pageScrolled ? "bg-white/5 backdrop-blur-xl" : ""}`}
+          style={{ top: "calc(3.5rem + env(safe-area-inset-top, 0px))" }}
+          className={`shrink-0 sticky z-30 -mx-4 px-4 pt-4 pb-5 mb-7 transition-colors duration-200 ${pageScrolled ? "bg-white/5 backdrop-blur-xl" : ""}`}
         >
           <div className="flex items-end justify-between px-1 mb-3">
             <div className="text-[44px] font-bold leading-none tracking-tight text-white" data-testid="calendar-mobile-month">

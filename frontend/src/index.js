@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/index.css";
 import App from "@/App";
 import { applyTheme, getStoredTheme } from "@/lib/theme";
+import { initPwa } from "@/lib/pwa";
 
 applyTheme(getStoredTheme());
+initPwa();
 
 const queryClient = new QueryClient({
   defaultOptions: {

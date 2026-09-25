@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import logo3 from "@/assets/logo3.png";
 import { MobileTitleContext } from "@/lib/mobile-title";
+import { useInstallApp, InstallBanner, InstallIcon } from "@/components/InstallApp";
 
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
@@ -65,6 +66,7 @@ export default function DashboardLayout() {
     };
   }, []);
 
+  const installApp = useInstallApp();
   const firstName = user?.name?.split(" ")[0] || "";
   const initial = (user?.name || user?.email || "?").trim().charAt(0).toUpperCase();
 
@@ -133,7 +135,16 @@ export default function DashboardLayout() {
               </button>
 
               {menuOpen && (
-                <div className="absolute right-0 top-full mt-2 w-44 rounded-xl bg-[#403A3C] shadow-lg border border-white/10 py-1.5 z-40">
+                <div className="absolute right-0 top-full mt-2 w-48 rounded-xl bg-[#403A3C] shadow-lg border border-white/10 py-1.5 z-40">
+                  {!installApp.standalone && (
+                    <button
+                      data-testid="install-app-btn"
+                      onClick={() => { setMenuOpen(false); installApp.install(); }}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+                    >
+                      <InstallIcon size={14} /> Installa l'app
+                    </button>
+                  )}
                   <button
                     data-testid="logout-btn"
                     onClick={() => { setMenuOpen(false); logout(); }}
@@ -149,8 +160,10 @@ export default function DashboardLayout() {
 
         {/* ===== Mobile top bar (<768px): logo · section name · avatar, fixed, thin ===== */}
         <header
-          className="md:hidden sticky top-0 z-40 flex items-center justify-between gap-3 px-4 h-14 bg-white/5 backdrop-blur-xl"
-          style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+          className="md:hidden sticky top-0 z-40 flex items-center justify-between gap-3 px-4 bg-white/5 backdrop-blur-xl"
+          // Installed app on iPhone: the page runs under the status bar, so the bar grows by
+          // that inset instead of squeezing its 56px of content.
+          style={{ paddingTop: "env(safe-area-inset-top, 0px)", height: "calc(3.5rem + env(safe-area-inset-top, 0px))" }}
         >
           <div className="h-8 w-8 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
             <div
@@ -184,6 +197,15 @@ export default function DashboardLayout() {
                 >
                   <Settings size={14} /> Impostazioni
                 </button>
+                {!installApp.standalone && (
+                  <button
+                    data-testid="install-app-btn-mobile"
+                    onClick={() => { setMenuOpen(false); installApp.install(); }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+                  >
+                    <InstallIcon size={14} /> Installa l'app
+                  </button>
+                )}
                 <button
                   data-testid="logout-btn-mobile"
                   onClick={() => { setMenuOpen(false); logout(); }}
@@ -204,6 +226,9 @@ export default function DashboardLayout() {
             <Outlet />
           </MobileTitleContext.Provider>
         </main>
+
+        {!installApp.standalone && !keyboardOpen && <InstallBanner onInstall={installApp.install} />}
+        {installApp.dialog}
 
         {/* ===== Mobile bottom navigation (<768px): a floating liquid-glass pill, only as
             wide as its four sections and lifted off the bottom edge, plus a separate round
