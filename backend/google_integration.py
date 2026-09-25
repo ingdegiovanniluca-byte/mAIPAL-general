@@ -245,7 +245,9 @@ async def create_calendar_event(
     due_date: Optional[str] = None,
     due_time: Optional[str] = None,
     duration_minutes: Optional[int] = None,
+    recurrence: Optional[str] = None,
 ) -> str:
+    """`recurrence`: an "RRULE:..." line - makes this ONE recurring event (a task series)."""
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
     duration = duration_minutes or 30
     if due_date and due_time:
@@ -274,6 +276,8 @@ async def create_calendar_event(
             "start": {"dateTime": now.isoformat()},
             "end": {"dateTime": end.isoformat()},
         }
+    if recurrence and (due_date or due_time):
+        event["recurrence"] = [recurrence]
     created = service.events().insert(calendarId="primary", body=event).execute()
     return created["id"]
 

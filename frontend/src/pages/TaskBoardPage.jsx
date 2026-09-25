@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2 } from "lucide-react";
+import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, Repeat } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -153,14 +153,18 @@ export default function TaskBoardPage() {
     } catch { toast.error("Errore"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: cur } : t))); }
   };
 
+  // A recurring task goes on Calendar as a whole series (one recurring event).
   const toggleCal = async (id, cur) => {
-    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, calendar_synced: !cur } : t)));
+    const t0 = tasks.find((t) => t.id === id);
+    const sid = t0?.recurrence_label ? t0.series_id : null;
+    const hit = (t) => t.id === id || (sid && t.series_id === sid);
+    setTasks((ts) => ts.map((t) => (hit(t) ? { ...t, calendar_synced: !cur } : t)));
     try {
       await api.patch(`/tasks/${id}`, { calendar_synced: !cur });
-      toast.success(cur ? "Rimosso da Calendar" : "Aggiunto a Calendar");
+      toast.success(sid ? (cur ? "Serie rimossa da Calendar" : "Serie aggiunta a Calendar come evento ricorrente") : (cur ? "Rimosso da Calendar" : "Aggiunto a Calendar"));
     } catch (e) {
       toast.error(e.response?.data?.detail || "Errore");
-      setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, calendar_synced: cur } : t)));
+      setTasks((ts) => ts.map((t) => (hit(t) ? { ...t, calendar_synced: cur } : t)));
     }
   };
 
@@ -176,18 +180,16 @@ export default function TaskBoardPage() {
   };
 
   const del = async (id) => {
-    toast("Eliminare questo task?", {
-      action: {
-        label: "Elimina",
-        onClick: async () => {
-          const prev = tasks;
-          setTasks((ts) => ts.filter((t) => t.id !== id));
-          try { await api.delete(`/tasks/${id}`); toast.success("Task eliminato"); }
-          catch { toast.error("Errore"); setTasks(prev); }
-        },
-      },
-      cancel: { label: "Annulla", onClick: () => {} },
-      duration: 6000,
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    askDeleteTask(task, async (scope) => {
+      const prev = tasks;
+      setTasks((ts) => ts.filter((t) => t.id !== id && !(scope === "following" && task.series_id && t.series_id === task.series_id && !t.completed && (t.due_date || "") >= (task.due_date || ""))));
+      try {
+        await api.delete(`/tasks/${id}`, { params: { scope } });
+        toast.success(scope === "following" ? "Task eliminati, la ripetizione si ferma qui" : "Task eliminato");
+        if (scope === "following") await load();
+      } catch { toast.error("Errore"); setTasks(prev); }
     });
   };
 
@@ -500,10 +502,14 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
             {prio && <span>{prio.label}</span>}
             {prio && task.due_date && <span>·</span>}
             {task.due_date && <span>{formatDayMonth(task.due_date, task.due_time)}</span>}
+            {task.recurrence_label && <Repeat size={11} className="shrink-0" aria-label={task.recurrence_label} data-testid="task-recurring-icon" />}
           </div>
         )
       ) : task.due_date && (
-        <div className={`text-[11px] ${inkMuted} mt-1`}>{formatDayMonth(task.due_date, task.due_time)}</div>
+        <div className={`text-[11px] ${inkMuted} mt-1 flex items-center gap-1.5`} title={task.recurrence_label || undefined}>
+          {formatDayMonth(task.due_date, task.due_time)}
+          {task.recurrence_label && <Repeat size={11} className="shrink-0" data-testid="task-recurring-icon" />}
+        </div>
       )}
       {assigneeName && (
         <div className="text-[11px] text-[#4E95D9]/80 mt-0.5 truncate">→ {assigneeName}</div>
@@ -572,6 +578,187 @@ function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onTogg
 }
 
 const TAG_BG = "rgba(131, 108, 96, 0.3)";
+
+// Deleting an occurrence of a recurring task asks what to delete: just this one, or this and
+// every following one (which also stops the repetition).
+const askDeleteTask = (task, doDelete) => {
+  if (!task.recurrence_label) {
+    toast("Eliminare questo task?", {
+      action: { label: "Elimina", onClick: () => doDelete("one") },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
+    return;
+  }
+  toast.custom((id) => (
+    <div data-testid="recurring-delete-toast" className="rounded-2xl bg-[#2A2429] text-white p-4 shadow-xl w-[356px] max-w-[calc(100vw-2rem)]" style={{ fontFamily: "'Poppins', sans-serif" }}>
+      <div className="text-sm font-medium">Eliminare questo task ricorrente?</div>
+      <div className="text-xs text-white/60 mt-1 flex items-center gap-1.5"><Repeat size={11} />{task.recurrence_label}</div>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <button data-testid="delete-one" onClick={() => { toast.dismiss(id); doDelete("one"); }} className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20">Solo questo</button>
+        <button data-testid="delete-following" onClick={() => { toast.dismiss(id); doDelete("following"); }} className="text-xs px-3 py-1.5 rounded-full bg-red-500/25 hover:bg-red-500/35 text-red-100">Questo e i successivi</button>
+        <button onClick={() => toast.dismiss(id)} className="text-xs px-3 py-1.5 rounded-full text-white/60 hover:text-white">Annulla</button>
+      </div>
+    </div>
+  ), { duration: 10000 });
+};
+
+const RECUR_FREQS = [
+  { key: "none", label: "Mai" },
+  { key: "daily", label: "Giorno", unit: ["giorno", "giorni"] },
+  { key: "weekly", label: "Settimana", unit: ["settimana", "settimane"] },
+  { key: "monthly", label: "Mese", unit: ["mese", "mesi"] },
+  { key: "yearly", label: "Anno", unit: ["anno", "anni"] },
+];
+const WEEKDAY_INITIALS = ["L", "M", "M", "G", "V", "S", "D"];
+const WEEKDAY_NAMES = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"];
+
+// "Ripeti" row of the task detail: shows the current repetition and edits it inline.
+function RecurrenceRow({ task, onUpdated }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const start = task.due_date ? new Date(`${task.due_date}T12:00:00`) : null;
+  const startWeekday = start ? (start.getDay() + 6) % 7 : 0;
+  const [freq, setFreq] = useState("none");
+  const [interval, setIntervalN] = useState(1);
+  const [weekdays, setWeekdays] = useState([startWeekday]);
+  const [lastDay, setLastDay] = useState(false);
+  const [endMode, setEndMode] = useState("never");
+  const [until, setUntil] = useState("");
+  const [count, setCount] = useState(10);
+
+  const openEditor = async () => {
+    setFreq("none"); setIntervalN(1); setWeekdays([startWeekday]); setLastDay(false); setEndMode("never"); setUntil(""); setCount(10);
+    if (task.recurrence_label) {
+      try {
+        const r = await api.get(`/tasks/${task.id}/recurrence`);
+        const rule = r.data?.series?.rule;
+        if (rule) {
+          setFreq(rule.freq);
+          setIntervalN(rule.interval || 1);
+          if (rule.weekdays) setWeekdays(rule.weekdays);
+          setLastDay(rule.day_of_month === -1);
+          if (rule.until) { setEndMode("until"); setUntil(rule.until); }
+          else if (rule.count) { setEndMode("count"); setCount(rule.count); }
+        }
+      } catch { /* editor opens with defaults */ }
+    }
+    setOpen(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      let rule = null;
+      if (freq !== "none") {
+        rule = { freq, interval: Math.max(1, Math.min(99, Number(interval) || 1)) };
+        if (freq === "weekly") rule.weekdays = weekdays.length ? weekdays : [startWeekday];
+        if (freq === "monthly") rule.day_of_month = lastDay ? -1 : start.getDate();
+        if (endMode === "until" && until) rule.until = until;
+        if (endMode === "count") rule.count = Math.max(1, Number(count) || 1);
+      }
+      if (!rule && !task.recurrence_label) { setOpen(false); return; }
+      await api.put(`/tasks/${task.id}/recurrence`, { rule });
+      await onUpdated();
+      toast.success(rule ? "Ripetizione salvata" : "Il task non si ripete più");
+      setOpen(false);
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setSaving(false); }
+  };
+
+  const chip = (active) => `text-xs px-2.5 py-1 rounded-full transition-colors ${active ? "bg-[#00B0F0]/25 text-[#00B0F0]" : "bg-white/10 text-white/80 hover:bg-white/15"}`;
+  const unit = RECUR_FREQS.find((f) => f.key === freq)?.unit;
+
+  if (!open) {
+    return (
+      <button
+        onClick={task.due_date ? openEditor : undefined}
+        data-testid="task-recurrence-display"
+        className={`flex items-center gap-1.5 mt-1.5 text-sm ${task.due_date ? "hover:underline decoration-dotted underline-offset-2" : "cursor-default opacity-60"}`}
+        style={{ color: "#D9D9D9" }}
+        title={task.due_date ? "Imposta la ripetizione" : "Aggiungi prima una data per poterlo ripetere"}
+      >
+        <Repeat size={14} />
+        {task.recurrence_label || (task.due_date ? "Non si ripete" : "Non si ripete · serve una data")}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-2xl p-3 space-y-3" style={{ background: TAG_BG }} data-testid="task-recurrence-editor">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-white/60"><Repeat size={12} /> Ripeti</div>
+      <div className="flex flex-wrap gap-1.5">
+        {RECUR_FREQS.map((f) => (
+          <button key={f.key} data-testid={`recur-${f.key}`} onClick={() => setFreq(f.key)} className={chip(freq === f.key)}>{f.label}</button>
+        ))}
+      </div>
+      {freq !== "none" && (
+        <>
+          <div className="flex items-center gap-2 text-xs text-white/80">
+            Ogni
+            <input
+              type="number" min={1} max={99} value={interval}
+              onChange={(e) => setIntervalN(e.target.value)}
+              data-testid="recur-interval"
+              className="w-14 bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 outline-none"
+            />
+            {Number(interval) === 1 ? unit?.[0] : unit?.[1]}
+          </div>
+          {freq === "weekly" && (
+            <div className="flex gap-1.5">
+              {WEEKDAY_INITIALS.map((w, i) => {
+                const on = weekdays.includes(i);
+                return (
+                  <button
+                    key={i}
+                    data-testid={`recur-wd-${i}`}
+                    title={WEEKDAY_NAMES[i]}
+                    onClick={() => setWeekdays((ws) => (on ? ws.filter((x) => x !== i) : [...ws, i].sort()))}
+                    className={`h-8 w-8 rounded-full text-xs font-semibold ${on ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/70"}`}
+                  >
+                    {w}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {freq === "monthly" && start && (
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setLastDay(false)} className={chip(!lastDay)}>Il giorno {start.getDate()}</button>
+              <button onClick={() => setLastDay(true)} className={chip(lastDay)}>L'ultimo giorno del mese</button>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-white/60 mr-1">Termina</span>
+            <button onClick={() => setEndMode("never")} className={chip(endMode === "never")}>Mai</button>
+            <button onClick={() => setEndMode("until")} className={chip(endMode === "until")}>Il giorno…</button>
+            <button onClick={() => setEndMode("count")} className={chip(endMode === "count")}>Dopo…</button>
+            {endMode === "until" && (
+              <input type="date" value={until} min={task.due_date} onChange={(e) => setUntil(e.target.value)} data-testid="recur-until"
+                className="bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs border-0 outline-none" />
+            )}
+            {endMode === "count" && (
+              <span className="flex items-center gap-1.5 text-xs text-white/80">
+                <input type="number" min={1} max={1000} value={count} onChange={(e) => setCount(e.target.value)}
+                  className="w-14 bg-white/10 rounded-lg px-2 py-1 text-white text-xs border-0 outline-none" />
+                volte
+              </span>
+            )}
+          </div>
+        </>
+      )}
+      {task.recurrence_label && (
+        <div className="text-[11px] text-white/50">La modifica vale da questa occorrenza in poi; quelle passate restano come sono.</div>
+      )}
+      <div className="flex items-center gap-2">
+        <button data-testid="recur-save" onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">
+          {saving ? "…" : "Salva"}
+        </button>
+        <button onClick={() => setOpen(false)} className="text-xs px-2 py-1.5 rounded-full text-white/50 hover:text-white/80">Annulla</button>
+      </div>
+    </div>
+  );
+}
 
 const formatCreatedAt = (iso) => {
   const d = new Date(iso);
@@ -696,17 +883,12 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
   };
 
   const del = async () => {
-    toast("Eliminare questo task?", {
-      action: {
-        label: "Elimina",
-        onClick: async () => {
-          await api.delete(`/tasks/${task.id}`);
-          onUpdated();
-          onClose();
-        },
-      },
-      cancel: { label: "Annulla", onClick: () => {} },
-      duration: 6000,
+    askDeleteTask(task, async (scope) => {
+      try {
+        await api.delete(`/tasks/${task.id}`, { params: { scope } });
+        onUpdated();
+        onClose();
+      } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
     });
   };
 
@@ -802,6 +984,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
                 <DialogTitle className="text-xl font-bold text-white break-words text-left leading-snug">{task.title}</DialogTitle>
               </DialogHeader>
               {dateBlock}
+              <RecurrenceRow task={task} onUpdated={onUpdated} />
             </div>
           </div>
         ) : (
@@ -811,6 +994,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
                 <DialogTitle className="text-xl font-bold text-white truncate">{task.title}</DialogTitle>
               </DialogHeader>
               {dateBlock}
+              <RecurrenceRow task={task} onUpdated={onUpdated} />
             </div>
             <div className="flex items-center gap-1 shrink-0 pt-1">
               {actionButtons}

@@ -41,6 +41,7 @@ import news_service
 import vet_reports
 import list_updates as lu
 import scheduled_actions as sa
+import recurrence as rec
 import usage_tracking as ut
 
 ROOT_DIR = Path(__file__).parent
@@ -1015,7 +1016,8 @@ def build_system_prompt(user: User, action: str) -> str:
             "e il CONTESTO fornisce dati sufficienti per identificarli tutti con certezza, crea un task PER CIASCUNO: "
             "usa il blocco META in forma elenco, "
             "<<<META>>>{\"tasks\": [{\"title\": \"...\", \"due_date\": \"YYYY-MM-DD\", \"due_time\": \"HH:MM o null\", "
-            "\"duration_minutes\": \"numero o null\", \"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}, "
+            "\"duration_minutes\": \"numero o null\", \"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\", "
+            "\"recurrence\": {...} solo se va ripetuto, vedi RICORRENZA}, "
             "...]}<<<END>>>, un oggetto per evento, con le stesse regole su date/ore/durata descritte sotto. Nella "
             "risposta visibile elenca brevemente cosa hai creato (es. 'Ho creato 5 task, uno per ogni lezione di "
             "pilates della settimana: lunedì, mercoledì...'). Se il CONTESTO non è chiaro o sufficiente per "
@@ -1027,7 +1029,16 @@ def build_system_prompt(user: User, action: str) -> str:
             "<<<META>>>{\"title\": \"breve titolo del task/todo\", \"summary\": \"riassunto in 1 riga max 140 caratteri\", \"description\": \"\", "
             "\"due_date\": \"YYYY-MM-DD o null\", \"due_time\": \"HH:MM o null\", \"duration_minutes\": \"numero di minuti o null\", "
             "\"reminder_minutes_before\": \"numero di minuti o null\", "
-            "\"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\"}<<<END>>>. "
+            "\"priority\": \"alta|media|bassa\", \"tags\": [\"...\"], \"notes\": \"\", "
+            "\"recurrence\": {...} solo se va ripetuto, vedi RICORRENZA}<<<END>>>. "
+            "RICORRENZA: se l'utente chiede che il task si RIPETA (es. 'ogni lunedì alle 9', 'tutti i giorni', 'ogni 2 "
+            "settimane', 'il primo di ogni mese', 'ogni anno il 3 ottobre', 'per tutto il 2026', 'fino a dicembre', "
+            "'per 10 volte'), aggiungi \"recurrence\": {\"freq\": \"daily|weekly|monthly|yearly\", \"interval\": 1, "
+            "\"weekdays\": [numeri 0-6, 0=lunedì, solo per weekly], \"day_of_month\": 1-31 oppure -1 per l'ultimo giorno "
+            "(solo per monthly), \"until\": \"YYYY-MM-DD o null\", \"count\": \"numero di ripetizioni o null\"} e metti in "
+            "due_date la PRIMA occorrenza da oggi in poi (es. 'ogni lunedì' -> il prossimo lunedì, oggi compreso). "
+            "'Per tutto il 2026' -> until 2026-12-31. Se l'utente non chiede ripetizioni ometti del tutto recurrence. "
+            "Nella risposta visibile conferma anche la cadenza (es. 'ogni lunedì alle 9'). "
             "REGOLA: se rilevi una data (anche implicita: 'domani', 'lunedì', 'tra 3 giorni'), imposta due_date. "
             "Se rilevi un'ora, imposta due_time. Se rilevi anche una durata (es. 'per un'ora', 'di 45 minuti', "
             "'dalle 15 alle 16'), imposta duration_minutes; altrimenti lascialo null (il sistema userà 30 minuti di default "
@@ -1435,6 +1446,10 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
     now = datetime.now(timezone.utc).isoformat()
     # RULE: if due_date is present → TASK, otherwise → TODO (regardless of any 'type' field the LLM returned)
     due_date = parsed.get("due_date")
+    recurrence_raw = parsed.get("recurrence") if isinstance(parsed.get("recurrence"), dict) else None
+    if recurrence_raw and not due_date:
+        # "ogni lunedì" without an explicit date: the first occurrence from today on
+        due_date = rec.first_occurrence(recurrence_raw, datetime.now(LOCAL_TZ).date())
     due_time = parsed.get("due_time")
     try:
         duration_minutes = int(parsed.get("duration_minutes")) if parsed.get("duration_minutes") else None
@@ -1468,6 +1483,11 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
             "source_conv": conv_id,
         }
         await db.tasks.insert_one(doc)
+        if recurrence_raw:
+            try:
+                await _set_task_recurrence(doc, recurrence_raw, user_id)
+            except Exception:
+                logger.exception(f"recurrence setup failed for {recurrence_raw!r}")
     else:
         doc = {
             "id": f"todo_{uuid.uuid4().hex[:12]}",
@@ -1701,11 +1721,17 @@ async def _update_task_or_todo_from_meta(kind: str, doc_id: str, meta: dict):
                 fields["reminder_enabled"] = True
         except (TypeError, ValueError):
             pass
-    if not fields:
-        return
-    _clear_cached_embedding(fields, {"title", "description", "notes"})
-    coll = db.tasks if kind == "task" else db.todos
-    await coll.update_one({"id": doc_id}, {"$set": fields})
+    if fields:
+        _clear_cached_embedding(fields, {"title", "description", "notes"})
+        coll = db.tasks if kind == "task" else db.todos
+        await coll.update_one({"id": doc_id}, {"$set": fields})
+    if kind == "task" and isinstance(meta.get("recurrence"), dict):
+        task = await db.tasks.find_one({"id": doc_id}, {"_id": 0})
+        if task and task.get("due_date"):
+            try:
+                await _set_task_recurrence(task, meta["recurrence"], task["user_id"])
+            except Exception:
+                logger.exception("recurrence update from follow-up failed")
 
 
 async def interpret_task_command(text: str, catalog: List[dict], user_id: Optional[str] = None, channel: str = "web") -> Optional[dict]:
@@ -1900,6 +1926,20 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
     existing = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Task not found")
+    apply_to = payload.pop("apply_to", None)
+
+    # Occurrence of a recurring task: Calendar holds the whole series as ONE recurring event
+    series = await db.task_series.find_one({"id": existing["series_id"]}, {"_id": 0}) if existing.get("series_id") else None
+    if series and "calendar_synced" in payload:
+        want = bool(payload.pop("calendar_synced"))
+        if want != bool(series.get("calendar_synced")):
+            try:
+                await _sync_series_calendar(series, want)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("series calendar sync failed")
+                raise HTTPException(status_code=500, detail=f"Sync calendar fallita: {e}")
 
     # Handle calendar_synced toggle
     if "calendar_synced" in payload and payload["calendar_synced"] != existing.get("calendar_synced"):
@@ -1937,16 +1977,25 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
         payload["reminder_msg_sent"] = False
 
     _clear_cached_embedding(payload, {"title", "description", "notes"})
-    await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": payload})
+    if payload:
+        await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": payload})
+    if apply_to == "series" and series:
+        await _apply_template_to_series(series["id"], payload)
     doc = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     return doc
 
 
 @api_router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str, current: User = Depends(get_current_user)):
+async def delete_task(task_id: str, scope: str = "one", current: User = Depends(get_current_user)):
+    """scope="following" on an occurrence of a recurring task: removes it and every
+    not-yet-done occurrence after it, and stops the series there."""
     existing = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Task not found")
+    if scope == "following" and existing.get("series_id"):
+        await _stop_task_recurrence(existing, include_this=True)
+        await db.tasks.delete_one({"id": task_id, **_editable_query(current)})
+        return {"ok": True}
     if existing.get("calendar_event_id"):
         try:
             creds = await gi.get_credentials(db, current.user_id)
@@ -1956,6 +2005,229 @@ async def delete_task(task_id: str, current: User = Depends(get_current_user)):
             logger.exception("failed removing calendar event on delete")
     await db.tasks.delete_one({"id": task_id, **_editable_query(current)})
     return {"ok": True}
+
+
+# ============ TASK RICORRENTI ============
+# A recurring task is a series (task_series) + ordinary task occurrences carrying series_id,
+# generated rec.WINDOW_DAYS ahead (and topped up by _task_series_loop). Each occurrence can be
+# completed, moved or deleted on its own; changing the rule from an occurrence re-anchors the
+# series there ("da questo in poi"), past occurrences stay as they are. On Google Calendar a
+# series is ONE recurring event (RRULE), not one event per occurrence.
+_SERIES_TEMPLATE_FIELDS = ("title", "description", "priority", "tags", "due_time", "duration_minutes",
+                           "reminder_enabled", "reminder_offset_minutes", "assigned_to")
+
+
+class RecurrencePayload(BaseModel):
+    rule: Optional[dict] = None  # None = stop repeating from this occurrence on
+
+
+def _local_today():
+    return datetime.now(LOCAL_TZ).date()
+
+
+def _occurrence_doc(series: dict, d) -> dict:
+    return {
+        "id": f"task_{uuid.uuid4().hex[:12]}",
+        "user_id": series["user_id"],
+        "org_id": series.get("org_id"),
+        "visibility": series.get("visibility") or "private",
+        **{k: series.get(k) for k in _SERIES_TEMPLATE_FIELDS},
+        "title": series.get("title") or "Task",
+        "tags": series.get("tags") or [],
+        "priority": series.get("priority") or "media",
+        "notes": "",
+        "due_date": d.isoformat(),
+        "calendar_synced": bool(series.get("calendar_synced")),
+        # the generic "domani hai in scadenza" digest would fire for every occurrence of a
+        # routine; the per-task reminder (reminder_enabled) still works as for any task
+        "reminder_sent": True,
+        "reminder_enabled": bool(series.get("reminder_enabled")),
+        "reminder_msg_sent": False,
+        "series_id": series["id"],
+        "recurrence_label": series.get("label"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_conv": series.get("source_conv"),
+    }
+
+
+async def _extend_series(series: dict, today=None) -> int:
+    """Creates the missing occurrences up to today + WINDOW_DAYS."""
+    if not series.get("active", True):
+        return 0
+    from datetime import date as _date
+    today = today or _local_today()
+    start = _date.fromisoformat(series["start_date"])
+    horizon = today + timedelta(days=rec.WINDOW_DAYS)
+    gen_until = _date.fromisoformat(series["generated_until"]) if series.get("generated_until") else start - timedelta(days=1)
+    upd = {}
+    created = 0
+    if gen_until < horizon:
+        dates = rec.occurrences(series["rule"], start, gen_until + timedelta(days=1), horizon)
+        docs = [_occurrence_doc(series, d) for d in dates]
+        if docs:
+            await db.tasks.insert_many(docs)
+            created = len(docs)
+        upd["generated_until"] = horizon.isoformat()
+        if rec.is_finished(series["rule"], start, horizon):
+            upd["active"] = False
+    if upd:
+        await db.task_series.update_one({"id": series["id"]}, {"$set": upd})
+        series.update(upd)
+    return created
+
+
+async def _sync_series_calendar(series: dict, on: bool, creds=None):
+    """(Re)creates or removes the single recurring Google Calendar event of a series and
+    flags its occurrences accordingly."""
+    from datetime import date as _date
+    creds = creds or await gi.get_credentials(db, series["user_id"])
+    if not creds:
+        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni.")
+    if series.get("calendar_event_id"):
+        await gi.delete_calendar_event(creds, series["calendar_event_id"])
+    # occurrences synced one by one before becoming a series: drop those single events
+    async for t in db.tasks.find({"series_id": series["id"], "calendar_event_id": {"$nin": [None, ""]}}, {"_id": 0}):
+        await gi.delete_calendar_event(creds, t["calendar_event_id"])
+        await db.tasks.update_one({"id": t["id"]}, {"$set": {"calendar_event_id": None}})
+    event_id = None
+    if on:
+        start = _date.fromisoformat(series["start_date"])
+        event_id = await gi.create_calendar_event(
+            creds, title=series.get("title") or "Task mAIPAL", description=series.get("description") or "",
+            due_date=series["start_date"], due_time=series.get("due_time"),
+            duration_minutes=series.get("duration_minutes"), recurrence=rec.to_rrule(series["rule"], start),
+        )
+    await db.task_series.update_one({"id": series["id"]}, {"$set": {"calendar_synced": on, "calendar_event_id": event_id}})
+    series.update({"calendar_synced": on, "calendar_event_id": event_id})
+    await db.tasks.update_many({"series_id": series["id"]}, {"$set": {"calendar_synced": on}})
+
+
+async def _resync_series_calendar_if_needed(series: dict):
+    if series.get("calendar_synced"):
+        try:
+            await _sync_series_calendar(series, True)
+        except Exception:
+            logger.exception("series calendar resync failed")
+
+
+async def _set_task_recurrence(task: dict, raw_rule: dict, user_id: str) -> dict:
+    """Makes `task` (and what follows it) repeat by `raw_rule`: a new series anchored on the
+    task, or - for an occurrence of an existing series - the series re-anchored there with
+    the new rule, replacing the not-yet-done occurrences after it."""
+    from datetime import date as _date
+    if not task.get("due_date"):
+        raise HTTPException(status_code=400, detail="Per farlo ripetere, il task deve avere una data")
+    start = _date.fromisoformat(task["due_date"])
+    rule = rec.normalize_rule(raw_rule, start)
+    if not rule:
+        raise HTTPException(status_code=400, detail="Cadenza di ripetizione non valida")
+    label = rec.rule_label(rule, start)
+    series = await db.task_series.find_one({"id": task.get("series_id")}, {"_id": 0}) if task.get("series_id") else None
+    template = {k: task.get(k) for k in _SERIES_TEMPLATE_FIELDS}
+    if series:
+        await db.tasks.delete_many({"series_id": series["id"], "id": {"$ne": task["id"]},
+                                    "due_date": {"$gt": task["due_date"]}, "completed": {"$ne": True}})
+        upd = {**template, "rule": rule, "label": label, "start_date": task["due_date"],
+               "generated_until": task["due_date"], "active": True}
+        await db.task_series.update_one({"id": series["id"]}, {"$set": upd})
+        series.update(upd)
+    else:
+        series = {
+            "id": f"series_{uuid.uuid4().hex[:12]}",
+            "user_id": task.get("user_id") or user_id,
+            "org_id": task.get("org_id"),
+            "visibility": task.get("visibility") or "private",
+            **template,
+            "rule": rule, "label": label,
+            "start_date": task["due_date"], "generated_until": task["due_date"],
+            "active": True, "calendar_synced": bool(task.get("calendar_synced")), "calendar_event_id": None,
+            "source_conv": task.get("source_conv"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.task_series.insert_one(dict(series))
+        series.pop("_id", None)
+    await db.tasks.update_one({"id": task["id"]}, {"$set": {"series_id": series["id"], "reminder_sent": True}})
+    await _extend_series(series)
+    await db.tasks.update_many({"series_id": series["id"]}, {"$set": {"recurrence_label": label}})
+    await _resync_series_calendar_if_needed(series)
+    return series
+
+
+async def _stop_task_recurrence(task: dict, include_this: bool = False):
+    """Stops a series at this occurrence: the not-yet-done occurrences after it (and this
+    one too with include_this) are removed; what is left becomes plain tasks."""
+    from datetime import date as _date
+    series = await db.task_series.find_one({"id": task.get("series_id")}, {"_id": 0}) if task.get("series_id") else None
+    if not series:
+        return
+    cmp = "$gte" if include_this else "$gt"
+    await db.tasks.delete_many({"series_id": series["id"], "due_date": {cmp: task["due_date"]}, "completed": {"$ne": True}})
+    last = _date.fromisoformat(task["due_date"]) - (timedelta(days=1) if include_this else timedelta(0))
+    rule = {**series["rule"], "until": last.isoformat()}
+    rule.pop("count", None)
+    await db.task_series.update_one({"id": series["id"]}, {"$set": {"active": False, "rule": rule}})
+    series.update({"active": False, "rule": rule})
+    await db.tasks.update_many({"series_id": series["id"]}, {"$set": {"recurrence_label": None}})
+    if series.get("calendar_synced"):
+        try:
+            remaining = await db.tasks.count_documents({"series_id": series["id"]})
+            if remaining and last >= _date.fromisoformat(series["start_date"]):
+                await _sync_series_calendar(series, True)
+            else:
+                await _sync_series_calendar(series, False)
+        except Exception:
+            logger.exception("series calendar update on stop failed")
+
+
+async def _apply_template_to_series(series_id: str, fields: dict):
+    """A change meant for the whole series: template + every not-yet-done occurrence from today."""
+    tmpl = {k: v for k, v in fields.items() if k in _SERIES_TEMPLATE_FIELDS}
+    if not tmpl:
+        return
+    await db.task_series.update_one({"id": series_id}, {"$set": tmpl})
+    await db.tasks.update_many({"series_id": series_id, "completed": {"$ne": True}, "due_date": {"$gte": _local_today().isoformat()}},
+                               {"$set": tmpl})
+    series = await db.task_series.find_one({"id": series_id}, {"_id": 0})
+    if series and ({"title", "description", "due_time", "duration_minutes"} & set(tmpl)):
+        await _resync_series_calendar_if_needed(series)
+
+
+@api_router.put("/tasks/{task_id}/recurrence")
+async def set_task_recurrence(task_id: str, payload: RecurrencePayload, current: User = Depends(get_current_user)):
+    task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if payload.rule is None:
+        await _stop_task_recurrence(task)
+    else:
+        await _set_task_recurrence(task, payload.rule, current.user_id)
+    return await db.tasks.find_one({"id": task_id}, {"_id": 0})
+
+
+@api_router.get("/tasks/{task_id}/recurrence")
+async def get_task_recurrence(task_id: str, current: User = Depends(get_current_user)):
+    task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    series = await db.task_series.find_one({"id": task.get("series_id")}, {"_id": 0}) if task.get("series_id") else None
+    if not series or not task.get("recurrence_label"):
+        return {"series": None}
+    return {"series": {k: series.get(k) for k in ("id", "rule", "label", "start_date", "active", "calendar_synced")}}
+
+
+async def _task_series_loop():
+    """Every 6 hours: tops up every active series to today + WINDOW_DAYS."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            async for s in db.task_series.find({"active": True}, {"_id": 0}):
+                try:
+                    await _extend_series(s)
+                except Exception:
+                    logger.exception(f"extending series {s.get('id')} failed")
+        except Exception:
+            logger.exception("task series loop iteration failed")
+        await asyncio.sleep(6 * 3600)
 
 
 # ============ TODOS ============
@@ -3361,7 +3633,12 @@ async def task_chat(task_id: str, payload: ContextChatRequest, current: User = D
         "Rispondi in modo naturale (1-2 frasi) con la conferma della modifica. "
         "In coda includi SOLO per il sistema i campi da aggiornare tra i marcatori "
         "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, due_date (formato ESATTO YYYY-MM-DD), "
-        "due_time (formato ESATTO HH:MM, oppure null), priority ('alta'|'media'|'bassa'), tags, notes. "
+        "due_time (formato ESATTO HH:MM, oppure null), priority ('alta'|'media'|'bassa'), tags, notes, "
+        "recurrence (per farlo RIPETERE: {\"freq\": \"daily|weekly|monthly|yearly\", \"interval\": 1, \"weekdays\": [0-6, "
+        "0=lunedì, solo weekly], \"day_of_month\": 1-31 o -1 (solo monthly), \"until\": \"YYYY-MM-DD o null\", \"count\": null}; "
+        "null per SMETTERE di ripeterlo), apply_to_series (true SOLO se il task fa parte di una serie ricorrente e "
+        "l'utente chiede che la modifica valga per tutte le prossime ripetizioni, es. 'sempre', 'tutte le volte', "
+        "'tutta la serie'; altrimenti la modifica vale solo per questa occorrenza). "
         "Includi in META SOLO le chiavi che l'utente ha chiesto esplicitamente di cambiare - non toccare le altre."
     )
     chat = LlmChat(
@@ -3379,8 +3656,24 @@ async def task_chat(task_id: str, payload: ContextChatRequest, current: User = D
             meta.pop("due_time")
     q = {"id": task_id, **_editable_query(current)}
     if meta:
-        _clear_cached_embedding(meta, {"title", "description", "notes"})
-        await db.tasks.update_one(q, {"$set": meta})
+        has_rec = "recurrence" in meta
+        rec_raw = meta.pop("recurrence", None)
+        to_series = bool(meta.pop("apply_to_series", False))
+        meta = {k: v for k, v in meta.items() if k in ("title", "description", "due_date", "due_time", "priority", "tags", "notes")}
+        if meta:
+            _clear_cached_embedding(meta, {"title", "description", "notes"})
+            await db.tasks.update_one(q, {"$set": meta})
+            if to_series and task.get("series_id"):
+                await _apply_template_to_series(task["series_id"], meta)
+        if has_rec:
+            fresh = await db.tasks.find_one(q, {"_id": 0})
+            try:
+                if rec_raw is None:
+                    await _stop_task_recurrence(fresh)
+                else:
+                    await _set_task_recurrence(fresh, rec_raw, current.user_id)
+            except HTTPException as he:
+                visible += f"\n⚠️ {he.detail}"
     updated = await db.tasks.find_one(q, {"_id": 0})
     return {"answer": visible, "task": updated}
 
@@ -4689,6 +4982,10 @@ async def start_services():
         asyncio.create_task(_scheduled_actions_loop())
     except Exception:
         logger.exception("failed to start scheduled actions loop")
+    try:
+        asyncio.create_task(_task_series_loop())
+    except Exception:
+        logger.exception("failed to start task series loop")
 
 
 def _snooze_keyboard(task_id: str):
