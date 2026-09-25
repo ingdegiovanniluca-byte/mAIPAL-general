@@ -38,7 +38,9 @@ export default function SuggestionsTicker({ onSelect }) {
 
   if (!items.length) return null;
   return (
-    <div className="-mx-4 mb-4" data-testid="suggestions">
+    // One empty line (as tall as a suggestion line: 15px x 1.375) above, below the header
+    // (-mt-4 cancels the page's own top padding), and one below, before the actions menu.
+    <div className="-mx-4 -mt-4 pt-[21px] mb-[21px]" data-testid="suggestions">
       <div
         ref={scrollerRef}
         onScroll={onScroll}
