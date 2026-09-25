@@ -1382,15 +1382,21 @@ const glowTileStyle = (color) => ({
   boxShadow: `inset 0 0 20px 3px ${hexToRgba(shadeHex(color, 0.6), 0.55)}, inset 0 1px 1px rgba(255, 255, 255, 0.35), 0 14px 32px -10px ${hexToRgba(color, 0.7)}`,
 });
 
+const IT_MONTHS_LONG_CHAT = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+
+// Mobile history tile: one-word topic (white, bold) with the star beside it, the first
+// question in a lighter tint of the tile's own color (readable, but quieter than the
+// topic), a blank line as tall as that text, then "25 settembre 15:00" with the trash can.
 function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDelete }) {
   const d = conv.created_at ? new Date(conv.created_at) : null;
   const pad = (n) => String(n).padStart(2, "0");
-  const dateLabel = d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}` : "";
-  const timeLabel = d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : "";
+  const dateLabel = d ? `${d.getDate()} ${IT_MONTHS_LONG_CHAT[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}` : "";
   const title = conv.title || (conv.meta && conv.meta.title) || "";
-  const preview = (conv.messages && conv.messages[0]?.content) || conv.user_message || "";
+  const topic = conv.topic || (title ? title.split(/\s+/)[0] : "") || ACTION_LABELS_IT[conv.action] || "Chat";
+  const question = (conv.messages && conv.messages.find((m) => m.role === "user")?.content) || conv.user_message || "";
   const isFav = !!conv.favorite;
   const color = ACTION_COLOR[conv.action] || "#6D6181";
+  const questionColor = hexToRgba(shadeHex(color, 0.62), 0.95);
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   return (
     <div
@@ -1403,22 +1409,21 @@ function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDe
       style={glowTileStyle(color)}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="text-xl font-semibold leading-none tabular-nums">{dateLabel}</div>
+        <div className="text-base font-bold leading-tight text-white break-words min-w-0" data-testid="conv-topic">{topic}</div>
         <button data-testid="fav-btn" onClick={stop(onToggleFav)} title={isFav ? "Rimuovi preferito" : "Preferito"}
-          className={`-mt-1 -mr-1 p-1 ${isFav ? "text-amber-300" : "text-white/60"}`}>
-          <Star size={15} className={isFav ? "fill-current" : ""} />
+          className={`-mt-1 -mr-1 p-1 shrink-0 ${isFav ? "text-amber-300" : "text-white/70"}`}>
+          <Star size={16} className={isFav ? "fill-current" : ""} />
         </button>
       </div>
-      {title && <div className="mt-3 text-sm font-semibold leading-snug" data-testid="conv-title">{title}</div>}
-      {preview && <div className="mt-2 text-xs text-white/80 leading-relaxed line-clamp-5">{preview}</div>}
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="text-[10px] px-2 py-0.5 rounded-md border border-white/35 text-white/90 truncate">{ACTION_LABELS_IT[conv.action] || conv.action}</span>
-        <div className="flex items-center gap-1 shrink-0 text-[10px] text-white/75">
-          {timeLabel}
-          <button data-testid="delete-conv-btn" onClick={stop(onDelete)} title="Elimina" className="p-1 -mr-1 text-white/60">
-            <Trash2 size={12} />
-          </button>
-        </div>
+      {question && (
+        <div className="mt-2 text-xs leading-snug line-clamp-5 break-words" style={{ color: questionColor }} data-testid="conv-question">{question}</div>
+      )}
+      <div className="h-3" aria-hidden="true" />
+      <div className="flex items-center justify-between gap-2 text-xs text-white">
+        <span className="truncate">{dateLabel}</span>
+        <button data-testid="delete-conv-btn" onClick={stop(onDelete)} title="Elimina" className="p-1 -mr-1 shrink-0 text-white/70">
+          <Trash2 size={13} />
+        </button>
       </div>
     </div>
   );

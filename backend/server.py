@@ -1268,6 +1268,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         completed_at = datetime.now(timezone.utc).isoformat()
         conv_set = {"agent_response": visible_answer, "meta": meta or {}, "completed_at": completed_at}
         # Persist a first-turn summary/title at conversation root so the history card can always display them
+        if not prior_messages:
+            asyncio.create_task(_ensure_conv_topics(current.user_id, [conv_id]))
         if not prior_messages and meta:
             if meta.get("title"): conv_set["title"] = meta["title"]
             if meta.get("summary"): conv_set["summary"] = meta["summary"]
@@ -1868,7 +1870,59 @@ async def list_conversations(current: User = Depends(get_current_user), action: 
     if favorite is True:
         q["favorite"] = True
     cursor = db.conversations.find(q, {"_id": 0}).sort("created_at", -1).limit(200)
-    return await cursor.to_list(200)
+    convs = await cursor.to_list(200)
+    # Conversations saved before topics existed get theirs in the background (visible on the
+    # next load) - never slowing this listing down.
+    missing = [c["conv_id"] for c in convs if not c.get("topic")][:40]
+    if missing:
+        asyncio.create_task(_ensure_conv_topics(current.user_id, missing))
+    return convs
+
+
+def _first_user_text(conv: dict) -> str:
+    for m in conv.get("messages") or []:
+        if m.get("role") == "user" and m.get("content"):
+            return m["content"]
+    return conv.get("user_message") or ""
+
+
+_topics_running: set = set()
+
+
+async def _ensure_conv_topics(user_id: str, conv_ids: List[str]):
+    """One word per conversation ("Pilates", "Vacanza", "Fatture"...) for the history cards -
+    one cheap batched call for all the conversations still without it."""
+    if user_id in _topics_running:
+        return
+    _topics_running.add(user_id)
+    try:
+        convs = await db.conversations.find({"user_id": user_id, "conv_id": {"$in": conv_ids}, "topic": {"$exists": False}},
+                                            {"_id": 0, "conv_id": 1, "title": 1, "messages": 1, "user_message": 1}).to_list(len(conv_ids))
+        if not convs:
+            return
+        items = [{"id": c["conv_id"], "titolo": c.get("title") or "", "messaggio": _first_user_text(c)[:300]} for c in convs]
+        system = (
+            "Per ogni conversazione scegli UNA sola parola italiana (al massimo due se indispensabile, es. 'Codici casa') "
+            "che dica di cosa parla, come un'etichetta: es. Vacanza, Pilates, Fatture, Sport, Design, Lavoro, Salute, "
+            "Famiglia, Spesa, Wifi. Iniziale maiuscola, niente punteggiatura. "
+            "Rispondi SOLO con JSON: {\"topics\": {\"<id>\": \"Parola\", ...}}"
+        )
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"topics_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=user_id, feature="altro", channel="sistema", trigger="automatico",
+        ).with_model("openai", "gpt-4o-mini")
+        import json as _json, re as _re
+        raw = await chat.send_message(UserMessage(text=_json.dumps(items, ensure_ascii=False)))
+        m = _re.search(r"\{.*\}", raw or "", _re.DOTALL)
+        topics = (_json.loads(m.group(0)).get("topics") or {}) if m else {}
+        for c in convs:
+            word = str(topics.get(c["conv_id"]) or "").strip().strip(".,;:!\"'")[:24]
+            if word:
+                await db.conversations.update_one({"conv_id": c["conv_id"]}, {"$set": {"topic": word[:1].upper() + word[1:]}})
+    except Exception:
+        logger.exception("conversation topics generation failed")
+    finally:
+        _topics_running.discard(user_id)
 
 
 @api_router.get("/conversations/{conv_id}")
