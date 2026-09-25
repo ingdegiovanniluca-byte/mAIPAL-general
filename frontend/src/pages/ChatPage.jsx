@@ -64,6 +64,45 @@ const ACTIONS = [
 const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 
+// Images over 1 MB for the knowledge base / Drive (typical PC screenshots or camera photos)
+// are re-encoded client-side into a JPEG of at most 2560px before upload - whichever of the
+// two is smaller is sent - so they stay well within the proxy's request size limits.
+const prepareImageForUpload = (file) => new Promise((resolve) => {
+  const isImg = (file.type || "").startsWith("image/") && !/heic|heif|gif|svg/i.test(file.type);
+  if (!isImg || file.size <= 1024 * 1024) { resolve(file); return; }
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const scale = Math.min(1, 2560 / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(url);
+        if (!blob || blob.size >= file.size) { resolve(file); return; }
+        resolve(new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" }));
+      }, "image/jpeg", 0.9);
+    } catch { URL.revokeObjectURL(url); resolve(file); }
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+  img.src = url;
+});
+
+// A non-JSON error body means the request was stopped BEFORE reaching mAIPAL (proxy,
+// Cloudflare, size limit) - say so instead of a bare "HTTP 403".
+const uploadErrorMessage = async (res) => {
+  const body = await res.text().catch(() => "");
+  try { const j = JSON.parse(body); if (j.detail) return typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* not JSON */ }
+  if (res.status === 413) return "file troppo grande per il server (limite del proxy)";
+  if (res.status === 403) return "caricamento bloccato prima di arrivare a mAIPAL (filtro di sicurezza di Cloudflare/proxy) - vedi Security → Events su Cloudflare";
+  return `HTTP ${res.status}`;
+};
+
 // Diary photos are downscaled/compressed client-side (max ~1600px, JPEG) before being
 // turned into a data URI, both to keep the request small and to stay under the backend's
 // ~2MB-per-image cap without the user having to think about file size.
@@ -241,7 +280,9 @@ export default function ChatPage() {
       const res = await api.post("/drive/resolve-pending", { pending_id: pendingDriveUpload.pendingId, text: folderText });
       const j = res.data;
       if (j.status === "saved") {
-        toast.success(`${pendingDriveUpload.fileName} → Drive/${j.folder}`);
+        const n = (j.saved || []).length;
+        toast.success(`${n > 1 ? `${n} file` : pendingDriveUpload.fileName} → Drive/${j.folder}`);
+        if ((j.failed || []).length) toast.error(`Non salvati: ${j.failed.join(", ")}`);
         setPendingDriveUpload(null);
         return true;
       }
@@ -580,6 +621,10 @@ export default function ChatPage() {
       } catch { /* check failed: fall through to a normal task/to-do creation */ }
     }
 
+    // What the chat SHOWS for this message: the user's own words + the attached file names.
+    // The notes for the model (chunks indexed, Drive outcome...) go only in `content`.
+    const displayQuestion = [currentQuestion, ...attachments.map((a) => `📎 ${a.name}`)].filter(Boolean).join("\n");
+    const driveHintText = currentQuestion;
     const journalImgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
     const journalDocs = attachments.filter((a) => a.journalDocument).map((a) => ({ name: a.name, url: a.url }));
     if (attachments.length > 0) {
@@ -591,7 +636,6 @@ export default function ChatPage() {
       currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
     }
     const driveFiles = attachments.filter((a) => a.driveFile);
-    const driveHintText = text.trim();
     setText("");
     setAttachments([]);
 
@@ -603,24 +647,27 @@ export default function ChatPage() {
         driveFiles.map(async (a) => ({ name: a.name, ...(await smartUploadToDrive(a.driveFile, driveHintText, !a.driveExplicit)) }))
       );
       const statusLines = driveResults
-        .filter((r) => r.status !== "skipped")
-        .map((r) => {
-          if (r.status === "saved") return `File salvato su Drive in "${r.folder}": ${r.name}.`;
-          if (r.status === "needs_folder") return `Non è stato possibile determinare automaticamente la cartella Drive per "${r.name}": è stato chiesto all'utente in che cartella salvarlo, il file non è ancora stato salvato su Drive.`;
-          return `Salvataggio su Drive di "${r.name}" non riuscito${r.error ? `: ${r.error}` : "."}`;
-        });
+        .filter((r) => r.status === "saved" || r.status === "error")
+        .map((r) => (r.status === "saved"
+          ? `File salvato su Drive in "${r.folder}": ${r.name}.`
+          : `Salvataggio su Drive di "${r.name}" non riuscito${r.error ? `: ${r.error}` : "."}`));
+      const waiting = driveResults.filter((r) => r.status === "needs_folder").map((r) => `"${r.name}"`);
+      if (waiting.length) {
+        statusLines.push(`Non è stato possibile capire in quale cartella Drive salvare ${waiting.length > 1 ? `questi ${waiting.length} file` : "il file"} (${waiting.join(", ")}): NON sono ancora su Drive. Chiedi all'utente in quale cartella salvarli - basta una sola risposta per tutti.`);
+      }
       if (statusLines.length > 0) {
         currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + statusLines.join("\n");
       }
     }
 
     if (thread) {
-      setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: currentQuestion }], liveAnswer: "" }));
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: displayQuestion }], liveAnswer: "" }));
     } else {
-      setThread({ conv_id: null, action: active, messages: [{ role: "user", content: currentQuestion }], liveAnswer: "" });
+      setThread({ conv_id: null, action: active, messages: [{ role: "user", content: displayQuestion }], liveAnswer: "" });
     }
 
     const payload = { action: active, content: currentQuestion };
+    if (displayQuestion !== currentQuestion) payload.display_content = displayQuestion;
     if (active === "info_request") payload.filters = { scope };
     if (active === "journal" && journalImgs.length > 0) payload.images = journalImgs;
     if (active === "journal" && journalDocs.length > 0) payload.documents = journalDocs;
@@ -694,17 +741,15 @@ export default function ChatPage() {
     // to Drive unread. In other actions: keep the previous behaviour (upload to Drive as
     // attachment).
     const useKb = active === "info_upload" || active === "task_todo";
-    for (const f of files) {
-      setUploadingFiles((u) => [...u, f.name]);
+    for (const original of files) {
+      setUploadingFiles((u) => [...u, original.name]);
+      const f = await prepareImageForUpload(original);
       try {
         const fd = new FormData();
         fd.append("file", f, f.name);
         const endpoint = useKb ? "/kb/upload" : "/attachments/upload";
         const res = await fetch(`${API}${endpoint}`, { method: "POST", body: fd, credentials: "include" });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-          throw new Error(errData.detail || `HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(await uploadErrorMessage(res));
         const j = await res.json();
         if (useKb) {
           // Always keep the raw file so it can ALSO be saved to Drive at send time - either
@@ -723,8 +768,8 @@ export default function ChatPage() {
           setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
           toast.success(`${f.name} → Drive`);
         }
-      } catch (err) { toast.error(`Upload ${f.name}: ${err.message}`); }
-      finally { setUploadingFiles((u) => u.filter((n) => n !== f.name)); }
+      } catch (err) { toast.error(`Upload ${original.name}: ${err.message}`); }
+      finally { setUploadingFiles((u) => u.filter((n) => n !== original.name)); }
     }
   };
   const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
@@ -737,16 +782,17 @@ export default function ChatPage() {
       fd.append("text", hintText || "");
       if (silent) fd.append("silent", "true");
       const res = await fetch(`${API}/drive/smart-upload`, { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) throw new Error(await uploadErrorMessage(res));
       const j = await res.json();
-      if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);
       if (j.status === "saved") {
         toast.success(`${file.name} → Drive/${j.folder}`);
         return { status: "saved", folder: j.folder };
       }
       if (j.status === "skipped") return { status: "skipped" };
       if (!silent) {
-        setPendingDriveUpload({ pendingId: j.pending_id, fileName: file.name, suggestions: j.suggestions || [] });
-        toast.message(`In quale cartella salvo "${file.name}"? Scrivilo nel messaggio o scegli qui sotto.`);
+        // Several files sent together: one question for all of them (the backend saves the
+        // whole batch into the folder given in the answer).
+        setPendingDriveUpload((p) => ({ pendingId: j.pending_id, fileName: file.name, count: (p?.count || 0) + 1, suggestions: j.suggestions || [] }));
         return { status: "needs_folder" };
       }
       return { status: "skipped" };
@@ -943,7 +989,7 @@ export default function ChatPage() {
             />
             {pendingDriveUpload && (
               <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">
-                <span className="kicker text-white/70">cartella per "{pendingDriveUpload.fileName}":</span>
+                <span className="kicker text-white/70">cartella per {pendingDriveUpload.count > 1 ? `${pendingDriveUpload.count} file` : `"${pendingDriveUpload.fileName}"`}:</span>
                 {pendingDriveUpload.suggestions.map((s) => (
                   <button
                     key={s}
@@ -1079,7 +1125,7 @@ export default function ChatPage() {
                 {thread.messages.map((m, i) => (
                   <div key={i}>
                     <div className="kicker mb-1">{m.role === "user" ? "· tu" : ""}</div>
-                    <div className={m.role === "user" ? "bg-white/10 rounded-2xl px-4 py-3 text-white" : "prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white"}>
+                    <div className={m.role === "user" ? "bg-white/10 rounded-2xl px-4 py-3 text-white whitespace-pre-wrap" : "prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white"}>
                       {m.content}
                     </div>
                     {m.reportId && (

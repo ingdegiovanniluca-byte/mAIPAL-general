@@ -144,6 +144,10 @@ class ChatRequest(BaseModel):
     # Non-image files attached to a diary entry (action == "journal" only) - already
     # uploaded to Drive client-side, each {"name": ..., "url": ...}.
     documents: Optional[List[dict]] = None
+    # What the chat shows for this message when `content` also carries notes meant only
+    # for the model (attachments indexed, Drive outcome): stored as the visible text, while
+    # `content` is kept (as llm_content) so follow-up turns still give the model the full context.
+    display_content: Optional[str] = None
 
 
 class Task(BaseModel):
@@ -1160,7 +1164,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             "user_id": current.user_id,
             "action": action,
             "created_at": now,
-            "user_message": payload.content,   # legacy: first message for cronologia preview
+            "user_message": payload.display_content or payload.content,   # legacy: first message for cronologia preview
             "filters": payload.filters or {},
             "pipeline": {"claude": "ok", "n8n": "skip", "mongodb": "ok"},
             "messages": [],
@@ -1199,7 +1203,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
 
     initial = [{"role": "system", "content": system}]
     for m in prior_messages:
-        initial.append({"role": m["role"], "content": m["content"]})
+        initial.append({"role": m["role"], "content": m.get("llm_content") or m["content"]})
 
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
@@ -1213,7 +1217,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     # Save the user turn to the messages array immediately
     await db.conversations.update_one(
         {"conv_id": conv_id},
-        {"$push": {"messages": {"role": "user", "content": payload.content, "ts": now}}},
+        {"$push": {"messages": {"role": "user", "content": payload.display_content or payload.content, "ts": now,
+                                **({"llm_content": payload.content} if payload.display_content else {})}}},
     )
 
     import json as _json
@@ -1290,8 +1295,10 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         # this on `not prior_messages` (first turn only) silently dropped every fact stated
         # in a follow-up turn - it never became retrievable, with no error to the user.
         if action == "info_upload":
+            # the note is what the user wrote (+ attached file names), not the notes for the model
+            note_text = payload.display_content or payload.content
             try:
-                e = await emb.embed_texts([payload.content])
+                e = await emb.embed_texts([note_text])
                 embedding = e[0] if e else None
             except Exception:
                 embedding = None
@@ -1299,7 +1306,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             await db.kb_chunks.insert_one({
                 "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
                 "user_id": current.user_id,
-                "text": payload.content,
+                "text": note_text,
                 "title": (meta or {}).get("title") if meta else None,
                 "tags": (meta or {}).get("tags", []) if meta else [],
                 "summary": (meta or {}).get("summary") if meta else visible_answer,
@@ -1312,21 +1319,21 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             })
             # Classify + persist document-level record so it appears in the Documents page
             try:
-                classification = await _classify_document(payload.content, user_id=current.user_id, channel="web")
+                classification = await _classify_document(note_text, user_id=current.user_id, channel="web")
             except Exception:
                 classification = {"category": "altro", "keywords": []}
             await db.kb_documents.insert_one({
                 "doc_id": doc_id,
                 "user_id": current.user_id,
-                "name": (meta or {}).get("title") if meta else (payload.content[:60] + ("…" if len(payload.content) > 60 else "")),
+                "name": (meta or {}).get("title") if meta else (note_text[:60] + ("…" if len(note_text) > 60 else "")),
                 "ext": "chat",
                 "source_type": "chat",
                 "category": classification["category"],
                 "keywords": list({*(classification["keywords"] or []), *(((meta or {}).get("tags") or []))})[:8],
                 "chunks_count": 1,
-                "chars": len(payload.content),
-                "size_bytes": len(payload.content.encode("utf-8")),
-                "preview": ((meta or {}).get("summary") if meta else payload.content)[:280],
+                "chars": len(note_text),
+                "size_bytes": len(note_text.encode("utf-8")),
+                "preview": ((meta or {}).get("summary") if meta else note_text)[:280],
                 "drive_link": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "conv_id": conv_id,
@@ -3740,41 +3747,73 @@ async def upload_attachment(file: UploadFile = File(...), current: User = Depend
         except Exception: pass
 
 
-_DRIVE_FOLDER_HINT_RE = None
+# Words that can follow the folder name in a request ("...nella cartella Schermate su drive
+# per favore") and are never part of it.
+_FOLDER_STOP_WORDS = {
+    "su", "in", "nel", "nella", "sul", "sulla", "di", "del", "della", "da", "per", "e", "ed", "che", "con",
+    "drive", "google", "grazie", "per favore", "perfavore", "please", "mi", "ti", "li", "le", "lo", "la",
+    "subito", "ora", "adesso", "tutti", "tutte", "anche", "poi", "dentro", "mentre",
+}
+# Verbs a reply like "salvali nella cartella X" is made of - such a reply is a sentence,
+# never a bare folder name, even when it's short.
+_FOLDER_COMMAND_WORDS = ("salva", "salvali", "salvale", "salvalo", "salvala", "salvarl", "metti", "mettil", "mettel",
+                         "carica", "caricali", "caricale", "sposta", "spostali", "archivia", "cartella", "drive")
 
 
 def _regex_drive_folder_hint(text: str) -> Optional[str]:
-    """Deterministic fallback used when the LLM-based folder-hint resolution fails
-    outright (e.g. a transient error calling the model) - catches the common literal
-    phrasing '...nella cartella NomeCartella...' without depending on any external call."""
-    global _DRIVE_FOLDER_HINT_RE
-    if _DRIVE_FOLDER_HINT_RE is None:
-        import re as _re
-        _DRIVE_FOLDER_HINT_RE = _re.compile(
-            r"cartella\s+(?:chiamata\s+|denominata\s+|di\s+nome\s+)?[\"'«]?"
-            r"([A-Za-zÀ-ÖØ-öø-ÿ0-9_\-]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ0-9_\-]+){0,3})[\"'»]?",
-            _re.IGNORECASE,
-        )
-    m = _DRIVE_FOLDER_HINT_RE.search(text or "")
+    """Deterministic extraction of '...(nella) cartella NomeCartella...' - tried BEFORE the
+    model, since this is by far the most common phrasing and needs no guessing. A quoted
+    name is taken as is; otherwise the name is the words after "cartella" up to the first
+    word that can't be part of it ("su drive", "per favore", punctuation...)."""
+    import re as _re
+    t = text or ""
+    q = _re.search(r"cartella\s+(?:chiamata\s+|denominata\s+|di\s+nome\s+|nominata\s+)?[\"'«“]([^\"'»”]{1,60})[\"'»”]", t, _re.IGNORECASE)
+    if q:
+        return q.group(1).strip() or None
+    m = _re.search(r"cartella\s+(?:chiamata\s+|denominata\s+|di\s+nome\s+|nominata\s+)?(.+)", t, _re.IGNORECASE)
     if not m:
         return None
-    name = m.group(1).strip().rstrip(".,;:!?")
-    return name or None
+    words = []
+    for w in _re.split(r"\s+", m.group(1).strip()):
+        clean = w.strip(".,;:!?()")
+        if not clean or clean.lower() in _FOLDER_STOP_WORDS:
+            break
+        words.append(clean)
+        if w[-1:] in ".,;:!?" or len(words) == 4:
+            break
+    return " ".join(words) or None
+
+
+def _canonical_folder(name: Optional[str], existing: List[str]) -> Optional[str]:
+    """Reuses an existing folder when the name only differs by case/spacing ("schermate"
+    -> "Schermate"), instead of creating a near-duplicate."""
+    if not name:
+        return None
+    key = " ".join(name.split()).lower()
+    for e in existing:
+        if " ".join((e or "").split()).lower() == key:
+            return e
+    return " ".join(name.split())
 
 
 async def _resolve_drive_folder_hint(text: str, existing_folders: List[str], user_id: Optional[str] = None, channel: str = "web") -> Optional[str]:
-    """Ask the LLM whether the user's message names a target Drive folder (existing or
-    new). Returns the folder name, or None if the message doesn't specify one."""
+    """Which Drive folder the user's message names (existing or new), or None. The literal
+    "cartella X" phrasing is read deterministically; the model only handles the rest
+    (e.g. "mettila con le altre fatture")."""
     text = (text or "").strip()
     if not text:
         return None
+    literal = _regex_drive_folder_hint(text)
+    if literal:
+        return _canonical_folder(literal, existing_folders)
     folders_list = ", ".join(existing_folders) if existing_folders else "(nessuna)"
     system = (
         "L'utente sta caricando un file su Google Drive, dentro la cartella mAIPAL. "
         f"Cartelle già esistenti dentro mAIPAL: {folders_list}. "
-        "Analizza il messaggio dell'utente: se indica chiaramente in quale cartella salvare il file "
-        "(sia una cartella esistente sia una nuova da creare), rispondi SOLO con il nome esatto di quella cartella, "
-        "senza virgolette né altro testo. Se non lo specifica, rispondi SOLO con la parola: NESSUNA."
+        "Analizza il messaggio dell'utente (può contenere errori di battitura): se indica in quale cartella salvare il "
+        "file (sia una cartella esistente sia una nuova da creare), rispondi SOLO con il nome di quella cartella - solo "
+        "il nome, senza verbi, articoli, virgolette né altro testo (es. 'salvali nelle fatture' -> Fatture se esiste "
+        "una cartella simile). Se non lo specifica, rispondi SOLO con la parola: NESSUNA."
     )
     try:
         chat = LlmChat(
@@ -3782,15 +3821,12 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str], use
             user_id=user_id, feature="caricamento_informazioni", channel=channel, trigger="utente",
         ).with_model("openai", "gpt-4o-mini")  # single-word folder-name extraction
         raw = (await chat.send_message(UserMessage(text=text))).strip().strip('"').strip()
-        if not raw or raw.upper() == "NESSUNA":
+        if not raw or raw.upper() == "NESSUNA" or len(raw) > 60:
             return None
-        return raw
+        return _canonical_folder(raw, existing_folders)
     except Exception:
-        # A failed LLM call (auth/config/network) must NOT be treated the same as "no
-        # folder mentioned" - fall back to a deterministic regex match on the common
-        # Italian phrasing so an explicit "salvalo nella cartella X" still works.
-        logger.exception("drive folder hint resolution via LLM failed, trying regex fallback")
-        return _regex_drive_folder_hint(text)
+        logger.exception("drive folder hint resolution via LLM failed")
+        return None
 
 
 async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False, channel: str = "web") -> dict:
@@ -3848,8 +3884,10 @@ async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""),
 
 async def _drive_resolve_pending_core(current: User, pending_id: str, text: str, channel: str = "web") -> dict:
     """Shared by the web endpoint and the Telegram bot. Second turn of the smart-upload
-    flow: the user's follow-up message may now name the folder. Resolves it and finally
-    uploads the stashed file."""
+    flow: the user's follow-up message may now name the folder. Resolves it once and
+    uploads EVERY file of that same batch still waiting for a folder (several images sent
+    together each got their own pending upload - answering the question once saves them
+    all, not just the last one)."""
     doc = await db.pending_drive_uploads.find_one({"pending_id": pending_id, "user_id": current.user_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Nessun upload in attesa trovato")
@@ -3861,36 +3899,58 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
     subfolders = await gi.list_subfolders(db, current.user_id, creds)
     existing_names = [f["name"] for f in subfolders]
 
-    # This message is a DIRECT reply to "in quale cartella la salvo?", not a fresh caption
-    # that may or may not mention a folder - a short answer (a few words, no question mark)
-    # IS the folder name itself, existing or new to create. Relying only on the LLM hint
-    # extractor here occasionally answered "NESSUNA" for a bare one/two-word reply (e.g. just
-    # "Scontrini"), which silently re-asked the same question instead of creating that folder.
+    # A direct reply to "in quale cartella la salvo?": "cartella X" in it is read literally;
+    # otherwise a short answer with no command verb in it ("Scontrini", "le ricevute") IS the
+    # folder name. A short SENTENCE like "salvali nella cartella schermate" never is - taking
+    # it verbatim once created a folder literally named after the whole sentence.
     _NON_ANSWERS = {"non lo so", "boh", "nessuna", "non saprei", "niente", "annulla", "no", "non importa"}
     stripped = text.strip()
-    folder_name = None
-    if stripped and len(stripped) <= 60 and len(stripped.split()) <= 6 and not stripped.endswith("?") \
-            and stripped.lower() not in _NON_ANSWERS:
+    folder_name = _regex_drive_folder_hint(stripped)
+    lowered = stripped.lower()
+    if not folder_name and stripped and len(stripped) <= 40 and len(stripped.split()) <= 4 and not stripped.endswith("?") \
+            and lowered not in _NON_ANSWERS and not any(w in lowered for w in _FOLDER_COMMAND_WORDS):
         folder_name = stripped.rstrip(".,;:!")
-    if not folder_name:
+    if folder_name:
+        folder_name = _canonical_folder(folder_name, existing_names)
+    else:
         folder_name = await _resolve_drive_folder_hint(text, existing_names, user_id=current.user_id, channel=channel)
     if not folder_name:
         return {"status": "needs_folder", "pending_id": pending_id, "suggestions": existing_names}
 
+    # the same batch: this user's uploads left waiting within 15 minutes of this one
+    created = doc.get("created_at")
+    batch_q = {"user_id": current.user_id}
+    if isinstance(created, datetime):
+        created_utc = created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+        batch_q["created_at"] = {"$gte": created_utc - timedelta(minutes=15)}
+    batch = await db.pending_drive_uploads.find(batch_q, {"_id": 0}).to_list(50)
+    if not any(b["pending_id"] == pending_id for b in batch):
+        batch.append(doc)
+
     import base64 as _b64
-    contents = _b64.b64decode(doc["data_b64"])
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{doc['filename'].rsplit('.',1)[-1] if '.' in (doc['filename'] or '') else 'bin'}") as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
-    try:
-        folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
-        result = gi.upload_file_to_folder(creds, folder_id, tmp_path, doc["filename"], doc["content_type"])
-        await db.pending_drive_uploads.delete_one({"pending_id": pending_id})
-        ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
-        return {"status": "saved", "folder": folder_name, **result}
-    finally:
-        try: os.unlink(tmp_path)
-        except Exception: pass
+    folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
+    saved, failed, last = [], [], {}
+    for item in batch:
+        ext = item["filename"].rsplit(".", 1)[-1] if "." in (item.get("filename") or "") else "bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+            tmp.write(_b64.b64decode(item["data_b64"]))
+            tmp_path = tmp.name
+        try:
+            last = gi.upload_file_to_folder(creds, folder_id, tmp_path, item["filename"], item["content_type"])
+            await db.pending_drive_uploads.delete_one({"pending_id": item["pending_id"]})
+            saved.append(item["filename"])
+        except Exception:
+            logger.exception(f"drive upload of pending {item['pending_id']} failed")
+            failed.append(item["filename"])
+        finally:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+    # uploads nobody ever answered for stay at most a day
+    await db.pending_drive_uploads.delete_many({"user_id": current.user_id, "created_at": {"$lt": datetime.now(timezone.utc) - timedelta(days=1)}})
+    if not saved:
+        raise HTTPException(status_code=500, detail="Caricamento su Drive non riuscito")
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
+    return {"status": "saved", "folder": folder_name, "saved": saved, "failed": failed, **last}
 
 
 @api_router.post("/drive/resolve-pending")

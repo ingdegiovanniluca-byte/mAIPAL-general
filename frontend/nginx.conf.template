@@ -1,5 +1,8 @@
 server {
     listen 80;
+    # Upload di foto/documenti: il default di nginx (1 MB) rifiuta già una normale foto o
+    # schermata da PC prima che arrivi al backend.
+    client_max_body_size 25m;
 
     location = ${PUBLIC_URL} {
         return 301 ${PUBLIC_URL}/;

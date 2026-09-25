@@ -935,7 +935,9 @@ async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, te
         await ctx.bot.send_message(chat_id=chat_id, text=f"📁 In quale cartella la salvo?{hint}")
         return
 
-    await ctx.bot.send_message(chat_id=chat_id, text=f"✅ Salvata su Drive in \"{result['folder']}\".")
+    n = len(result.get("saved") or []) or 1
+    what = f"{n} file salvati" if n > 1 else "Salvata"
+    await ctx.bot.send_message(chat_id=chat_id, text=f"✅ {what} su Drive in \"{result['folder']}\".")
     await _set_state(db, chat_id, user["user_id"], pending_drive_upload_id=None)
 
 
