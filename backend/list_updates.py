@@ -202,6 +202,13 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         "lezione', 'aggiungi un elemento per ciascuna voce dell'elenco che ho caricato'.\n"
         "- 'info_upload': qualunque altra informazione generica da salvare/ricordare (una nota, un documento, "
         "un fatto), che non è un'istruzione di modifica su una lista specifica.\n"
+        "REGOLA DECISIVA: un fatto RACCONTATO (qualcosa che è successo o è vero, anche se riguarda persone o "
+        "argomenti presenti in una lista) è SEMPRE 'info_upload'. È 'list_update' solo se l'utente CHIEDE "
+        "esplicitamente di cambiare una lista, di solito con un verbo all'imperativo o una richiesta diretta "
+        "(aggiungi, inserisci, iscrivi, togli, elimina, rimuovi, cancella, modifica, cambia, aggiorna, sposta, "
+        "crea, segna nella lista). Esempi di 'info_upload': 'Martina ha fatto pilates il 19 settembre', 'oggi "
+        "Giulia è venuta a lezione', 'Marco ha saltato la lezione di mercoledì', 'Sara ha pagato 10 lezioni', "
+        "'il codice del wifi è XYZ'.\n"
         'Rispondi SOLO con un JSON: {"kind": "list_update"} oppure {"kind": "info_upload"}.'
     )
     try:

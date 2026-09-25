@@ -36,6 +36,7 @@ from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageC
 import google_integration as gi
 import telegram_bot as tg
 import embeddings as emb
+import retrieval
 import news_service
 import vet_reports
 import list_updates as lu
@@ -986,6 +987,15 @@ def build_system_prompt(user: User, action: str) -> str:
         base += (
             " L'utente ti sta ponendo una domanda. Se ti viene fornito un CONTESTO dalla knowledge base personale, "
             "usalo come fonte principale e rispondi in modo naturale (senza dire 'ecco il contesto', 'dal database'; parla come un assistente). "
+            "Leggi TUTTO il contesto prima di rispondere: le voci possono essere note, documenti, task, diario o liste. "
+            "DATE: ogni nota riporta tra parentesi quadre il giorno in cui è stata salvata (es. '[Nota salvata sabato 12 settembre 2026]'). "
+            "Se il testo di una nota usa un riferimento relativo ('oggi', 'ieri', 'stamattina', 'venerdì scorso', 'il 19'), "
+            "calcola la data reale a partire dal giorno di salvataggio di QUELLA nota, non da oggi: 'oggi Martina ha fatto pilates' "
+            "salvata il 12 settembre significa il 12 settembre. "
+            "Se la domanda chiede QUANDO o QUANTE VOLTE è successo qualcosa, elenca tutte le occorrenze che trovi nel contesto "
+            "(ogni data, in ordine cronologico), non solo la prima. "
+            "Considera equivalenti parole vicine per significato (es. 'lezione' e 'pilates', 'corso' e 'lezione', singolare e plurale). "
+            "Rispondi 'non ho trovato' SOLO se nessuna voce del contesto riguarda davvero la domanda. "
             "Se il contesto è vuoto o non pertinente, indica gentilmente che non hai fonti dalla KB personale e rispondi con le tue conoscenze generali. "
             "Al termine, solo per il sistema, aggiungi: "
             "<<<META>>>{\"title\": \"argomento in 3-6 parole\", \"summary\": \"riassunto naturale in 1 riga, max 140 caratteri, che descriva cosa hai risposto\"}<<<END>>>"
@@ -1082,348 +1092,19 @@ def _extract_meta(text: str) -> tuple[str, Optional[dict]]:
 
 def _clear_cached_embedding(payload: dict, text_fields: set):
     """retrieve_kb caches a lazily-computed semantic embedding on tasks/todos/list items
-    (see _EMBED_SOURCE_COLLECTIONS below) so it isn't recomputed on every search. If this
+    (see retrieval.py) so it isn't recomputed on every search. If this
     update touches one of the fields that embedding was computed from, drop the stale
     cache so the next search recomputes it from the new text."""
     if any(f in payload for f in text_fields):
         payload["embedding"] = None
 
 
-# Maps a retrieve_kb candidate "source" to the Mongo collection its document lives in,
-# used to persist a lazily-computed embedding back onto the document itself (see below).
-_EMBED_SOURCE_COLLECTIONS = {
-    "task": db.tasks,
-    "todo": db.todos,
-    "journal": db.journal_entries,
-    "collection_item": db.collection_items,
-    "collection_sub_item": db.collection_sub_items,
-    "vet_report": db.vet_reports,
-}
 
 
 async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb", org_id: Optional[str] = None) -> List[dict]:
-    """Hybrid semantic + keyword retrieval over kb_chunks (and tasks/todos/journal if scope='all').
-    - Semantic scoring via multilingual MiniLM cosine similarity.
-    - Keyword boost for exact term matches (proper nouns, place names, etc.) to help generic queries
-      like "informazioni su Rovigno" recover chunks that mention "Rovigno" but score low semantically.
-    - Union of top-N semantic + top-M keyword hits, deduped by chunk id."""
-    import re as _re
-    try:
-        q_emb = await emb.embed_query(query)
-    except Exception:
-        logger.exception("embed_query failed, falling back to keyword-only")
-        q_emb = None
-
-    # Extract meaningful query terms (drop very short + Italian stopwords)
-    _STOP = {"per","con","del","dei","della","delle","degli","dal","dalla","dai","dagli","dallo",
-             "sul","sulla","sui","sugli","sullo","nel","nella","nei","negli","nello","the","and",
-             "che","chi","cosa","come","dove","quando","quale","quali","quanti","quanto",
-             "sono","siamo","siete","essere","stato","stata","stati","state","molto","poco",
-             "questa","questo","questi","queste","quello","quella","quelli","quelle","hai","hanno",
-             "una","uno","gli","voi","noi","tuo","tua","tuoi","tue","mio","mia","miei","mie",
-             "info","informazione","informazioni","dimmi","dammi","raccontami","parlami","cerca",
-             "trova","voglio","sapere","cosa","tutto","tutti","tutte","tutta"}
-    terms = [t for t in _re.findall(r"[\wàèéìòù']+", query.lower()) if len(t) >= 3 and t not in _STOP][:8]
-
-    # Build candidate pool: kb_chunks always, plus extras when scope=='all'
-    candidates: List[dict] = []
-    forced: set = set()  # id() of candidate dicts guaranteed into `top` regardless of score
-    kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
-    # Map: doc_id → list of sibling chunks (ordered by chunk_index) — used for doc expansion
-    doc_siblings: dict = {}
-    for c in kb_docs:
-        item = {
-            "text": c.get("text", ""),
-            "source": "kb",
-            "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title"), "doc_id": c.get("doc_id"), "chunk_index": c.get("chunk_index", 0)},
-            "embedding": c.get("embedding"),
-        }
-        candidates.append(item)
-        did = c.get("doc_id")
-        if did:
-            doc_siblings.setdefault(did, []).append(item)
-    # Sort each doc's siblings by chunk_index for stable ordering
-    for did in doc_siblings:
-        doc_siblings[did].sort(key=lambda x: x["meta"].get("chunk_index", 0))
-
-    # Tasks and Liste can be shared with a team (visibility="org"), not just owned by
-    # this user - miss that and a colleague's shared patient list is invisible to search.
-    def _owned_or_shared(query_field: str = "user_id") -> dict:
-        if org_id:
-            return {"$or": [{query_field: user_id}, {"org_id": org_id, "visibility": "org"}]}
-        return {query_field: user_id}
-
-    if scope == "all":
-        tasks = await db.tasks.find(_owned_or_shared(), {"_id": 0}).to_list(500)
-        for t in tasks:
-            txt_parts = [t.get("title", ""), t.get("description", ""), t.get("notes", "")]
-            txt = " · ".join([p for p in txt_parts if p])
-            if not txt: continue
-            when = t.get("due_date", "") + (f" {t.get('due_time','')}" if t.get("due_time") else "")
-            display = f"[Task] {t.get('title','')} — {when} · priorità {t.get('priority','media')}. {t.get('description','') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": t.get("embedding")})
-        todos = await db.todos.find({"user_id": user_id}, {"_id": 0}).to_list(500)
-        for td in todos:
-            txt_parts = [td.get("title", ""), td.get("description", ""), td.get("notes", "")]
-            txt = " · ".join([p for p in txt_parts if p])
-            if not txt: continue
-            display = f"[To-Do] {td.get('title','')} — stato {td.get('status','da_fare')} ({td.get('completion_percent',0)}%). {td.get('description','') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "todo", "meta": {"id": td.get("id")}, "embedding": td.get("embedding")})
-        journal_docs = await db.journal_entries.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
-        for j in journal_docs:
-            txt = (j.get("cleaned_text") or j.get("raw_text") or "").strip()
-            if not txt: continue
-            display = f"[Diario · {j.get('date','')}] {j.get('title','')} · mood: {j.get('mood','')}. {txt[:400]}".strip()
-            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": j.get("embedding")})
-        vet_report_docs = await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(500)
-        for vrp in vet_report_docs:
-            txt = (vrp.get("transcript") or "").strip()
-            if not txt: continue
-            who = vrp.get("patient_name") or "paziente non identificato"
-            visit_date = (vrp.get("created_at") or "")[:10]
-            display = f"[Referto veterinario · {visit_date}] {who} — {vrp.get('template_name','')}. {txt[:400]}".strip()
-            candidates.append({
-                "text": f"{who} {txt}",
-                "display": display,
-                "source": "vet_report",
-                "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
-                "embedding": vrp.get("embedding"),
-            })
-
-    # Liste (Collections): fetched and force-matchable regardless of scope - a query that
-    # explicitly names a Lista or one of its Campi (e.g. "quante persone nella lezione di
-    # pilates di lunedì mattina") should find it even under the default scope="kb", not
-    # only when the user has opted into the broader "tutto" search. Only the REGULAR
-    # (non-forced, normally-scored) per-item candidates stay scope="all"-only below.
-    colls = await db.collections.find(_owned_or_shared(), {"_id": 0}).to_list(200)
-    if colls:
-        coll_map = {c["id"]: c for c in colls}
-        coll_items = await db.collection_items.find({"collection_id": {"$in": list(coll_map.keys())}}, {"_id": 0}).to_list(2000)
-        item_display_map: dict = {}  # item_id -> display text, used below to match a Campo by name
-        item_candidates: List[dict] = []
-        for it in coll_items:
-            coll = coll_map.get(it.get("collection_id"))
-            if not coll: continue
-            field_labels = {f["key"]: f["label"] for f in (coll.get("fields") or [])}
-            parts = [f"{field_labels.get(k, k)}: {v}" for k, v in (it.get("data") or {}).items() if v not in (None, "")]
-            if not parts: continue
-            txt = " · ".join(parts)
-            display = f"[Lista: {coll.get('name', '')}] {txt}"
-            cand = {"text": txt, "display": display, "source": "collection_item", "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": it.get("embedding")}
-            item_candidates.append(cand)
-            item_display_map[it["id"]] = txt
-        if scope == "all":
-            candidates.extend(item_candidates)
-
-        # "Quali pazienti ho in lista?" style questions need the WHOLE list, not just
-        # the fragments that happen to score well against a generic question - no
-        # single item's text closely resembles "quali pazienti ho". If the query names
-        # one of the user's lists, force-include ALL of its items regardless of semantic/
-        # keyword score (and regardless of scope). Same fuzzy matcher as "Modifica liste"
-        # (token-overlap, not a strict substring) so plural/singular or extra words in the
-        # question (e.g. "lezione di pilates" vs a list named "Lezioni Pilates") don't
-        # silently miss an otherwise obvious match - this deterministic name-matching,
-        # not an LLM guess, is what decides whether a question gets this exhaustive,
-        # guaranteed-complete answer path instead of the regular fuzzy-scored search.
-        named_coll_ids = set(lu.match_candidates(query, [(c["id"], c["name"]) for c in colls if (c.get("name") or "").strip()]))
-        if named_coll_ids:
-            for cand in item_candidates:
-                if cand["meta"].get("collection_id") in named_coll_ids:
-                    if scope != "all":
-                        candidates.append(cand)
-                    forced.add(id(cand))
-
-        # A Campo named in the question (e.g. "lezione di pilates di lunedì mattina") is
-        # matched with the same fuzzy matcher "Modifica liste" uses - this catches it even
-        # when the query doesn't repeat the Lista's own name verbatim (singular/plural,
-        # extra words, etc. can all break the exact-substring named-list check above).
-        # Force BOTH the Campo's own candidate (its answer may sit directly in its own
-        # fields, e.g. a 2-level list) AND all of its nested Elementi (a 3-level list, e.g.
-        # people enrolled in a lesson) - a partial sample of either would silently give a
-        # wrong count for a question like "quante persone ci sono".
-        if item_display_map:
-            matched_item_ids = set(lu.match_candidates(query, list(item_display_map.items())))
-            if matched_item_ids:
-                item_by_id = {c["meta"]["id"]: c for c in item_candidates}
-                for iid in matched_item_ids:
-                    cand = item_by_id.get(iid)
-                    if not cand: continue
-                    if scope != "all":
-                        candidates.append(cand)
-                    forced.add(id(cand))
-
-                sub_items_all = await db.collection_sub_items.find(
-                    {"item_id": {"$in": list(matched_item_ids)}}, {"_id": 0}
-                ).to_list(5000)
-                item_coll_map = {it["id"]: it.get("collection_id") for it in coll_items}
-                for s in sub_items_all:
-                    if s.get("item_id") not in matched_item_ids:
-                        continue
-                    coll = coll_map.get(s.get("collection_id") or item_coll_map.get(s.get("item_id")))
-                    if not coll: continue
-                    sub_field_labels = {f["key"]: f["label"] for f in (coll.get("sub_item_fields") or [])}
-                    sub_parts = [f"{sub_field_labels.get(k, k)}: {v}" for k, v in (s.get("data") or {}).items() if v not in (None, "")]
-                    if not sub_parts: continue
-                    sub_txt = " · ".join(sub_parts)
-                    parent_txt = item_display_map.get(s.get("item_id"), "")
-                    display = f"[Lista: {coll.get('name','')} > {parent_txt}] {sub_txt}"
-                    cand = {
-                        "text": sub_txt, "display": display, "source": "collection_sub_item",
-                        "meta": {"id": s.get("id"), "item_id": s.get("item_id"), "collection_id": s.get("collection_id")},
-                        "embedding": s.get("embedding"),
-                    }
-                    candidates.append(cand)
-                    forced.add(id(cand))
-
-    # A query naming a specific month+year (e.g. "luglio 2026") should surface any
-    # candidate whose text literally contains that same month+year - one specific monthly
-    # data point (e.g. one of twelve monthly bills) can score just below other same-topic
-    # candidates and fall outside `limit`, the same structural gap the named-list force-
-    # include above addresses. Runs unconditionally (not just scope=='all') since kb_chunks
-    # - where a monthly document most likely lives - are always in the candidate pool.
-    _IT_MONTHS_LOW = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
-                       "agosto", "settembre", "ottobre", "novembre", "dicembre"]
-    query_low_full = query.lower()
-    date_month = next((m for m in _IT_MONTHS_LOW if m in query_low_full), None)
-    date_year_m = _re.search(r"\b(19|20)\d{2}\b", query_low_full)
-    if date_month and date_year_m:
-        date_year = date_year_m.group(0)
-        for c in candidates:
-            ctext_low = c["text"].lower()
-            if date_month in ctext_low and date_year in ctext_low:
-                forced.add(id(c))
-
-    # Compute embeddings for all candidates (semantic scoring)
-    if q_emb is not None:
-        missing_kb = [c for c in candidates if c["source"] == "kb" and not c.get("embedding")]
-        if missing_kb:
-            try:
-                new_embs = await emb.embed_texts([c["text"] for c in missing_kb])
-                for c, e in zip(missing_kb, new_embs):
-                    c["embedding"] = e
-                    await db.kb_chunks.update_one({"chunk_id": c["meta"]["chunk_id"]}, {"$set": {"embedding": e}})
-            except Exception:
-                logger.exception("backfill embeddings failed")
-        # Tasks/todos/journal/list items/vet reports never had their embeddings persisted,
-        # so "tutto" search recomputed one for EVERY such record on EVERY query - the
-        # dominant cost that made search noticeably slower as a user's data grew. Cache
-        # them on the source document itself (same pattern as kb_chunks above) so a
-        # record's embedding is computed once and reused; the update endpoints below
-        # clear the cached value whenever the text it was computed from changes.
-        non_kb = [c for c in candidates if c["source"] != "kb" and not c.get("embedding")]
-        if non_kb:
-            try:
-                nk_embs = await emb.embed_texts([c["text"] for c in non_kb])
-                from pymongo import UpdateOne
-                writes_by_source: dict = {}
-                for c, e in zip(non_kb, nk_embs):
-                    c["embedding"] = e
-                    doc_id = (c.get("meta") or {}).get("id")
-                    if doc_id and c["source"] in _EMBED_SOURCE_COLLECTIONS:
-                        writes_by_source.setdefault(c["source"], []).append(UpdateOne({"id": doc_id}, {"$set": {"embedding": e}}))
-                for source, ops in writes_by_source.items():
-                    try:
-                        await _EMBED_SOURCE_COLLECTIONS[source].bulk_write(ops, ordered=False)
-                    except Exception:
-                        logger.exception(f"embedding cache write failed for source={source}")
-            except Exception:
-                logger.exception("non-kb embed failed")
-
-    # Hybrid scoring: semantic cosine + keyword boost
-    def _kw_hits(text: str) -> int:
-        if not terms: return 0
-        low = text.lower()
-        return sum(1 for t in terms if t in low)
-
-    scored = []
-    for c in candidates:
-        e = c.get("embedding")
-        sem = emb.cosine(q_emb, e) if (q_emb is not None and e) else 0.0
-        kh = _kw_hits(c["text"])
-        # Each keyword hit adds 0.15; capped at +0.60. Ensures a chunk containing all terms wins.
-        kw_boost = min(0.60, kh * 0.15)
-        score = sem + kw_boost
-        scored.append((score, sem, kh, c))
-
-    # Keep chunks that have EITHER decent semantic score OR at least one keyword match,
-    # OR are force-included (a named list's items, or a candidate matching a month+year
-    # named in the query - see `forced` above).
-    def _is_forced(s) -> bool:
-        return id(s[3]) in forced
-
-    scored = [s for s in scored if s[1] >= 0.20 or s[2] >= 1 or _is_forced(s)]
-    forced_scored = [s for s in scored if _is_forced(s)]
-    rest_scored = [s for s in scored if not _is_forced(s)]
-    rest_scored.sort(key=lambda x: x[0], reverse=True)
-    # Forced items (e.g. every patient in a list the question names) always make it in,
-    # even past `limit` - otherwise a long list starves itself out of its own answer.
-    top = [c for _s, _sem, _kh, c in forced_scored] + [c for _s, _sem, _kh, c in rest_scored[:max(0, limit - len(forced_scored))]]
-
-    # DOCUMENT EXPANSION: for each KB chunk in the top, pull in ALL sibling chunks from the same doc.
-    # This preserves the full document context (e.g., all Rovigno chunks together) so the LLM sees
-    # the complete picture instead of scattered fragments diluted by other unrelated docs.
-    seen_chunk_ids = set()
-    expanded: List[dict] = []
-    seen_doc_ids: set = set()
-    for c in top:
-        cid = (c.get("meta") or {}).get("chunk_id")
-        did = (c.get("meta") or {}).get("doc_id")
-        if c.get("source") == "kb" and did and did in doc_siblings and did not in seen_doc_ids:
-            # Add all siblings of this doc (already sorted by chunk_index)
-            for sib in doc_siblings[did]:
-                scid = sib["meta"].get("chunk_id")
-                if scid and scid not in seen_chunk_ids:
-                    expanded.append(sib)
-                    seen_chunk_ids.add(scid)
-            seen_doc_ids.add(did)
-        else:
-            if cid and cid not in seen_chunk_ids:
-                expanded.append(c)
-                if cid: seen_chunk_ids.add(cid)
-    top = expanded
-
-    # Date-aware forcing: temporal questions about tasks ("oggi", "domani", "questa
-    # settimana", "scaduti") get exact date-matched tasks injected regardless of semantic
-    # score — a due_date carries no signal a text embedding model can pick up on, so
-    # "dimmi i task di oggi" could otherwise score every task as equally (ir)relevant.
-    if scope == "all":
-        from datetime import date as _date, timedelta as _td
-        low_q = query.lower()
-        today = _date.today()
-        lo = hi = None
-        if "oggi" in low_q:
-            lo = hi = today.isoformat()
-        elif "domani" in low_q:
-            lo = hi = (today + _td(days=1)).isoformat()
-        elif "settiman" in low_q:
-            lo, hi = today.isoformat(), (today + _td(days=7)).isoformat()
-        elif "scad" in low_q or "ritardo" in low_q:
-            hi = (today - _td(days=1)).isoformat()
-
-        if lo or hi:
-            date_q = {"user_id": user_id}
-            if lo and hi: date_q["due_date"] = {"$gte": lo, "$lte": hi}
-            elif hi: date_q["due_date"] = {"$lte": hi}
-            elif lo: date_q["due_date"] = {"$gte": lo}
-            date_tasks = await db.tasks.find(date_q, {"_id": 0}).sort("due_date", 1).to_list(200)
-            existing_ids = {(c.get("meta") or {}).get("id") for c in top if c.get("source") == "task"}
-            forced = []
-            for t in date_tasks:
-                if t.get("id") in existing_ids:
-                    continue
-                when = t.get("due_date", "") + (f" {t.get('due_time','')}" if t.get("due_time") else "")
-                display = f"[Task] {t.get('title','')} — {when} · priorità {t.get('priority','media')}. {t.get('description','') or ''}".strip()
-                forced.append({"text": t.get("title", ""), "display": display, "source": "task", "meta": {"id": t.get("id")}})
-            top = forced + top
-
-    # Fallback: if nothing passed filters but we have keyword terms, do a raw substring scan
-    if not top and terms:
-        for c in candidates:
-            if any(t in c["text"].lower() for t in terms):
-                top.append(c)
-                if len(top) >= limit: break
-
-    return top
+    """Search the user's saved knowledge - see retrieval.py (kept separate so it can be
+    tested without the web server). Used by the web chat and the Telegram bot alike."""
+    return await retrieval.retrieve(db, user_id, query, limit=limit, scope=scope, org_id=org_id)
 
 
 # Usage tracking: the chat "action" field already tells us which catalog feature (§4 of
