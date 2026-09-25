@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useNavigate, useLocation } from "react-router-dom";
 
-const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista" };
+const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const formatReplyLabel = (conv) => {
   const d = conv.created_at ? new Date(conv.created_at) : null;
@@ -51,10 +52,17 @@ const ACTIONS = [
     placeholder: 'Descrivi la visita, es. "Ho visitato Fester, controllo ecografico di routine…"',
     color: "#2E7D63",
   },
+  {
+    id: "scheduled_action", key: "scheduled", icon: <Repeat size={22} />,
+    title: "Azioni programmate",
+    subtitle: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi",
+    placeholder: 'Es. "Ogni venerdì all\'una di notte svuota gli iscritti della lista Lezioni Pilates"',
+    color: "#3E7C8C",
+  },
 ];
 
-const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D" };
-const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D" };
+const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 
 // Diary photos are downscaled/compressed client-side (max ~1600px, JPEG) before being
 // turned into a data URI, both to keep the request small and to stay under the backend's
@@ -92,7 +100,10 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
 
 export default function ChatPage() {
   const isMobile = useIsMobile();
-  const [active, setActive] = useState("info_request");
+  const navigate = useNavigate();
+  const location = useLocation();
+  // The Azioni section's "Nuova azione" opens the chat with that action already selected.
+  const [active, setActive] = useState(() => (ACTIONS.some((a) => a.id === location.state?.action) ? location.state.action : "info_request"));
   const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -293,6 +304,71 @@ export default function ChatPage() {
     }
   };
 
+  // "Azioni programmate": the command is interpreted server-side into an exact schedule +
+  // what will be done, shown back for an explicit "Attiva". Any further message in the same
+  // thread before confirming is treated as a correction of that same command.
+  const sendScheduledAction = async () => {
+    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    let content = text.trim();
+    if (pendingVoice) {
+      setTranscribing(true);
+      try { content = [content, await transcribeBlob(pendingVoice.blob)].filter(Boolean).join(" ").trim(); }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    if (!content || streaming || transcribing) return;
+    const pendingDraft = thread?.action === "scheduled_action"
+      ? [...thread.messages].reverse().find((m) => m.schedDraft && !m.schedDone)
+      : null;
+    setStreaming(true);
+    setText("");
+    setThread((th) => (th && th.action === "scheduled_action")
+      ? { ...th, messages: [...th.messages.map((m) => (m === pendingDraft ? { ...m, schedDone: "replaced" } : m)), { role: "user", content }] }
+      : { conv_id: null, action: "scheduled_action", messages: [{ role: "user", content }], liveAnswer: "" });
+    try {
+      const r = await api.post("/scheduled-actions/interpret", { text: content, previous_text: pendingDraft?.schedDraft?.text || null });
+      const msg = r.data.status === "confirm"
+        ? { role: "assistant", content: `Ho capito così:\n\n${r.data.preview}\n\nLa attivo? Se qualcosa non va, scrivimi cosa correggere.`, schedDraft: r.data.draft }
+        : { role: "assistant", content: `⚠️ ${r.data.message}` };
+      setThread((th) => ({ ...th, messages: [...th.messages, msg] }));
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a interpretare il comando");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  const resolveScheduledDraft = async (msgIndex, activate) => {
+    const target = thread?.messages[msgIndex];
+    if (!target?.schedDraft) return;
+    const mark = (done) => (th) => ({ ...th, messages: th.messages.map((m, i) => (i === msgIndex ? { ...m, schedDone: done } : m)) });
+    if (!activate) {
+      setThread((th) => {
+        const next = mark("cancelled")(th);
+        return { ...next, messages: [...next.messages, { role: "assistant", content: "Ok, non ho attivato nulla." }] };
+      });
+      return;
+    }
+    setStreaming(true);
+    try {
+      const r = await api.post("/scheduled-actions", { draft: target.schedDraft });
+      setThread((th) => {
+        const next = mark("activated")(th);
+        return { ...next, messages: [...next.messages, {
+          role: "assistant",
+          content: `✅ Azione attivata: "${r.data.title}".\nProssima esecuzione: ${r.data.next_run_label}.`,
+          schedLink: true,
+        }] };
+      });
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore nell'attivazione");
+    } finally {
+      setStreaming(false);
+    }
+  };
+
   const resolveVetPatient = async (patientId, ambText, ambVisitType) => {
     setStreaming(true);
     try {
@@ -435,6 +511,7 @@ export default function ChatPage() {
   const send = async () => {
     if (isMobile && mobileReplyTo) { await sendMobileReply(); return; }
     if (active === "vet_report") { await sendVetReport(); return; }
+    if (active === "scheduled_action") { await sendScheduledAction(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
       const resolved = await resolveDrivePending(text.trim());
@@ -981,7 +1058,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
                   <div className="kicker">
-                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "report" : thread.action === "list_update" ? "modifica lista" : "task / to-do"}
+                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "report" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -1049,6 +1126,35 @@ export default function ChatPage() {
                           </button>
                         ))}
                       </div>
+                    )}
+                    {m.schedDraft && !m.schedDone && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="scheduled-confirm">
+                        <button
+                          data-testid="scheduled-activate"
+                          onClick={() => resolveScheduledDraft(i, true)}
+                          disabled={streaming}
+                          className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-[#3E7C8C] hover:bg-[#4A8D9E] text-white"
+                        >
+                          Attiva
+                        </button>
+                        <button
+                          data-testid="scheduled-cancel"
+                          onClick={() => resolveScheduledDraft(i, false)}
+                          disabled={streaming}
+                          className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-white/10 hover:bg-white/20 text-white"
+                        >
+                          Annulla
+                        </button>
+                      </div>
+                    )}
+                    {m.schedLink && (
+                      <button
+                        data-testid="scheduled-open-section"
+                        onClick={() => navigate("/dashboard/azioni")}
+                        className="ml-4 mt-2 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
+                      >
+                        <Repeat size={12} /> Vai alla sezione Azioni
+                      </button>
                     )}
                     {m.taskAmbiguous && (
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-task-choices">

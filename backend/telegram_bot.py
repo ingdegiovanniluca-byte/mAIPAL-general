@@ -389,6 +389,9 @@ async def _cmd_help(update: Update, ctx):
         "  /report — genera un referto veterinario (scegli il tipo, poi detta la visita)\n"
         "  /lista <richiesta> — aggiungi/modifica/rimuovi un elemento da una lista, es. "
         "\"/lista aggiungi Mario Rossi alla lista clienti\"\n"
+        "  /azione <comando> — programma un'azione ricorrente, es. \"/azione ogni domenica a mezzanotte "
+        "calcola la spesa della settimana e mandamela\"\n"
+        "  /azioni — elenco delle azioni programmate attive\n"
         "  /end   — chiudi la conversazione in corso\n"
         "  /help"
     )
@@ -460,6 +463,9 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             return
         if state.get("pending_list_update"):
             await _run_list_update_flow(update, ctx, db, user, content)
+            return
+        if state.get("pending_sched_text"):
+            await _run_scheduled_draft_flow(chat_id, ctx, db, user, content)
             return
         if state.get("pending_drive_upload_id"):
             await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], content)
@@ -562,6 +568,61 @@ async def _cmd_list_update(update: Update, ctx):
     else:
         await _set_state(db, chat_id, user["user_id"], pending_list_update=True)
         await update.message.reply_text('📋 Scrivimi cosa vuoi modificare, es. "Aggiungi Mario Rossi alla lista clienti".')
+
+
+async def _cmd_scheduled_action(update: Update, ctx):
+    """'/azione ogni venerdì all'una svuota la lista lezioni pilates': interpreta il comando
+    e chiede conferma con un pulsante - stessa anteprima della sezione Azioni dell'app."""
+    from server import db
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
+        return
+    parts = (update.message.text or "").split(" ", 1)
+    content = parts[1].strip() if len(parts) > 1 else ""
+    if content:
+        await _run_scheduled_draft_flow(chat_id, ctx, db, user, content)
+    else:
+        await _set_state(db, chat_id, user["user_id"], pending_sched_text=True)
+        await update.message.reply_text('🔁 Scrivimi cosa devo fare e quando, es. "ogni venerdì all\'una di notte svuota gli iscritti della lista Lezioni Pilates".')
+
+
+async def _run_scheduled_draft_flow(chat_id, ctx, db, user, content):
+    from server import _build_scheduled_draft
+    await _set_state(db, chat_id, user["user_id"], pending_sched_text=None)
+    try:
+        res = await _build_scheduled_draft(_to_user_pydantic(user), content, channel="telegram")
+    except Exception as e:
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {getattr(e, 'detail', None) or e}")
+        return
+    if res.get("status") != "confirm":
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {res.get('message')}")
+        return
+    await _set_state(db, chat_id, user["user_id"], pending_sched_draft=res["draft"])
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Attiva", callback_data="sched:ok"),
+        InlineKeyboardButton("✖️ Annulla", callback_data="sched:no"),
+    ]])
+    await ctx.bot.send_message(chat_id=chat_id, text=f"🔁 Ho capito così:\n\n{res['preview']}\n\nLa attivo?", reply_markup=kb)
+
+
+async def _cmd_scheduled_list(update: Update, ctx):
+    from server import db
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
+        return
+    acts = await db.scheduled_actions.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    if not acts:
+        await update.message.reply_text("Nessuna azione programmata. Creane una con /azione oppure dalla chat dell'app (pulsante Azioni).")
+        return
+    lines = ["🔁 Azioni programmate:"]
+    for a in acts:
+        lines.append(f"{'🟢' if a.get('enabled') else '⏸️'} {a.get('title')} — {a.get('schedule_label')}")
+    lines.append("\nPer disattivarle o cancellarle apri la sezione Azioni dell'app.")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None, collection_id=None,
@@ -695,6 +756,25 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             item_id=pctx.get("item_id"), fields=pctx.get("fields"), item_query=pctx.get("item_query"),
             sub_item_query=pctx.get("sub_item_query"), confirm=True, items=pctx.get("items"),
         )
+    elif data in ("sched:ok", "sched:no"):
+        state = await _get_state(db, user["user_id"], chat_id)
+        draft = state.get("pending_sched_draft")
+        await _set_state(db, chat_id, user["user_id"], pending_sched_draft=None)
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        if data == "sched:no":
+            await ctx.bot.send_message(chat_id=chat_id, text="Ok, non ho attivato nulla.")
+        elif not draft:
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto, rifai /azione.")
+        else:
+            from server import _create_scheduled_action
+            try:
+                a = await _create_scheduled_action(_to_user_pydantic(user), draft)
+                await ctx.bot.send_message(chat_id=chat_id, text=f"✅ Azione attivata: {a['title']}.\nProssima esecuzione: {a['next_run_label']}.")
+            except Exception as e:
+                await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {getattr(e, 'detail', None) or e}")
     elif data.startswith("taskcmd:"):
         _, op, target_id = data.split(":", 2)
         from server import _apply_task_command
@@ -808,6 +888,10 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if state.get("pending_list_update"):
             _track_stt("gestione_liste")
             await _run_list_update_flow(update, ctx, db, user, transcript)
+            return
+        if state.get("pending_sched_text"):
+            _track_stt("azioni_programmate")
+            await _run_scheduled_draft_flow(chat_id, ctx, db, user, transcript)
             return
         if state.get("pending_drive_upload_id"):
             _track_stt("caricamento_informazioni")
@@ -957,6 +1041,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("journal", _cmd_journal))
     app.add_handler(CommandHandler("report", _cmd_report))
     app.add_handler(CommandHandler("lista", _cmd_list_update))
+    app.add_handler(CommandHandler("azione", _cmd_scheduled_action))
+    app.add_handler(CommandHandler("azioni", _cmd_scheduled_list))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.PHOTO, _msg_photo))

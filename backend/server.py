@@ -40,6 +40,7 @@ import retrieval
 import news_service
 import vet_reports
 import list_updates as lu
+import scheduled_actions as sa
 import usage_tracking as ut
 
 ROOT_DIR = Path(__file__).parent
@@ -2462,7 +2463,7 @@ async def _execute_list_update(
     items = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).to_list(2000)
 
     item = None
-    if op not in ("add_item", "clear_items", "bulk_add_items"):
+    if op not in ("add_item", "clear_items", "clear_all_sub_items", "bulk_add_items"):
         if item_id:
             item = next((i for i in items if i["id"] == item_id), None)
             if not item:
@@ -2535,6 +2536,17 @@ async def _execute_list_update(
             "item_query": item_query, "sub_item_query": sub_item_query, "text": text, "count": len(items),
             "candidates": [{"confirm": True, "label": f"Conferma: elimina tutti e {len(items)} gli elementi di \"{coll['name']}\""}],
         }
+    if op == "clear_all_sub_items":
+        all_subs_count = await db.collection_sub_items.count_documents({"collection_id": collection_id, "item_id": {"$in": [i["id"] for i in items]}})
+        if not all_subs_count:
+            ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
+            return {"status": "ok", "message": f"I campi di \"{coll['name']}\" sono già tutti vuoti, nulla da eliminare.", "collection_id": collection_id, "collection_name": coll["name"]}
+        if not confirm:
+            return {
+                "status": "confirm_clear", "op": op, "collection_id": collection_id, "fields": {},
+                "item_query": item_query, "sub_item_query": sub_item_query, "text": text, "count": all_subs_count,
+                "candidates": [{"confirm": True, "label": f"Conferma: elimina tutti e {all_subs_count} gli elementi dai {len(items)} campi di \"{coll['name']}\""}],
+            }
     if op == "clear_sub_items" and not confirm:
         if not sub_items:
             ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
@@ -2598,6 +2610,9 @@ async def _execute_list_update(
     elif op == "clear_sub_items":
         await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item["id"]})
         summary = f"Ho eliminato tutti e {len(sub_items)} gli elementi di \"{lu.item_display(item)}\" ({coll['name']})."
+    elif op == "clear_all_sub_items":
+        await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": {"$in": [i["id"] for i in items]}})
+        summary = f"Ho eliminato tutti e {all_subs_count} gli elementi dai {len(items)} campi di \"{coll['name']}\" (i campi restano)."
     elif op == "update_sub_item":
         merged = {**sub_item.get("data", {}), **norm_fields}
         updated = await update_sub_item(collection_id, item["id"], sub_item["id"], CollectionSubItemPayload(data=merged), current)
@@ -4144,6 +4159,478 @@ async def save_news_to_kb(item_id: str, current: User = Depends(get_current_user
     return {"doc_id": doc_id, "already_saved": False}
 
 
+# ============ AZIONI PROGRAMMATE ============
+# Comandi ricorrenti scritti a parole ("ogni venerdì all'una di notte svuota la lista lezioni
+# di pilates"): interpretati una volta sola alla creazione (scheduled_actions.py), mostrati
+# all'utente per conferma con la cadenza esatta, poi eseguiti da _scheduled_actions_loop
+# finché l'utente non li disattiva o cancella dalla sezione Azioni.
+class ScheduledInterpretPayload(BaseModel):
+    text: str
+    previous_text: Optional[str] = None
+
+
+class ScheduledCreatePayload(BaseModel):
+    draft: dict
+
+
+class ScheduledPatchPayload(BaseModel):
+    enabled: Optional[bool] = None
+    title: Optional[str] = None
+
+
+def _dt_iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat() if dt else None
+
+
+def _fmt_local_dt(iso: Optional[str]) -> str:
+    if not iso:
+        return ""
+    d = datetime.fromisoformat(iso).astimezone(LOCAL_TZ)
+    return f"{sa.IT_WEEKDAYS[d.weekday()]} {d.day} {sa.IT_MONTHS[d.month - 1]} alle {d.strftime('%H:%M')}"
+
+
+def _fields_text(fields: Optional[dict]) -> str:
+    return " · ".join(str(v) for v in (fields or {}).values() if str(v or "").strip())
+
+
+async def _describe_list_op(lo: dict, coll: dict) -> str:
+    """What a scheduled list edit will do, in words, with today's counts - shown before the
+    user confirms, so e.g. "svuota" can't silently mean the wrong level of the list."""
+    name = coll["name"]
+    op = lo["op"]
+    items = await db.collection_items.find({"collection_id": coll["id"]}, {"_id": 0, "id": 1}).to_list(2000)
+    item_ids = [i["id"] for i in items]
+    if op == "clear_items":
+        return f"eliminerò TUTTI i campi della lista \"{name}\" (oggi sono {len(items)}), con i loro elementi"
+    if op == "clear_all_sub_items":
+        n = await db.collection_sub_items.count_documents({"collection_id": coll["id"], "item_id": {"$in": item_ids}})
+        return f"eliminerò tutti gli elementi dentro tutti i campi di \"{name}\", lasciando i campi (oggi {n} elementi in {len(items)} campi)"
+    target = lo.get("item_query") or ""
+    if op == "clear_sub_items":
+        return f"eliminerò tutti gli elementi del campo \"{target}\" di \"{name}\""
+    if op == "add_item":
+        return f"aggiungerò a \"{name}\" il campo \"{_fields_text(lo.get('fields'))}\""
+    if op == "bulk_add_items":
+        return f"aggiungerò {len(lo.get('items') or [])} campi a \"{name}\""
+    if op == "delete_item":
+        return f"eliminerò da \"{name}\" il campo \"{target}\""
+    if op == "update_item":
+        return f"aggiornerò in \"{name}\" il campo \"{target}\" con: {_fields_text(lo.get('fields'))}"
+    if op == "add_sub_item":
+        who = [_fields_text(s) for s in (lo.get("sub_items") or [])] or [_fields_text(lo.get("fields"))]
+        return f"aggiungerò {', '.join(w for w in who if w)} al campo \"{target}\" di \"{name}\""
+    if op == "delete_sub_item":
+        return f"eliminerò \"{lo.get('sub_item_query')}\" dal campo \"{target}\" di \"{name}\""
+    if op == "update_sub_item":
+        return f"aggiornerò \"{lo.get('sub_item_query')}\" nel campo \"{target}\" di \"{name}\" con: {_fields_text(lo.get('fields'))}"
+    return f"modificherò la lista \"{name}\""
+
+
+async def _build_scheduled_draft(current: User, text: str, channel: str = "web") -> dict:
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Scrivi cosa vuoi che faccia e quando")
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(LOCAL_TZ)
+    colls = await db.collections.find(_visible_query(current), {"_id": 0}).to_list(200)
+    linked = bool(current.telegram_chat_id)
+    try:
+        parsed = await sa.interpret_command(
+            text, [{"name": c["name"], "has_sub_items": bool(c.get("sub_item_fields"))} for c in colls],
+            now_local, linked, user_id=current.user_id, channel=channel,
+        )
+    except Exception as e:
+        logger.exception("scheduled action interpretation failed")
+        raise HTTPException(status_code=500, detail=f"Non sono riuscito a interpretare il comando: {e}")
+
+    kind = parsed.get("kind")
+    if parsed.get("supported") is False or kind not in sa.KINDS:
+        return {"status": "unsupported", "message": parsed.get("reason") or "Non riesco a trasformare questa richiesta in un'azione programmata."}
+    schedule = sa.normalize_schedule(parsed.get("schedule"))
+    if not schedule:
+        return {"status": "unsupported", "message": "Non ho capito quando eseguire l'azione: indicami il giorno (o la cadenza) e l'orario."}
+    next_run = sa.next_run_after(schedule, now_utc)
+    if not next_run:
+        return {"status": "unsupported", "message": "La data indicata è già passata: indicami un momento futuro."}
+
+    draft = {
+        "text": text,
+        "title": (str(parsed.get("title") or "").strip() or text)[:80],
+        "kind": kind,
+        "schedule": schedule,
+        "delivery": "telegram" if parsed.get("delivery") == "telegram" else "app",
+        "notify": bool(parsed.get("notify")),
+    }
+    warnings = []
+    if kind == "list_update":
+        if not colls:
+            return {"status": "unsupported", "message": "Non hai ancora nessuna lista: creane una nella sezione Liste prima di programmare modifiche."}
+        request = (str(parsed.get("list_request") or "").strip() or text)
+        catalog = [{"id": c["id"], "name": c["name"], "fields": c.get("fields", []), "sub_item_fields": c.get("sub_item_fields", [])} for c in colls]
+        try:
+            li = await lu.interpret_list_request(request, catalog, user_id=current.user_id, channel=channel)
+        except Exception as e:
+            logger.exception("scheduled list interpretation failed")
+            raise HTTPException(status_code=500, detail=f"Non sono riuscito a capire la modifica alla lista: {e}")
+        coll = next((c for c in colls if c["id"] == li.get("collection_id")), None)
+        if li.get("op") not in lu.VALID_OPS or not coll:
+            return {"status": "unsupported", "message": "Non ho capito quale lista modificare o come: scrivi il nome della lista e cosa fare (es. \"svuota tutti gli iscritti della lista Lezioni Pilates\")."}
+        draft["list_op"] = {
+            "text": request, "op": li["op"], "collection_id": coll["id"], "collection_name": coll["name"],
+            "item_query": li.get("item_query") or "", "sub_item_query": li.get("sub_item_query") or "",
+            "fields": li.get("fields") or {}, "sub_items": li.get("sub_items") or [], "items": li.get("items") or [],
+        }
+        what = await _describe_list_op(draft["list_op"], coll)
+    elif kind == "report":
+        instruction = str(parsed.get("report_instruction") or "").strip() or text
+        period = parsed.get("period") if parsed.get("period") in sa.PERIODS else "none"
+        draft.update({"report_instruction": instruction, "period": period})
+        what = f"{instruction[0].lower() + instruction[1:]}" + (f", usando i dati del periodo: {sa.PERIOD_PREVIEW[period]}" if period != "none" else "")
+    elif kind == "message":
+        msg = str(parsed.get("message_text") or "").strip()
+        if not msg:
+            return {"status": "unsupported", "message": "Non ho capito il testo del promemoria da inviarti."}
+        draft["message_text"] = msg
+        what = f"ti manderò il promemoria: \"{msg}\""
+    else:
+        task = parsed.get("task") if isinstance(parsed.get("task"), dict) else {}
+        title = str(task.get("title") or "").strip()
+        if not title:
+            return {"status": "unsupported", "message": "Non ho capito che task creare."}
+        draft["task"] = {
+            "title": title[:200],
+            "priority": task.get("priority") if task.get("priority") in ("alta", "media", "bassa") else "media",
+            "due_time": sa._norm_time(task.get("due_time")),
+        }
+        what = f"creerò il task \"{title}\" con scadenza il giorno stesso"
+
+    if draft["delivery"] == "telegram" and not linked:
+        draft["delivery"] = "app"
+        warnings.append("Telegram non è collegato: finché non lo colleghi (Impostazioni → Telegram) il risultato lo trovi nella sezione Azioni.")
+    if kind in ("report", "message"):
+        where = "su Telegram" if draft["delivery"] == "telegram" else "nella sezione Azioni"
+        what += f"; il risultato arriverà {where}"
+    elif draft["notify"] and linked:
+        what += "; ti avviserò su Telegram a ogni esecuzione"
+
+    draft["schedule_label"] = sa.schedule_label(schedule)
+    preview = f"{draft['schedule_label']} {what}.\nPrima esecuzione: {_fmt_local_dt(_dt_iso(next_run))}."
+    if warnings:
+        preview += "\n⚠️ " + " ".join(warnings)
+    return {"status": "confirm", "draft": draft, "preview": preview}
+
+
+def _public_action(a: dict) -> dict:
+    a = {k: v for k, v in a.items() if k != "_id"}
+    a["next_run_label"] = _fmt_local_dt(a.get("next_run_at")) if a.get("enabled") else ""
+    a["last_run_label"] = _fmt_local_dt(a.get("last_run_at"))
+    return a
+
+
+@api_router.post("/scheduled-actions/interpret")
+async def interpret_scheduled_action(payload: ScheduledInterpretPayload, current: User = Depends(get_current_user)):
+    text = payload.text.strip()
+    if payload.previous_text and payload.previous_text.strip():
+        text = f"{payload.previous_text.strip()}\nPrecisazione successiva dell'utente (ha la precedenza): {text}"
+    return await _build_scheduled_draft(current, text)
+
+
+async def _create_scheduled_action(current: User, draft: dict) -> dict:
+    kind = draft.get("kind")
+    schedule = sa.normalize_schedule(draft.get("schedule"))
+    if kind not in sa.KINDS or not schedule:
+        raise HTTPException(status_code=400, detail="Azione non valida, riprova a descriverla")
+    active = await db.scheduled_actions.count_documents({"user_id": current.user_id, "enabled": True})
+    if active >= sa.MAX_ACTIVE_PER_USER:
+        raise HTTPException(status_code=400, detail=f"Hai già {active} azioni attive (massimo {sa.MAX_ACTIVE_PER_USER}): disattivane o cancellane qualcuna.")
+    next_run = sa.next_run_after(schedule, datetime.now(timezone.utc))
+    if not next_run:
+        raise HTTPException(status_code=400, detail="La data indicata è già passata")
+    doc = {
+        "id": f"sched_{uuid.uuid4().hex[:12]}",
+        "user_id": current.user_id,
+        "org_id": current.org_id,
+        "text": str(draft.get("text") or "")[:2000],
+        "title": str(draft.get("title") or "Azione programmata")[:80],
+        "kind": kind,
+        "schedule": schedule,
+        "schedule_label": sa.schedule_label(schedule),
+        "delivery": "telegram" if draft.get("delivery") == "telegram" else "app",
+        "notify": bool(draft.get("notify")),
+        "enabled": True,
+        "next_run_at": _dt_iso(next_run),
+        "last_run_at": None,
+        "last_status": None,
+        "last_result": None,
+        "run_count": 0,
+        "runs": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if kind == "list_update":
+        lo = draft.get("list_op") or {}
+        if lo.get("op") not in lu.VALID_OPS or not await db.collections.find_one({"id": lo.get("collection_id"), **_visible_query(current)}, {"_id": 1}):
+            raise HTTPException(status_code=400, detail="Lista non trovata")
+        doc["list_op"] = {k: lo.get(k) for k in ("text", "op", "collection_id", "collection_name", "item_query", "sub_item_query", "fields", "sub_items", "items")}
+    elif kind == "report":
+        doc["report_instruction"] = str(draft.get("report_instruction") or doc["text"])[:1000]
+        doc["period"] = draft.get("period") if draft.get("period") in sa.PERIODS else "none"
+    elif kind == "message":
+        doc["message_text"] = str(draft.get("message_text") or "")[:1000]
+    else:
+        t = draft.get("task") or {}
+        doc["task"] = {"title": str(t.get("title") or doc["title"])[:200],
+                       "priority": t.get("priority") if t.get("priority") in ("alta", "media", "bassa") else "media",
+                       "due_time": sa._norm_time(t.get("due_time"))}
+    await db.scheduled_actions.insert_one(doc)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="azioni_programmate", channel="web", trigger="utente", org_id=current.org_id)
+    return _public_action(doc)
+
+
+@api_router.post("/scheduled-actions")
+async def create_scheduled_action(payload: ScheduledCreatePayload, current: User = Depends(get_current_user)):
+    return await _create_scheduled_action(current, payload.draft)
+
+
+@api_router.get("/scheduled-actions")
+async def list_scheduled_actions(current: User = Depends(get_current_user)):
+    docs = await db.scheduled_actions.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return [_public_action(d) for d in docs]
+
+
+@api_router.patch("/scheduled-actions/{action_id}")
+async def update_scheduled_action(action_id: str, payload: ScheduledPatchPayload, current: User = Depends(get_current_user)):
+    a = await db.scheduled_actions.find_one({"id": action_id, "user_id": current.user_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Azione non trovata")
+    upd = {}
+    if payload.title is not None and payload.title.strip():
+        upd["title"] = payload.title.strip()[:80]
+    if payload.enabled is not None:
+        if payload.enabled and not a.get("enabled"):
+            active = await db.scheduled_actions.count_documents({"user_id": current.user_id, "enabled": True})
+            if active >= sa.MAX_ACTIVE_PER_USER:
+                raise HTTPException(status_code=400, detail=f"Hai già {active} azioni attive (massimo {sa.MAX_ACTIVE_PER_USER})")
+            # Re-activation starts from now: runs missed while paused are skipped, not replayed.
+            nxt = sa.next_run_after(a["schedule"], datetime.now(timezone.utc))
+            if not nxt:
+                raise HTTPException(status_code=400, detail="Questa azione era da eseguire una volta sola e la data è passata")
+            upd.update({"enabled": True, "next_run_at": _dt_iso(nxt)})
+        elif not payload.enabled:
+            upd.update({"enabled": False, "next_run_at": None})
+    if upd:
+        await db.scheduled_actions.update_one({"id": action_id}, {"$set": upd})
+        a.update(upd)
+    return _public_action(a)
+
+
+@api_router.delete("/scheduled-actions/{action_id}")
+async def delete_scheduled_action(action_id: str, current: User = Depends(get_current_user)):
+    res = await db.scheduled_actions.delete_one({"id": action_id, "user_id": current.user_id})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="Azione non trovata")
+    return {"ok": True}
+
+
+@api_router.post("/scheduled-actions/{action_id}/run")
+async def run_scheduled_action_now(action_id: str, current: User = Depends(get_current_user)):
+    """"Esegui ora": same execution as the scheduled one (handy to check what it does),
+    without moving the next scheduled run."""
+    a = await db.scheduled_actions.find_one({"id": action_id, "user_id": current.user_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Azione non trovata")
+    await _execute_scheduled_action(a, manual=True)
+    a = await db.scheduled_actions.find_one({"id": action_id}, {"_id": 0})
+    return _public_action(a)
+
+
+async def _send_telegram_text(chat_id, text: str) -> bool:
+    """Plain text to a linked chat, Markdown first then plain as fallback - model-written
+    text can contain characters Telegram's Markdown parser rejects."""
+    if not chat_id or not tg.bot_token() or not text:
+        return False
+    from telegram import Bot
+    bot = Bot(token=tg.bot_token())
+    ok = True
+    for i in range(0, len(text), 3900):
+        chunk = text[i:i + 3900]
+        try:
+            await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+        except Exception:
+            try:
+                await bot.send_message(chat_id=chat_id, text=chunk)
+            except Exception:
+                logger.exception("scheduled action telegram send failed")
+                ok = False
+    return ok
+
+
+async def _gather_report_data(user: User, instruction: str, rng) -> str:
+    """Everything the report may need: all records dated inside the period (notes, diary,
+    tasks, to-dos, list entries) plus the best search hits for the instruction itself (e.g.
+    a "Spese" list whose rows carry no date)."""
+    lines, seen = [], set()
+
+    def add(line: str):
+        key = line.strip()[:400]
+        if key and key not in seen:
+            seen.add(key)
+            lines.append(line.strip())
+
+    uid = user.user_id
+    colls = await db.collections.find(_visible_query(user), {"_id": 0}).to_list(200)
+    coll_by_id = {c["id"]: c for c in colls}
+    if rng:
+        s, e, _ = rng
+        start_iso = datetime(s.year, s.month, s.day, tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
+        e1 = e + timedelta(days=1)
+        end_iso = datetime(e1.year, e1.month, e1.day, tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
+        in_range = {"$gte": start_iso, "$lt": end_iso}
+        for c in await db.kb_chunks.find({"user_id": uid, "created_at": in_range}, {"_id": 0, "embedding": 0}).sort("created_at", 1).to_list(400):
+            add(retrieval._kb_display(c))
+        for j in await db.journal_entries.find({"user_id": uid, "date": {"$gte": s.isoformat(), "$lte": e.isoformat()}}, {"_id": 0}).sort("date", 1).to_list(60):
+            add(f"[Diario {retrieval.format_it_date(j.get('date'))}] {(j.get('cleaned_text') or j.get('raw_text') or '')[:1500]}")
+        task_q = {"$and": [_visible_query(user), {"$or": [
+            {"due_date": {"$gte": s.isoformat(), "$lte": e.isoformat()}}, {"completed_at": in_range}]}]}
+        for t in await db.tasks.find(task_q, {"_id": 0}).to_list(300):
+            state = "completato" if t.get("completed") else "aperto"
+            add(f"[Task] {t.get('title', '')} · scadenza {t.get('due_date') or '-'} · {state}")
+        for t in await db.todos.find({"user_id": uid, "created_at": in_range}, {"_id": 0}).to_list(200):
+            add(f"[To-Do creato {retrieval.format_it_date(t.get('created_at'))}] {t.get('title', '')} · {t.get('status', '')}")
+        if coll_by_id:
+            items = await db.collection_items.find({"collection_id": {"$in": list(coll_by_id)}, "created_at": in_range}, {"_id": 0}).to_list(1000)
+            for it in items:
+                add(f"[Lista \"{coll_by_id[it['collection_id']]['name']}\" · aggiunto {retrieval.format_it_date(it.get('created_at'))}] {lu.item_display(it)}")
+            subs = await db.collection_sub_items.find({"collection_id": {"$in": list(coll_by_id)}, "created_at": in_range}, {"_id": 0}).to_list(1000)
+            parents = {}
+            if subs:
+                for p in await db.collection_items.find({"id": {"$in": list({x['item_id'] for x in subs})}}, {"_id": 0}).to_list(1000):
+                    parents[p["id"]] = p
+            for sub in subs:
+                parent = parents.get(sub["item_id"])
+                where = f"{coll_by_id[sub['collection_id']]['name']} › {lu.item_display(parent)}" if parent else coll_by_id[sub["collection_id"]]["name"]
+                add(f"[Lista \"{where}\" · aggiunto {retrieval.format_it_date(sub.get('created_at'))}] {lu.item_display(sub)}")
+    try:
+        hits = await retrieval.retrieve(db, uid, instruction, limit=12, scope="all", org_id=user.org_id)
+    except Exception:
+        logger.exception("report retrieval failed")
+        hits = []
+    if hits:
+        add("--- Altri dati pertinenti trovati con la ricerca (possono essere fuori dal periodo) ---")
+        for h in hits:
+            add(h.get("display") or retrieval._kb_display(h))
+    out, total = [], 0
+    for line in lines:
+        if total + len(line) > 30000:
+            break
+        out.append(line)
+        total += len(line) + 1
+    return "\n".join(out)
+
+
+async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for: Optional[str] = None) -> dict:
+    """Runs one action and records the outcome on it (last_* fields + last 10 runs)."""
+    started = datetime.now(timezone.utc)
+    status, result, delivered = "ok", "", False
+    user_doc = await db.users.find_one({"user_id": a["user_id"]}, {"_id": 0})
+    if not user_doc:
+        await db.scheduled_actions.update_one({"id": a["id"]}, {"$set": {"enabled": False, "next_run_at": None}})
+        return {"status": "error", "result": "utente non trovato"}
+    user = User(**user_doc)
+    chat_id = user_doc.get("telegram_chat_id")
+    kind = a.get("kind")
+    try:
+        if kind == "list_update":
+            lo = a.get("list_op") or {}
+            try:
+                res = await _execute_list_update(
+                    user, lo.get("text") or a.get("text", ""), op=lo.get("op"), collection_id=lo.get("collection_id"),
+                    item_query=lo.get("item_query"), sub_item_query=lo.get("sub_item_query"), fields=lo.get("fields"),
+                    confirm=True, new_sub_items=lo.get("sub_items"), new_items=lo.get("items"), channel="sistema",
+                )
+            except HTTPException as he:
+                res = {"status": "error", "message": str(he.detail)}
+            if res.get("status") == "ok":
+                result = res.get("message") or "Fatto."
+            elif str(res.get("status", "")).startswith("ambiguous"):
+                status = "error"
+                result = "Più elementi corrispondono alla descrizione, non ho modificato nulla per non sbagliare. Rendi il comando più preciso."
+            else:
+                status = "error"
+                result = res.get("message") or "Modifica non riuscita."
+            if a.get("notify") and chat_id:
+                delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n{'✅' if status == 'ok' else '⚠️'} {result}")
+        elif kind == "report":
+            now_local = started.astimezone(LOCAL_TZ)
+            rng = sa.period_range(a.get("period") or "none", now_local)
+            data_block = await _gather_report_data(user, a.get("report_instruction") or a.get("text", ""), rng)
+            result = await sa.write_report(a.get("report_instruction") or a.get("text", ""), data_block, now_local,
+                                           rng[2] if rng else None, user_name=user.name, user_id=user.user_id)
+            if not result:
+                status, result = "error", "Il riepilogo è risultato vuoto."
+            elif a.get("delivery") == "telegram" and chat_id:
+                delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n\n{result}")
+        elif kind == "message":
+            result = a.get("message_text") or a.get("title")
+            if a.get("delivery") == "telegram" and chat_id:
+                delivered = await _send_telegram_text(chat_id, f"⏰ {result}")
+        elif kind == "create_task":
+            t = a.get("task") or {}
+            due = started.astimezone(LOCAL_TZ).date().isoformat()
+            await _create_task_or_todo(user.user_id, {
+                "title": t.get("title") or a["title"], "priority": t.get("priority") or "media",
+                "due_date": due, "due_time": t.get("due_time"),
+                "description": f"Creato dall'azione programmata \"{a['title']}\"",
+            }, f"sched_{a['id']}")
+            result = f"Creato il task \"{t.get('title') or a['title']}\" con scadenza {due}."
+            if a.get("notify") and chat_id:
+                delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n✅ {result}")
+        else:
+            status, result = "error", "Tipo di azione sconosciuto."
+    except Exception as e:
+        logger.exception(f"scheduled action {a.get('id')} failed")
+        status, result = "error", f"Errore durante l'esecuzione: {e}"
+
+    run = {"at": _dt_iso(started), "status": status, "result": (result or "")[:4000], "delivered": delivered, "manual": manual}
+    if scheduled_for and not manual:
+        late = (started - datetime.fromisoformat(scheduled_for)).total_seconds() / 60
+        if late > 10:
+            run["late_minutes"] = int(late)
+    await db.scheduled_actions.update_one({"id": a["id"]}, {
+        "$set": {"last_run_at": run["at"], "last_status": status, "last_result": run["result"], "last_delivered": delivered},
+        "$inc": {"run_count": 1},
+        "$push": {"runs": {"$each": [run], "$slice": -10}},
+    })
+    ut.fire_and_forget_feature_event(user_id=user.user_id, feature="azioni_programmate", channel="web" if manual else "sistema",
+                                     trigger="utente" if manual else "automatico", org_id=user.org_id)
+    logger.info(f"[scheduled] {a['id']} kind={kind} status={status} manual={manual}")
+    return run
+
+
+async def _scheduled_actions_loop():
+    """Every 30s: runs every enabled action whose next_run_at has come. The next run is
+    moved forward BEFORE executing (a compare-and-set on next_run_at, so a run is never
+    picked up twice), always computed from now: if the server was off at the scheduled
+    moment, a missed action runs once on restart instead of once per missed occurrence."""
+    await asyncio.sleep(20)
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            due = await db.scheduled_actions.find(
+                {"enabled": True, "next_run_at": {"$ne": None, "$lte": _dt_iso(now)}}, {"_id": 0},
+            ).to_list(200)
+            for a in due:
+                nxt = sa.next_run_after(a["schedule"], now)
+                upd = {"next_run_at": _dt_iso(nxt)}
+                if nxt is None:
+                    upd["enabled"] = False  # one-off action: done
+                claimed = await db.scheduled_actions.update_one({"id": a["id"], "next_run_at": a["next_run_at"]}, {"$set": upd})
+                if claimed.modified_count:
+                    await _execute_scheduled_action(a, scheduled_for=a["next_run_at"])
+        except Exception:
+            logger.exception("scheduled actions loop iteration failed")
+        await asyncio.sleep(30)
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -4198,6 +4685,10 @@ async def start_services():
         asyncio.create_task(_usage_aggregation_loop())
     except Exception:
         logger.exception("failed to start usage aggregation loop")
+    try:
+        asyncio.create_task(_scheduled_actions_loop())
+    except Exception:
+        logger.exception("failed to start scheduled actions loop")
 
 
 def _snooze_keyboard(task_id: str):

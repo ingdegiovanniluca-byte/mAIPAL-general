@@ -42,6 +42,7 @@ FEATURES = {
     # Non nel catalogo originale della specifica: il motore "Modifica liste" non aveva una
     # voce dedicata. Aggiunta qui (unico punto da toccare per estendere il catalogo).
     "gestione_liste":           {"label": "Gestione liste",                       "category": "generale"},
+    "azioni_programmate":       {"label": "Azioni programmate",                   "category": "generale"},
     "altro":                    {"label": "Non classificato",                     "category": "sistema"},
 }
 VALID_FEATURES = set(FEATURES)

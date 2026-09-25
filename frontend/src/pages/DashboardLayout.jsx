@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell,
+  Newspaper, List, FileText, Dumbbell, Repeat,
 } from "lucide-react";
 import logo3 from "@/assets/logo3.png";
 import { MobileTitleContext } from "@/lib/mobile-title";
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: "/dashboard/news", label: "News", testid: "tab-news", icon: Newspaper },
   { to: "/dashboard/liste", label: "Liste", testid: "tab-liste", icon: List },
   { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents", icon: FileText },
+  { to: "/dashboard/azioni", label: "Azioni", testid: "tab-azioni", icon: Repeat },
   { to: "/dashboard/fitness", label: "Fitness", testid: "tab-fitness", vertical: "fitness", icon: Dumbbell },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings", icon: Settings },
 ];

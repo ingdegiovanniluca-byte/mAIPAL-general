@@ -47,7 +47,7 @@ def _track(resp, user_id: Optional[str], channel: str, status: str = "ok", model
 VALID_OPS = {
     "add_item", "delete_item", "update_item", "clear_items",
     "add_sub_item", "delete_sub_item", "update_sub_item", "clear_sub_items",
-    "bulk_add_items",
+    "clear_all_sub_items", "bulk_add_items",
 }
 
 _STOPWORDS_IT = {
@@ -107,8 +107,11 @@ async def interpret_list_request(text: str, catalog: list[dict], kb_context: str
         "- update_sub_item: modificare i valori di un Elemento annidato\n"
         "- clear_sub_items: eliminare TUTTI gli Elementi annidati di un Campo (l'utente dice esplicitamente "
         "'tutti/tutte/tutto/svuota', es. 'cancella tutte le persone dalla lezione di pilates del lunedì mattina' - "
-        "qui item_query identifica IL CAMPO 'lezione di pilates del lunedì mattina', non le singole persone)\n\n"
-        "IMPORTANTE: usa clear_items/clear_sub_items SOLO quando l'utente chiede esplicitamente di eliminare TUTTO/"
+        "qui item_query identifica IL CAMPO 'lezione di pilates del lunedì mattina', non le singole persone)\n"
+        "- clear_all_sub_items: eliminare TUTTI gli Elementi annidati di TUTTI i Campi di una lista, lasciando i "
+        "Campi (es. 'svuota tutte le lezioni della lista lezioni pilates', 'cancella tutti gli iscritti da tutte le "
+        "lezioni', 'elimina tutti gli elementi della lista X' quando la lista ha Elementi annidati)\n\n"
+        "IMPORTANTE: usa clear_items/clear_sub_items/clear_all_sub_items SOLO quando l'utente chiede esplicitamente di eliminare TUTTO/"
         "TUTTI/TUTTE in un colpo solo - per l'eliminazione di uno o più elementi nominati singolarmente usa sempre "
         "delete_item/delete_sub_item (uno per ciascun elemento nominato).\n\n"
         "Rispondi SOLO con un JSON valido in questo formato: "
