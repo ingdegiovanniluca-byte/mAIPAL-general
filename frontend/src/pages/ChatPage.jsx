@@ -7,6 +7,7 @@ import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { takeSharedPayload } from "@/lib/pwa";
+import SuggestionsTicker from "@/components/SuggestionsTicker";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
@@ -874,6 +875,21 @@ export default function ChatPage() {
   };
 
   const mobileChatView = isMobile && mobileView === "chat";
+
+  // What a tap on a "per te" suggestion does.
+  const runSuggestion = (sug) => {
+    const t = sug.target || {};
+    if (t.type === "task") navigate("/dashboard/tasks", { state: { openTask: t.id } });
+    else if (t.type === "page") navigate(t.to, { state: t.date ? { date: t.date } : undefined });
+    else if (t.type === "url") window.open(t.url, "_blank", "noopener");
+    else if (t.type === "chat") {
+      if (ACTIONS.some((a) => a.id === t.action)) setActive(t.action);
+      setThread(null);
+      setMobileReplyTo(null);
+      setText(t.text || "");
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  };
   const mobileHistoryView = isMobile && mobileView === "history";
 
   return (
@@ -881,6 +897,7 @@ export default function ChatPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 w-full lg:h-[calc(100vh-15rem)]">
         {/* LEFT 1/3 — action icons + input area */}
         <aside className={`lg:col-span-1 flex flex-col lg:overflow-y-auto pr-1 ${focusMode || (isMobile && mobileView === "history") ? "hidden" : ""}`}>
+          {mobileChatView && !thread && !mobileReplyTo && <SuggestionsTicker onSelect={runSuggestion} />}
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
           <div className="flex items-center gap-1.5 md:gap-2 p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0 overflow-x-auto no-scrollbar">
               {ACTIONS.map((a) => {

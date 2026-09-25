@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -313,7 +314,10 @@ function DiaryCarousel({ dates, entriesByDate, focusDate, centerRequest, onSettl
 
 export default function JournalPage() {
   const today = new Date();
-  const initialIso = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-01`;
+  // A suggestion like "Un anno fa nel diario" opens the diary on that exact day.
+  const location = useLocation();
+  const requestedDate = /^\d{4}-\d{2}-\d{2}$/.test(location.state?.date || "") ? location.state.date : null;
+  const initialIso = requestedDate || `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-01`;
 
   // Un'unica sorgente di verità per la navigazione: la data attualmente al centro del
   // carosello. centerRequest è il "comando" esplicito che sposta il carosello (click su un
@@ -365,7 +369,7 @@ export default function JournalPage() {
         const keys = Object.keys(map).sort();
         const todayIso = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
         const upToToday = keys.filter((k) => k <= todayIso);
-        const best = upToToday.length ? upToToday[upToToday.length - 1] : keys[keys.length - 1];
+        const best = requestedDate && map[requestedDate] ? requestedDate : (upToToday.length ? upToToday[upToToday.length - 1] : keys[keys.length - 1]);
         if (best) {
           setFocusDate(best);
           setCenterRequest((r2) => ({ date: best, behavior: "auto", nonce: r2.nonce + 1 }));

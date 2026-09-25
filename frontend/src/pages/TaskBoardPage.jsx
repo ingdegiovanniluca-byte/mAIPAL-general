@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, Repeat } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -63,6 +64,17 @@ export default function TaskBoardPage() {
     setTasks(r.data);
   };
   useEffect(() => { load(); }, []);
+  // Opened from a suggestion ("Oggi: «Palestra» alle 18:00"): show that task right away.
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const wanted = location.state?.openTask;
+    if (wanted && tasks.some((t) => t.id === wanted)) {
+      setSelected(wanted);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks]);
   useEffect(() => {
     if (user?.org_id) api.get("/org").then((r) => setOrgMembers(r.data?.members || [])).catch(() => {});
     else setOrgMembers([]);

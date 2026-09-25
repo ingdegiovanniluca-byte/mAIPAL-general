@@ -5038,6 +5038,107 @@ async def _scheduled_actions_loop():
         await asyncio.sleep(30)
 
 
+# ============ SUGGERIMENTI "PER TE" (striscia sopra la chat, mobile) ============
+_insights_running: set = set()
+
+
+async def _generate_ai_insights(user: User, today_iso: str):
+    """Once a day per user: up to 3 short suggestions linking what the user saved (notes,
+    documents) with what's coming up (tasks, to-dos) or today's news. Cached in
+    suggestions_ai; an empty result is cached too, so it runs at most once a day."""
+    if user.user_id in _insights_running:
+        return
+    _insights_running.add(user.user_id)
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        notes = await db.kb_chunks.find({"user_id": user.user_id, "created_at": {"$gte": since}},
+                                        {"_id": 0, "embedding": 0}).sort("created_at", -1).to_list(30)
+        horizon = (datetime.now(LOCAL_TZ).date() + timedelta(days=14)).isoformat()
+        tasks = await db.tasks.find({"$and": [_visible_query(user), {"due_date": {"$gte": today_iso, "$lte": horizon}},
+                                              {"completed": {"$ne": True}}]}, {"_id": 0}).sort("due_date", 1).to_list(25)
+        todos = await db.todos.find({"user_id": user.user_id, "status": {"$in": ["da_fare", "in_corso"]}}, {"_id": 0}).to_list(10)
+        news = await db.news_items.find({"user_id": user.user_id, "date": today_iso}, {"_id": 0}).to_list(5)
+        if not notes and not tasks:
+            await db.suggestions_ai.update_one({"user_id": user.user_id}, {"$set": {"date": today_iso, "items": []}}, upsert=True)
+            return
+        lines = [f"OGGI: {_today_it_string()}", "NOTE E DOCUMENTI SALVATI (ultimi 30 giorni):"]
+        lines += [f"- {retrieval._kb_display(n)[:300]}" for n in notes] or ["- nessuna"]
+        lines.append("TASK IN ARRIVO (14 giorni):")
+        lines += [f"- [id={t['id']}] {t.get('title')} · {t.get('due_date')} {t.get('due_time') or ''}" for t in tasks] or ["- nessuno"]
+        lines.append("TO-DO APERTI:")
+        lines += [f"- {t.get('title')}" for t in todos] or ["- nessuno"]
+        if news:
+            lines.append("NEWS DI OGGI:")
+            lines += [f"- {n.get('title')}" for n in news]
+        system = (
+            "Sei mAIPAL, assistente personale. Guarda i dati dell'utente e proponi AL MASSIMO 3 suggerimenti brevi e "
+            "concreti (max 110 caratteri ciascuno, in italiano, seconda persona) che COLLEGANO informazioni diverse e gli "
+            "sono utili adesso: es. un task in arrivo e una nota che lo riguarda ('Domani chiami Marco: nell'ultima nota "
+            "aspettava il preventivo'), una scadenza o un'informazione salvata da non dimenticare, una news collegata a "
+            "un suo argomento. Usa SOLO i dati forniti, non inventare nulla; niente consigli generici o banali; se non c'è "
+            "niente di davvero utile restituisci una lista vuota. Per ciascuno indica cosa succede al tocco: "
+            "{\"type\": \"task\", \"id\": \"<id del task>\"} se riguarda un task elencato, altrimenti "
+            "{\"type\": \"chat\", \"action\": \"info_request\", \"text\": \"<domanda breve da fare a mAIPAL per approfondire>\"}. "
+            "Rispondi SOLO con JSON: {\"items\": [{\"text\": \"...\", \"target\": {...}}]}"
+        )
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"insights_{uuid.uuid4().hex[:8]}", system_message=system,
+            user_id=user.user_id, feature="altro", channel="sistema", trigger="automatico", org_id=user.org_id,
+        ).with_model("openai", "gpt-4o-mini")
+        import json as _json, re as _re
+        raw = await chat.send_message(UserMessage(text="\n".join(lines)[:12000]))
+        m = _re.search(r"\{.*\}", raw or "", _re.DOTALL)
+        parsed = _json.loads(m.group(0)) if m else {}
+        task_ids = {t["id"] for t in tasks}
+        items = []
+        for i, it in enumerate((parsed.get("items") or [])[:3]):
+            text = str((it or {}).get("text") or "").strip()
+            tgt = (it or {}).get("target") or {}
+            if not text:
+                continue
+            if tgt.get("type") == "task" and tgt.get("id") in task_ids:
+                target = {"type": "task", "id": tgt["id"]}
+            else:
+                target = {"type": "chat", "action": "info_request", "text": str(tgt.get("text") or "")[:200]}
+            items.append({"id": f"ai{i}", "kind": "insight", "text": text[:140], "target": target, "priority": 70 - i})
+        await db.suggestions_ai.update_one({"user_id": user.user_id}, {"$set": {"date": today_iso, "items": items}}, upsert=True)
+    except Exception:
+        logger.exception("AI insights generation failed")
+    finally:
+        _insights_running.discard(user.user_id)
+
+
+@api_router.get("/suggestions")
+async def get_suggestions(current: User = Depends(get_current_user)):
+    import suggestions as sg
+    now_local = datetime.now(LOCAL_TZ)
+    today = now_local.date()
+    today_iso = today.isoformat()
+    tasks = await db.tasks.find({"$and": [_visible_query(current), {"completed": {"$ne": True}}, {"due_date": {"$lte": (today + timedelta(days=1)).isoformat()}}]},
+                                {"_id": 0, "id": 1, "title": 1, "due_date": 1, "due_time": 1, "completed": 1}).to_list(500)
+    todos = await db.todos.find({"user_id": current.user_id, "status": {"$in": ["da_fare", "in_corso"]}},
+                                {"_id": 0, "id": 1, "title": 1, "status": 1, "created_at": 1}).to_list(200)
+    news = await db.news_items.find({"user_id": current.user_id, "date": today_iso}, {"_id": 0, "title": 1, "url": 1, "date": 1, "feedback": 1}).to_list(20)
+    past_dates = []
+    for y in (1, 2, 3):
+        try:
+            past_dates.append(today.replace(year=today.year - y).isoformat())
+        except ValueError:
+            pass
+    journal_past = await db.journal_entries.find({"user_id": current.user_id, "date": {"$in": past_dates}},
+                                                 {"_id": 0, "date": 1, "title": 1, "cleaned_text": 1}).to_list(5)
+    actions = await db.scheduled_actions.find({"user_id": current.user_id, "enabled": True}, {"_id": 0, "title": 1, "enabled": 1, "next_run_at": 1}).to_list(50)
+    items = sg.build_rule_suggestions(today, now_local, tasks, todos, news, journal_past, actions)
+
+    cached = await db.suggestions_ai.find_one({"user_id": current.user_id}, {"_id": 0})
+    if cached and cached.get("date") == today_iso:
+        items += cached.get("items") or []
+    else:
+        asyncio.create_task(_generate_ai_insights(current, today_iso))  # ready on a later load
+    items.sort(key=lambda s: -s.get("priority", 0))
+    return {"items": sg.with_tips(items[:8], today)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
