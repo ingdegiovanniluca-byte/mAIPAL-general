@@ -42,6 +42,7 @@ import vet_reports
 import list_updates as lu
 import scheduled_actions as sa
 import recurrence as rec
+import conversation_retention as cr
 import usage_tracking as ut
 
 ROOT_DIR = Path(__file__).parent
@@ -1952,6 +1953,34 @@ async def delete_conversation(conv_id: str, current: User = Depends(get_current_
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+async def _cleanup_old_conversations() -> int:
+    """Deletes non-favorite conversations whose last message is older than
+    cr.RETENTION_DAYS (see conversation_retention.py). Only the chat goes: whatever it
+    created (notes, tasks, diary, lists) is stored elsewhere and stays."""
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=cr.RETENTION_DAYS)).isoformat()
+    candidates = await db.conversations.find(
+        {"favorite": {"$ne": True}, "created_at": {"$lt": cutoff}},
+        {"_id": 0, "conv_id": 1, "favorite": 1, "created_at": 1, "completed_at": 1, "messages.ts": 1},
+    ).to_list(5000)
+    expired = [c["conv_id"] for c in candidates if cr.is_expired(c, now)]
+    if expired:
+        await db.conversations.delete_many({"conv_id": {"$in": expired}, "favorite": {"$ne": True}})
+        logger.info(f"[cleanup] deleted {len(expired)} old non-favorite conversations")
+    return len(expired)
+
+
+async def _conversation_cleanup_loop():
+    """Every 6 hours (and shortly after start-up, so a PC that was off catches up)."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await _cleanup_old_conversations()
+        except Exception:
+            logger.exception("conversation cleanup failed")
+        await asyncio.sleep(6 * 3600)
 
 
 # ============ TASKS ============
@@ -5201,6 +5230,10 @@ async def start_services():
         asyncio.create_task(_task_series_loop())
     except Exception:
         logger.exception("failed to start task series loop")
+    try:
+        asyncio.create_task(_conversation_cleanup_loop())
+    except Exception:
+        logger.exception("failed to start conversation cleanup loop")
 
 
 def _snooze_keyboard(task_id: str):

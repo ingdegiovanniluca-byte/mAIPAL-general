@@ -11,6 +11,8 @@ import SuggestionsTicker from "@/components/SuggestionsTicker";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
+// Matches the backend's conversation_retention.RETENTION_DAYS.
+const HISTORY_RETENTION_NOTE = "Le chat non preferite si cancellano da sole 10 giorni dopo l'ultimo messaggio: segna con la stella quelle da tenere. Note, task e diario salvati restano.";
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const formatReplyLabel = (conv) => {
   const d = conv.created_at ? new Date(conv.created_at) : null;
@@ -1311,13 +1313,16 @@ export default function ChatPage() {
                 )),
               ];
               return (
-                <div className="flex gap-3 mt-4 items-start" data-testid="mobile-history-grid">
-                  {[0, 1].map((col) => (
-                    <div key={col} className="flex-1 min-w-0 flex flex-col gap-3">
-                      {tiles.filter((_, i) => i % 2 === col)}
-                    </div>
-                  ))}
-                </div>
+                <>
+                  <div className="flex gap-3 mt-4 items-start" data-testid="mobile-history-grid">
+                    {[0, 1].map((col) => (
+                      <div key={col} className="flex-1 min-w-0 flex flex-col gap-3">
+                        {tiles.filter((_, i) => i % 2 === col)}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-5 px-1 text-[11px] text-white/45" data-testid="history-retention-note">{HISTORY_RETENTION_NOTE}</div>
+                </>
               );
             })()
           ) : (
@@ -1326,6 +1331,7 @@ export default function ChatPage() {
                 <div className="text-xs font-bold uppercase tracking-wider text-white">cronologia</div>
                 <div className="text-xs font-bold uppercase tracking-wider text-white/70">{filtered.length} messaggi</div>
               </div>
+              <div className="px-2 mt-1 text-[11px] text-white/45 shrink-0">{HISTORY_RETENTION_NOTE}</div>
               <div className="space-y-3 flex-1 overflow-y-auto pr-1 mt-2">
                 {filtered.length === 0 && <div className="text-white/60 text-sm">Nessuna conversazione ancora.</div>}
                 {filtered.map((c, idx) => (
