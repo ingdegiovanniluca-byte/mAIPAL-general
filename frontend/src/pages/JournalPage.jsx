@@ -499,8 +499,8 @@ export default function JournalPage() {
                 onClick={has ? () => goTo(`${focusParts.y}-${pad2(focusParts.m)}-${pad2(d)}`) : undefined}
                 disabled={!has}
                 title={has ? "Apri questa giornata" : "Nessuna voce"}
-                className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${has ? "cursor-pointer" : "cursor-default"} ${isSelected ? "ring-2 ring-white" : ""}`}
-                style={{ backgroundColor: has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: has ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
+                className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${has ? "cursor-pointer" : "cursor-default"}`}
+                style={{ backgroundColor: isSelected ? "rgba(0, 176, 240, 0.9)" : has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: has || isSelected ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
               >
                 {d}
               </button>

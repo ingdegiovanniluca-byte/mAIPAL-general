@@ -24,6 +24,9 @@ const DOT_OVERDUE = "#B16941";
 const DOT_DONE = "#8ED973";
 const MUTED_TEXT = "#D9D9D9";
 const ACCENT = "#00B0F0"; // same cyan used for the selected day/week everywhere in the app
+// Mobile: days with open (not overdue) tasks get the same fill as the diary's days that have a
+// written page.
+const DIARY_DAY_FILL = "rgba(255,255,255,0.18)";
 
 function withAlpha(hex, alpha) {
   const h = hex.replace("#", "");
@@ -67,8 +70,9 @@ function weekMonthKey(monday) {
 const DRAG_THRESHOLD = 4; // px of movement before a mousedown counts as a drag, not a click
 
 // mobileBelowStrip: content the Task page shows right under the mobile day strip (the active
-// day/week filter).
-export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek, mobileBelowStrip = null }) {
+// day/week filter). onVisibleMonthChange: called on mobile with { month, year } of the week
+// shown, so the list below can default to that month.
+export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selectedDate, onSelectDate, selectedWeekStart, onSelectWeek, mobileBelowStrip = null, onVisibleMonthChange = null }) {
   const isMobile = useIsMobile();
   const DAY_LABEL_COL_WIDTH = DAY_LABEL_COL_WIDTH_DESKTOP;
   const COL_WIDTH = COL_WIDTH_DESKTOP;
@@ -158,11 +162,27 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
   // its Thursday, same rule as the month label) - cleared again when leaving the page.
   const setTitleSuffix = useSetMobileTitleSuffix();
   const shownYear = mobileMonthYear.year;
+  const shownMonth = mobileMonthYear.month;
   useEffect(() => {
     if (!isMobile) return undefined;
     setTitleSuffix(String(shownYear));
     return () => setTitleSuffix("");
   }, [isMobile, shownYear, setTitleSuffix]);
+  useEffect(() => {
+    if (isMobile && onVisibleMonthChange) onVisibleMonthChange({ month: shownMonth, year: shownYear });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, shownMonth, shownYear]);
+
+  // Mobile: the calendar stays pinned under the top bar while the task list scrolls; its
+  // frosted backing (same as the top bar) only appears once something scrolls beneath it.
+  const [pageScrolled, setPageScrolled] = useState(false);
+  useEffect(() => {
+    if (!isMobile) return undefined;
+    const onScroll = () => setPageScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [isMobile]);
 
   // Swipe col dito sulla riga dei giorni per cambiare settimana (niente frecce) - stesso
   // schema del carosello del diario: la cattura/il cambio settimana scatta solo oltre una
@@ -257,8 +277,11 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
     const isWeekSelected = selectedWeekStart === weekKey;
     return (
       <TooltipProvider delayDuration={150}>
-        <div className="shrink-0 mb-12" data-testid="calendar-mobile-week">
-          <div className="flex items-end justify-between px-1 mt-4 mb-3">
+        <div
+          data-testid="calendar-mobile-week"
+          className={`shrink-0 sticky top-14 z-30 -mx-4 px-4 pt-4 pb-5 mb-7 transition-colors duration-200 ${pageScrolled ? "bg-white/5 backdrop-blur-xl" : ""}`}
+        >
+          <div className="flex items-end justify-between px-1 mb-3">
             <div className="text-[44px] font-bold leading-none tracking-tight text-white" data-testid="calendar-mobile-month">
               {IT_MONTHS_SHORT[mobileMonthYear.month]}<span style={{ color: ACCENT }}>.</span>
             </div>
@@ -287,14 +310,13 @@ export default function TaskCalendar({ tasks, collapsed, onToggleCollapse, selec
               const isSelected = selectedDate === key;
               const isToday = key === todayStr;
               const stats = dayStats[key];
-              let dotColor = null;
+              let cellFill = "transparent";
               if (stats) {
-                if (stats.overdue > 0) dotColor = DOT_OVERDUE;
-                else if (stats.fav > 0) dotColor = DOT_FAV;
-                else if (stats.doneCount === stats.count) dotColor = DOT_DONE;
-                else dotColor = DOT_HAS;
+                if (stats.overdue > 0) cellFill = withAlpha(DOT_OVERDUE, 0.9);
+                else if (stats.doneCount === stats.count) cellFill = withAlpha(DOT_DONE, 0.9);
+                else cellFill = DIARY_DAY_FILL;
               }
-              const cellBg = isSelected ? withAlpha(ACCENT, 0.9) : dotColor ? withAlpha(dotColor, 0.9) : "transparent";
+              const cellBg = isSelected ? withAlpha(ACCENT, 0.9) : cellFill;
               const cell = (
                 <div key={di} className="flex flex-col items-center gap-1.5">
                   <div

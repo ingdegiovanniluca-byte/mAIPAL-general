@@ -52,6 +52,9 @@ export default function TaskBoardPage() {
   const [filters, setFilters] = useState({});
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
   const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
+  // Mobile: month of the week shown in the calendar strip - with no day/week selected the list
+  // shows that month's tasks.
+  const [mobileMonth, setMobileMonth] = useState(() => { const d = new Date(); return { month: d.getMonth(), year: d.getFullYear() }; });
   const [tagFilters, setTagFilters] = useState([]);
   const [orgMembers, setOrgMembers] = useState([]);
 
@@ -108,8 +111,10 @@ export default function TaskBoardPage() {
   });
 
   // ===== Mobile: niente aree di priorità - un'unica lista in ordine cronologico (per data di
-  // scadenza, quelli senza data in fondo); a parità di data prima la priorità più alta, poi
-  // l'ora. Un solo gruppo di filtri (stato "all") vale per tutta la lista. =====
+  // scadenza); a parità di data prima la priorità più alta, poi l'ora. Un solo gruppo di
+  // filtri (stato "all") vale per tutta la lista. Senza giorno/settimana selezionati mostra i
+  // task del mese in visualizzazione nel calendario. =====
+  const mobileMonthPrefix = `${mobileMonth.year}-${String(mobileMonth.month + 1).padStart(2, "0")}-`;
   const mobileFilterState = filters.all || { fav: false, overdue: false, notOverdue: false };
   const mobileList = (() => {
     let list = visible;
@@ -119,6 +124,7 @@ export default function TaskBoardPage() {
     if (f.fav) list = list.filter((t) => !!t.favorite);
     if (calendarFilter?.type === "day") list = list.filter((t) => t.due_date === calendarFilter.date);
     else if (calendarFilter?.type === "week") list = list.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
+    else list = list.filter((t) => t.due_date && t.due_date.startsWith(mobileMonthPrefix));
     return [...list].sort((a, b) => {
       const da = a.due_date || "9999-12-31";
       const db_ = b.due_date || "9999-12-31";
@@ -220,6 +226,7 @@ export default function TaskBoardPage() {
     <div className="flex flex-col md:h-[calc(100vh-17rem)]">
       <TaskCalendar
         mobileBelowStrip={mobileBelowStrip}
+        onVisibleMonthChange={setMobileMonth}
         tasks={tasks}
         collapsed={calendarCollapsed}
         onToggleCollapse={() => setCalendarCollapsed((v) => !v)}
@@ -309,7 +316,9 @@ export default function TaskBoardPage() {
         <div data-testid="mobile-task-list">
           {/* Un solo menu di filtro, all'altezza dove prima c'era "Alta priorità". */}
           <div className="flex items-center justify-between px-1 mb-4">
-            <div className="kicker whitespace-nowrap">tutti i task</div>
+            <div className="kicker whitespace-nowrap" data-testid="mobile-list-scope">
+              {calendarFilter?.type === "day" ? "task del giorno" : calendarFilter?.type === "week" ? "task della settimana" : IT_MONTHS_LONG[mobileMonth.month]}
+            </div>
             <div className="flex items-center gap-1 shrink-0">
               <button
                 data-testid="filter-overdue-all"
