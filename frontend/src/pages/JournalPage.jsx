@@ -435,6 +435,22 @@ export default function JournalPage() {
     }
   };
 
+  // The day strip opens with the current week in the middle (its Thursday centered) when
+  // showing the current month; in another month it centers the day being viewed.
+  const dayStripRef = useRef(null);
+  useEffect(() => {
+    const strip = dayStripRef.current;
+    if (!strip) return;
+    let target = focusParts.d;
+    if (focusParts.y === today.getFullYear() && focusParts.m === today.getMonth() + 1) {
+      const dow = (today.getDay() + 6) % 7; // 0 = lunedì
+      target = Math.min(daysInMonth, Math.max(1, today.getDate() - dow + 3));
+    }
+    const btn = strip.querySelector(`[data-testid="journal-day-${target}"]`);
+    if (btn) strip.scrollLeft = btn.offsetLeft + btn.offsetWidth / 2 - strip.clientWidth / 2;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusParts.y, focusParts.m]);
+
   const daysWithEntries = useMemo(() => {
     const s = new Set();
     const prefix = `${focusParts.y}-${pad2(focusParts.m)}-`;
@@ -488,7 +504,7 @@ export default function JournalPage() {
             {cap(IT_MONTHS_LONG[focusParts.m - 1])} {focusParts.y}
           </button>
         </div>
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full px-1 py-1">
+        <div ref={dayStripRef} className="relative flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full px-1 py-1">
           {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
             const has = daysWithEntries.has(d);
             const isSelected = focusParts.d === d;

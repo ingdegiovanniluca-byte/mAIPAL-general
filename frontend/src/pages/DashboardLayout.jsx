@@ -198,7 +198,7 @@ export default function DashboardLayout() {
         {/* Mobile bottom padding clears the floating menu below, so the last element of a
             page can always be scrolled fully into view above it (content still passes
             under the glass while scrolling). */}
-        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-[calc(env(safe-area-inset-bottom,0px)+6.5rem)] md:pb-8 w-full">
+        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-[calc(env(safe-area-inset-bottom,0px)+5.5rem)] md:pb-8 w-full">
           <MobileTitleContext.Provider value={setTitleSuffix}>
             <Outlet />
           </MobileTitleContext.Provider>
@@ -226,10 +226,11 @@ export default function DashboardLayout() {
                     data-testid={item.testid}
                     onClick={() => goTo(item.to)}
                     aria-current={active ? "page" : undefined}
-                    className={`min-w-[54px] min-[380px]:min-w-[62px] flex flex-col items-center justify-center gap-1 px-2 min-[380px]:px-3 py-2 rounded-full transition-colors ${active ? "bg-white/20 text-white" : "text-white/60"}`}
+                    aria-label={item.label}
+                    title={item.label}
+                    className={`min-w-[52px] min-[380px]:min-w-[60px] h-10 flex items-center justify-center px-2 min-[380px]:px-3 rounded-full transition-colors ${active ? "bg-white/20 text-white" : "text-white/60"}`}
                   >
-                    <Icon size={19} />
-                    <span className="text-[10px] font-medium leading-none">{item.label}</span>
+                    <Icon size={20} />
                   </button>
                 );
               })}
@@ -239,7 +240,7 @@ export default function DashboardLayout() {
               onClick={() => setMoreOpen(true)}
               title="Altre sezioni"
               aria-label="Altre sezioni"
-              className={`pointer-events-auto liquid-glass-panel !border-0 !shadow-[0_8px_30px_rgba(0,0,0,0.25)] h-[52px] w-[52px] min-[380px]:h-[58px] min-[380px]:w-[58px] shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white bg-white/20" : "text-white/85"}`}
+              className={`pointer-events-auto liquid-glass-panel !border-0 !shadow-[0_8px_30px_rgba(0,0,0,0.25)] h-[52px] w-[52px] shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white bg-white/20" : "text-white/85"}`}
             >
               <Plus size={24} />
             </button>

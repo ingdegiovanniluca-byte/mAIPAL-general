@@ -1212,6 +1212,24 @@ const hexToRgba = (hex, alpha) => {
   return `rgba(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}, ${alpha})`;
 };
 
+// Mixes a hex color toward white (t > 0) or black (t < 0), returning hex.
+const shadeHex = (hex, t) => {
+  const h = hex.replace("#", "");
+  const target = t >= 0 ? 255 : 0;
+  const k = Math.abs(t);
+  return "#" + [0, 2, 4].map((i) => {
+    const c = parseInt(h.slice(i, i + 2), 16);
+    return Math.round(c + (target - c) * k).toString(16).padStart(2, "0");
+  }).join("");
+};
+
+// Soft "glowing" tile in the action's color: deeper in the middle, lighter and luminous
+// toward the edges, with an inner light rim and a colored halo underneath.
+const glowTileStyle = (color) => ({
+  background: `radial-gradient(ellipse 85% 80% at 50% 55%, ${hexToRgba(shadeHex(color, -0.12), 0.95)} 0%, ${hexToRgba(color, 0.92)} 45%, ${hexToRgba(shadeHex(color, 0.38), 0.9)} 100%)`,
+  boxShadow: `inset 0 0 20px 3px ${hexToRgba(shadeHex(color, 0.6), 0.55)}, inset 0 1px 1px rgba(255, 255, 255, 0.35), 0 14px 32px -10px ${hexToRgba(color, 0.7)}`,
+});
+
 function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDelete }) {
   const d = conv.created_at ? new Date(conv.created_at) : null;
   const pad = (n) => String(n).padStart(2, "0");
@@ -1229,8 +1247,8 @@ function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDe
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
       data-testid="history-card"
-      className={`rounded-3xl p-4 text-white cursor-pointer shadow-md ${isReplying ? "ring-2 ring-white/70" : ""}`}
-      style={{ background: hexToRgba(color, 0.85) }}
+      className={`rounded-3xl p-4 text-white cursor-pointer ${isReplying ? "ring-2 ring-white/70" : ""}`}
+      style={glowTileStyle(color)}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="text-xl font-semibold leading-none tabular-nums">{dateLabel}</div>
