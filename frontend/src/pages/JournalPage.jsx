@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { api } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -316,6 +317,7 @@ export default function JournalPage() {
   const today = new Date();
   // A suggestion like "Un anno fa nel diario" opens the diary on that exact day.
   const location = useLocation();
+  const isMobile = useIsMobile();
   const requestedDate = /^\d{4}-\d{2}-\d{2}$/.test(location.state?.date || "") ? location.state.date : null;
   const initialIso = requestedDate || `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-01`;
 
@@ -520,7 +522,11 @@ export default function JournalPage() {
                 disabled={!has}
                 title={has ? "Apri questa giornata" : "Nessuna voce"}
                 className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all ${has ? "cursor-pointer" : "cursor-default"}`}
-                style={{ backgroundColor: isSelected ? "rgba(0, 176, 240, 0.9)" : has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: has || isSelected ? "#FFFFFF" : "rgba(255,255,255,0.4)" }}
+                // App (mobile): the other days' numbers take the same color as the big day number on the diary card below
+                style={{
+                  backgroundColor: isSelected ? "rgba(0, 176, 240, 0.9)" : has ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)",
+                  color: isSelected ? "#FFFFFF" : isMobile ? DIARY_DAY_COLOR : has ? "#FFFFFF" : "rgba(255,255,255,0.4)",
+                }}
               >
                 {d}
               </button>
