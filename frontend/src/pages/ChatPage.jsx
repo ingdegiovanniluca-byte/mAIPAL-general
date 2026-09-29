@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { takeSharedPayload } from "@/lib/pwa";
 import SuggestionsTicker from "@/components/SuggestionsTicker";
+import { MENTION_AGENTS, agentByKey, splitMentions, tokenizeMentions, mentionQueryAt } from "@/lib/mentions";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
@@ -215,6 +216,51 @@ export default function ChatPage() {
   const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
   activeRef.current = active;
 
+  // ===== @agenti =====
+  const [mentionQuery, setMentionQuery] = useState(null);
+  // caret to restore right after an inserted @tag is rendered (before the next key press)
+  const pendingCaretRef = useRef(null);
+  useLayoutEffect(() => {
+    const pos = pendingCaretRef.current;
+    const el = textareaRef.current;
+    if (pos !== null && el) { el.focus(); el.setSelectionRange(pos, pos); pendingCaretRef.current = null; }
+  });
+  const agentResultMessage = (res) => ({
+    role: "assistant",
+    content: res.message || "",
+    agent: res.agent,
+    ...(res.status === "pending" && res.list_result ? { listAmbiguous: res.list_result } : {}),
+    ...(res.status === "pending" && res.draft ? { schedDraft: res.draft } : {}),
+    ...(res.task_id ? { taskLink: res.task_id } : {}),
+  });
+  // For the main actions that don't go through /chat/stream (report, azione programmata,
+  // modifica lista): the tagged pieces run afterwards via /agents/dispatch.
+  const dispatchTagged = async (fullText, source = null) => {
+    if (!splitMentions(fullText).parts.length) return;
+    try {
+      const r = await api.post("/agents/dispatch", { text: fullText, source });
+      setThread((th) => (th ? { ...th, messages: [...th.messages, ...(r.data.results || []).map(agentResultMessage)] } : th));
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore negli agenti taggati"); }
+  };
+  const onComposerChange = (e) => {
+    setText(e.target.value);
+    setMentionQuery(mentionQueryAt(e.target.value, e.target.selectionStart ?? e.target.value.length));
+  };
+  const insertMention = (agent) => {
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? text.length;
+    const before = text.slice(0, caret).replace(/@[\w-]*$/, `@${agent.tag} `);
+    const next = before + text.slice(caret);
+    pendingCaretRef.current = before.length;
+    setText(next);
+    setMentionQuery(null);
+  };
+  const mentionMatches = mentionQuery === null ? [] : MENTION_AGENTS.filter((a) => a.aliases.some((al) => al.startsWith(mentionQuery)));
+  const typedTags = splitMentions(text).parts;
+  const renderWithTags = (content) => tokenizeMentions(content).map((tk, i) => (typeof tk === "string" ? tk : (
+    <span key={i} className="inline-block rounded-md px-1.5 mx-0.5 text-[0.9em] font-medium text-white" style={{ background: tk.agent.color }}>{tk.tag}</span>
+  )));
+
   // Something shared to mAIPAL from another app (Android "Condividi" -> mAIPAL): it opens
   // here with the files attached and the shared text/link in the box, as "Salva
   // informazioni" - the user adds a word (e.g. which Drive folder) and sends.
@@ -263,6 +309,15 @@ export default function ChatPage() {
   const startNewMobileConversation = () => { closeThread(); setMobileView("chat"); };
   // Spec v2 §3.4: picking an old conversation from the history goes back to the chat view,
   // showing that conversation with the composer bound to it.
+  // Opened from a task's "Da: ..." link: show that conversation.
+  useEffect(() => {
+    const cid = location.state?.openConv;
+    if (!cid) return;
+    openThread(cid).catch(() => toast.error("Conversazione non più disponibile"));
+    navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const resumeMobileConversation = (conv) => {
     setMobileReplyTo({ conv_id: conv.conv_id, action: conv.action, label: formatReplyLabel(conv) });
     openThread(conv.conv_id);
@@ -365,8 +420,11 @@ export default function ChatPage() {
     setText("");
 
     try {
-      const r = await api.post("/vet/generate-report", { text: content, visit_type: visitType });
+      const { main: visitText } = splitMentions(content);
+      const r = await api.post("/vet/generate-report", { text: visitText || content, visit_type: visitType });
       appendVetReportResult(r.data);
+      // "@task richiamo vaccino tra un anno": linked to this report (and its patient)
+      await dispatchTagged(content, r.data?.id ? { type: "vet_report", id: r.data.id, preview: (visitText || "").slice(0, 200) } : null);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
@@ -398,11 +456,17 @@ export default function ChatPage() {
       ? { ...th, messages: [...th.messages.map((m) => (m === pendingDraft ? { ...m, schedDone: "replaced" } : m)), { role: "user", content }] }
       : { conv_id: null, action: "scheduled_action", messages: [{ role: "user", content }], liveAnswer: "" });
     try {
-      const r = await api.post("/scheduled-actions/interpret", { text: content, previous_text: pendingDraft?.schedDraft?.text || null });
-      const msg = r.data.status === "confirm"
-        ? { role: "assistant", content: `Ho capito così:\n\n${r.data.preview}\n\nLa attivo? Se qualcosa non va, scrivimi cosa correggere.`, schedDraft: r.data.draft }
-        : { role: "assistant", content: `⚠️ ${r.data.message}` };
-      setThread((th) => ({ ...th, messages: [...th.messages, msg] }));
+      const { main: schedText, parts: schedTags } = splitMentions(content);
+      const r = schedText
+        ? await api.post("/scheduled-actions/interpret", { text: schedText, previous_text: pendingDraft?.schedDraft?.text || null })
+        : { data: null };
+      if (r.data) {
+        const msg = r.data.status === "confirm"
+          ? { role: "assistant", content: `Ho capito così:\n\n${r.data.preview}\n\nLa attivo? Se qualcosa non va, scrivimi cosa correggere.`, schedDraft: r.data.draft }
+          : { role: "assistant", content: `⚠️ ${r.data.message}` };
+        setThread((th) => ({ ...th, messages: [...th.messages, msg] }));
+      }
+      if (schedTags.length) await dispatchTagged(content);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a interpretare il comando");
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
@@ -563,6 +627,7 @@ export default function ChatPage() {
     setThread((th) => (th && th.conv_id === replyTarget.conv_id)
       ? { ...th, messages: [...th.messages, { role: "user", content }], liveAnswer: "" }
       : th);
+    const replyAgentResults = [];
     await streamChat(
       { action: replyTarget.action, content, conv_id: replyTarget.conv_id },
       (delta) => setThread((th) => (th && th.conv_id === replyTarget.conv_id) ? { ...th, liveAnswer: (th.liveAnswer || "") + delta } : th),
@@ -571,11 +636,12 @@ export default function ChatPage() {
         setThread((th) => {
           if (!th || th.conv_id !== replyTarget.conv_id) return th;
           const finalized = th.liveAnswer || "";
-          return { ...th, messages: [...th.messages, { role: "assistant", content: finalized }], liveAnswer: "" };
+          return { ...th, messages: [...th.messages, ...(finalized ? [{ role: "assistant", content: finalized }] : []), ...replyAgentResults.map(agentResultMessage)], liveAnswer: "" };
         });
         await load();
       },
-      (err) => { setStreaming(false); toast.error("Errore: " + err.message); }
+      (err) => { setStreaming(false); toast.error("Errore: " + err.message); },
+      (evt) => { if (evt.type === "agent") replyAgentResults.push(evt); }
     );
   };
 
@@ -610,10 +676,12 @@ export default function ChatPage() {
     // list edit keeps going as one; a fresh message gets a cheap classification pass so
     // "aggiungi Mario alla lista clienti" is routed to the list editor instead of being
     // saved as a generic note - no separate button needed for the two.
-    if (active === "info_upload" && attachments.length === 0 && currentQuestion) {
+    const { main: mainQuestion, parts: taggedParts } = splitMentions(currentQuestion);
+    if (active === "info_upload" && attachments.length === 0 && mainQuestion) {
       if (thread?.action === "list_update") {
         setText("");
-        await runListUpdateFor(currentQuestion);
+        await runListUpdateFor(mainQuestion);
+        if (taggedParts.length) await dispatchTagged(currentQuestion);
         return;
       }
       // Re-classify on every new message, not just the first one in a thread: a user who
@@ -622,10 +690,11 @@ export default function ChatPage() {
       // still be caught instead of being treated as a plain conversational follow-up.
       if (!thread || thread.action === "info_upload") {
         try {
-          const cls = await api.post("/classify-save-intent", { text: currentQuestion });
+          const cls = await api.post("/classify-save-intent", { text: mainQuestion });
           if (cls.data?.kind === "list_update") {
             setText("");
-            await runListUpdateFor(currentQuestion);
+            await runListUpdateFor(mainQuestion);
+            if (taggedParts.length) await dispatchTagged(currentQuestion);
             return;
           }
         } catch { /* classification failed: fall through to a normal save */ }
@@ -634,7 +703,7 @@ export default function ChatPage() {
 
     // "Salvataggio task o to-do" doubles as "elimina/segna come fatto" - checked on every
     // fresh message before it's treated as a request to create a new one.
-    if (active === "task_todo" && attachments.length === 0 && currentQuestion && (!thread || thread.action === "task_todo")) {
+    if (active === "task_todo" && attachments.length === 0 && mainQuestion && !taggedParts.length && (!thread || thread.action === "task_todo")) {
       try {
         const cmd = await api.post("/tasks/command", { text: currentQuestion });
         if (cmd.data?.status && cmd.data.status !== "not_applicable") {
@@ -705,6 +774,8 @@ export default function ChatPage() {
     if (active === "journal" && journalDocs.length > 0) payload.documents = journalDocs;
     if (thread?.conv_id) payload.conv_id = thread.conv_id;
 
+    // @agenti results arrive after the main answer; shown right below it
+    const agentResults = [];
     await streamChat(
       payload,
       (delta) => setThread((th) => (th ? { ...th, liveAnswer: (th.liveAnswer || "") + delta } : th)),
@@ -713,11 +784,12 @@ export default function ChatPage() {
         setThread((th) => {
           if (!th) return th;
           const finalized = th.liveAnswer || "";
-          return { ...th, conv_id: convId, messages: [...th.messages, { role: "assistant", content: finalized }], liveAnswer: "" };
+          return { ...th, conv_id: convId, messages: [...th.messages, ...(finalized ? [{ role: "assistant", content: finalized }] : []), ...agentResults.map(agentResultMessage)], liveAnswer: "" };
         });
         await load();
       },
-      (err) => { setStreaming(false); toast.error("Errore: " + err.message); }
+      (err) => { setStreaming(false); toast.error("Errore: " + err.message); },
+      (evt) => { if (evt.type === "agent") agentResults.push(evt); }
     );
   };
 
@@ -1035,12 +1107,44 @@ export default function ChatPage() {
               data-testid="chat-textarea"
               ref={textareaRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send(); }}
+              onChange={onComposerChange}
+              onClick={(e) => setMentionQuery(mentionQueryAt(text, e.target.selectionStart))}
+              onKeyDown={(e) => {
+                if (mentionMatches.length && (e.key === "Enter" || e.key === "Tab")) { e.preventDefault(); insertMention(mentionMatches[0]); return; }
+                if (e.key === "Escape") setMentionQuery(null);
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
+              }}
               placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro nel contesto…" : activeAction.placeholder}
               rows={isMobile ? 1 : undefined}
               className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base md:flex-1 md:min-h-[200px] px-0 resize-none text-white placeholder:text-white/60 overflow-y-auto"
             />
+            {mentionMatches.length > 0 && (
+              <div className="mb-2 rounded-2xl bg-[#2A2429]/95 border border-white/10 shadow-lg overflow-hidden" data-testid="mention-menu">
+                {mentionMatches.map((a) => (
+                  <button
+                    key={a.key}
+                    type="button"
+                    data-testid={`mention-${a.tag}`}
+                    onMouseDown={(e) => { e.preventDefault(); insertMention(a); }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/10"
+                  >
+                    <span className="rounded-md px-1.5 text-xs font-medium text-white" style={{ background: a.color }}>@{a.tag}</span>
+                    <span className="text-sm text-white/90 whitespace-nowrap">{a.label}</span>
+                    <span className="text-xs text-white/45 truncate min-w-0">{a.hint}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {typedTags.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="mention-chips">
+                <span className="text-[11px] text-white/55">Invio anche a:</span>
+                {typedTags.map((p, i) => (
+                  <span key={i} className="text-[11px] rounded-md px-1.5 py-0.5 text-white" style={{ background: agentByKey(p.agent)?.color }} title={p.text}>
+                    @{p.tag} · {p.text.length > 28 ? p.text.slice(0, 27) + "…" : p.text}
+                  </span>
+                ))}
+              </div>
+            )}
             {pendingDriveUpload && (
               <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">
                 <span className="kicker text-white/70">cartella per {pendingDriveUpload.count > 1 ? `${pendingDriveUpload.count} file` : `"${pendingDriveUpload.fileName}"`}:</span>
@@ -1179,9 +1283,23 @@ export default function ChatPage() {
                 {thread.messages.map((m, i) => (
                   <div key={i}>
                     <div className="kicker mb-1">{m.role === "user" ? "· tu" : ""}</div>
+                    {m.agent && agentByKey(m.agent) && (
+                      <span className="ml-4 inline-block rounded-md px-1.5 text-[11px] font-medium text-white" style={{ background: agentByKey(m.agent).color }} data-testid="agent-result-tag">
+                        @{agentByKey(m.agent).tag}
+                      </span>
+                    )}
                     <div className={m.role === "user" ? "bg-white/10 rounded-2xl px-4 py-3 text-white whitespace-pre-wrap" : "prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white"}>
-                      {m.content}
+                      {m.role === "user" ? renderWithTags(m.content) : m.content}
                     </div>
+                    {m.taskLink && (
+                      <button
+                        data-testid="agent-open-task"
+                        onClick={() => navigate("/dashboard/tasks", { state: { openTask: m.taskLink } })}
+                        className="ml-4 mt-1 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
+                      >
+                        <CheckSquare size={12} /> Apri il task
+                      </button>
+                    )}
                     {m.reportId && (
                       <a
                         href={`${API}/vet/reports/${m.reportId}/download`}

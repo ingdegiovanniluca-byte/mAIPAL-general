@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, Repeat } from "lucide-react";
+import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, Repeat, Link2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -615,6 +615,36 @@ const askDeleteTask = (task, doDelete) => {
   ), { duration: 10000 });
 };
 
+// "Da: Nota del 29 set" - where a task created by a tagged agent (@task) came from.
+function SourceRow({ source }) {
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  if (!source) return null;
+  const label = source.label || "Chat";
+  const canOpenChat = !!source.conv_id && !String(source.conv_id).startsWith("agents_") && !String(source.conv_id).startsWith("tg_");
+  return (
+    <div className="mt-1.5 text-sm" style={{ color: "#D9D9D9" }} data-testid="task-source">
+      <button
+        onClick={() => (source.preview ? setOpen((v) => !v) : canOpenChat && navigate("/dashboard/chat", { state: { openConv: source.conv_id } }))}
+        className="flex items-center gap-1.5 hover:underline decoration-dotted underline-offset-2"
+        title="Da dove è nato questo task"
+      >
+        <Link2 size={14} /> Da: {label}
+      </button>
+      {open && (
+        <div className="mt-2 rounded-xl px-3 py-2 text-xs text-white/85 whitespace-pre-wrap" style={{ background: TAG_BG }}>
+          {source.preview}
+          {canOpenChat && (
+            <button onClick={() => navigate("/dashboard/chat", { state: { openConv: source.conv_id } })} className="block mt-2 text-[11px] underline text-white/70">
+              Apri la chat
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const RECUR_FREQS = [
   { key: "none", label: "Mai" },
   { key: "daily", label: "Giorno", unit: ["giorno", "giorni"] },
@@ -997,6 +1027,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
               </DialogHeader>
               {dateBlock}
               <RecurrenceRow task={task} onUpdated={onUpdated} />
+              <SourceRow source={task.source} />
             </div>
           </div>
         ) : (
@@ -1007,6 +1038,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
               </DialogHeader>
               {dateBlock}
               <RecurrenceRow task={task} onUpdated={onUpdated} />
+              <SourceRow source={task.source} />
             </div>
             <div className="flex items-center gap-1 shrink-0 pt-1">
               {actionButtons}

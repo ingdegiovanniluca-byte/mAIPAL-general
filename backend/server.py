@@ -43,6 +43,7 @@ import list_updates as lu
 import scheduled_actions as sa
 import recurrence as rec
 import conversation_retention as cr
+import mentions as mn
 import usage_tracking as ut
 
 ROOT_DIR = Path(__file__).parent
@@ -1174,6 +1175,20 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             "messages": [],
         })
 
+    # @agenti: the part before the first tag is this action's message; the tagged pieces
+    # are run by their agents after it (see _run_sub_agent). The chat shows the message as
+    # typed, tags included.
+    shown_user_text = payload.display_content or payload.content
+    typed = _strip_attachment_lines(payload.display_content) if payload.display_content else payload.content.split("\n\nAllegati caricati", 1)[0]
+    main_text, mention_parts = mn.split_mentions(typed)
+    run_primary = True
+    if mention_parts:
+        run_primary = bool(main_text)
+        payload.content = payload.content.replace(typed, main_text, 1) if typed and typed in payload.content else main_text
+        if payload.display_content:
+            payload.display_content = payload.display_content.replace(typed, main_text, 1)
+    linkage: dict = {}
+
     # RAG context: run on EVERY info_request turn (not just first) so follow-up questions
     # can pull fresh chunks based on the new question. Also runs for task_todo so a request
     # like "crea un task per ogni lezione di pilates" can see a schedule the user uploaded
@@ -1228,13 +1243,13 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     # Save the user turn to the messages array immediately
     await db.conversations.update_one(
         {"conv_id": conv_id},
-        {"$push": {"messages": {"role": "user", "content": payload.display_content or payload.content, "ts": now,
-                                **({"llm_content": payload.content} if payload.display_content else {})}}},
+        {"$push": {"messages": {"role": "user", "content": shown_user_text, "ts": now,
+                                **({"llm_content": payload.content} if payload.content != shown_user_text else {})}}},
     )
 
     import json as _json
     MARKER = "<<<META>>>"
-    async def event_gen():
+    async def primary_events():
         full = []
         pending = ""     # buffer with tail that could still be a partial marker prefix
         stopped = False  # true once MARKER encountered
@@ -1322,6 +1337,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             except Exception:
                 embedding = None
             doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+            linkage["source"] = {"type": "note", "doc_id": doc_id, "conv_id": conv_id, "preview": note_text[:200],
+                                 "created_at": datetime.now(timezone.utc).isoformat()}
             await db.kb_chunks.insert_one({
                 "chunk_id": f"kb_{uuid.uuid4().hex[:12]}",
                 "user_id": current.user_id,
@@ -1448,6 +1465,21 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                 except Exception:
                     logger.exception("Drive backup of journal images failed")
 
+
+    async def event_gen():
+        if run_primary:
+            async for chunk in primary_events():
+                yield chunk
+        # then every @agent piece, each with the whole message as context
+        source = linkage.get("source") or {"type": "conversation", "conv_id": conv_id, "created_at": now}
+        for part in mention_parts[:6]:
+            res = await _run_sub_agent(current, part["agent"], part["text"], typed, source, conv_id)
+            await db.conversations.update_one({"conv_id": conv_id}, {"$push": {"messages": {
+                "role": "assistant", "content": res.get("message") or "", "agent": part["agent"],
+                "ts": datetime.now(timezone.utc).isoformat()}}})
+            yield _json.dumps({"type": "agent", **res}) + "\n"
+        if not run_primary and not prior_messages:
+            await db.conversations.update_one({"conv_id": conv_id}, {"$set": {"completed_at": datetime.now(timezone.utc).isoformat()}})
         yield _json.dumps({"type": "done", "conv_id": conv_id}) + "\n"
 
     return StreamingResponse(
@@ -1529,6 +1561,8 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
             "source_conv": conv_id,
         }
         await db.todos.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 
 def _resolve_journal_date(meta: Optional[dict]) -> str:
@@ -5229,6 +5263,167 @@ async def get_suggestions(current: User = Depends(get_current_user)):
         asyncio.create_task(_generate_ai_insights(current, today_iso))  # ready on a later load
     items.sort(key=lambda s: -s.get("priority", 0))
     return {"items": sg.with_tips(items[:8], today)}
+
+
+# ============ @AGENTI IN CHAT ============
+# "...informazioni sul paziente... @task richiamare la padrona giovedì": the part before the
+# first tag goes to the action selected in the chat, each tagged piece to that agent (see
+# mentions.py), with the whole message as context. Results come back one per agent; list
+# edits and scheduled actions that need a confirmation return it (never applied blindly).
+
+AGENT_LABELS = {"task_todo": "Task", "info_upload": "Nota", "info_request": "Cerca", "journal": "Diario",
+                "list_update": "Lista", "scheduled_action": "Azione"}
+
+
+def _short_it_date(iso: Optional[str], time_s: Optional[str] = None) -> str:
+    if not iso:
+        return ""
+    try:
+        d = datetime.fromisoformat(str(iso)[:10])
+    except ValueError:
+        return str(iso)
+    s = f"{d.day} {sa.IT_MONTHS[d.month - 1][:3]}"
+    return f"{s} {time_s}" if time_s else s
+
+
+def _source_label(source: Optional[dict]) -> str:
+    if not source:
+        return ""
+    when = _short_it_date((source.get("created_at") or "")[:10])
+    return {"note": f"Nota del {when}", "journal": f"Diario del {_short_it_date(source.get('date'))}",
+            "vet_report": f"Referto del {when}"}.get(source.get("type"), f"Chat del {when}")
+
+
+async def _agent_llm(user: User, action: str, text: str, feature: str, channel: str) -> tuple[str, Optional[dict]]:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY, session_id=f"agent_{action}_{uuid.uuid4().hex[:8]}",
+        system_message=build_system_prompt(user, action),
+        user_id=user.user_id, feature=feature, channel=channel, trigger="utente", org_id=user.org_id,
+    ).with_model("openai", "gpt-4o")
+    raw = await chat.send_message(UserMessage(text=text))
+    visible, meta = _extract_meta(raw or "")
+    return visible.replace("```json", "").replace("```", "").strip(), meta
+
+
+async def _run_sub_agent(user: User, agent: str, piece: str, context: str, source: Optional[dict],
+                         conv_id: str, channel: str = "web") -> dict:
+    """Runs one tagged piece; never raises - a failing agent reports its error and the
+    others still run."""
+    base = {"agent": agent, "label": AGENT_LABELS.get(agent, agent)}
+    ctx_block = (f"CONTESTO - il messaggio completo dell'utente, di cui questa richiesta fa parte:\n{context}\n\n"
+                 if context and context.strip() != piece.strip() else "")
+    try:
+        if agent == "task_todo":
+            prompt = (ctx_block + "Usa il contesto per rendere il task completo e specifico: nel titolo i nomi giusti "
+                      "(persona, paziente, cliente...), in 'notes' i dettagli utili per svolgerlo presi dal contesto "
+                      "(senza inventare nulla).\n\nRICHIESTA PER IL TASK:\n" + piece)
+            visible, meta = await _agent_llm(user, "task_todo", prompt, "creazione_task", channel)
+            items = meta.get("tasks") if meta and isinstance(meta.get("tasks"), list) else ([meta] if meta else [])
+            created = []
+            for it in items:
+                if isinstance(it, dict) and it.get("title"):
+                    doc = await _create_task_or_todo(user.user_id, it, conv_id, default_reminder_enabled=(channel == "telegram"))
+                    if doc:
+                        created.append(doc)
+            if not created:
+                return {**base, "status": "error", "message": visible or "Non ho capito che task creare."}
+            if source:
+                src = {**source, "label": _source_label(source)}
+                for d in created:
+                    coll = db.tasks if d["id"].startswith("task_") else db.todos
+                    await coll.update_one({"id": d["id"]}, {"$set": {"source": src}})
+                if source.get("type") == "note" and source.get("doc_id"):
+                    await db.kb_documents.update_one({"doc_id": source["doc_id"]}, {"$push": {"linked": {"$each": [
+                        {"type": "task" if d["id"].startswith("task_") else "todo", "id": d["id"], "title": d.get("title")} for d in created]}}})
+            lines = []
+            for d in created:
+                if d["id"].startswith("task_"):
+                    when = _short_it_date(d.get("due_date"), d.get("due_time"))
+                    lines.append(f"📌 Task creato: «{d.get('title')}»" + (f" · {when}" if when else ""))
+                else:
+                    lines.append(f"✅ To-Do creato: «{d.get('title')}»")
+                if d.get("notes"):
+                    lines.append(f"   Note: {d['notes'][:200]}")
+            return {**base, "status": "ok", "message": "\n".join(lines),
+                    "task_id": created[0]["id"] if created[0]["id"].startswith("task_") else None}
+
+        if agent == "journal":
+            visible, meta = await _agent_llm(user, "journal", piece, "diario", channel)
+            jr = await _save_journal_entry(user.user_id, _resolve_journal_date(meta), piece, visible or piece, meta, conv_id)
+            return {**base, "status": "ok", "message": f"📔 Aggiunto al diario del {_short_it_date(jr.get('date'))}."}
+
+        if agent == "info_upload":
+            try:
+                e = await emb.embed_texts([piece])
+                embedding = e[0] if e else None
+            except Exception:
+                embedding = None
+            doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.kb_chunks.insert_one({
+                "chunk_id": f"kb_{uuid.uuid4().hex[:12]}", "user_id": user.user_id, "text": piece, "title": piece[:60],
+                "tags": [], "summary": piece[:140], "embedding": embedding, "doc_id": doc_id, "source_type": "chat",
+                "chunk_index": 0, "conv_id": conv_id, "created_at": now_iso,
+            })
+            await db.kb_documents.insert_one({
+                "doc_id": doc_id, "user_id": user.user_id, "name": piece[:60] + ("…" if len(piece) > 60 else ""),
+                "ext": "chat", "source_type": "chat", "category": "note", "keywords": [], "chunks_count": 1,
+                "chars": len(piece), "size_bytes": len(piece.encode("utf-8")), "preview": piece[:280], "drive_link": None,
+                "created_at": now_iso, "conv_id": conv_id,
+            })
+            ut.fire_and_forget_feature_event(user_id=user.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=user.org_id)
+            return {**base, "status": "ok", "message": "💾 Informazione salvata."}
+
+        if agent == "info_request":
+            hits = await retrieve_kb(user.user_id, piece, scope="all", org_id=user.org_id)
+            ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)
+            text = (f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{piece}") if ctx else piece
+            visible, _ = await _agent_llm(user, "info_request", text, "ricerca_informazioni", channel)
+            return {**base, "status": "ok", "message": f"🔍 {visible}"}
+
+        if agent == "list_update":
+            text = piece + (f"\n\n(Contesto del messaggio, per capire a chi o cosa si riferisce: {context[:600]})" if ctx_block else "")
+            try:
+                res = await _execute_list_update(user, text, channel=channel)
+            except HTTPException as he:
+                return {**base, "status": "error", "message": f"⚠️ {he.detail}"}
+            if res.get("status") == "ok":
+                return {**base, "status": "ok", "message": f"📋 {res.get('message')}"}
+            # ambiguity or a confirmation (e.g. "svuota") - shown with its buttons, applied only on a tap
+            prompt = {"ambiguous_list": "In quale lista?", "ambiguous_item": "Ho trovato più corrispondenze, quale intendi?",
+                      "ambiguous_sub_item": "Ho trovato più corrispondenze, quale intendi?"}.get(res.get("status"))
+            msg = prompt or (f"⚠️ {res.get('message')}" if res.get("message") else "⚠️ Prima di modificare la lista serve una tua conferma:")
+            return {**base, "status": "pending", "message": msg, "list_result": res}
+
+        if agent == "scheduled_action":
+            res = await _build_scheduled_draft(user, piece, channel=channel)
+            if res.get("status") != "confirm":
+                return {**base, "status": "error", "message": f"⚠️ {res.get('message')}"}
+            return {**base, "status": "pending", "message": f"🔁 Ho capito così:\n\n{res['preview']}\n\nLa attivo?", "draft": res["draft"]}
+    except Exception as e:
+        logger.exception(f"sub-agent {agent} failed")
+        return {**base, "status": "error", "message": f"⚠️ {getattr(e, 'detail', None) or 'non sono riuscito a completare questa parte'}"}
+    return {**base, "status": "error", "message": "Agente sconosciuto."}
+
+
+class AgentDispatchPayload(BaseModel):
+    text: str                          # the whole typed message, tags included
+    source: Optional[dict] = None      # what the main action produced, e.g. {"type": "vet_report", "id": ...}
+
+
+@api_router.post("/agents/dispatch")
+async def dispatch_agents(payload: AgentDispatchPayload, current: User = Depends(get_current_user)):
+    """The tagged pieces of a message whose main action does not go through /chat/stream
+    (report visita, azioni programmate, modifica lista): run after the main one."""
+    main, parts = mn.split_mentions(payload.text)
+    source = payload.source if isinstance(payload.source, dict) else None
+    if source is not None:
+        source = {k: v for k, v in source.items() if k in ("type", "id", "doc_id", "conv_id", "date", "created_at", "preview")}
+        source.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    results = []
+    for p in parts[:6]:
+        results.append(await _run_sub_agent(current, p["agent"], p["text"], payload.text, source, conv_id=f"agents_{uuid.uuid4().hex[:8]}"))
+    return {"main": main, "results": results}
 
 
 app.include_router(api_router)

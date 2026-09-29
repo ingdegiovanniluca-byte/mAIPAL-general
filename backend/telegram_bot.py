@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import mentions as mn
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from llm_integrations import LlmChat, UserMessage, OpenAISpeechToText
 import usage_tracking as ut
@@ -453,8 +454,6 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         if not content.strip():
             await update.message.reply_text("Scrivi qualcosa dopo il comando.")
             return
-        action = forced_action
-        force_new = True   # explicit command = fresh context by default
     else:
         content = text
         state = await _get_state(db, user["user_id"], chat_id)
@@ -470,6 +469,26 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         if state.get("pending_drive_upload_id"):
             await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], content)
             return
+
+    # @agenti: "...info... @task richiamare giovedì" - the main part is handled as usual,
+    # then each tagged piece by its agent (same rules as the web chat, see mentions.py).
+    full_text = content
+    main_text, tagged = mn.split_mentions(content)
+    if tagged:
+        content = main_text
+    if content:
+        await _run_main_message(update, ctx, db, user, content, forced_action, force_new)
+    if tagged:
+        await _run_tagged_pieces(update, ctx, db, user, tagged, full_text)
+
+
+async def _run_main_message(update, ctx, db, user, content, forced_action, force_new):
+    chat_id = update.effective_chat.id
+    if forced_action:
+        action = forced_action
+        force_new = True   # explicit command = fresh context by default
+    else:
+        state = await _get_state(db, user["user_id"], chat_id)
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)
         intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"])
@@ -482,6 +501,25 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         force_new = (intent["continuation"] == "new") or (prev_ctx is None) or (state.get("current_action") != action)
 
     await _run_and_reply(update, ctx, db, user, action, content, force_new=force_new)
+
+
+async def _run_tagged_pieces(update, ctx, db, user, tagged, full_text):
+    from server import _run_sub_agent
+    chat_id = update.effective_chat.id
+    current = _to_user_pydantic(user)
+    state = await _get_state(db, user["user_id"], chat_id)
+    source = {"type": "conversation", "conv_id": state.get("current_conv_id"), "created_at": datetime.now(timezone.utc).isoformat()}
+    for p in tagged[:6]:
+        if p["agent"] == "list_update":
+            # Telegram's own flow: ambiguity and "svuota" confirmation buttons included
+            await _run_list_update_flow(update, ctx, db, user, p["text"])
+        elif p["agent"] == "scheduled_action":
+            await _run_scheduled_draft_flow(chat_id, ctx, db, user, p["text"])
+        else:
+            await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+            res = await _run_sub_agent(current, p["agent"], p["text"], full_text, source,
+                                       conv_id=state.get("current_conv_id") or f"tg_{chat_id}", channel="telegram")
+            await ctx.bot.send_message(chat_id=chat_id, text=f"@{p['tag']} → {res.get('message') or ''}")
 
 
 async def _cmd_ask(update, ctx):     await _cmd_generic(update, ctx, "info_request")
@@ -896,6 +934,14 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if state.get("pending_drive_upload_id"):
             _track_stt("caricamento_informazioni")
             await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], transcript)
+            return
+        # dictated "agente task ..." / "chiocciola task ..." - same split as typed @tags
+        main_text, tagged = mn.split_mentions(transcript)
+        if tagged:
+            _track_stt("altro")
+            if main_text:
+                await _run_main_message(update, ctx, db, user, main_text, None, False)
+            await _run_tagged_pieces(update, ctx, db, user, tagged, transcript)
             return
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)

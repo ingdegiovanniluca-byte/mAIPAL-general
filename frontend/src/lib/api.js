@@ -8,7 +8,7 @@ export const api = axios.create({
   withCredentials: true,
 });
 
-export async function streamChat(payload, onDelta, onDone, onError) {
+export async function streamChat(payload, onDelta, onDone, onError, onEvent) {
   try {
     const res = await fetch(`${API}/chat/stream`, {
       method: "POST",
@@ -37,6 +37,7 @@ export async function streamChat(payload, onDelta, onDone, onError) {
           if (evt.type === "delta") onDelta && onDelta(evt.content);
           else if (evt.type === "done") onDone && onDone(evt.conv_id);
           else if (evt.type === "error") onError && onError(new Error(evt.content));
+          else onEvent && onEvent(evt);
         } catch (_) {}
       }
     }
