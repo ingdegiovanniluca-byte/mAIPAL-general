@@ -986,7 +986,9 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tg_file = await ctx.bot.get_file(photos[-1].file_id)  # last = highest resolution
             raw = await tg_file.download_as_bytearray()
             filename = f"foto_{uuid.uuid4().hex[:8]}.jpg"
-            kb_result = await _ocr_and_save_image_to_kb(user["user_id"], filename, bytes(raw), channel="telegram")
+            # the caption ("spese del gatto") is written into the saved text, so it's found by it
+            kb_result = await _ocr_and_save_image_to_kb(user["user_id"], filename, bytes(raw), channel="telegram",
+                                                        user_context=caption if action == "info_upload" else None)
         except ValueError as ve:
             await update.message.reply_text(f"⚠️ {str(ve)}")
             return

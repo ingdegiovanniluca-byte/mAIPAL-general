@@ -666,6 +666,7 @@ export default function ChatPage() {
       currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
     }
     const driveFiles = attachments.filter((a) => a.driveFile);
+    const kbDocIds = attachments.filter((a) => a.kb && a.id).map((a) => a.id);
     setText("");
     setAttachments([]);
 
@@ -698,6 +699,7 @@ export default function ChatPage() {
 
     const payload = { action: active, content: currentQuestion };
     if (displayQuestion !== currentQuestion) payload.display_content = displayQuestion;
+    if (kbDocIds.length) payload.attachment_doc_ids = kbDocIds;
     if (active === "info_request") payload.filters = { scope };
     if (active === "journal" && journalImgs.length > 0) payload.images = journalImgs;
     if (active === "journal" && journalDocs.length > 0) payload.documents = journalDocs;

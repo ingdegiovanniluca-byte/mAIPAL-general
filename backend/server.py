@@ -149,6 +149,9 @@ class ChatRequest(BaseModel):
     # for the model (attachments indexed, Drive outcome): stored as the visible text, while
     # `content` is kept (as llm_content) so follow-up turns still give the model the full context.
     display_content: Optional[str] = None
+    # KB documents (doc_id from /kb/upload) attached to this message: the model gets their
+    # extracted text, and the message is linked to them so they are found by it later.
+    attachment_doc_ids: Optional[List[str]] = None
 
 
 class Task(BaseModel):
@@ -1191,6 +1194,13 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
 
     system = build_system_prompt(current, action)
     user_text = payload.content
+    attached_ids = [d for d in (payload.attachment_doc_ids or []) if isinstance(d, str)][:10]
+    if attached_ids and action in ("info_upload", "task_todo"):
+        att_text = await _attachments_text_for_model(current.user_id, attached_ids)
+        if att_text:
+            user_text = (f"{user_text}\n\nCONTENUTO LETTO DAGLI ALLEGATI (già salvato nella knowledge base, collegato a "
+                         f"questo messaggio - nella risposta conferma in breve cosa contiene, es. esercente, data e "
+                         f"totale di uno scontrino):\n{att_text}")
     if kb_context:
         def _fmt(c):
             # Non-KB sources (task/todo/journal) use a compact display line.
@@ -1200,7 +1210,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             return c.get("text", "")
         ctx = "\n\n".join([f"- {_fmt(c)}" for c in kb_context])
         label = "RICHIESTA" if action == "task_todo" else "DOMANDA"
-        user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\n{label}:\n{payload.content}"
+        user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\n{label}:\n{user_text}"
 
     initial = [{"role": "system", "content": system}]
     for m in prior_messages:
@@ -1297,6 +1307,12 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         # Pilates Martina?" to be answerable), not a duplicate of the first message. Gating
         # this on `not prior_messages` (first turn only) silently dropped every fact stated
         # in a follow-up turn - it never became retrievable, with no error to the user.
+        if action == "info_upload" and attached_ids:
+            typed = _strip_attachment_lines(payload.display_content or payload.content.split("\n\nAllegati caricati", 1)[0])
+            try:
+                await _link_user_context_to_docs(current.user_id, attached_ids, typed)
+            except Exception:
+                logger.exception("linking message to attachments failed")
         if action == "info_upload":
             # the note is what the user wrote (+ attached file names), not the notes for the model
             note_text = payload.display_content or payload.content
@@ -1582,8 +1598,53 @@ def _image_bytes_to_journal_data_uri(contents: bytes, max_dim: int = 1600, max_b
     return "data:image/jpeg;base64," + _b64.b64encode(jpeg_bytes).decode("ascii")
 
 
+def _strip_attachment_lines(text: str) -> str:
+    return "\n".join(l for l in (text or "").splitlines() if not l.strip().startswith("📎")).strip()
+
+
+async def _link_user_context_to_docs(user_id: str, doc_ids: List[str], context: str):
+    """What the user wrote together with a file ("salva le spese come spese gatto") is
+    written INTO that file's knowledge-base text, so the receipt's amounts and the user's own
+    words for it are found together - saved apart, "spese del gatto" matched only a note
+    with no amounts and the receipt had no "gatto" in it."""
+    context = " ".join((context or "").split())[:500]
+    if not context or not doc_ids:
+        return
+    chunks = await db.kb_chunks.find({"user_id": user_id, "doc_id": {"$in": list(doc_ids)}}, {"_id": 0, "embedding": 0}).to_list(500)
+    if not chunks:
+        return
+    texts = []
+    for c in chunks:
+        raw = c.get("raw_text") or c.get("text") or ""
+        texts.append(f"Nota dell'utente: {context}\n\n{raw}")
+    try:
+        embeddings = await emb.embed_texts(texts)
+    except Exception:
+        logger.exception("re-embedding of linked attachment failed")
+        embeddings = [None] * len(texts)
+    for c, t, e in zip(chunks, texts, embeddings):
+        await db.kb_chunks.update_one({"chunk_id": c["chunk_id"]}, {"$set": {
+            "text": t, "raw_text": c.get("raw_text") or c.get("text") or "", "user_context": context, "embedding": e,
+        }})
+    await db.kb_documents.update_many({"user_id": user_id, "doc_id": {"$in": list(doc_ids)}}, {"$set": {"user_context": context}})
+
+
+async def _attachments_text_for_model(user_id: str, doc_ids: List[str], limit: int = 6000) -> str:
+    chunks = await db.kb_chunks.find({"user_id": user_id, "doc_id": {"$in": list(doc_ids)}}, {"_id": 0, "embedding": 0}).to_list(200)
+    chunks.sort(key=lambda c: (c.get("doc_id") or "", c.get("chunk_index") or 0))
+    out, total = [], 0
+    for c in chunks:
+        piece = f"[{c.get('source_name') or c.get('title') or 'allegato'}]\n{c.get('raw_text') or c.get('text') or ''}"
+        if total + len(piece) > limit:
+            break
+        out.append(piece)
+        total += len(piece)
+    return "\n\n".join(out)
+
+
 async def _ocr_and_save_image_to_kb(
     user_id: str, filename: str, contents: bytes, channel: str = "web", org_id: Optional[str] = None,
+    user_context: Optional[str] = None,
 ) -> dict:
     """Runs OCR on an image and persists the extracted text into the personal KB (kb_chunks +
     kb_documents) - the image-handling half of /kb/upload, factored out so a photo sent on
@@ -1646,6 +1707,8 @@ async def _ocr_and_save_image_to_kb(
         "created_at": now,
     })
 
+    if user_context:
+        await _link_user_context_to_docs(user_id, [doc_id], user_context)
     ut.fire_and_forget_feature_event(user_id=user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=org_id)
     return {
         "doc_id": doc_id, "name": filename, "size": len(contents), "chunks": len(docs), "chars": len(text),
