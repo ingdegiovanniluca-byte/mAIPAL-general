@@ -187,3 +187,30 @@ def first_occurrence(raw, today: date) -> str:
         if _matches(rule, today, d):
             return d.isoformat()
     return today.isoformat()
+
+
+_GRAPH_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def to_graph_recurrence(rule: dict, start: date) -> dict:
+    """The same series as a Microsoft Graph (Outlook calendar) patternedRecurrence.
+    Outlook has no "last day of the month" option: -1 becomes day 31 (in shorter months Outlook
+    may skip it rather than move it - the app's own occurrences are always exact)."""
+    f, n = rule["freq"], rule.get("interval", 1)
+    if f == "daily":
+        pattern = {"type": "daily", "interval": n}
+    elif f == "weekly":
+        pattern = {"type": "weekly", "interval": n, "daysOfWeek": [_GRAPH_DAYS[d] for d in rule["weekdays"]],
+                   "firstDayOfWeek": "monday"}
+    elif f == "monthly":
+        dom = rule["day_of_month"]
+        pattern = {"type": "absoluteMonthly", "interval": n, "dayOfMonth": 31 if dom == -1 else dom}
+    else:
+        pattern = {"type": "absoluteYearly", "interval": n, "dayOfMonth": start.day, "month": start.month}
+    if rule.get("until"):
+        rng = {"type": "endDate", "startDate": start.isoformat(), "endDate": rule["until"]}
+    elif rule.get("count"):
+        rng = {"type": "numbered", "startDate": start.isoformat(), "numberOfOccurrences": rule["count"]}
+    else:
+        rng = {"type": "noEnd", "startDate": start.isoformat()}
+    return {"pattern": pattern, "range": rng}

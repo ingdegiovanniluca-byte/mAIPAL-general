@@ -170,6 +170,14 @@ export default function DocumentsPage() {
                   {d.source_type === "chat" && (
                     <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-white/60 bg-white/10">via chat</span>
                   )}
+                  {d.shared_by?.name && (
+                    <span data-testid="doc-shared-by" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md text-white bg-[#4E7FA8]">condivisa da {d.shared_by.name}</span>
+                  )}
+                  {(d.shared_with || []).length > 0 && (
+                    <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md text-white/70 bg-white/10" title={(d.shared_with || []).map((x) => x.name).join(", ")}>
+                      condivisa con {d.shared_with.length}
+                    </span>
+                  )}
                   {(d.keywords || []).slice(0, 6).map((k, i) => (
                     <span key={i} className="text-[10px] font-mono-tight lowercase tracking-widest px-2 py-0.5 rounded-md bg-white/10 text-white/70 ">
                       #{k}

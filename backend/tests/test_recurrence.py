@@ -80,3 +80,14 @@ def test_rrule():
     assert rec.to_rrule({"freq": "daily", "interval": 2, "until": "2026-12-31"}) == "RRULE:FREQ=DAILY;INTERVAL=2;UNTIL=20261231T235959Z"
     assert rec.to_rrule({"freq": "monthly", "interval": 1, "day_of_month": 31}) == "RRULE:FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1"
     assert rec.to_rrule({"freq": "monthly", "interval": 1, "day_of_month": 5, "count": 4}) == "RRULE:FREQ=MONTHLY;BYMONTHDAY=5;COUNT=4"
+
+
+def test_graph_recurrence():
+    start = date(2026, 9, 28)
+    g = rec.to_graph_recurrence({"freq": "weekly", "interval": 2, "weekdays": [0, 3], "until": "2026-12-31"}, start)
+    assert g["pattern"] == {"type": "weekly", "interval": 2, "daysOfWeek": ["monday", "thursday"], "firstDayOfWeek": "monday"}
+    assert g["range"] == {"type": "endDate", "startDate": "2026-09-28", "endDate": "2026-12-31"}
+    assert rec.to_graph_recurrence({"freq": "daily", "interval": 1, "count": 5}, start)["range"]["numberOfOccurrences"] == 5
+    assert rec.to_graph_recurrence({"freq": "monthly", "interval": 1, "day_of_month": -1}, start)["pattern"]["dayOfMonth"] == 31
+    y = rec.to_graph_recurrence({"freq": "yearly", "interval": 1}, date(2026, 10, 3))
+    assert y["pattern"] == {"type": "absoluteYearly", "interval": 1, "dayOfMonth": 3, "month": 10} and y["range"]["type"] == "noEnd"

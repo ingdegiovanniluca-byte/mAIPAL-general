@@ -16,6 +16,30 @@ Cloudflare con un altro sito attivo sulla root. L'obiettivo è esporre mAIPAL so
 5. Se il progetto è in modalità "Test", aggiungi la tua email tra gli utenti di test
    (o pubblica l'app per consentire l'accesso a chiunque sia in whitelist)
 
+## 1b. Microsoft: OneDrive + calendario Outlook (facoltativo)
+
+Serve solo se vuoi salvare i file su OneDrive e/o mettere i task nel calendario di Outlook
+(in alternativa o insieme a Google: ogni utente sceglie in Impostazioni → "Dove salvo file ed eventi").
+
+1. Vai su https://entra.microsoft.com → "Identità" → "Applicazioni" → "Registrazioni app" →
+   "Nuova registrazione" (va bene anche un account Microsoft personale: è gratis)
+2. Nome: `mAIPAL`. Tipi di account supportati: **"Account in qualsiasi directory organizzativa
+   e account Microsoft personali"** (così funzionano sia hotmail/outlook.com sia Microsoft 365)
+3. URI di reindirizzamento: piattaforma **Web**,
+   `https://maipal.it/general/api/integrations/microsoft/callback` → "Registra"
+4. Dalla pagina "Panoramica" copia **ID applicazione (client)** in `.env` come `MS_CLIENT_ID`
+5. "Certificati e segreti" → "Nuovo segreto client" (scadenza 24 mesi) → copia subito il
+   **Valore** (non l'ID) in `.env` come `MS_CLIENT_SECRET`. Segnati la scadenza: quando
+   scade va rigenerato e aggiornato nel `.env`
+6. "Autorizzazioni API" → "Aggiungi un'autorizzazione" → Microsoft Graph → Autorizzazioni
+   delegate: `offline_access`, `openid`, `email`, `User.Read`, `Files.ReadWrite.AppFolder`,
+   `Calendars.ReadWrite` (non serve il consenso amministratore)
+7. Lascia `MS_TENANT=common`, ricrea il backend e collega l'account da Impostazioni →
+   "Microsoft · OneDrive e Outlook"
+
+I file finiscono solo nella cartella dell'app su OneDrive (`App/mAIPAL`): mAIPAL non vede il
+resto del tuo OneDrive.
+
 ## 2. Chiavi LLM
 
 - `OPENAI_API_KEY`: da https://platform.openai.com/api-keys — usata per tutte le

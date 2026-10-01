@@ -8,7 +8,8 @@ import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { takeSharedPayload } from "@/lib/pwa";
 import SuggestionsTicker from "@/components/SuggestionsTicker";
-import { MENTION_AGENTS, agentByKey, splitMentions, tokenizeMentions, mentionQueryAt } from "@/lib/mentions";
+import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
+import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
@@ -218,6 +219,13 @@ export default function ChatPage() {
 
   // ===== @agenti =====
   const [mentionQuery, setMentionQuery] = useState(null);
+  // team members and "@team", taggable to share a saved information with them
+  const { user: me } = useAuth();
+  const [people, setPeople] = useState([]);
+  useEffect(() => {
+    if (!me?.org_id) { setPeople([]); return; }
+    api.get("/org").then((r) => setPeople(buildPeopleDirectory(r.data?.members || [], me.user_id))).catch(() => setPeople([]));
+  }, [me?.org_id, me?.user_id]);
   // caret to restore right after an inserted @tag is rendered (before the next key press)
   const pendingCaretRef = useRef(null);
   useLayoutEffect(() => {
@@ -249,16 +257,22 @@ export default function ChatPage() {
   const insertMention = (agent) => {
     const el = textareaRef.current;
     const caret = el?.selectionStart ?? text.length;
-    const before = text.slice(0, caret).replace(/@[\w-]*$/, `@${agent.tag} `);
+    const before = text.slice(0, caret).replace(/@[\w.-]*$/, `@${agent.tag || agent.slug} `);
     const next = before + text.slice(caret);
     pendingCaretRef.current = before.length;
     setText(next);
     setMentionQuery(null);
   };
-  const mentionMatches = mentionQuery === null ? [] : MENTION_AGENTS.filter((a) => a.aliases.some((al) => al.startsWith(mentionQuery)));
+  const mentionMatches = mentionQuery === null ? [] : [
+    ...MENTION_AGENTS.filter((a) => a.aliases.some((al) => al.startsWith(mentionQuery))),
+    ...people.filter((p) => p.slug.startsWith(mentionQuery) || (p.name || "").toLowerCase().split(/\s+/).some((w) => w.startsWith(mentionQuery))),
+  ];
   const typedTags = splitMentions(text).parts;
-  const renderWithTags = (content) => tokenizeMentions(content).map((tk, i) => (typeof tk === "string" ? tk : (
-    <span key={i} className="inline-block rounded-md px-1.5 mx-0.5 text-[0.9em] font-medium text-white" style={{ background: tk.agent.color }}>{tk.tag}</span>
+  const typedPeople = findPeople(text, people);
+  const renderWithTags = (content) => tokenizeAll(content, people).map((tk, i) => (typeof tk === "string" ? tk : (
+    <span key={i} className="inline-block rounded-md px-1.5 mx-0.5 text-[0.9em] font-medium text-white" style={{ background: tk.agent ? tk.agent.color : PERSON_COLOR }}>
+      {tk.person ? `@${tk.person.name}` : tk.tag}
+    </span>
   )));
 
   // Something shared to mAIPAL from another app (Android "Condividi" -> mAIPAL): it opens
@@ -366,7 +380,7 @@ export default function ChatPage() {
       const j = res.data;
       if (j.status === "saved") {
         const n = (j.saved || []).length;
-        toast.success(`${n > 1 ? `${n} file` : pendingDriveUpload.fileName} → Drive/${j.folder}`);
+        toast.success(`${n > 1 ? `${n} file` : pendingDriveUpload.fileName} → ${j.where || "Drive"}/${j.folder}`);
         if ((j.failed || []).length) toast.error(`Non salvati: ${j.failed.join(", ")}`);
         setPendingDriveUpload(null);
         return true;
@@ -394,7 +408,7 @@ export default function ChatPage() {
       rep.patient_name
         ? `👤 Paziente: ${rep.patient_name} (data ultima visita aggiornata)`
         : `👤 Paziente non riconosciuto — salvato tra i "Report generici"`,
-      rep.drive_link ? `📁 Salvato su Drive in "${rep.drive_folder}"` : "⚠️ Non salvato su Drive (collega Google Workspace in Impostazioni)",
+      rep.drive_link ? `📁 Salvato nella cartella "${rep.drive_folder}" (Drive/OneDrive)` : "⚠️ Non salvato nel cloud (collega Google Drive o OneDrive in Impostazioni)",
       rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
     ].filter(Boolean).join("\n");
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id }] }));
@@ -749,7 +763,7 @@ export default function ChatPage() {
       const statusLines = driveResults
         .filter((r) => r.status === "saved" || r.status === "error")
         .map((r) => (r.status === "saved"
-          ? `File salvato su Drive in "${r.folder}": ${r.name}.`
+          ? `File salvato su ${r.where || "Drive"} nella cartella "${r.folder}": ${r.name}.`
           : `Salvataggio su Drive di "${r.name}" non riuscito${r.error ? `: ${r.error}` : "."}`));
       const waiting = driveResults.filter((r) => r.status === "needs_folder").map((r) => `"${r.name}"`);
       if (waiting.length) {
@@ -822,7 +836,7 @@ export default function ChatPage() {
             const j = await res.json();
             if (!res.ok) throw new Error(j.detail || `HTTP ${res.status}`);
             setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link, journalDocument: true }]);
-            toast.success(`${f.name} → Drive`);
+            toast.success(`${f.name} → ${(j.saved || ["google"]).map((t) => (t === "onedrive" ? "OneDrive" : "Drive")).join(" + ")}`);
           } catch (err) {
             toast.error(`Errore con ${f.name}: ${err.message}`);
           } finally {
@@ -876,7 +890,7 @@ export default function ChatPage() {
           if (saveToDrive) toast.message(`"${f.name}" verrà salvato anche su Drive quando invii il messaggio — scrivi la cartella se vuoi sceglierla tu.`);
         } else {
           setAttachments((a) => [...a, { name: f.name, id: j.file_id, url: j.web_view_link }]);
-          toast.success(`${f.name} → Drive`);
+          toast.success(`${f.name} → ${(j.saved || ["google"]).map((t) => (t === "onedrive" ? "OneDrive" : "Drive")).join(" + ")}`);
         }
       } catch (err) { toast.error(`Upload ${original.name}: ${err.message}`); }
       finally { setUploadingFiles((u) => u.filter((n) => n !== original.name)); }
@@ -895,8 +909,8 @@ export default function ChatPage() {
       if (!res.ok) throw new Error(await uploadErrorMessage(res));
       const j = await res.json();
       if (j.status === "saved") {
-        toast.success(`${file.name} → Drive/${j.folder}`);
-        return { status: "saved", folder: j.folder };
+        toast.success(`${file.name} → ${j.where || "Drive"}/${j.folder}`);
+        return { status: "saved", folder: j.folder, where: j.where };
       }
       if (j.status === "skipped") return { status: "skipped" };
       if (!silent) {
@@ -1122,17 +1136,26 @@ export default function ChatPage() {
               <div className="mb-2 rounded-2xl bg-[#2A2429]/95 border border-white/10 shadow-lg overflow-hidden" data-testid="mention-menu">
                 {mentionMatches.map((a) => (
                   <button
-                    key={a.key}
+                    key={a.key || `p-${a.slug}`}
                     type="button"
-                    data-testid={`mention-${a.tag}`}
+                    data-testid={`mention-${a.tag || a.slug}`}
                     onMouseDown={(e) => { e.preventDefault(); insertMention(a); }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/10"
                   >
-                    <span className="rounded-md px-1.5 text-xs font-medium text-white" style={{ background: a.color }}>@{a.tag}</span>
-                    <span className="text-sm text-white/90 whitespace-nowrap">{a.label}</span>
-                    <span className="text-xs text-white/45 truncate min-w-0">{a.hint}</span>
+                    <span className="rounded-md px-1.5 text-xs font-medium text-white whitespace-nowrap" style={{ background: a.color || PERSON_COLOR }}>@{a.tag || a.slug}</span>
+                    <span className="text-sm text-white/90 whitespace-nowrap">{a.label || a.name}</span>
+                    <span className="text-xs text-white/45 truncate min-w-0">{a.hint || (a.kind === "group" ? "condividi con tutti i membri" : "condividi con questa persona")}</span>
                   </button>
                 ))}
+              </div>
+            )}
+            {typedPeople.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="share-chips">
+                <span className="text-[11px] text-white/55">Condivido con:</span>
+                {typedPeople.map((p) => (
+                  <span key={p.slug} className="text-[11px] rounded-md px-1.5 py-0.5 text-white" style={{ background: PERSON_COLOR }}>{p.name}</span>
+                ))}
+                {active !== "info_upload" && <span className="text-[11px] text-amber-300">(funziona con Salva informazioni)</span>}
               </div>
             )}
             {typedTags.length > 0 && (

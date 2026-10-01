@@ -583,7 +583,7 @@ async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_ty
     else:
         lines.append('👤 Paziente non riconosciuto — salvato tra i "Report generici"')
     if rep.get("drive_link"):
-        lines.append(f"📁 Salvato su Drive in \"{rep['drive_folder']}\"")
+        lines.append(f"📁 Salvato in \"{rep['drive_folder']}\" (cloud)")
     lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: nessun problema, resta salvato in app/Drive.")
     await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines))
     await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
@@ -983,7 +983,7 @@ async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, te
 
     n = len(result.get("saved") or []) or 1
     what = f"{n} file salvati" if n > 1 else "Salvata"
-    await ctx.bot.send_message(chat_id=chat_id, text=f"✅ {what} su Drive in \"{result['folder']}\".")
+    await ctx.bot.send_message(chat_id=chat_id, text=f"✅ {what} su {result.get('where') or 'Drive'} in \"{result['folder']}\".")
     await _set_state(db, chat_id, user["user_id"], pending_drive_upload_id=None)
 
 
@@ -1077,7 +1077,7 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📸 In quale cartella la salvo?{hint}")
         return
 
-    await update.message.reply_text(f"✅ Foto salvata su Drive in \"{result['folder']}\".")
+    await update.message.reply_text(f"✅ Foto salvata su {result.get('where') or 'Drive'} in \"{result['folder']}\".")
 
 
 def build_application() -> Application:

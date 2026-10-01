@@ -82,6 +82,8 @@ export default function SettingsPage() {
     load();
     if (params.get("google") === "ok") toast.success("Google Workspace collegato");
     if (params.get("google") === "error") toast.error("Errore collegamento Google");
+    if (params.get("microsoft") === "ok") toast.success("Account Microsoft collegato");
+    if (params.get("microsoft") === "error") toast.error("Errore collegamento Microsoft");
   }, []);
 
   const toggleV = (v) => setVerticals((s) => (s.includes(v) ? s.filter((x) => x !== v) : [...s, v]));
@@ -131,6 +133,32 @@ export default function SettingsPage() {
     await api.post("/integrations/google/disconnect");
     toast.success("Google scollegato");
     load();
+  };
+
+  const connectMicrosoft = async () => {
+    try {
+      const r = await api.get("/integrations/microsoft/authorize");
+      window.location.href = r.data.url;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore");
+    }
+  };
+
+  const disconnectMicrosoft = async () => {
+    await api.post("/integrations/microsoft/disconnect");
+    toast.success("Microsoft scollegato");
+    load();
+  };
+
+  // Where files are saved / which calendars tasks go to: any combination of the connected ones.
+  const toggleTarget = async (kind, value) => {
+    const key = kind === "storage" ? "storage_targets" : "calendar_targets";
+    const current = status[key] || [];
+    const next = current.includes(value) ? current.filter((x) => x !== value) : [...current, value];
+    try {
+      const r = await api.put("/integrations/preferences", { [key]: next });
+      setStatus((st) => ({ ...st, ...r.data }));
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
   const genTelegramCode = async () => {
@@ -335,6 +363,87 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        <div className="card-soft p-6" data-testid="microsoft-card">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center">
+              <Cloud size={22} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="text-lg font-semibold">Microsoft · OneDrive e Outlook</div>
+                {status.microsoft?.connected && (
+                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-500/30">
+                    <Check size={10} className="inline mr-1" /> connesso
+                  </span>
+                )}
+                {!status.microsoft?.configured && (
+                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 border border-amber-500/30">
+                    non configurato
+                  </span>
+                )}
+              </div>
+              <div className="text-sm text-white/60 mt-1">
+                OneDrive: i file vanno nella cartella dell'app (<code className="text-black">Apps/mAIPAL</code>). Calendario di Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.
+              </div>
+              {status.microsoft?.connected && status.microsoft?.email && (
+                <div className="kicker mt-2">connesso come · {status.microsoft.email}</div>
+              )}
+              {!status.microsoft?.configured && (
+                <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
+                  <b>Come attivare:</b> l'amministratore registra l'app su
+                  {" "}<a href="https://entra.microsoft.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Microsoft Entra</a>{" "}
+                  e imposta <code>MS_CLIENT_ID</code> / <code>MS_CLIENT_SECRET</code> nel file .env (guida in DEPLOY.md).
+                </div>
+              )}
+              <div className="mt-4 flex gap-2">
+                {status.microsoft?.connected ? (
+                  <button data-testid="microsoft-disconnect" onClick={disconnectMicrosoft} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
+                    <Unlink size={14} /> Scollega
+                  </button>
+                ) : (
+                  <button data-testid="microsoft-connect" onClick={connectMicrosoft} disabled={!status.microsoft?.configured} className="pill-btn">
+                    Collega account Microsoft →
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {(status.google.connected || status.microsoft?.connected) && (
+          <div className="card-soft p-6" data-testid="cloud-targets-card">
+            <div className="text-lg font-semibold">Dove salvo file ed eventi</div>
+            <div className="text-sm text-white/60 mt-1">Puoi sceglierne uno o entrambi.</div>
+            <div className="mt-4 space-y-3">
+              {[
+                { kind: "storage", label: "Salva i file su", opts: [["google", "Google Drive", status.google.connected], ["onedrive", "OneDrive", status.microsoft?.connected]] },
+                { kind: "calendar", label: "Sincronizza i task con", opts: [["google", "Google Calendar", status.google.connected], ["outlook", "Calendario di Outlook", status.microsoft?.connected]] },
+              ].map((row) => {
+                const chosen = status[row.kind === "storage" ? "storage_targets" : "calendar_targets"] || [];
+                return (
+                  <div key={row.kind} className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm text-white/80 w-full sm:w-44">{row.label}</span>
+                    {row.opts.filter((o) => o[2]).map(([value, label]) => {
+                      const on = chosen.includes(value);
+                      return (
+                        <button
+                          key={value}
+                          data-testid={`target-${row.kind}-${value}`}
+                          onClick={() => toggleTarget(row.kind, value)}
+                          className={`text-xs px-3 py-1.5 rounded-full transition-colors inline-flex items-center gap-1.5 ${on ? "bg-[#00B0F0]/25 text-[#00B0F0]" : "bg-white/10 text-white/70"}`}
+                        >
+                          {on && <Check size={12} />} {label}
+                        </button>
+                      );
+                    })}
+                    {chosen.length === 0 && <span className="text-xs text-amber-300">nessuno: {row.kind === "storage" ? "i file restano solo nell'app" : "i task non vanno su nessun calendario"}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="card-soft p-6" data-testid="telegram-card">
           <div className="flex items-start gap-4">

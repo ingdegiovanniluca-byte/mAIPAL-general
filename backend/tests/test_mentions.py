@@ -47,3 +47,23 @@ def test_empty_piece_is_dropped_and_aliases():
     assert split_mentions("x @promemoria domani")[1][0]["agent"] == "task_todo"
     assert split_mentions("x @azione ogni lunedì alle 9 svuota la lista")[1][0]["agent"] == "scheduled_action"
     assert split_mentions("x @to-do comprare pane")[1][0]["text"] == "comprare pane"
+
+
+from mentions import slugify, people_directory, extract_people  # noqa: E402
+
+
+def test_people_slugs_and_extraction():
+    members = [{"user_id": "u2", "name": "Mario Rossi"}, {"user_id": "u1", "name": "Giulia Bianchì"}, {"user_id": "u3", "name": "Mario Rossi"}]
+    d = people_directory(members)
+    assert set(d) == {"giulia.bianchi", "mario.rossi", "mario.rossi-u3"}
+    assert slugify("Ánna  D'Amico") == "anna.d.amico"
+    clean, found = extract_people("Il codice del cancello è 4521 @mario.rossi @team, grazie", d)
+    assert clean == "Il codice del cancello è 4521 , grazie" and found == ["mario.rossi", "team"]
+    # agent tags, e-mails and unknown names are left alone
+    clean, found = extract_people("scrivi a mario@rossi.it @task chiamare @sconosciuto", d)
+    assert found == [] and "@task" in clean and "mario@rossi.it" in clean and "@sconosciuto" in clean
+
+
+def test_people_tag_at_sentence_end():
+    d = people_directory([{"user_id": "u1", "name": "Luca"}])
+    assert extract_people("condividi con @luca.", d) == ("condividi con .", ["luca"])

@@ -34,6 +34,7 @@ def _time_str_to_today_utc(time_str: Optional[str], local_date) -> datetime:
 from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageContent, OpenAISpeechToText
 
 import google_integration as gi
+import microsoft_integration as ms
 import telegram_bot as tg
 import embeddings as emb
 import retrieval
@@ -1180,9 +1181,18 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     # typed, tags included.
     shown_user_text = payload.display_content or payload.content
     typed = _strip_attachment_lines(payload.display_content) if payload.display_content else payload.content.split("\n\nAllegati caricati", 1)[0]
-    main_text, mention_parts = mn.split_mentions(typed)
+    # @persone / @team: who the saved information is ALSO shared with (see _share_kb_docs)
+    share_recipients, share_slugs, typed_clean = [], [], typed
+    if current.org_id and "@" in typed:
+        members = await db.users.find({"org_id": current.org_id}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "telegram_chat_id": 1}).to_list(300)
+        directory = mn.people_directory(members)
+        typed_clean, share_slugs = mn.extract_people(typed, directory)
+        for slug in share_slugs:
+            share_recipients += [m for m in members if m["user_id"] != current.user_id] if slug in mn.GROUP_TAGS else [directory[slug]]
+        share_recipients = list({m["user_id"]: m for m in share_recipients if m["user_id"] != current.user_id}.values())
+    main_text, mention_parts = mn.split_mentions(typed_clean)
     run_primary = True
-    if mention_parts:
+    if mention_parts or share_slugs:
         run_primary = bool(main_text)
         payload.content = payload.content.replace(typed, main_text, 1) if typed and typed in payload.content else main_text
         if payload.display_content:
@@ -1369,7 +1379,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                 "chunks_count": 1,
                 "chars": len(note_text),
                 "size_bytes": len(note_text.encode("utf-8")),
-                "preview": ((meta or {}).get("summary") if meta else note_text)[:280],
+                "preview": (((meta or {}).get("summary")) or note_text)[:280],
                 "drive_link": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "conv_id": conv_id,
@@ -1443,33 +1453,42 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             # Best-effort backup copy on Drive (Diario subfolder) when connected - the
             # app itself always displays the images straight from `jr["images"]` above,
             # this is purely for the user's own organization/backup on Drive.
-            if valid_images:
+            if valid_images and await _storage_targets(current.user_id):
                 try:
-                    creds = await gi.get_credentials(db, current.user_id)
-                    if creds:
-                        folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, "Diario")
-                        import base64 as _b64
-                        for idx, img in enumerate(valid_images):
-                            header, b64_part = img.split(",", 1)
-                            content_type = header.split(":", 1)[1].split(";", 1)[0] or "image/jpeg"
-                            ext = content_type.split("/", 1)[-1] or "jpg"
-                            raw = _b64.b64decode(b64_part)
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-                                tmp.write(raw)
-                                tmp_path = tmp.name
-                            try:
-                                gi.upload_file_to_folder(creds, folder_id, tmp_path, f"diario_{jr['date']}_{idx + 1}.{ext}", content_type)
-                            finally:
-                                try: os.unlink(tmp_path)
-                                except Exception: pass
+                    import base64 as _b64
+                    for idx, img in enumerate(valid_images):
+                        header, b64_part = img.split(",", 1)
+                        content_type = header.split(":", 1)[1].split(";", 1)[0] or "image/jpeg"
+                        ext = content_type.split("/", 1)[-1] or "jpg"
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+                            tmp.write(_b64.b64decode(b64_part))
+                            tmp_path = tmp.name
+                        try:
+                            await _storage_save(current.user_id, "Diario", tmp_path, f"diario_{jr['date']}_{idx + 1}.{ext}", content_type)
+                        finally:
+                            try: os.unlink(tmp_path)
+                            except Exception: pass
                 except Exception:
-                    logger.exception("Drive backup of journal images failed")
+                    logger.exception("Drive/OneDrive backup of journal images failed")
 
 
     async def event_gen():
         if run_primary:
             async for chunk in primary_events():
                 yield chunk
+        # shared with @persone / @team: a copy of the saved note (and its attachments) in their knowledge base
+        if share_slugs:
+            if action == "info_upload" and linkage.get("source", {}).get("doc_id"):
+                if share_recipients:
+                    res = await _share_kb_docs(current, share_recipients, [linkage["source"]["doc_id"]] + attached_ids)
+                else:
+                    res = {"agent": "share", "label": "Condivisione", "status": "error", "message": "⚠️ Nel team non c'è nessun altro con cui condividere."}
+            else:
+                res = {"agent": "share", "label": "Condivisione", "status": "error",
+                       "message": "ℹ️ Per condividere con persone o col team usa \"Salva informazioni\"."}
+            await db.conversations.update_one({"conv_id": conv_id}, {"$push": {"messages": {
+                "role": "assistant", "content": res["message"], "agent": "share", "ts": datetime.now(timezone.utc).isoformat()}}})
+            yield _json.dumps({"type": "agent", **res}) + "\n"
         # then every @agent piece, each with the whole message as context
         source = linkage.get("source") or {"type": "conversation", "conv_id": conv_id, "created_at": now}
         for part in mention_parts[:6]:
@@ -2052,6 +2071,199 @@ async def delete_conversation(conv_id: str, current: User = Depends(get_current_
     return {"ok": True}
 
 
+# ============ CLOUD: FILE (Google Drive / OneDrive) E CALENDARIO (Google / Outlook) ============
+# Each user picks where files are saved (Google Drive, OneDrive or both) and which calendar
+# tasks are synced to (Google, Outlook or both) - users.storage_targets / calendar_targets.
+# Not set = every connected service. Saving goes to all chosen targets; one failing doesn't
+# stop the others.
+STORAGE_LABELS = {"google": "Google Drive", "onedrive": "OneDrive"}
+CALENDAR_LABELS = {"google": "Google Calendar", "outlook": "Calendario di Outlook"}
+
+
+async def _connected_providers(user_id: str) -> set:
+    docs = await db.integrations.find({"user_id": user_id, "provider": {"$in": ["google", "microsoft"]}}, {"_id": 0, "provider": 1}).to_list(5)
+    return {d["provider"] for d in docs}
+
+
+async def _storage_targets(user_id: str) -> List[str]:
+    conn = await _connected_providers(user_id)
+    available = [t for t, p in (("google", "google"), ("onedrive", "microsoft")) if p in conn]
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "storage_targets": 1}) or {}
+    chosen = u.get("storage_targets")
+    return available if chosen is None else [t for t in available if t in chosen]
+
+
+async def _calendar_targets(user_id: str) -> List[str]:
+    conn = await _connected_providers(user_id)
+    available = [t for t, p in (("google", "google"), ("outlook", "microsoft")) if p in conn]
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "calendar_targets": 1}) or {}
+    chosen = u.get("calendar_targets")
+    return available if chosen is None else [t for t in available if t in chosen]
+
+
+NO_STORAGE_MSG = "Nessun archivio collegato: collega Google Drive o OneDrive in Impostazioni."
+NO_CALENDAR_MSG = "Nessun calendario collegato: collega Google Calendar o il Calendario di Outlook in Impostazioni."
+
+
+async def _storage_folder_names(user_id: str) -> List[str]:
+    names = []
+    for t in await _storage_targets(user_id):
+        try:
+            if t == "google":
+                creds = await gi.get_credentials(db, user_id)
+                names += [f["name"] for f in await gi.list_subfolders(db, user_id, creds)] if creds else []
+            else:
+                token = await ms.get_token(db, user_id)
+                names += [f["name"] for f in await ms.list_folders(db, user_id, token)] if token else []
+        except Exception:
+            logger.exception(f"listing {t} folders failed")
+    seen, out = set(), []
+    for n in names:
+        if n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return out
+
+
+async def _storage_save(user_id: str, folder_name: Optional[str], tmp_path: str, filename: str, content_type: Optional[str]) -> dict:
+    """Saves a file into <mAIPAL>/<folder_name> (or the mAIPAL folder itself) on every chosen
+    storage. -> {"saved": [...], "links": {target: url}, "web_view_link": first url, "errors": {...}}"""
+    targets = await _storage_targets(user_id)
+    if not targets:
+        raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
+    out = {"saved": [], "links": {}, "errors": {}, "web_view_link": None, "file_id": None, "name": filename}
+    for t in targets:
+        try:
+            if t == "google":
+                creds = await gi.get_credentials(db, user_id)
+                folder_id = (await gi.find_or_create_subfolder(db, user_id, creds, folder_name)) if folder_name else await gi.ensure_maipal_folder(db, user_id, creds)
+                res = gi.upload_file_to_folder(creds, folder_id, tmp_path, filename, content_type)
+            else:
+                token = await ms.get_token(db, user_id)
+                folder_id = await ms.find_or_create_folder(db, user_id, token, folder_name)
+                res = await ms.upload_file(token, folder_id, tmp_path, filename, content_type)
+            out["saved"].append(t)
+            out["links"][t] = res.get("web_view_link")
+            out["web_view_link"] = out["web_view_link"] or res.get("web_view_link")
+            out["file_id"] = out["file_id"] or res.get("file_id")
+        except Exception as e:
+            logger.exception(f"saving to {t} failed")
+            out["errors"][t] = str(e)[:200]
+    if not out["saved"]:
+        raise HTTPException(status_code=500, detail="Salvataggio non riuscito: " + "; ".join(f"{STORAGE_LABELS[k]}: {v}" for k, v in out["errors"].items()))
+    return out
+
+
+def _saved_where(res: dict) -> str:
+    return " e ".join(STORAGE_LABELS[t] for t in res.get("saved", []))
+
+
+def _events_of(doc: dict) -> dict:
+    """{"google": id, "outlook": id} - older tasks only have calendar_event_id (Google)."""
+    ev = dict(doc.get("calendar_events") or {})
+    if doc.get("calendar_event_id") and "google" not in ev:
+        ev["google"] = doc["calendar_event_id"]
+    return {k: v for k, v in ev.items() if v}
+
+
+async def _calendar_create(user_id: str, title: str, description: str, due_date: Optional[str], due_time: Optional[str],
+                           duration_minutes: Optional[int], rule: Optional[dict] = None) -> dict:
+    """One event (recurring when `rule` is given) on every chosen calendar -> {target: event id}."""
+    targets = await _calendar_targets(user_id)
+    if not targets:
+        raise HTTPException(status_code=400, detail=NO_CALENDAR_MSG)
+    from datetime import date as _date
+    start = _date.fromisoformat(due_date) if (rule and due_date) else None
+    events, errors = {}, {}
+    for t in targets:
+        try:
+            if t == "google":
+                creds = await gi.get_credentials(db, user_id)
+                events[t] = await gi.create_calendar_event(creds, title=title, description=description, due_date=due_date,
+                                                          due_time=due_time, duration_minutes=duration_minutes,
+                                                          recurrence=rec.to_rrule(rule, start) if rule else None)
+            else:
+                token = await ms.get_token(db, user_id)
+                events[t] = await ms.create_event(token, title=title, description=description, due_date=due_date,
+                                                  due_time=due_time, duration_minutes=duration_minutes,
+                                                  recurrence=rec.to_graph_recurrence(rule, start) if rule else None)
+        except Exception as e:
+            logger.exception(f"calendar event on {t} failed")
+            errors[t] = str(e)[:200]
+    if not events:
+        raise HTTPException(status_code=500, detail="Sync calendar fallita: " + "; ".join(f"{CALENDAR_LABELS[k]}: {v}" for k, v in errors.items()))
+    return events
+
+
+async def _calendar_delete(user_id: str, events: dict):
+    for t, eid in (events or {}).items():
+        try:
+            if t == "google":
+                creds = await gi.get_credentials(db, user_id)
+                if creds:
+                    await gi.delete_calendar_event(creds, eid)
+            elif t == "outlook":
+                token = await ms.get_token(db, user_id)
+                if token:
+                    await ms.delete_event(token, eid)
+        except Exception:
+            logger.exception(f"calendar delete on {t} failed")
+
+
+class CloudPreferencesPayload(BaseModel):
+    storage_targets: Optional[List[Literal["google", "onedrive"]]] = None
+    calendar_targets: Optional[List[Literal["google", "outlook"]]] = None
+
+
+@api_router.put("/integrations/preferences")
+async def set_cloud_preferences(payload: CloudPreferencesPayload, current: User = Depends(get_current_user)):
+    upd = {}
+    if payload.storage_targets is not None:
+        upd["storage_targets"] = list(dict.fromkeys(payload.storage_targets))
+    if payload.calendar_targets is not None:
+        upd["calendar_targets"] = list(dict.fromkeys(payload.calendar_targets))
+    if upd:
+        await db.users.update_one({"user_id": current.user_id}, {"$set": upd})
+    return {"storage_targets": await _storage_targets(current.user_id), "calendar_targets": await _calendar_targets(current.user_id)}
+
+
+@api_router.get("/integrations/microsoft/authorize")
+async def microsoft_authorize(current: User = Depends(get_current_user)):
+    if not ms.is_configured():
+        raise HTTPException(status_code=400, detail="Microsoft non è ancora configurato sul server (MS_CLIENT_ID / MS_CLIENT_SECRET nel file .env).")
+    state = secrets.token_urlsafe(24)
+    await db.ms_oauth_states.insert_one({"state": state, "user_id": current.user_id, "created_at": datetime.now(timezone.utc).isoformat()})
+    return {"url": ms.authorization_url(state)}
+
+
+@api_router.get("/integrations/microsoft/callback")
+async def microsoft_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    base = os.environ["APP_BASE_URL"]
+    st = await db.ms_oauth_states.find_one({"state": state}, {"_id": 0}) if state else None
+    if not st or error or not code:
+        return RedirectResponse(f"{base}/dashboard/settings?microsoft=error")
+    await db.ms_oauth_states.delete_one({"state": state})
+    try:
+        tok = await ms.exchange_code(code)
+        email = await ms.get_account_email(tok["access_token"])
+    except Exception:
+        logger.exception("microsoft oauth exchange failed")
+        return RedirectResponse(f"{base}/dashboard/settings?microsoft=error")
+    await db.integrations.update_one(
+        {"user_id": st["user_id"], "provider": "microsoft"},
+        {"$set": {**tok, "provider": "microsoft", "user_id": st["user_id"], "email": email,
+                  "connected_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return RedirectResponse(f"{base}/dashboard/settings?microsoft=ok")
+
+
+@api_router.post("/integrations/microsoft/disconnect")
+async def microsoft_disconnect(current: User = Depends(get_current_user)):
+    await db.integrations.delete_one({"user_id": current.user_id, "provider": "microsoft"})
+    return {"ok": True}
+
+
 async def _cleanup_old_conversations() -> int:
     """Deletes non-favorite conversations whose last message is older than
     cr.RETENTION_DAYS (see conversation_retention.py). Only the chat goes: whatever it
@@ -2131,22 +2343,17 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
     # Handle calendar_synced toggle
     if "calendar_synced" in payload and payload["calendar_synced"] != existing.get("calendar_synced"):
         try:
-            creds = await gi.get_credentials(db, current.user_id)
-            if not creds:
-                raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni.")
             if payload["calendar_synced"]:
-                event_id = await gi.create_calendar_event(
-                    creds,
-                    title=existing.get("title","Task mAIPAL"),
-                    description=existing.get("description","") or "",
-                    due_date=existing.get("due_date"),
-                    due_time=existing.get("due_time"),
+                events = await _calendar_create(
+                    current.user_id, title=existing.get("title", "Task mAIPAL"), description=existing.get("description", "") or "",
+                    due_date=existing.get("due_date"), due_time=existing.get("due_time"),
                     duration_minutes=existing.get("duration_minutes"),
                 )
-                payload["calendar_event_id"] = event_id
+                payload["calendar_events"] = events
+                payload["calendar_event_id"] = events.get("google")
             else:
-                if existing.get("calendar_event_id"):
-                    await gi.delete_calendar_event(creds, existing["calendar_event_id"])
+                await _calendar_delete(current.user_id, _events_of(existing))
+                payload["calendar_events"] = {}
                 payload["calendar_event_id"] = None
         except HTTPException:
             raise
@@ -2183,13 +2390,8 @@ async def delete_task(task_id: str, scope: str = "one", current: User = Depends(
         await _stop_task_recurrence(existing, include_this=True)
         await db.tasks.delete_one({"id": task_id, **_editable_query(current)})
         return {"ok": True}
-    if existing.get("calendar_event_id"):
-        try:
-            creds = await gi.get_credentials(db, current.user_id)
-            if creds:
-                await gi.delete_calendar_event(creds, existing["calendar_event_id"])
-        except Exception:
-            logger.exception("failed removing calendar event on delete")
+    if _events_of(existing):
+        await _calendar_delete(current.user_id, _events_of(existing))
     await db.tasks.delete_one({"id": task_id, **_editable_query(current)})
     return {"ok": True}
 
@@ -2264,28 +2466,27 @@ async def _extend_series(series: dict, today=None) -> int:
 
 
 async def _sync_series_calendar(series: dict, on: bool, creds=None):
-    """(Re)creates or removes the single recurring Google Calendar event of a series and
-    flags its occurrences accordingly."""
-    from datetime import date as _date
-    creds = creds or await gi.get_credentials(db, series["user_id"])
-    if not creds:
-        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni.")
-    if series.get("calendar_event_id"):
-        await gi.delete_calendar_event(creds, series["calendar_event_id"])
+    """(Re)creates or removes the single recurring event of a series on every chosen
+    calendar (Google and/or Outlook) and flags its occurrences accordingly."""
+    owner = series["user_id"]
+    if on and not await _calendar_targets(owner):
+        raise HTTPException(status_code=400, detail=NO_CALENDAR_MSG)
+    await _calendar_delete(owner, _events_of(series))
     # occurrences synced one by one before becoming a series: drop those single events
-    async for t in db.tasks.find({"series_id": series["id"], "calendar_event_id": {"$nin": [None, ""]}}, {"_id": 0}):
-        await gi.delete_calendar_event(creds, t["calendar_event_id"])
-        await db.tasks.update_one({"id": t["id"]}, {"$set": {"calendar_event_id": None}})
-    event_id = None
+    async for t in db.tasks.find({"series_id": series["id"], "$or": [{"calendar_event_id": {"$nin": [None, ""]}},
+                                                                      {"calendar_events": {"$nin": [None, {}]}}]}, {"_id": 0}):
+        await _calendar_delete(owner, _events_of(t))
+        await db.tasks.update_one({"id": t["id"]}, {"$set": {"calendar_event_id": None, "calendar_events": {}}})
+    events = {}
     if on:
-        start = _date.fromisoformat(series["start_date"])
-        event_id = await gi.create_calendar_event(
-            creds, title=series.get("title") or "Task mAIPAL", description=series.get("description") or "",
+        events = await _calendar_create(
+            owner, title=series.get("title") or "Task mAIPAL", description=series.get("description") or "",
             due_date=series["start_date"], due_time=series.get("due_time"),
-            duration_minutes=series.get("duration_minutes"), recurrence=rec.to_rrule(series["rule"], start),
+            duration_minutes=series.get("duration_minutes"), rule=series["rule"],
         )
-    await db.task_series.update_one({"id": series["id"]}, {"$set": {"calendar_synced": on, "calendar_event_id": event_id}})
-    series.update({"calendar_synced": on, "calendar_event_id": event_id})
+    upd = {"calendar_synced": on, "calendar_events": events, "calendar_event_id": events.get("google")}
+    await db.task_series.update_one({"id": series["id"]}, {"$set": upd})
+    series.update(upd)
     await db.tasks.update_many({"series_id": series["id"]}, {"$set": {"calendar_synced": on}})
 
 
@@ -3509,16 +3710,14 @@ async def _generate_vet_report(current: User, text: str, visit_type: str, patien
     drive_link = None
     drive_folder_name = None
     try:
-        creds = await gi.get_credentials(db, current.user_id)
-        if creds:
+        if await _storage_targets(current.user_id):
             folder_name = patient_name if patient_name else "Report generici"
-            folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
                 tmp.write(docx_bytes)
                 tmp_path = tmp.name
             try:
-                result = gi.upload_file_to_folder(
-                    creds, folder_id, tmp_path, fname,
+                result = await _storage_save(
+                    current.user_id, folder_name, tmp_path, fname,
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 )
                 drive_link = result.get("web_view_link")
@@ -3527,7 +3726,7 @@ async def _generate_vet_report(current: User, text: str, visit_type: str, patien
                 try: os.unlink(tmp_path)
                 except Exception: pass
     except Exception:
-        logger.exception("vet report drive save failed")
+        logger.exception("vet report drive/onedrive save failed")
 
     if patient:
         await db.collection_items.update_one(
@@ -3900,23 +4099,17 @@ async def root():
 # ============ FILE ATTACHMENTS -> DRIVE ============
 @api_router.post("/attachments/upload")
 async def upload_attachment(file: UploadFile = File(...), current: User = Depends(get_current_user)):
-    creds = await gi.get_credentials(db, current.user_id)
-    if not creds:
-        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
+    if not await _storage_targets(current.user_id):
+        raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
 
     contents = await file.read()
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file.filename.rsplit('.',1)[-1] if '.' in (file.filename or '') else 'bin'}") as tmp:
         tmp.write(contents)
         tmp_path = tmp.name
     try:
-        folder_id = await gi.ensure_maipal_folder(db, current.user_id, creds)
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
-        service = build("drive", "v3", credentials=creds, cache_discovery=False)
-        media = MediaFileUpload(tmp_path, mimetype=file.content_type or "application/octet-stream")
-        meta = {"name": file.filename or "file", "parents": [folder_id]}
-        created = service.files().create(body=meta, media_body=media, fields="id, webViewLink, name").execute()
-        return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": created["name"]}
+        res = await _storage_save(current.user_id, None, tmp_path, file.filename or "file", file.content_type)
+        return {"file_id": res.get("file_id"), "web_view_link": res.get("web_view_link"), "name": res.get("name"),
+                "saved": res["saved"], "links": res["links"]}
     except HTTPException:
         raise
     except Exception as e:
@@ -4018,24 +4211,22 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
     used when a file was primarily attached for the knowledge base and the caller wants
     to *also* save it to Drive automatically only if the message clearly names a folder,
     without ever prompting the user for one."""
-    creds = await gi.get_credentials(db, current.user_id)
-    if not creds:
+    if not await _storage_targets(current.user_id):
         if silent:
             return {"status": "skipped"}
-        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
+        raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
 
-    subfolders = await gi.list_subfolders(db, current.user_id, creds)
-    folder_name = await _resolve_drive_folder_hint(text, [f["name"] for f in subfolders], user_id=current.user_id, channel=channel)
+    existing_names = await _storage_folder_names(current.user_id)
+    folder_name = await _resolve_drive_folder_hint(text, existing_names, user_id=current.user_id, channel=channel)
 
     if folder_name:
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{filename.rsplit('.',1)[-1] if '.' in (filename or '') else 'bin'}") as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
         try:
-            folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
-            result = gi.upload_file_to_folder(creds, folder_id, tmp_path, filename, content_type)
+            result = await _storage_save(current.user_id, folder_name, tmp_path, filename, content_type)
             ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
-            return {"status": "saved", "folder": folder_name, **result}
+            return {"status": "saved", "folder": folder_name, "where": _saved_where(result), **result}
         finally:
             try: os.unlink(tmp_path)
             except Exception: pass
@@ -4053,7 +4244,7 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
         "data_b64": _b64.b64encode(contents).decode("ascii"),
         "created_at": datetime.now(timezone.utc),
     })
-    return {"status": "needs_folder", "pending_id": pending_id, "suggestions": [f["name"] for f in subfolders]}
+    return {"status": "needs_folder", "pending_id": pending_id, "suggestions": existing_names}
 
 
 @api_router.post("/drive/smart-upload")
@@ -4072,12 +4263,9 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
     if not doc:
         raise HTTPException(status_code=404, detail="Nessun upload in attesa trovato")
 
-    creds = await gi.get_credentials(db, current.user_id)
-    if not creds:
-        raise HTTPException(status_code=400, detail="Google Workspace non collegato. Vai in Impostazioni per collegarlo.")
-
-    subfolders = await gi.list_subfolders(db, current.user_id, creds)
-    existing_names = [f["name"] for f in subfolders]
+    if not await _storage_targets(current.user_id):
+        raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
+    existing_names = await _storage_folder_names(current.user_id)
 
     # A direct reply to "in quale cartella la salvo?": "cartella X" in it is read literally;
     # otherwise a short answer with no command verb in it ("Scontrini", "le ricevute") IS the
@@ -4108,7 +4296,6 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
         batch.append(doc)
 
     import base64 as _b64
-    folder_id = await gi.find_or_create_subfolder(db, current.user_id, creds, folder_name)
     saved, failed, last = [], [], {}
     for item in batch:
         ext = item["filename"].rsplit(".", 1)[-1] if "." in (item.get("filename") or "") else "bin"
@@ -4116,7 +4303,7 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
             tmp.write(_b64.b64decode(item["data_b64"]))
             tmp_path = tmp.name
         try:
-            last = gi.upload_file_to_folder(creds, folder_id, tmp_path, item["filename"], item["content_type"])
+            last = await _storage_save(current.user_id, folder_name, tmp_path, item["filename"], item["content_type"])
             await db.pending_drive_uploads.delete_one({"pending_id": item["pending_id"]})
             saved.append(item["filename"])
         except Exception:
@@ -4130,7 +4317,9 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
     if not saved:
         raise HTTPException(status_code=500, detail="Caricamento su Drive non riuscito")
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
-    return {"status": "saved", "folder": folder_name, "saved": saved, "failed": failed, **last}
+    where = _saved_where(last)
+    last = {k: v for k, v in last.items() if k not in ("saved",)}
+    return {"status": "saved", "folder": folder_name, "where": where, **last, "saved": saved, "failed": failed}
 
 
 @api_router.post("/drive/resolve-pending")
@@ -4462,6 +4651,7 @@ async def delete_kb_document(doc_id: str, current: User = Depends(get_current_us
 @api_router.get("/integrations/status")
 async def integrations_status(current: User = Depends(get_current_user)):
     google_doc = await db.integrations.find_one({"user_id": current.user_id, "provider": "google"}, {"_id": 0})
+    ms_doc = await db.integrations.find_one({"user_id": current.user_id, "provider": "microsoft"}, {"_id": 0, "email": 1})
     user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     return {
         "google": {
@@ -4470,6 +4660,15 @@ async def integrations_status(current: User = Depends(get_current_user)):
             "email": google_doc.get("email") if google_doc else None,
             "drive_folder_id": google_doc.get("drive_folder_id") if google_doc else None,
         },
+        "microsoft": {
+            "configured": ms.is_configured(),
+            "connected": bool(ms_doc),
+            "email": ms_doc.get("email") if ms_doc else None,
+        },
+        "storage_targets": await _storage_targets(current.user_id),
+        "calendar_targets": await _calendar_targets(current.user_id),
+        "storage_choice": (user_doc or {}).get("storage_targets"),
+        "calendar_choice": (user_doc or {}).get("calendar_targets"),
         "telegram": {
             "configured": bool(tg.bot_token()),
             "connected": bool(user_doc and user_doc.get("telegram_chat_id")),
@@ -5404,6 +5603,42 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
         logger.exception(f"sub-agent {agent} failed")
         return {**base, "status": "error", "message": f"⚠️ {getattr(e, 'detail', None) or 'non sono riuscito a completare questa parte'}"}
     return {**base, "status": "error", "message": "Agente sconosciuto."}
+
+
+async def _share_kb_docs(sender: User, recipients: List[dict], doc_ids: List[str]) -> dict:
+    """Copies the sender's saved note/documents into each recipient's knowledge base, marked
+    "condivisa da <sender>" (search shows it that way), and lets them know on Telegram."""
+    doc_ids = [d for d in dict.fromkeys(doc_ids) if d]
+    chunks = await db.kb_chunks.find({"user_id": sender.user_id, "doc_id": {"$in": doc_ids}}, {"_id": 0}).to_list(500)
+    docs = await db.kb_documents.find({"user_id": sender.user_id, "doc_id": {"$in": doc_ids}}, {"_id": 0}).to_list(50)
+    if not chunks:
+        return {"agent": "share", "label": "Condivisione", "status": "error", "message": "⚠️ Non ho trovato l'informazione da condividere."}
+    by = {"user_id": sender.user_id, "name": sender.name}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    preview = next((c.get("raw_text") or c.get("text") or "" for c in chunks if c.get("doc_id") == doc_ids[0]), "")[:400]
+    for r in recipients:
+        idmap = {d: f"doc_{uuid.uuid4().hex[:12]}" for d in doc_ids}
+        await db.kb_chunks.insert_many([{
+            **{k: v for k, v in c.items() if k not in ("conv_id",)},
+            "chunk_id": f"kb_{uuid.uuid4().hex[:12]}", "user_id": r["user_id"], "doc_id": idmap[c["doc_id"]],
+            "shared_by": by, "shared_from": {"user_id": sender.user_id, "doc_id": c["doc_id"]}, "created_at": now_iso,
+        } for c in chunks])
+        if docs:
+            await db.kb_documents.insert_many([{
+                **{k: v for k, v in d.items() if k not in ("conv_id", "linked", "shared_with")},
+                "doc_id": idmap[d["doc_id"]], "user_id": r["user_id"], "shared_by": by, "created_at": now_iso,
+            } for d in docs])
+        if r.get("telegram_chat_id"):
+            try:
+                await _send_telegram_text(r["telegram_chat_id"], f"📥 {sender.name} ti ha condiviso un'informazione su mAIPAL:\n\n{preview}")
+            except Exception:
+                logger.exception("share telegram notice failed")
+    await db.kb_documents.update_many({"user_id": sender.user_id, "doc_id": {"$in": doc_ids}},
+                                      {"$addToSet": {"shared_with": {"$each": [{"user_id": r["user_id"], "name": r.get("name")} for r in recipients]}}})
+    names = [r.get("name") or "un membro del team" for r in recipients]
+    who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " e " + names[-1]
+    return {"agent": "share", "label": "Condivisione", "status": "ok",
+            "message": f"👥 Condivisa con {who}: la trovano anche nella loro base di conoscenza, con il tuo nome."}
 
 
 class AgentDispatchPayload(BaseModel):

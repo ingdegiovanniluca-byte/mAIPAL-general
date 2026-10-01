@@ -58,3 +58,67 @@ export function mentionQueryAt(text, caret) {
   const m = before.match(/(^|\s)@([\w-]*)$/);
   return m ? m[2].toLowerCase() : null;
 }
+
+// ===== persone e gruppi del team (same slugs as backend/mentions.py people_directory) =====
+export const GROUP_TAGS = ["team", "tutti"];
+const AGENT_ALIASES = new Set(Object.keys(BY_ALIAS));
+export const PERSON_COLOR = "#4E7FA8";
+
+export function slugify(name) {
+  const s = (name || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "");
+  return s || "utente";
+}
+
+// -> [{ slug, name, user_id, kind: "person" | "group" }] for the "@" menu
+export function buildPeopleDirectory(members, selfId) {
+  const out = [];
+  const used = new Set();
+  [...(members || [])].sort((a, b) => ((a.user_id || "") < (b.user_id || "") ? -1 : 1)).forEach((m) => {
+    let slug = slugify(m.name || (m.email || "").split("@")[0]);
+    if (used.has(slug) || GROUP_TAGS.includes(slug) || AGENT_ALIASES.has(slug)) slug = `${slug}-${(m.user_id || "").slice(-4)}`;
+    used.add(slug);
+    if (m.user_id !== selfId) out.push({ slug, name: m.name || m.email, user_id: m.user_id, kind: "person" });
+  });
+  if (out.length) out.unshift({ slug: "team", name: "Tutto il team", kind: "group" });
+  return out;
+}
+
+const PEOPLE_RE = /(^|[\s(\[,;.!?])@([a-z0-9][a-z0-9.-]*[a-z0-9]|[a-z0-9])(?![\w@])/gi;
+
+// The people/group tags present in a text -> [{ slug, name }]
+export function findPeople(text, directory) {
+  const bySlug = Object.fromEntries((directory || []).map((p) => [p.slug, p]));
+  const found = [];
+  let m;
+  PEOPLE_RE.lastIndex = 0;
+  while ((m = PEOPLE_RE.exec(text || "")) !== null) {
+    const slug = m[2].toLowerCase().replace(/\.+$/, "");
+    const p = bySlug[slug];
+    if (p && !found.some((f) => f.slug === slug)) found.push(p);
+  }
+  return found;
+}
+
+// tokenizeMentions + person/group tags, for the colored rendering of a sent message
+export function tokenizeAll(text, directory) {
+  const bySlug = Object.fromEntries((directory || []).map((p) => [p.slug, p]));
+  const out = [];
+  tokenizeMentions(text).forEach((tk) => {
+    if (typeof tk !== "string") { out.push(tk); return; }
+    let last = 0;
+    let m;
+    PEOPLE_RE.lastIndex = 0;
+    while ((m = PEOPLE_RE.exec(tk)) !== null) {
+      const slug = m[2].toLowerCase().replace(/\.+$/, "");
+      const p = bySlug[slug];
+      if (!p) continue;
+      const start = m.index + m[1].length;
+      if (start > last) out.push(tk.slice(last, start));
+      out.push({ tag: `@${m[2]}`, person: p });
+      last = start + 1 + m[2].length;
+    }
+    if (last < tk.length) out.push(tk.slice(last));
+  });
+  return out;
+}

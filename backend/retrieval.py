@@ -102,9 +102,13 @@ def _kb_display(c: dict) -> str:
     text = c.get("text", "")
     saved = format_it_date(c.get("created_at"))
     src = c.get("source_type")
+    by = (c.get("shared_by") or {}).get("name")
     if src in ("file", "image_ocr"):
         name = c.get("source_name") or c.get("title") or "documento"
-        head = f'[Documento "{name}"' + (f" · caricato {saved}" if saved else "") + "]"
+        verb = f"condiviso da {by}" if by else "caricato"
+        head = f'[Documento "{name}"' + (f" · {verb} {saved}" if saved else (f" · {verb}" if by else "")) + "]"
+    elif by:
+        head = f"[Nota condivisa da {by}" + (f" il {saved}]" if saved else "]")
     else:
         head = f"[Nota salvata {saved}]" if saved else "[Nota]"
     return f"{head} {text}"
