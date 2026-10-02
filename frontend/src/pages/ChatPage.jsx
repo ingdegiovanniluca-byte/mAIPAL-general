@@ -266,7 +266,9 @@ export default function ChatPage() {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px";
+    const max = window.innerHeight * 0.4;
+    el.style.height = Math.min(el.scrollHeight, max) + "px";
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
     if (!text) setComposerGrown(false);
     else if (el.scrollHeight > 52) setComposerGrown(true);
   }, [text, isMobile]);
@@ -1258,7 +1260,8 @@ export default function ChatPage() {
             i
           </button>
         </div>
-        {agentOptions.length > 0 && <div className="flex items-center justify-center gap-3" data-testid="agent-options">{agentOptions}</div>}
+        {/* always as tall as one row of icons, so name, bar and agents never move between agents */}
+        <div className="h-8 flex items-center justify-center gap-3" data-testid="agent-options">{agentOptions}</div>
         {visitMenuOpen && active === "vet_report" && (
           <div className="mt-2 flex flex-wrap justify-center gap-1.5" data-testid="visit-type-menu">
             {visitTypes.map((t) => (
@@ -1304,7 +1307,7 @@ export default function ChatPage() {
           }}
           placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro…" : activeAction.placeholder}
           rows={1}
-          className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-2 px-1 resize-none text-white placeholder:text-white/55 overflow-y-auto ${composerOpen ? "order-1 basis-full" : "order-2 flex-1 min-w-0 placeholder:truncate"}`}
+          className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-2 px-1 resize-none text-white placeholder:text-white/55 overflow-y-hidden no-scrollbar ${composerOpen ? "order-1 basis-full" : "order-2 flex-1 min-w-0 placeholder:truncate"}`}
         />
         {composerOpen && (
           <div className="order-2 basis-full">
