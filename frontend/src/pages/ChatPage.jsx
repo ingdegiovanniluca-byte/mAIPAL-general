@@ -1241,7 +1241,6 @@ export default function ChatPage() {
     <div data-testid="mobile-chat">
       {!compactHero && <SuggestionsTicker onSelect={runSuggestion} />}
       <div className={`flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
-        {!compactHero && <div className="text-[10px] tracking-[0.22em] uppercase text-white/60">agente</div>}
         <div className="flex items-center gap-2">
           <h1
             data-testid="agent-name"
