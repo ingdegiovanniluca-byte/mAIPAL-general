@@ -1417,6 +1417,9 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         # because it wasn't the very first message.
         if action == "task_todo":
             logger.info(f"[task_todo] meta={meta!r}")
+            # mobile chat icons: put the new tasks on the calendar / turn their reminder on
+            task_opts = {"default_reminder_enabled": bool((payload.filters or {}).get("reminder")),
+                         "sync_calendar": bool((payload.filters or {}).get("calendar"))}
             bulk_tasks = meta.get("tasks") if meta else None
             if isinstance(bulk_tasks, list) and bulk_tasks:
                 # Multiple events read from an attached/KB document (e.g. "un task per ogni
@@ -1425,13 +1428,13 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
                 for item in bulk_tasks:
                     if isinstance(item, dict) and item.get("title"):
                         try:
-                            await _create_task_or_todo(current.user_id, item, conv_id)
+                            await _create_task_or_todo(current.user_id, item, conv_id, **task_opts)
                         except Exception:
                             logger.exception(f"bulk task creation failed for item={item!r}")
             elif meta:
                 existing = await _find_created_in_conv(conv_id)
                 if existing is None:
-                    await _create_task_or_todo(current.user_id, meta, conv_id)
+                    await _create_task_or_todo(current.user_id, meta, conv_id, **task_opts)
                 else:
                     kind, existing_doc = existing
                     await _update_task_or_todo_from_meta(kind, existing_doc["id"], meta)
@@ -1535,7 +1538,8 @@ def _parse_task_json(text: str) -> Optional[dict]:
         return None
 
 
-async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default_reminder_enabled: bool = False):
+async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default_reminder_enabled: bool = False,
+                               sync_calendar: bool = False):
     now = datetime.now(timezone.utc).isoformat()
     # RULE: if due_date is present → TASK, otherwise → TODO (regardless of any 'type' field the LLM returned)
     due_date = parsed.get("due_date")
@@ -1581,6 +1585,12 @@ async def _create_task_or_todo(user_id: str, parsed: dict, conv_id: str, default
                 await _set_task_recurrence(doc, recurrence_raw, user_id)
             except Exception:
                 logger.exception(f"recurrence setup failed for {recurrence_raw!r}")
+        if sync_calendar:  # calendar icon on in the chat: straight onto the chosen calendars
+            try:
+                owner = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+                doc = await update_task(doc["id"], {"calendar_synced": True}, User(**owner))
+            except Exception:
+                logger.exception("calendar sync of a chat-created task failed")
     else:
         doc = {
             "id": f"todo_{uuid.uuid4().hex[:12]}",
@@ -2141,10 +2151,16 @@ async def _storage_folder_names(user_id: str) -> List[str]:
     return out
 
 
-async def _storage_save(user_id: str, folder_name: Optional[str], tmp_path: str, filename: str, content_type: Optional[str]) -> dict:
+async def _storage_save(user_id: str, folder_name: Optional[str], tmp_path: str, filename: str, content_type: Optional[str],
+                        only: Optional[List[str]] = None) -> dict:
     """Saves a file into <mAIPAL>/<folder_name> (or the mAIPAL folder itself) on every chosen
-    storage. -> {"saved": [...], "links": {target: url}, "web_view_link": first url, "errors": {...}}"""
+    storage - or only on `only` (the cloud icons picked for this message in the mobile chat),
+    always limited to the connected ones.
+    -> {"saved": [...], "links": {target: url}, "web_view_link": first url, "errors": {...}}"""
     targets = await _storage_targets(user_id)
+    if only is not None:
+        conn = await _connected_providers(user_id)
+        targets = [t for t, p in (("google", "google"), ("onedrive", "microsoft")) if p in conn and t in only]
     if not targets:
         raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
     out = {"saved": [], "links": {}, "errors": {}, "web_view_link": None, "file_id": None, "name": filename}
@@ -4297,7 +4313,8 @@ async def _resolve_drive_folder_hint(text: str, existing_folders: List[str], use
         return None
 
 
-async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False, channel: str = "web") -> dict:
+async def _drive_smart_upload_core(current: User, contents: bytes, filename: str, content_type: str, text: str, silent: bool = False, channel: str = "web",
+                                   only: Optional[List[str]] = None, ask_folder: bool = True) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
     Uploads a file into the mAIPAL Drive tree, picking the subfolder from the user's
     message when possible. If no folder can be determined, stashes the file and returns
@@ -4305,8 +4322,9 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
     UNLESS `silent` is set, in which case it just reports {"status": "skipped"} instead:
     used when a file was primarily attached for the knowledge base and the caller wants
     to *also* save it to Drive automatically only if the message clearly names a folder,
-    without ever prompting the user for one."""
-    if not await _storage_targets(current.user_id):
+    without ever prompting the user for one. With `ask_folder` False (mobile chat, folder icon
+    off) a file whose message names no folder goes straight into the mAIPAL folder itself."""
+    if not await _storage_targets(current.user_id) and not only:
         if silent:
             return {"status": "skipped"}
         raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
@@ -4314,12 +4332,13 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
     existing_names = await _storage_folder_names(current.user_id)
     folder_name = await _resolve_drive_folder_hint(text, existing_names, user_id=current.user_id, channel=channel)
 
-    if folder_name:
+    if folder_name or (not ask_folder and not silent):
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{filename.rsplit('.',1)[-1] if '.' in (filename or '') else 'bin'}") as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
         try:
-            result = await _storage_save(current.user_id, folder_name, tmp_path, filename, content_type)
+            result = await _storage_save(current.user_id, folder_name or None, tmp_path, filename, content_type, only=only)
+            folder_name = folder_name or "mAIPAL"
             ut.fire_and_forget_feature_event(user_id=current.user_id, feature="caricamento_informazioni", channel=channel, trigger="utente", org_id=current.org_id)
             return {"status": "saved", "folder": folder_name, "where": _saved_where(result), **result}
         finally:
@@ -4337,15 +4356,22 @@ async def _drive_smart_upload_core(current: User, contents: bytes, filename: str
         "filename": filename,
         "content_type": content_type,
         "data_b64": _b64.b64encode(contents).decode("ascii"),
+        "only": only,
         "created_at": datetime.now(timezone.utc),
     })
     return {"status": "needs_folder", "pending_id": pending_id, "suggestions": existing_names}
 
 
 @api_router.post("/drive/smart-upload")
-async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), silent: bool = Form(False), current: User = Depends(get_current_user)):
+async def drive_smart_upload(file: UploadFile = File(...), text: str = Form(""), silent: bool = Form(False),
+                             targets: Optional[str] = Form(None), ask_folder: bool = Form(True),
+                             current: User = Depends(get_current_user)):
+    """`targets` (comma-separated "google,onedrive") and `ask_folder` come from the mobile chat's
+    icons; without them the user's saved preferences apply and a missing folder is asked."""
     contents = await file.read()
-    return await _drive_smart_upload_core(current, contents, file.filename, file.content_type, text, silent=silent)
+    only = [t.strip() for t in targets.split(",") if t.strip()] if targets is not None else None
+    return await _drive_smart_upload_core(current, contents, file.filename, file.content_type, text, silent=silent,
+                                          only=only, ask_folder=ask_folder)
 
 
 async def _drive_resolve_pending_core(current: User, pending_id: str, text: str, channel: str = "web") -> dict:
@@ -4398,7 +4424,7 @@ async def _drive_resolve_pending_core(current: User, pending_id: str, text: str,
             tmp.write(_b64.b64decode(item["data_b64"]))
             tmp_path = tmp.name
         try:
-            last = await _storage_save(current.user_id, folder_name, tmp_path, item["filename"], item["content_type"])
+            last = await _storage_save(current.user_id, folder_name, tmp_path, item["filename"], item["content_type"], only=item.get("only"))
             await db.pending_drive_uploads.delete_one({"pending_id": item["pending_id"]})
             saved.append(item["filename"])
         except Exception:

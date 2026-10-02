@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat } from "lucide-react";
+import { createPortal } from "react-dom";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,48 +25,85 @@ const formatReplyLabel = (conv) => {
 
 const ACTIONS = [
   {
-    id: "info_request", key: "query", icon: <Search size={22} />,
+    id: "info_request", key: "query", short: "Cerca", icon: <Search size={22} />,
     title: "Richiesta informazioni",
     subtitle: "Interroga la base di conoscenza con Claude",
     placeholder: "Cosa vuoi sapere?",
     color: "#DD772F",
   },
   {
-    id: "info_upload", key: "upload", icon: <CloudUpload size={22} />,
+    id: "info_upload", key: "upload", short: "Salva", icon: <CloudUpload size={22} />,
     title: "Salva informazioni",
     subtitle: "Nota, documento o dato — oppure aggiungi/modifica/rimuovi un elemento da una lista",
     placeholder: 'Es. "Il codice del wifi è XYZ" oppure "Aggiungi Mario Rossi alla lista clienti"',
     color: "#6D6181",
   },
   {
-    id: "task_todo", key: "todo", icon: <CheckSquare size={22} />,
+    id: "task_todo", key: "todo", short: "Task", icon: <CheckSquare size={22} />,
     title: "Salvataggio task o to-do",
     subtitle: "Crea task e sincronizzali con n8n + Supabase",
     placeholder: "Es. Ricordami di chiamare il fornitore martedì alle 15",
     color: "#7C6A7D",
   },
   {
-    id: "journal", key: "journal", icon: <BookOpen size={22} />,
+    id: "journal", key: "journal", short: "Diario", icon: <BookOpen size={22} />,
     title: "Diario",
     subtitle: "Racconta la giornata: la salvo nel diario",
     placeholder: "Com'è andata oggi? Cosa vuoi ricordare…",
     color: "#8E2E11",
   },
   {
-    id: "vet_report", key: "report", icon: <Stethoscope size={22} />,
+    id: "vet_report", key: "report", short: "Referto", icon: <Stethoscope size={22} />,
     title: "Report visita",
     subtitle: "Detta o scrivi il resoconto: genero il referto strutturato",
     placeholder: 'Descrivi la visita, es. "Ho visitato Fester, controllo ecografico di routine…"',
     color: "#2E7D63",
   },
   {
-    id: "scheduled_action", key: "scheduled", icon: <Repeat size={22} />,
+    id: "scheduled_action", key: "scheduled", short: "Azioni", icon: <Repeat size={22} />,
     title: "Azioni programmate",
     subtitle: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi",
     placeholder: 'Es. "Ogni venerdì all\'una di notte svuota gli iscritti della lista Lezioni Pilates"',
     color: "#3E7C8C",
   },
 ];
+
+// Mobile chat: what the ⓘ next to the agent's name explains - what it does, what the icons
+// under the name mean, and examples (tapping one fills the box).
+const AGENT_INFO = {
+  info_request: {
+    what: "Risponde alle tue domande usando quello che hai salvato: note, documenti, task, diario e liste.",
+    options: [[Layers, "Cerca ovunque: note, documenti, task, diario e liste"], [Database, "Cerca solo nella base di conoscenza (note e documenti)"]],
+    examples: ["Qual è il codice del wifi?", "Quanto ho speso per il gatto negli ultimi tre mesi?", "Cosa devo fare questa settimana?"],
+  },
+  info_upload: {
+    what: "Salva note, codici, documenti e foto nella tua base di conoscenza, e se vuoi anche su Drive o OneDrive. Capisce anche quando vuoi aggiungere, modificare o togliere un elemento da una Lista.",
+    options: [[HardDrive, "Salva gli allegati anche su Google Drive"], [Cloud, "Salva gli allegati anche su OneDrive"], [Folder, "Acceso: se non scrivi la cartella te la chiedo. Spento: la scelgo io (quella che scrivi, o la cartella mAIPAL)"]],
+    examples: ["Il codice del wifi è XYZ-123", "Aggiungi Mario Rossi alla lista Clienti", "Salva lo scontrino nella cartella Spese gatto"],
+  },
+  task_todo: {
+    what: "Crea task (con una data) e to-do (senza data) da quello che scrivi o detti. Capisce le ricorrenze (\"ogni lunedì\") e comandi come \"segna come fatto\".",
+    options: [[Calendar, "Mette i nuovi task anche nel calendario collegato"], [Bell, "Attiva il promemoria prima della scadenza"]],
+    examples: ["Ricordami di chiamare il fornitore martedì alle 15", "Palestra ogni lunedì e giovedì alle 18", "Segna come fatto il task del commercialista"],
+  },
+  journal: {
+    what: "Racconta la giornata a parole tue: la riscrivo in ordine e la salvo nel Diario, nel giorno giusto (\"ieri\", \"sabato\"). Puoi allegare fino a 5 foto.",
+    options: [],
+    examples: ["Oggi giornata al mare con la famiglia", "Ieri cena da Marco, abbiamo parlato del viaggio in Grecia"],
+  },
+  vet_report: {
+    what: "Detta o scrivi il resoconto della visita: genero il referto strutturato (Word) e lo collego al paziente.",
+    options: [[ClipboardList, "Scegli il tipo di visita o carica un tuo modello di referto"]],
+    examples: ["Ho visitato Fester, controllo ecografico di routine, tutto nella norma"],
+  },
+  scheduled_action: {
+    what: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi. Prima di attivarlo ti mostro cosa farò.",
+    options: [],
+    examples: ["Ogni venerdì all'una di notte svuota gli iscritti della lista Lezioni Pilates", "Ogni lunedì alle 8 mandami su Telegram i task della settimana"],
+  },
+};
+const CHAT_OPTS_KEY = "maipal.chatOptions";
+const readChatOpts = () => { try { return JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || "{}"); } catch { return {}; } };
 
 const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
@@ -185,6 +223,35 @@ export default function ChatPage() {
   // Mobile only (spec v2 §3.1/3.3): the chat opens on the composer alone; the history of old
   // conversations is a separate view reached from the clock button, not shown by default.
   const [mobileView, setMobileView] = useState("chat"); // "chat" | "history"
+  // The header's clock button (DashboardLayout) opens/closes the history.
+  useEffect(() => {
+    const onHist = () => setMobileView((v) => (v === "history" ? "chat" : "history"));
+    window.addEventListener("maipal:chat-history", onHist);
+    return () => window.removeEventListener("maipal:chat-history", onHist);
+  }, []);
+
+  // Mobile: the per-agent icons under the agent's name (remembered on this device).
+  const [integ, setInteg] = useState(null); // /integrations/status
+  const [chatOpts, setChatOpts] = useState(readChatOpts); // {cloud: [...], askFolder, taskCal, taskBell}
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [allAgentsOpen, setAllAgentsOpen] = useState(false);
+  const [visitMenuOpen, setVisitMenuOpen] = useState(false);
+  const [composerGrown, setComposerGrown] = useState(false);
+  useEffect(() => {
+    if (!isMobile) return;
+    api.get("/integrations/status").then((r) => setInteg(r.data)).catch(() => setInteg({}));
+  }, [isMobile]);
+  const googleOn = !!integ?.google?.connected;
+  const msOn = !!integ?.microsoft?.connected;
+  const connectedClouds = [googleOn && "google", msOn && "onedrive"].filter(Boolean);
+  // until the user touches the icons, the clouds chosen in Impostazioni
+  const cloudTargets = (chatOpts.cloud || integ?.storage_targets || connectedClouds).filter((t) => connectedClouds.includes(t));
+  const setChatOpt = (patch) => setChatOpts((o) => {
+    const next = { ...o, ...patch };
+    try { localStorage.setItem(CHAT_OPTS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    return next;
+  });
+  useEffect(() => { if (isMobile && integ) setSaveToDrive(cloudTargets.length > 0); }, [isMobile, integ, cloudTargets.length]);
 
   // Auto-growing composer textarea on mobile: grows with content up to ~50% of the viewport,
   // then scrolls internally. With no conversation on screen the box starts taller (~30% of
@@ -192,15 +259,17 @@ export default function ChatPage() {
   // below it shrinks back to 1-2 lines to leave room for the messages. Desktop untouched.
   // (The textarea's flex-1 is desktop-only: in the mobile card, which has no fixed height,
   // flex-basis 0 overrode this inline height and pinned the box at its 60px minimum.)
+  // Mobile: the box starts as a one-line bar (like a search bar) and opens up into a card as
+  // soon as the text needs a second line; it goes back to a bar only once emptied.
   useEffect(() => {
     if (!isMobile) return;
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    const max = window.innerHeight * 0.5;
-    const min = thread ? 0 : window.innerHeight * 0.3;
-    el.style.height = Math.max(min, Math.min(el.scrollHeight, max)) + "px";
-  }, [text, isMobile, thread]);
+    el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px";
+    if (!text) setComposerGrown(false);
+    else if (el.scrollHeight > 52) setComposerGrown(true);
+  }, [text, isMobile]);
 
   const [visitType, setVisitType] = useState("imaging"); // 'imaging' | 'general' | id template personalizzato
   const [vetTemplates, setVetTemplates] = useState({ builtin: [], custom: [] });
@@ -209,7 +278,7 @@ export default function ChatPage() {
   const loadVetTemplates = async () => {
     try {
       const r = await api.get("/vet/templates");
-      setVetTemplates(r.data);
+      setVetTemplates({ builtin: r.data?.builtin || [], custom: r.data?.custom || [] });
     } catch { /* silent: la sezione report resta usabile con i template built-in */ }
   };
   useEffect(() => { if (active === "vet_report") loadVetTemplates(); }, [active]);
@@ -748,7 +817,8 @@ export default function ChatPage() {
       if (driveLine) parts.push(`Allegati caricati su Drive:\n${driveLine}`);
       currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
     }
-    const driveFiles = attachments.filter((a) => a.driveFile);
+    // mobile: no cloud icon on -> the files stay in the knowledge base only
+    const driveFiles = attachments.filter((a) => a.driveFile && !(isMobile && cloudTargets.length === 0));
     const kbDocIds = attachments.filter((a) => a.kb && a.id).map((a) => a.id);
     setText("");
     setAttachments([]);
@@ -758,7 +828,9 @@ export default function ChatPage() {
       // told the real outcome instead of assuming the file landed on Drive - see the
       // matching "REGOLA CRITICA SU GOOGLE DRIVE" instruction in build_system_prompt.
       const driveResults = await Promise.all(
-        driveFiles.map(async (a) => ({ name: a.name, ...(await smartUploadToDrive(a.driveFile, driveHintText, !a.driveExplicit)) }))
+        driveFiles.map(async (a) => ({ name: a.name, ...(await (isMobile
+          ? smartUploadToDrive(a.driveFile, driveHintText, false, { targets: cloudTargets, askFolder: !!chatOpts.askFolder })
+          : smartUploadToDrive(a.driveFile, driveHintText, !a.driveExplicit))) }))
       );
       const statusLines = driveResults
         .filter((r) => r.status === "saved" || r.status === "error")
@@ -784,6 +856,7 @@ export default function ChatPage() {
     if (displayQuestion !== currentQuestion) payload.display_content = displayQuestion;
     if (kbDocIds.length) payload.attachment_doc_ids = kbDocIds;
     if (active === "info_request") payload.filters = { scope };
+    if (active === "task_todo" && isMobile) payload.filters = { calendar: !!chatOpts.taskCal && (googleOn || msOn), reminder: !!chatOpts.taskBell };
     if (active === "journal" && journalImgs.length > 0) payload.images = journalImgs;
     if (active === "journal" && journalDocs.length > 0) payload.documents = journalDocs;
     if (thread?.conv_id) payload.conv_id = thread.conv_id;
@@ -898,13 +971,15 @@ export default function ChatPage() {
   };
   const removeAttachment = (i) => setAttachments((a) => a.filter((_, idx) => idx !== i));
 
-  const smartUploadToDrive = async (file, hintText, silent = false) => {
+  const smartUploadToDrive = async (file, hintText, silent = false, cloud = null) => {
     setUploadingFiles((u) => [...u, file.name]);
     try {
       const fd = new FormData();
       fd.append("file", file, file.name);
       fd.append("text", hintText || "");
       if (silent) fd.append("silent", "true");
+      // mobile icons: which clouds, and whether to ask for a folder the message doesn't name
+      if (cloud) { fd.append("targets", cloud.targets.join(",")); fd.append("ask_folder", cloud.askFolder ? "true" : "false"); }
       const res = await fetch(`${API}/drive/smart-upload`, { method: "POST", body: fd, credentials: "include" });
       if (!res.ok) throw new Error(await uploadErrorMessage(res));
       const j = await res.json();
@@ -964,6 +1039,98 @@ export default function ChatPage() {
     });
   };
 
+
+  // ===== pieces shared by the desktop card and the mobile composer =====
+  const mentionMenu = (
+    <>
+      {mentionMatches.length > 0 && (
+        <div className="mb-2 rounded-2xl bg-[#2A2429]/95 border border-white/10 shadow-lg overflow-hidden" data-testid="mention-menu">
+          {mentionMatches.map((a) => (
+            <button
+              key={a.key || `p-${a.slug}`}
+              type="button"
+              data-testid={`mention-${a.tag || a.slug}`}
+              onMouseDown={(e) => { e.preventDefault(); insertMention(a); }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/10"
+            >
+              <span className="rounded-md px-1.5 text-xs font-medium text-white whitespace-nowrap" style={{ background: a.color || PERSON_COLOR }}>@{a.tag || a.slug}</span>
+              <span className="text-sm text-white/90 whitespace-nowrap">{a.label || a.name}</span>
+              <span className="text-xs text-white/45 truncate min-w-0">{a.hint || (a.kind === "group" ? "condividi con tutti i membri" : "condividi con questa persona")}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+  const shareChips = (
+    <>
+      {typedPeople.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="share-chips">
+          <span className="text-[11px] text-white/55">Condivido con:</span>
+          {typedPeople.map((p) => (
+            <span key={p.slug} className="text-[11px] rounded-md px-1.5 py-0.5 text-white" style={{ background: PERSON_COLOR }}>{p.name}</span>
+          ))}
+          {active !== "info_upload" && <span className="text-[11px] text-amber-300">(funziona con Salva informazioni)</span>}
+        </div>
+      )}
+    </>
+  );
+  const tagChips = (
+    <>
+      {typedTags.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="mention-chips">
+          <span className="text-[11px] text-white/55">Invio anche a:</span>
+          {typedTags.map((p, i) => (
+            <span key={i} className="text-[11px] rounded-md px-1.5 py-0.5 text-white" style={{ background: agentByKey(p.agent)?.color }} title={p.text}>
+              @{p.tag} · {p.text.length > 28 ? p.text.slice(0, 27) + "…" : p.text}
+            </span>
+          ))}
+        </div>
+      )}
+    </>
+  );
+  const drivePendingChips = (
+    <>
+      {pendingDriveUpload && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">
+          <span className="kicker text-white/70">cartella per {pendingDriveUpload.count > 1 ? `${pendingDriveUpload.count} file` : `"${pendingDriveUpload.fileName}"`}:</span>
+          {pendingDriveUpload.suggestions.map((s) => (
+            <button
+              key={s}
+              onClick={() => resolveDrivePending(s)}
+              className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white hover:bg-white/30"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+  const composerChips = (
+    <>
+      {(recording || transcribing) && <span className="kicker text-white/80">{recording ? "· rec…" : "· trascrivo…"}</span>}
+      {pendingVoice && !recording && !transcribing && (
+        <span data-testid="voice-chip" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/25 text-white flex items-center gap-1">
+          🎙️ {pendingVoice.seconds}s
+          <button onClick={discardVoice} data-testid="voice-discard"><X size={10} /></button>
+        </span>
+      )}
+      {attachments.map((a, i) => (
+        <span key={i} className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white flex items-center gap-1" title={a.preview || a.name}>
+          {a.journalImage ? "📷" : a.ocr ? "🖼️" : "📎"} {a.name.slice(0,12)}{a.name.length > 12 ? "…" : ""}
+          {a.ocr && <span className="opacity-70">· ocr</span>}
+          <button onClick={() => removeAttachment(i)}><X size={10} /></button>
+        </span>
+      ))}
+      {uploadingFiles.map((name, i) => (
+        <span key={`up-${i}`} data-testid="file-uploading-chip" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/10 text-white/70 flex items-center gap-1.5" title={`Carico ${name}…`}>
+          <Loader2 size={11} className="animate-spin" /> {name.slice(0,12)}{name.length > 12 ? "…" : ""} · carico…
+        </span>
+      ))}
+    </>
+  );
+
   const mobileChatView = isMobile && mobileView === "chat";
 
   // What a tap on a "per te" suggestion does.
@@ -981,13 +1148,313 @@ export default function ChatPage() {
     }
   };
   const mobileHistoryView = isMobile && mobileView === "history";
+  // ===== Mobile chat (like a browser's start page): agent name + ⓘ, its option icons, the
+  // bar that opens up while you write, the row of agents (Cerca first, then the 3 most used,
+  // then "Altri"). Desktop keeps its own card above.
+  const selectAgent = (id) => {
+    setActive(id);
+    if (thread && thread.action !== id) setThread(null);
+    setMobileReplyTo(null);
+    setVisitMenuOpen(false);
+  };
+  const usage = useMemo(() => {
+    const since = Date.now() - 30 * 864e5;
+    const c = {};
+    history.forEach((h) => {
+      if (new Date(h.created_at).getTime() < since) return;
+      const k = h.action === "list_update" ? "info_upload" : h.action;
+      c[k] = (c[k] || 0) + 1;
+    });
+    return c;
+  }, [history]);
+  const rowAgents = useMemo(() => {
+    const others = ACTIONS.filter((a) => a.id !== "info_request").sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
+    let row = [ACTIONS[0], ...others.slice(0, 3)];
+    if (!row.some((a) => a.id === active)) row = [...row.slice(0, 3), ACTIONS.find((a) => a.id === active)];
+    return row;
+  }, [usage, active]);
+  const optIcon = (key, Icon, on, onClick, title) => (
+    <button
+      key={key}
+      type="button"
+      data-testid={`opt-${key}`}
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={on}
+      className={`h-8 w-8 flex items-center justify-center transition-all duration-200 ${on ? "text-white drop-shadow-[0_0_6px_rgba(255,255,255,0.55)]" : "text-white/40"}`}
+    >
+      <Icon size={19} />
+    </button>
+  );
+  const flash = (msg) => toast.message(msg, { duration: 1400 });
+  const toggleCloud = (t, label) => {
+    const on = cloudTargets.includes(t);
+    setChatOpt({ cloud: on ? cloudTargets.filter((x) => x !== t) : [...cloudTargets, t] });
+    flash(`${label}: ${on ? "spento" : "acceso"}`);
+  };
+  const agentOptions = [];
+  if (active === "info_request") {
+    agentOptions.push(
+      optIcon("scope-all", Layers, scope === "all", () => { setScope("all"); flash("Cerco ovunque"); }, "Cerca ovunque"),
+      optIcon("scope-kb", Database, scope === "kb", () => { setScope("kb"); flash("Cerco solo nella base di conoscenza"); }, "Solo base di conoscenza"),
+    );
+  } else if (active === "info_upload") {
+    if (googleOn) agentOptions.push(optIcon("cloud-google", HardDrive, cloudTargets.includes("google"), () => toggleCloud("google", "Google Drive"), "Salva anche su Google Drive"));
+    if (msOn) agentOptions.push(optIcon("cloud-onedrive", Cloud, cloudTargets.includes("onedrive"), () => toggleCloud("onedrive", "OneDrive"), "Salva anche su OneDrive"));
+    if (cloudTargets.length) agentOptions.push(optIcon("ask-folder", Folder, !!chatOpts.askFolder, () => {
+      setChatOpt({ askFolder: !chatOpts.askFolder });
+      flash(chatOpts.askFolder ? "Cartella automatica" : "Ti chiedo la cartella se non la scrivi");
+    }, "Chiedimi la cartella"));
+  } else if (active === "task_todo") {
+    if (googleOn || msOn) agentOptions.push(optIcon("task-calendar", Calendar, !!chatOpts.taskCal, () => {
+      setChatOpt({ taskCal: !chatOpts.taskCal });
+      flash(chatOpts.taskCal ? "Calendario: spento" : "I nuovi task vanno anche nel calendario");
+    }, "Metti nel calendario"));
+    agentOptions.push(optIcon("task-reminder", Bell, !!chatOpts.taskBell, () => {
+      setChatOpt({ taskBell: !chatOpts.taskBell });
+      flash(chatOpts.taskBell ? "Promemoria: spento" : "Promemoria acceso per i nuovi task");
+    }, "Promemoria"));
+  } else if (active === "vet_report") {
+    agentOptions.push(optIcon("visit-type", ClipboardList, true, () => setVisitMenuOpen((v) => !v), "Tipo di visita"));
+  }
+  const visitTypes = [...(vetTemplates.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(vetTemplates.custom || []).map((t) => ({ id: t.id, name: t.name }))];
+
+  const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
+  const composerOpen = composerGrown || attachments.length > 0 || uploadingFiles.length > 0 || !!pendingVoice || recording || transcribing
+    || mentionMatches.length > 0 || typedTags.length > 0 || typedPeople.length > 0 || !!pendingDriveUpload;
+  const canSend = !(streaming || transcribing || uploadingFiles.length > 0 || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording));
+  const insertAt = () => {
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? text.length;
+    const before = text.slice(0, caret);
+    const add = (before && !/\s$/.test(before) ? " " : "") + "@";
+    pendingCaretRef.current = before.length + add.length;
+    setText(before + add + text.slice(caret));
+    setMentionQuery("");
+  };
+  const info = AGENT_INFO[active] || { what: "", options: [], examples: [] };
+
+  const mobileChat = (
+    <div data-testid="mobile-chat">
+      {!compactHero && <SuggestionsTicker onSelect={runSuggestion} />}
+      <div className={`flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
+        {!compactHero && <div className="text-[10px] tracking-[0.22em] uppercase text-white/60">agente</div>}
+        <div className="flex items-center gap-2">
+          <h1
+            data-testid="agent-name"
+            className={`font-semibold tracking-tight leading-tight bg-gradient-to-r from-white via-[#E9D5FF] to-[#BFDBFE] bg-clip-text text-transparent transition-all duration-200 ${compactHero ? "text-[30px]" : "text-[42px]"}`}
+          >
+            {activeAction.short}
+          </h1>
+          <button
+            type="button"
+            data-testid="agent-info-btn"
+            onClick={() => setInfoOpen(true)}
+            title={`Cosa fa ${activeAction.short}`}
+            aria-label={`Cosa fa ${activeAction.short}`}
+            className="h-[18px] w-[18px] rounded-full border border-white/70 bg-white/10 flex items-center justify-center text-[10px] leading-none italic font-semibold font-serif text-white"
+          >
+            i
+          </button>
+        </div>
+        {agentOptions.length > 0 && <div className="flex items-center justify-center gap-3" data-testid="agent-options">{agentOptions}</div>}
+        {visitMenuOpen && active === "vet_report" && (
+          <div className="mt-2 flex flex-wrap justify-center gap-1.5" data-testid="visit-type-menu">
+            {visitTypes.map((t) => (
+              <button key={t.id} onClick={() => { setVisitType(t.id); setVisitMenuOpen(false); }}
+                className={`text-xs px-3 py-1.5 rounded-full ${visitType === t.id ? "bg-white text-[#403A3C]" : "bg-white/10 text-white/85"}`}>{t.name}</button>
+            ))}
+            <button onClick={() => { setShowTemplateUpload(true); setVisitMenuOpen(false); }} className="text-xs px-3 py-1.5 rounded-full bg-white/10 text-white/85 inline-flex items-center gap-1">
+              <UploadCloud size={12} /> carica modello
+            </button>
+          </div>
+        )}
+      </div>
+
+      {mobileReplyTo && (
+        <div data-testid="mobile-reply-pill" className="flex items-center gap-2 mt-3 px-3 py-2 rounded-xl bg-white/10 text-white/85 text-xs">
+          <Reply size={13} className="shrink-0" />
+          <span className="flex-1 min-w-0 truncate">Rispondi a: {mobileReplyTo.label}</span>
+          <button data-testid="mobile-reply-clear" onClick={startNewMobileConversation} title="Torna a un nuovo messaggio" className="shrink-0 p-0.5 rounded-full hover:bg-white/10">
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
+      {/* One DOM for both shapes (bar / card), only the classes change: the textarea is never
+          remounted, so the keyboard stays open when the bar opens up. */}
+      <div
+        data-testid="chat-input-card"
+        className={`mt-5 flex flex-wrap items-center bg-white/15 border border-white/35 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.45),0_10px_30px_rgba(0,0,0,0.25)] transition-[border-radius] duration-200 ${composerOpen ? "rounded-3xl px-4 pt-3 pb-2 gap-y-1" : "rounded-full pl-3 pr-1.5 py-1.5"}`}
+      >
+        <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
+          className={`p-2 rounded-full text-white/85 hover:bg-white/15 ${composerOpen ? "order-3" : "order-1"}`}>
+          <Paperclip size={19} />
+        </button>
+        <Textarea
+          data-testid="chat-textarea"
+          ref={textareaRef}
+          value={text}
+          onChange={onComposerChange}
+          onClick={(e) => setMentionQuery(mentionQueryAt(text, e.target.selectionStart))}
+          onKeyDown={(e) => {
+            if (mentionMatches.length && (e.key === "Enter" || e.key === "Tab")) { e.preventDefault(); insertMention(mentionMatches[0]); return; }
+            if (e.key === "Escape") setMentionQuery(null);
+          }}
+          placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro…" : activeAction.placeholder}
+          rows={1}
+          className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-2 px-1 resize-none text-white placeholder:text-white/55 overflow-y-auto ${composerOpen ? "order-1 basis-full" : "order-2 flex-1 min-w-0 placeholder:truncate"}`}
+        />
+        {composerOpen && (
+          <div className="order-2 basis-full">
+            {mentionMenu}
+            {shareChips}
+            {tagChips}
+            {drivePendingChips}
+            <div className="flex items-center gap-1.5 flex-wrap empty:hidden mb-1">{composerChips}</div>
+          </div>
+        )}
+        {composerOpen && (
+          <button type="button" data-testid="at-btn" onClick={insertAt} title="Tagga un agente o una persona" aria-label="Tagga"
+            className="order-3 p-2 rounded-full text-white/85 hover:bg-white/15">
+            <AtSign size={19} />
+          </button>
+        )}
+        {composerOpen && <div className="order-2 basis-full h-px bg-white/15" />}
+        <div className={`order-3 flex items-center gap-1 ${composerOpen ? "ml-auto" : ""}`}>
+          <button
+            data-testid="mic-btn"
+            onClick={recording ? stopRec : startRec}
+            disabled={transcribing}
+            title={recording ? "Ferma" : "Detta"}
+            aria-label={recording ? "Ferma" : "Detta"}
+            className={`p-2 rounded-full transition-colors duration-150 ${recording ? "bg-white/30 text-white animate-pulse" : "text-white/85 hover:bg-white/15"}`}
+          >{recording ? <MicOff size={19} /> : <Mic size={19} />}</button>
+          <button
+            data-testid="send-btn"
+            onClick={send}
+            disabled={!canSend}
+            title="Invia"
+            aria-label="Invia"
+            style={{ background: activeAction.color }}
+            className="h-10 w-10 rounded-full flex items-center justify-center text-white shadow-md disabled:opacity-60"
+          >
+            {streaming || transcribing || uploadingFiles.length > 0 ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 mt-8" data-testid="agent-row">
+        {rowAgents.map((a) => {
+          const sel = a.id === active;
+          return (
+            <button key={a.id} data-testid={`action-${a.key}`} onClick={() => selectAgent(a.id)} aria-pressed={sel}
+              className="flex flex-col items-center gap-1.5">
+              <span className={`h-12 w-12 rounded-full flex items-center justify-center text-white transition-all duration-200 ${sel ? "shadow-[0_6px_18px_rgba(0,0,0,0.25)]" : ""}`}
+                style={sel ? glowTileStyle(a.color) : undefined}>
+                {React.cloneElement(a.icon, { size: 20 })}
+              </span>
+              <span className={`text-[11.5px] ${sel ? "font-semibold text-white" : "text-white/85"}`}>{a.short}</span>
+            </button>
+          );
+        })}
+        <button data-testid="agents-more" onClick={() => setAllAgentsOpen(true)} className="flex flex-col items-center gap-1.5">
+          <span className="h-12 w-12 rounded-full flex items-center justify-center text-white"><Plus size={22} /></span>
+          <span className="text-[11.5px] text-white/85">Altri</span>
+        </button>
+      </div>
+
+      {infoOpen && (
+        <BottomSheet onClose={() => setInfoOpen(false)} testid="agent-info-sheet">
+          <div className="flex items-center gap-3">
+            <span className="h-11 w-11 rounded-full flex items-center justify-center text-white shrink-0" style={glowTileStyle(activeAction.color)}>
+              {React.cloneElement(activeAction.icon, { size: 19 })}
+            </span>
+            <div className="min-w-0">
+              <div className="text-lg font-semibold text-white">{activeAction.title}</div>
+              <div className="text-xs text-white/55">agente</div>
+            </div>
+          </div>
+          <SheetSection title="cosa fa"><p className="text-[13.5px] leading-relaxed text-white/90 font-light">{info.what}</p></SheetSection>
+          {info.options.length > 0 && (
+            <SheetSection title="icone sotto il nome">
+              <div className="space-y-2">
+                {info.options.map(([Icon, label], i) => (
+                  <div key={i} className="flex items-start gap-3 text-[13px] text-white/85 font-light">
+                    <Icon size={17} className="text-white shrink-0 mt-0.5" /> <span>{label}</span>
+                  </div>
+                ))}
+              </div>
+            </SheetSection>
+          )}
+          <SheetSection title="esempi · tocca per provare">
+            <div className="space-y-1.5">
+              {info.examples.map((ex) => (
+                <button key={ex} data-testid="agent-example" onClick={() => { setText(ex); setInfoOpen(false); setTimeout(() => textareaRef.current?.focus(), 60); }}
+                  className="w-full flex items-center gap-3 text-left px-3 py-2.5 rounded-2xl bg-white/[0.07] border border-white/10 text-[13px] text-white/90 font-light">
+                  <span className="flex-1">«{ex}»</span>
+                  <span className="shrink-0 text-[11px] font-medium text-white bg-white/15 px-2.5 py-0.5 rounded-full">Prova</span>
+                </button>
+              ))}
+            </div>
+          </SheetSection>
+          <SheetSection title="chiama altri agenti con @">
+            <p className="text-[13px] leading-relaxed text-white/85 font-light mb-2">
+              Nello stesso messaggio puoi far fare qualcosa anche a un altro agente{people.length ? ", o condividere con il team" : ""}: scrivi @ e scegli.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {MENTION_AGENTS.map((a) => (
+                <span key={a.key} className="rounded-lg px-2 py-0.5 text-[13px] font-medium text-white" style={{ background: a.color }}>@{a.tag}</span>
+              ))}
+              {people.length > 0 && <span className="rounded-lg px-2 py-0.5 text-[13px] font-medium text-white" style={{ background: PERSON_COLOR }}>@nome · @team</span>}
+            </div>
+            <div className="mt-3 px-3 py-2.5 rounded-2xl bg-white/[0.07] border border-white/10 text-[12.5px] leading-relaxed text-white/90 font-light">
+              «Visitato Fester, tutto ok <span className="rounded-md px-1.5 font-medium text-white" style={{ background: agentByKey("task_todo").color }}>@task</span> richiamare la padrona giovedì»
+            </div>
+          </SheetSection>
+        </BottomSheet>
+      )}
+
+      {allAgentsOpen && (
+        <BottomSheet onClose={() => setAllAgentsOpen(false)} testid="all-agents-sheet">
+          <div className="text-lg font-semibold text-white">Tutti gli agenti</div>
+          <p className="text-[12.5px] text-white/60 mt-1">Nella riga trovi Cerca e i 3 che usi di più: l'ordine si aggiorna da solo.</p>
+          <div className="grid grid-cols-3 gap-y-5 mt-5">
+            {ACTIONS.map((a) => {
+              const sel = a.id === active;
+              const n = usage[a.id] || 0;
+              return (
+                <button key={a.id} data-testid={`all-agents-${a.key}`} onClick={() => { selectAgent(a.id); setAllAgentsOpen(false); }} className="flex flex-col items-center gap-1">
+                  <span className="h-14 w-14 rounded-full flex items-center justify-center text-white" style={sel ? glowTileStyle(a.color) : undefined}>
+                    {React.cloneElement(a.icon, { size: 22 })}
+                  </span>
+                  <span className={`text-[13px] ${sel ? "font-semibold text-white" : "text-white/90"}`}>{a.short}</span>
+                  <span className="text-[10.5px] text-white/50">{a.id === "info_request" ? "sempre prima" : n === 1 ? "1 chat recente" : n ? `${n} chat recenti` : "non usato di recente"}</span>
+                </button>
+              );
+            })}
+          </div>
+          <SheetSection title="altro">
+            <button onClick={() => { setAllAgentsOpen(false); setMobileView("history"); }}
+              className="w-full flex items-center gap-3 text-left px-3 py-2.5 rounded-2xl bg-white/[0.07] border border-white/10 text-[13px] text-white/90">
+              <History size={16} /> <span className="flex-1">Cronologia delle chat</span>
+              <span className="text-[11px] font-medium text-white bg-white/15 px-2.5 py-0.5 rounded-full">Apri</span>
+            </button>
+          </SheetSection>
+        </BottomSheet>
+      )}
+    </div>
+  );
+
 
   return (
     <div className="relative w-full">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 w-full lg:h-[calc(100vh-15rem)]">
         {/* LEFT 1/3 — action icons + input area */}
         <aside className={`lg:col-span-1 flex flex-col lg:overflow-y-auto pr-1 ${focusMode || (isMobile && mobileView === "history") ? "hidden" : ""}`}>
-          {mobileChatView && !thread && !mobileReplyTo && <SuggestionsTicker onSelect={runSuggestion} />}
+          {isMobile ? mobileChat : (
+          <>
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
           <div className="flex items-center gap-1.5 md:gap-2 p-3 md:p-3.5 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm shrink-0 overflow-x-auto no-scrollbar">
               {ACTIONS.map((a) => {
@@ -1132,56 +1599,10 @@ export default function ChatPage() {
               rows={isMobile ? 1 : undefined}
               className="diary-lines border-0 focus-visible:ring-0 bg-transparent text-base md:flex-1 md:min-h-[200px] px-0 resize-none text-white placeholder:text-white/60 overflow-y-auto"
             />
-            {mentionMatches.length > 0 && (
-              <div className="mb-2 rounded-2xl bg-[#2A2429]/95 border border-white/10 shadow-lg overflow-hidden" data-testid="mention-menu">
-                {mentionMatches.map((a) => (
-                  <button
-                    key={a.key || `p-${a.slug}`}
-                    type="button"
-                    data-testid={`mention-${a.tag || a.slug}`}
-                    onMouseDown={(e) => { e.preventDefault(); insertMention(a); }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/10"
-                  >
-                    <span className="rounded-md px-1.5 text-xs font-medium text-white whitespace-nowrap" style={{ background: a.color || PERSON_COLOR }}>@{a.tag || a.slug}</span>
-                    <span className="text-sm text-white/90 whitespace-nowrap">{a.label || a.name}</span>
-                    <span className="text-xs text-white/45 truncate min-w-0">{a.hint || (a.kind === "group" ? "condividi con tutti i membri" : "condividi con questa persona")}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {typedPeople.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="share-chips">
-                <span className="text-[11px] text-white/55">Condivido con:</span>
-                {typedPeople.map((p) => (
-                  <span key={p.slug} className="text-[11px] rounded-md px-1.5 py-0.5 text-white" style={{ background: PERSON_COLOR }}>{p.name}</span>
-                ))}
-                {active !== "info_upload" && <span className="text-[11px] text-amber-300">(funziona con Salva informazioni)</span>}
-              </div>
-            )}
-            {typedTags.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="mention-chips">
-                <span className="text-[11px] text-white/55">Invio anche a:</span>
-                {typedTags.map((p, i) => (
-                  <span key={i} className="text-[11px] rounded-md px-1.5 py-0.5 text-white" style={{ background: agentByKey(p.agent)?.color }} title={p.text}>
-                    @{p.tag} · {p.text.length > 28 ? p.text.slice(0, 27) + "…" : p.text}
-                  </span>
-                ))}
-              </div>
-            )}
-            {pendingDriveUpload && (
-              <div className="flex items-center gap-1.5 flex-wrap mb-2" data-testid="drive-pending-suggestions">
-                <span className="kicker text-white/70">cartella per {pendingDriveUpload.count > 1 ? `${pendingDriveUpload.count} file` : `"${pendingDriveUpload.fileName}"`}:</span>
-                {pendingDriveUpload.suggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => resolveDrivePending(s)}
-                    className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white hover:bg-white/30"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
+            {mentionMenu}
+            {shareChips}
+            {tagChips}
+            {drivePendingChips}
             <div className="flex items-center justify-between pt-2 border-t ">
               <div className="flex items-center gap-1.5 text-white/85 flex-wrap">
                 <button data-testid="attach-btn" onClick={onAttachClick} className="p-2 rounded-full hover:bg-white/15"><Paperclip size={16} /></button>
@@ -1201,25 +1622,7 @@ export default function ChatPage() {
                   disabled={transcribing}
                   className={`p-2 rounded-full transition-colors duration-150 ${recording ? "bg-white/30 text-white animate-pulse" : "hover:bg-white/15"}`}
                 >{recording ? <MicOff size={16} /> : <Mic size={16} />}</button>
-                {(recording || transcribing) && <span className="kicker text-white/80">{recording ? "· rec…" : "· trascrivo…"}</span>}
-                {pendingVoice && !recording && !transcribing && (
-                  <span data-testid="voice-chip" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/25 text-white flex items-center gap-1">
-                    🎙️ {pendingVoice.seconds}s
-                    <button onClick={discardVoice} data-testid="voice-discard"><X size={10} /></button>
-                  </span>
-                )}
-                {attachments.map((a, i) => (
-                  <span key={i} className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/20 text-white flex items-center gap-1" title={a.preview || a.name}>
-                    {a.journalImage ? "📷" : a.ocr ? "🖼️" : "📎"} {a.name.slice(0,12)}{a.name.length > 12 ? "…" : ""}
-                    {a.ocr && <span className="opacity-70">· ocr</span>}
-                    <button onClick={() => removeAttachment(i)}><X size={10} /></button>
-                  </span>
-                ))}
-                {uploadingFiles.map((name, i) => (
-                  <span key={`up-${i}`} data-testid="file-uploading-chip" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-1 rounded-md bg-white/10 text-white/70 flex items-center gap-1.5" title={`Carico ${name}…`}>
-                    <Loader2 size={11} className="animate-spin" /> {name.slice(0,12)}{name.length > 12 ? "…" : ""} · carico…
-                  </span>
-                ))}
+                {composerChips}
               </div>
               <button data-testid="send-btn" onClick={send}
                 disabled={streaming || transcribing || uploadingFiles.length > 0 || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording)}
@@ -1228,8 +1631,10 @@ export default function ChatPage() {
                 <span className="hidden md:inline">{streaming ? "Elaboro…" : transcribing ? "Trascrivo…" : uploadingFiles.length > 0 ? "Carico…" : recording ? "Ferma & invia" : "Invia"}</span>
               </button>
             </div>
-            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : undefined} data-testid="file-input" />
           </div>
+          </>
+          )}
+          <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : undefined} data-testid="file-input" />
         </aside>
 
         {/* RIGHT 2/3 — scrolls. On mobile (spec v2 §3) this area is either the conversation
@@ -1681,6 +2086,36 @@ function HistoryCard({ conv, index = 0, isReplying = false, onOpen, onToggleFav,
           </div>
         )}
       </button>
+    </div>
+  );
+}
+
+// Mobile panel sliding up from the bottom (agent info, all agents). Portaled to <body>: the
+// page's frosted (backdrop-filter) ancestors would otherwise trap a fixed element inside them.
+function BottomSheet({ onClose, testid, children }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return createPortal(
+    <div className="fixed inset-0 z-[70]" data-testid={testid}>
+      <div className="absolute inset-0 bg-[#0A0819]/50 animate-in fade-in duration-200" onClick={onClose} />
+      <div className="absolute left-0 right-0 bottom-0 max-h-[86vh] overflow-y-auto rounded-t-[28px] bg-[#28223A]/90 backdrop-blur-2xl border-t border-white/20 shadow-[0_-10px_40px_rgba(0,0,0,0.35)] px-5 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] animate-in slide-in-from-bottom duration-300">
+        <div className="w-10 h-1 rounded-full bg-white/35 mx-auto mb-4" />
+        <button onClick={onClose} aria-label="Chiudi" data-testid="sheet-close" className="absolute top-4 right-4 p-1.5 rounded-full text-white/70 hover:bg-white/10"><X size={18} /></button>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function SheetSection({ title, children }) {
+  return (
+    <div className="mt-5">
+      <div className="text-[10.5px] tracking-[0.2em] uppercase text-white/55 mb-2">{title}</div>
+      {children}
     </div>
   );
 }

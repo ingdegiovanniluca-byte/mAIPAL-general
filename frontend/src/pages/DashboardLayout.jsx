@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat,
+  Newspaper, List, FileText, Dumbbell, Repeat, History,
 } from "lucide-react";
 import logo3 from "@/assets/logo3.png";
 import { MobileTitleContext } from "@/lib/mobile-title";
@@ -174,7 +174,19 @@ export default function DashboardLayout() {
             />
           </div>
           <div className="text-sm font-semibold text-white truncate" data-testid="mobile-section-title">{currentItem?.label || ""}{titleSuffix ? ` ${titleSuffix}` : ""}</div>
-          <div className="relative shrink-0" ref={menuRefMobile}>
+          <div className="relative shrink-0 flex items-center gap-2" ref={menuRefMobile}>
+            {/* Chat only: the history of old conversations (ChatPage listens for the event). */}
+            {currentItem?.to === "/dashboard/chat" && (
+              <button
+                data-testid="mobile-history-toggle"
+                onClick={() => window.dispatchEvent(new CustomEvent("maipal:chat-history"))}
+                title="Cronologia delle chat"
+                aria-label="Cronologia delle chat"
+                className="h-8 w-8 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-white/85"
+              >
+                <History size={15} />
+              </button>
+            )}
             <button
               data-testid="user-menu-btn-mobile"
               onClick={() => setMenuOpen((v) => !v)}

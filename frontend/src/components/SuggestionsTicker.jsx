@@ -38,9 +38,9 @@ export default function SuggestionsTicker({ onSelect }) {
 
   if (!items.length) return null;
   return (
-    // One empty line (as tall as a suggestion line: 15px x 1.375) above, below the header
-    // (-mt-4 cancels the page's own top padding), and one below, before the actions menu.
-    <div className="-mx-4 -mt-4 pt-[21px] mb-[21px]" data-testid="suggestions">
+    // Centered like the agent's name below it, well apart from the header (-mt-4 cancels
+    // the page's own top padding).
+    <div className="-mx-4 -mt-4 pt-9 mb-2" data-testid="suggestions">
       <div
         ref={scrollerRef}
         onScroll={onScroll}
@@ -53,14 +53,14 @@ export default function SuggestionsTicker({ onSelect }) {
             key={s.id}
             data-testid={`suggestion-${s.id}`}
             onClick={() => onSelect(s)}
-            className="snap-start shrink-0 w-full px-4 text-left"
+            className="snap-start shrink-0 w-full px-5 text-center"
           >
-            <span className="block text-[15px] leading-snug text-white/90 line-clamp-2 min-h-[2.6em]">{s.text}</span>
+            <span className="block text-[20px] leading-snug font-medium text-white line-clamp-2 min-h-[2.75em] [text-shadow:0_1px_8px_rgba(0,0,0,0.25)]">{s.text}</span>
           </button>
         ))}
       </div>
       {items.length > 1 && (
-        <div className="flex items-center gap-1 px-4 mt-2" aria-hidden="true">
+        <div className="flex items-center justify-center gap-1 px-4 mt-2" aria-hidden="true">
           {items.map((s, i) => (
             <span key={s.id} className={`h-1 rounded-full transition-all duration-300 ${i === idx ? "w-4 bg-white/80" : "w-1 bg-white/30"}`} />
           ))}
