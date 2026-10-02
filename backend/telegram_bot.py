@@ -64,9 +64,9 @@ async def _get_user_by_chat(db, chat_id: int):
 
 
 async def _user_list_names(db, user_doc: dict) -> list[str]:
-    from server import _visible_query
+    from server import _lists_query
     current = _to_user_pydantic(user_doc)
-    colls = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(200)
+    colls = await db.collections.find(_lists_query(current), {"_id": 0, "name": 1}).to_list(200)
     return [c["name"] for c in colls]
 
 

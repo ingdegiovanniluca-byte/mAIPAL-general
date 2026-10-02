@@ -221,7 +221,10 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
 
     # ---- Liste ----
     extra_scan: List[dict] = []  # list sub-elements, searched by name only (no embedding cost)
-    colls = await db.collections.find(_owned_or_shared(), {"_id": 0}).to_list(500)
+    lists_q = _owned_or_shared()
+    if org_id:  # lists a team-mate shared by name (see server._lists_query)
+        lists_q = {"$or": lists_q["$or"] + [{"org_id": org_id, "shared_with": user_id}]}
+    colls = await db.collections.find(lists_q, {"_id": 0}).to_list(500)
     if colls:
         coll_map = {c["id"]: c for c in colls}
         coll_items = await db.collection_items.find({"collection_id": {"$in": list(coll_map.keys())}}, {"_id": 0}).to_list(5000)

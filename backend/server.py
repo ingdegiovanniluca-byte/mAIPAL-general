@@ -238,6 +238,7 @@ class CollectionCreatePayload(BaseModel):
     fields: List[CollectionFieldDef]
     sub_item_fields: List[CollectionFieldDef] = []  # schema per gli "elementi" annidati in ogni campo
     visibility: Literal["private", "org"] = "private"
+    shared_with: List[str] = []  # user_id dei compagni di team con cui è condivisa (vedono e modificano)
     max_items: Optional[int] = None  # limite massimo di Campi nella lista, nullo = illimitato
     max_sub_items_per_item: Optional[int] = None  # limite massimo di Elementi per Campo, nullo = illimitato
 
@@ -252,6 +253,11 @@ class CollectionUpdatePayload(BaseModel):
     max_sub_items_per_item: Optional[int] = None
     clear_max_items: bool = False  # esplicito: azzera il limite invece di lasciarlo invariato
     clear_max_sub_items_per_item: bool = False
+
+
+class CollectionSharingPayload(BaseModel):
+    visibility: Literal["private", "org"] = "private"  # "org" = tutto il team
+    user_ids: List[str] = []  # singole persone del team
 
 
 class CollectionReorderPayload(BaseModel):
@@ -389,6 +395,16 @@ def _editable_query(current: User) -> dict:
     """Same as _visible_query but meant for mutating endpoints: any org-mate can edit/
     complete/delete a document shared with the org, not just its creator."""
     return _visible_query(current)
+
+
+def _lists_query(current: User) -> dict:
+    """Lists (collections) a user can see AND edit: their own, the team's (visibility
+    "org") and the ones a team-mate shared with them by name (shared_with). Sharing by
+    name only holds within the same team: whoever leaves it stops seeing the list."""
+    if current.org_id:
+        return {"$or": [{"user_id": current.user_id}, {"org_id": current.org_id, "visibility": "org"},
+                        {"org_id": current.org_id, "shared_with": current.user_id}]}
+    return {"user_id": current.user_id}
 
 
 def _stamp_owner_fields(doc: dict, current: User):
@@ -2729,7 +2745,7 @@ async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current
 # ============ COLLEZIONI (liste personalizzate: clienti, esercizi, commesse, ecc.) ============
 @api_router.get("/collections")
 async def list_collections(current: User = Depends(get_current_user)):
-    cursor = db.collections.find(_visible_query(current), {"_id": 0}).sort("created_at", 1)
+    cursor = db.collections.find(_lists_query(current), {"_id": 0}).sort("created_at", 1)
     collections = await cursor.to_list(200)
     # Backfill sort_order (added for drag-to-reorder) for lists that predate it, keeping
     # the order they already had (by creation date) instead of jumping around on first load.
@@ -2743,7 +2759,13 @@ async def list_collections(current: User = Depends(get_current_user)):
             ops.append(UpdateOne({"id": c["id"]}, {"$set": {"sort_order": next_order}}))
             next_order += 1
         await db.collections.bulk_write(ops)
-    collections.sort(key=lambda c: c["sort_order"])
+    # Each user keeps their own order (users.list_order, set by drag-and-drop): a team-mate
+    # reordering a shared list never moves it in the owner's page. Lists not in it yet
+    # (new or just shared) go at the bottom, in their owner's order.
+    me = await db.users.find_one({"user_id": current.user_id}, {"_id": 0, "list_order": 1}) or {}
+    pos = {cid: i for i, cid in enumerate(me.get("list_order") or [])}
+    collections.sort(key=lambda c: (pos.get(c["id"], len(pos)), c["sort_order"]))
+    await _add_sharing_info(collections, current)
     ids = [c["id"] for c in collections]
     if ids:
         counts = await db.collection_items.aggregate([
@@ -2758,17 +2780,78 @@ async def list_collections(current: User = Depends(get_current_user)):
 
 @api_router.patch("/collections/reorder")
 async def reorder_collections(payload: CollectionReorderPayload, current: User = Depends(get_current_user)):
-    """Persists the drag-and-drop order from the Liste page. Silently ignores any id the
-    caller can't edit or that doesn't exist, rather than failing the whole reorder."""
-    editable = await db.collections.find({**_editable_query(current)}, {"_id": 0, "id": 1}).to_list(500)
-    editable_ids = {c["id"] for c in editable}
-    ids = [i for i in payload.ordered_ids if i in editable_ids]
+    """Persists the drag-and-drop order from the Liste page, for this user only
+    (users.list_order); the lists they own also keep it as their sort_order. Silently
+    ignores any id the caller can't see or that doesn't exist."""
+    visible = await db.collections.find(_lists_query(current), {"_id": 0, "id": 1, "user_id": 1}).to_list(500)
+    owner_of = {c["id"]: c.get("user_id") for c in visible}
+    ids = [i for i in payload.ordered_ids if i in owner_of]
     if not ids:
         raise HTTPException(status_code=400, detail="Nessuna lista valida da riordinare")
+    await db.users.update_one({"user_id": current.user_id}, {"$set": {"list_order": ids}})
     from pymongo import UpdateOne
-    ops = [UpdateOne({"id": cid}, {"$set": {"sort_order": idx}}) for idx, cid in enumerate(ids)]
-    await db.collections.bulk_write(ops)
+    ops = [UpdateOne({"id": cid}, {"$set": {"sort_order": idx}}) for idx, cid in enumerate(ids) if owner_of[cid] == current.user_id]
+    if ops:
+        await db.collections.bulk_write(ops)
     return {"ok": True}
+
+
+async def _add_sharing_info(colls: list, current: User):
+    """Adds to each list: is_owner, owner {user_id, name} and shared_with_users [{user_id, name}]
+    (the list's user_id is always whoever created it - sharing never changes the owner)."""
+    uids = {c.get("user_id") for c in colls} | {u for c in colls for u in (c.get("shared_with") or [])}
+    users = await db.users.find({"user_id": {"$in": [u for u in uids if u]}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(500)
+    names = {u["user_id"]: u.get("name") or (u.get("email") or "").split("@")[0] for u in users}
+    for c in colls:
+        c["is_owner"] = c.get("user_id") == current.user_id
+        c["owner"] = {"user_id": c.get("user_id"), "name": names.get(c.get("user_id"), "")}
+        c["shared_with_users"] = [{"user_id": u, "name": names.get(u, "")} for u in (c.get("shared_with") or []) if u in names]
+    return colls
+
+
+async def _team_mate_ids(current: User, user_ids: list) -> list:
+    """The given ids that are members of the caller's team (the caller excluded), deduplicated."""
+    if not current.org_id or not user_ids:
+        return []
+    mates = await db.users.find({"org_id": current.org_id, "user_id": {"$in": list(user_ids)}}, {"_id": 0, "user_id": 1}).to_list(300)
+    ok = {m["user_id"] for m in mates} - {current.user_id}
+    return [u for u in dict.fromkeys(user_ids) if u in ok]
+
+
+async def _notify_list_shared(current: User, coll: dict, user_ids: list):
+    if not user_ids:
+        return
+    rec = await db.users.find({"user_id": {"$in": user_ids}, "telegram_chat_id": {"$ne": None}}, {"_id": 0, "telegram_chat_id": 1}).to_list(300)
+    for r in rec:
+        try:
+            await _send_telegram_text(r["telegram_chat_id"], f"📋 {current.name} ti ha condiviso la lista «{coll['name']}»: puoi vederla e modificarla in mAIPAL → Liste.")
+        except Exception:
+            logger.exception("list share telegram notice failed")
+
+
+@api_router.put("/collections/{collection_id}/sharing")
+async def set_collection_sharing(collection_id: str, payload: CollectionSharingPayload, current: User = Depends(get_current_user)):
+    """Only the owner decides who the list is shared with: the whole team (visibility "org")
+    and/or single team-mates (shared_with). Whoever it is shared with can see and edit it."""
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    if coll.get("user_id") != current.user_id:
+        raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può cambiare con chi è condivisa.")
+    if (payload.visibility == "org" or payload.user_ids) and not current.org_id:
+        raise HTTPException(status_code=400, detail="Per condividere una lista devi far parte di un team.")
+    shared = await _team_mate_ids(current, payload.user_ids)
+    updates = {"visibility": payload.visibility if current.org_id else "private", "shared_with": shared,
+               "org_id": current.org_id}
+    await db.collections.update_one({"id": collection_id}, {"$set": updates})
+    before = coll.get("shared_with") or []
+    new_people = [u for u in shared if u not in before]
+    if payload.visibility == "org" and coll.get("visibility") != "org":
+        mates = await db.users.find({"org_id": current.org_id, "user_id": {"$ne": current.user_id}}, {"_id": 0, "user_id": 1}).to_list(300)
+        new_people = list(dict.fromkeys(new_people + [m["user_id"] for m in mates if m["user_id"] not in before]))
+    await _notify_list_shared(current, {**coll, **updates}, new_people)
+    out = await db.collections.find_one({"id": collection_id}, {"_id": 0})
+    return (await _add_sharing_info([out], current))[0]
 
 
 @api_router.post("/collections")
@@ -2780,7 +2863,7 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
     if payload.max_sub_items_per_item is not None and payload.max_sub_items_per_item < 1:
         raise HTTPException(status_code=400, detail="Il limite di Elementi per Campo deve essere almeno 1")
     name = payload.name.strip() or "Nuova lista"
-    existing = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1, "sort_order": 1}).to_list(500)
+    existing = await db.collections.find(_lists_query(current), {"_id": 0, "name": 1, "sort_order": 1}).to_list(500)
     if any((e.get("name") or "").strip().lower() == name.lower() for e in existing):
         raise HTTPException(status_code=400, detail=f"Esiste già una lista chiamata \"{name}\".")
     next_order = max([e.get("sort_order", -1) for e in existing], default=-1) + 1
@@ -2791,6 +2874,7 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
         "fields": [f.model_dump() for f in payload.fields],
         "sub_item_fields": [f.model_dump() for f in payload.sub_item_fields],
         "visibility": payload.visibility,
+        "shared_with": await _team_mate_ids(current, payload.shared_with),
         "max_items": payload.max_items,
         "max_sub_items_per_item": payload.max_sub_items_per_item,
         "sort_order": next_order,
@@ -2799,20 +2883,26 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
     _stamp_owner_fields(doc, current)
     await db.collections.insert_one(doc)
     doc.pop("_id", None)
-    return doc
+    if doc["shared_with"] or doc["visibility"] == "org":
+        people = doc["shared_with"]
+        if doc["visibility"] == "org":
+            mates = await db.users.find({"org_id": current.org_id, "user_id": {"$ne": current.user_id}}, {"_id": 0, "user_id": 1}).to_list(300)
+            people = list(dict.fromkeys(people + [m["user_id"] for m in mates]))
+        await _notify_list_shared(current, doc, people)
+    return (await _add_sharing_info([doc], current))[0]
 
 
 @api_router.get("/collections/{collection_id}")
 async def get_collection(collection_id: str, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
-    return coll
+    return (await _add_sharing_info([coll], current))[0]
 
 
 @api_router.patch("/collections/{collection_id}")
 async def update_collection(collection_id: str, payload: CollectionUpdatePayload, current: User = Depends(get_current_user)):
-    existing = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    existing = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     updates = {}
@@ -2824,7 +2914,9 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
         updates["fields"] = [f.model_dump() for f in payload.fields]
     if payload.sub_item_fields is not None:
         updates["sub_item_fields"] = [f.model_dump() for f in payload.sub_item_fields]
-    if payload.visibility is not None:
+    if payload.visibility is not None and payload.visibility != existing.get("visibility", "private"):
+        if existing.get("user_id") != current.user_id:
+            raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può cambiare con chi è condivisa.")
         if payload.visibility == "org" and current.org_id:
             updates["visibility"] = "org"
             updates["org_id"] = current.org_id
@@ -2845,14 +2937,17 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
         updates["max_sub_items_per_item"] = payload.max_sub_items_per_item
     if updates:
         await db.collections.update_one({"id": collection_id}, {"$set": updates})
-    return await db.collections.find_one({"id": collection_id}, {"_id": 0})
+    out = await db.collections.find_one({"id": collection_id}, {"_id": 0})
+    return (await _add_sharing_info([out], current))[0]
 
 
 @api_router.delete("/collections/{collection_id}")
 async def delete_collection(collection_id: str, current: User = Depends(get_current_user)):
-    existing = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    existing = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    if existing.get("user_id") != current.user_id:
+        raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può eliminarla.")
     await db.collections.delete_one({"id": collection_id})
     await db.collection_items.delete_many({"collection_id": collection_id})
     await db.collection_sub_items.delete_many({"collection_id": collection_id})
@@ -2861,7 +2956,7 @@ async def delete_collection(collection_id: str, current: User = Depends(get_curr
 
 @api_router.get("/collections/{collection_id}/items")
 async def list_collection_items(collection_id: str, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     cursor = db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).sort("created_at", -1)
@@ -2893,7 +2988,7 @@ async def list_collection_items(collection_id: str, current: User = Depends(get_
 
 @api_router.post("/collections/{collection_id}/items")
 async def create_collection_item(collection_id: str, payload: CollectionItemPayload, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     max_items = coll.get("max_items")
@@ -2928,7 +3023,7 @@ async def create_collection_item(collection_id: str, payload: CollectionItemPayl
 
 @api_router.patch("/collections/{collection_id}/items/reorder")
 async def reorder_collection_items(collection_id: str, payload: CollectionReorderPayload, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     existing = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "id": 1}).to_list(2000)
@@ -2944,7 +3039,7 @@ async def reorder_collection_items(collection_id: str, payload: CollectionReorde
 
 @api_router.patch("/collections/{collection_id}/items/{item_id}")
 async def update_collection_item(collection_id: str, item_id: str, payload: CollectionItemPayload, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     updates = {"data": payload.data, "embedding": None}
@@ -2961,7 +3056,7 @@ async def update_collection_item(collection_id: str, item_id: str, payload: Coll
 
 @api_router.delete("/collections/{collection_id}/items/{item_id}")
 async def delete_collection_item(collection_id: str, item_id: str, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
@@ -2972,7 +3067,7 @@ async def delete_collection_item(collection_id: str, item_id: str, current: User
 # ---- Elementi (livello 3): annidati dentro un campo/item specifico ----
 @api_router.get("/collections/{collection_id}/items/{item_id}/sub-items")
 async def list_sub_items(collection_id: str, item_id: str, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     cursor = db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0}).sort("created_at", -1)
@@ -2981,7 +3076,7 @@ async def list_sub_items(collection_id: str, item_id: str, current: User = Depen
 
 @api_router.post("/collections/{collection_id}/items/{item_id}/sub-items")
 async def create_sub_item(collection_id: str, item_id: str, payload: CollectionSubItemPayload, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_visible_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     item = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
@@ -3013,7 +3108,7 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
 
 @api_router.patch("/collections/{collection_id}/items/{item_id}/sub-items/{sub_id}")
 async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload: CollectionSubItemPayload, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     r = await db.collection_sub_items.update_one(
@@ -3026,7 +3121,7 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
 
 @api_router.delete("/collections/{collection_id}/items/{item_id}/sub-items/{sub_id}")
 async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current: User = Depends(get_current_user)):
-    coll = await db.collections.find_one({"id": collection_id, **_editable_query(current)}, {"_id": 0})
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     r = await db.collection_sub_items.delete_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id})
@@ -3038,7 +3133,7 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current
 # ---- Rilevamento automatico "salva nota" vs "modifica lista" (un solo tasto in chat) ----
 @api_router.post("/classify-save-intent")
 async def classify_save_intent(payload: ClassifySaveIntentPayload, current: User = Depends(get_current_user)):
-    colls = await db.collections.find(_visible_query(current), {"_id": 0, "name": 1}).to_list(200)
+    colls = await db.collections.find(_lists_query(current), {"_id": 0, "name": 1}).to_list(200)
     kind = await lu.classify_save_intent(payload.text, [c["name"] for c in colls], user_id=current.user_id, channel="web")
     return {"kind": kind}
 
@@ -3080,7 +3175,7 @@ async def _execute_list_update(
     if not text:
         raise HTTPException(status_code=400, detail="Scrivi cosa vuoi modificare nella lista")
 
-    colls = await db.collections.find(_visible_query(current), {"_id": 0}).to_list(200)
+    colls = await db.collections.find(_lists_query(current), {"_id": 0}).to_list(200)
     if not colls:
         raise HTTPException(status_code=400, detail="Non hai ancora nessuna lista. Creane una nella sezione Liste prima di poter usare questa funzione.")
     coll_by_id = {c["id"]: c for c in colls}
@@ -4964,7 +5059,7 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
         raise HTTPException(status_code=400, detail="Scrivi cosa vuoi che faccia e quando")
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(LOCAL_TZ)
-    colls = await db.collections.find(_visible_query(current), {"_id": 0}).to_list(200)
+    colls = await db.collections.find(_lists_query(current), {"_id": 0}).to_list(200)
     linked = bool(current.telegram_chat_id)
     try:
         parsed = await sa.interpret_command(
@@ -5100,7 +5195,7 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
     }
     if kind == "list_update":
         lo = draft.get("list_op") or {}
-        if lo.get("op") not in lu.VALID_OPS or not await db.collections.find_one({"id": lo.get("collection_id"), **_visible_query(current)}, {"_id": 1}):
+        if lo.get("op") not in lu.VALID_OPS or not await db.collections.find_one({"id": lo.get("collection_id"), **_lists_query(current)}, {"_id": 1}):
             raise HTTPException(status_code=400, detail="Lista non trovata")
         doc["list_op"] = {k: lo.get(k) for k in ("text", "op", "collection_id", "collection_name", "item_query", "sub_item_query", "fields", "sub_items", "items")}
     elif kind == "report":
@@ -5209,7 +5304,7 @@ async def _gather_report_data(user: User, instruction: str, rng) -> str:
             lines.append(line.strip())
 
     uid = user.user_id
-    colls = await db.collections.find(_visible_query(user), {"_id": 0}).to_list(200)
+    colls = await db.collections.find(_lists_query(user), {"_id": 0}).to_list(200)
     coll_by_id = {c["id"]: c for c in colls}
     if rng:
         s, e, _ = rng

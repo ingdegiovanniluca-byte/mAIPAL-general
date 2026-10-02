@@ -4,7 +4,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2 } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 // Gerarchia a 3 livelli:
@@ -28,7 +28,6 @@ const slugify = (label) =>
   (label || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "campo";
 
 export default function CollectionsPage() {
-  const { user } = useAuth();
   const [collections, setCollections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState({ level: 1 }); // {level:1} | {level:2, collection} | {level:3, collection, item}
@@ -142,24 +141,26 @@ export default function CollectionsPage() {
           >
             <div className="flex items-start justify-between mb-2">
               <div className="font-semibold text-lg">{c.name}</div>
-              {c.visibility === "org" ? <Users size={14} className="text-white/40 mt-1" title="Condivisa col team" /> : <Lock size={14} className="text-white/30 mt-1" title="Privata" />}
+              {isShared(c) ? <Users size={14} className="text-white/40 mt-1" title="Condivisa" /> : <Lock size={14} className="text-white/30 mt-1" title="Privata" />}
             </div>
             <div className="text-sm text-white/50">{c.item_count || 0} campi</div>
+            {sharingLabel(c) && <div className="text-[11px] text-[#7FB3E0] mt-1" data-testid={`collection-sharing-${c.id}`}>{sharingLabel(c)}</div>}
             <div className="text-[11px] text-white/35 mt-2">{(c.fields || []).map((f) => f.label).join(" · ")}</div>
-            <button
-              onClick={(e) => { e.stopPropagation(); del(c); }}
-              className="absolute top-3 right-3 p-1.5 rounded-full text-white/0 group-hover:text-white/40 hover:!text-red-400 hover:bg-red-500/10 transition-colors"
-              title="Elimina lista"
-            >
-              <Trash2 size={14} />
-            </button>
+            {c.is_owner !== false && (
+              <button
+                onClick={(e) => { e.stopPropagation(); del(c); }}
+                className="absolute top-3 right-3 p-1.5 rounded-full text-white/0 group-hover:text-white/40 hover:!text-red-400 hover:bg-red-500/10 transition-colors"
+                title="Elimina lista"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </div>
         ))}
       </div>
 
       {showCreate && (
         <CreateCollectionDialog
-          hasOrg={!!user?.org_id}
           existingCollections={collections}
           onClose={() => setShowCreate(false)}
           onCreated={async (c) => { setShowCreate(false); await load(); setView({ level: 2, collection: c }); }}
@@ -169,17 +170,83 @@ export default function CollectionsPage() {
   );
 }
 
-function VisibilityToggle({ hasOrg, visibility, onChange }) {
-  if (!hasOrg) return null;
+const isShared = (c) => c.visibility === "org" || (c.shared_with || []).length > 0;
+
+const joinNames = (names) => (names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}`);
+
+// "di Mario Rossi" on a list a team-mate shared with me; "condivisa con …" on my own shared lists.
+function sharingLabel(c) {
+  if (c.is_owner === false) return `di ${c.owner?.name || "un collega"} · condivisa con te`;
+  if (c.visibility === "org") return "condivisa con tutto il team";
+  const names = (c.shared_with_users || []).map((u) => u.name.split(" ")[0]);
+  return names.length ? `condivisa con ${joinNames(names)}` : "";
+}
+
+// Team-mates (me excluded), loaded once per picker; [] when not in a team.
+function useTeamMates() {
+  const { user } = useAuth();
+  const [mates, setMates] = useState(null);
+  useEffect(() => {
+    if (!user?.org_id) { setMates([]); return; }
+    api.get("/org").then((r) => setMates((r.data?.members || []).filter((m) => m.user_id !== user.user_id))).catch(() => setMates([]));
+  }, [user?.org_id, user?.user_id]);
+  return mates;
+}
+
+// Who the list is shared with: nobody, the whole team, or chosen team-mates. Whoever it is
+// shared with can see and edit it; the creator stays the owner.
+function SharePicker({ value, onChange }) {
+  const mates = useTeamMates();
+  if (!mates || mates.length === 0) return null;
+  const { visibility, user_ids } = value;
+  const toggle = (id) => onChange({ visibility: "private", user_ids: user_ids.includes(id) ? user_ids.filter((x) => x !== id) : [...user_ids, id] });
+  const chip = (on) => `px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors ${on ? "bg-[#4E7FA8] text-white" : "bg-white/10 text-white/70"}`;
   return (
-    <div className="flex gap-2">
-      <button type="button" onClick={() => onChange("private")} className={`flex-1 py-2 rounded-xl text-sm flex items-center justify-center gap-1.5 ${visibility === "private" ? "bg-[#CECAD0] text-[#403A3C]" : "bg-white/10 text-white/60"}`}>
-        <Lock size={13} /> Privata
-      </button>
-      <button type="button" onClick={() => onChange("org")} className={`flex-1 py-2 rounded-xl text-sm flex items-center justify-center gap-1.5 ${visibility === "org" ? "bg-[#CECAD0] text-[#403A3C]" : "bg-white/10 text-white/60"}`}>
-        <Users size={13} /> Condivisa col team
-      </button>
+    <div data-testid="share-picker">
+      <div className="kicker mb-2">condividi con</div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" data-testid="share-none" onClick={() => onChange({ visibility: "private", user_ids: [] })} className={chip(visibility !== "org" && user_ids.length === 0)}>
+          <Lock size={12} /> Solo io
+        </button>
+        <button type="button" data-testid="share-team" onClick={() => onChange({ visibility: "org", user_ids: [] })} className={chip(visibility === "org")}>
+          <Users size={12} /> Tutto il team
+        </button>
+        {mates.map((m) => {
+          const on = visibility !== "org" && user_ids.includes(m.user_id);
+          return (
+            <button type="button" key={m.user_id} data-testid={`share-person-${m.user_id}`} onClick={() => toggle(m.user_id)} className={chip(on)}>
+              {on ? <Check size={12} /> : <UserRound size={12} />} {m.name || m.email}
+            </button>
+          );
+        })}
+      </div>
+      <div className="text-[11px] text-white/40 mt-2">Chi la riceve può vederla e modificarla; solo tu puoi eliminarla o cambiare con chi è condivisa.</div>
     </div>
+  );
+}
+
+function ShareDialog({ collection, onClose, onSaved }) {
+  const [value, setValue] = useState({ visibility: collection.visibility || "private", user_ids: collection.shared_with || [] });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      const r = await api.put(`/collections/${collection.id}/sharing`, value);
+      toast.success(isShared(r.data) ? sharingLabel(r.data).replace(/^c/, "C") : "Ora la lista è visibile solo a te");
+      onSaved(r.data);
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg bg-[color:var(--app-bg)]" data-testid="share-collection-dialog">
+        <DialogHeader><DialogTitle>Condividi «{collection.name}»</DialogTitle></DialogHeader>
+        <SharePicker value={value} onChange={setValue} />
+        <div className="flex justify-end mt-4">
+          <button data-testid="share-save" onClick={save} disabled={saving} className="pill-btn">{saving ? "…" : "Salva"}</button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -243,9 +310,9 @@ function toApiFields(fields) {
   }));
 }
 
-function CreateCollectionDialog({ hasOrg, existingCollections, onClose, onCreated }) {
+function CreateCollectionDialog({ existingCollections, onClose, onCreated }) {
   const [name, setName] = useState("");
-  const [visibility, setVisibility] = useState("private");
+  const [share, setShare] = useState({ visibility: "private", user_ids: [] });
   const [fields, setFields] = useState([{ key: "nome", label: "Nome", type: "text" }]);
   const [saving, setSaving] = useState(false);
 
@@ -255,7 +322,7 @@ function CreateCollectionDialog({ hasOrg, existingCollections, onClose, onCreate
     if (cleanFields.length === 0) { toast.error("Aggiungi almeno un attributo"); return; }
     setSaving(true);
     try {
-      const r = await api.post("/collections", { name: name.trim(), visibility, fields: cleanFields });
+      const r = await api.post("/collections", { name: name.trim(), visibility: share.visibility, shared_with: share.user_ids, fields: cleanFields });
       toast.success("Lista creata");
       onCreated(r.data);
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -273,7 +340,7 @@ function CreateCollectionDialog({ hasOrg, existingCollections, onClose, onCreate
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="es. Clienti, Esercizi, Commesse…" className="h-11 rounded-xl bg-white/10" />
           </div>
 
-          <VisibilityToggle hasOrg={hasOrg} visibility={visibility} onChange={setVisibility} />
+          <SharePicker value={share} onChange={setShare} />
 
           <div>
             <div className="kicker mb-2">attributi dei campi</div>
@@ -299,8 +366,11 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // campo in modifica, o {} per nuovo
   const [managingFields, setManagingFields] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+  const mates = useTeamMates();
+  const canShare = coll.is_owner !== false && (mates || []).length > 0;
 
   const load = async () => {
     try {
@@ -363,8 +433,16 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
       </button>
 
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div className="font-semibold text-xl">{coll.name}</div>
-        <div className="flex items-center gap-2">
+        <div>
+          <div className="font-semibold text-xl">{coll.name}</div>
+          {sharingLabel(coll) && <div className="text-xs text-[#7FB3E0] mt-0.5" data-testid="collection-sharing">{sharingLabel(coll)}</div>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {canShare && (
+            <button data-testid="share-collection" onClick={() => setSharing(true)} className="pill-btn text-sm bg-white/10 text-white">
+              <Share2 size={14} /> Condividi
+            </button>
+          )}
           <button data-testid="manage-fields" onClick={() => setManagingFields(true)} className="pill-btn text-sm bg-white/10 text-white">
             <Settings2 size={14} /> Gestisci attributi
           </button>
@@ -427,6 +505,14 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
             await load();
             toast.success("Salvato");
           }}
+        />
+      )}
+
+      {sharing && (
+        <ShareDialog
+          collection={coll}
+          onClose={() => setSharing(false)}
+          onSaved={(c) => { setSharing(false); setColl((cur) => ({ ...cur, ...c })); onCollectionChanged({ ...coll, ...c }); }}
         />
       )}
 
