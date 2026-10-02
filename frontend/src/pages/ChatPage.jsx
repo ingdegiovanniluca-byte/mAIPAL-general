@@ -1353,17 +1353,17 @@ export default function ChatPage() {
           return (
             <button key={a.id} data-testid={`action-${a.key}`} onClick={() => selectAgent(a.id)} aria-pressed={sel}
               className="flex flex-col items-center gap-1.5">
-              <span className={`h-12 w-12 rounded-full flex items-center justify-center text-white transition-all duration-200 ${sel ? "shadow-[0_6px_18px_rgba(0,0,0,0.25)]" : ""}`}
+              <span className={`h-12 w-12 rounded-full flex items-center justify-center transition-all duration-200 ${sel ? "text-white shadow-[0_6px_18px_rgba(0,0,0,0.25)]" : "text-white/45"}`}
                 style={sel ? glowTileStyle(a.color) : undefined}>
                 {React.cloneElement(a.icon, { size: 20 })}
               </span>
-              <span className={`text-[11.5px] ${sel ? "font-semibold text-white" : "text-white/85"}`}>{a.short}</span>
+              <span className={`text-[11.5px] ${sel ? "font-semibold text-white" : "text-white/60"}`}>{a.short}</span>
             </button>
           );
         })}
         <button data-testid="agents-more" onClick={() => setAllAgentsOpen(true)} className="flex flex-col items-center gap-1.5">
-          <span className="h-12 w-12 rounded-full flex items-center justify-center text-white"><Plus size={22} /></span>
-          <span className="text-[11.5px] text-white/85">Altri</span>
+          <span className="h-12 w-12 rounded-full flex items-center justify-center text-white/45"><Plus size={22} /></span>
+          <span className="text-[11.5px] text-white/60">Altri</span>
         </button>
       </div>
 
@@ -1428,7 +1428,7 @@ export default function ChatPage() {
               const n = usage[a.id] || 0;
               return (
                 <button key={a.id} data-testid={`all-agents-${a.key}`} onClick={() => { selectAgent(a.id); setAllAgentsOpen(false); }} className="flex flex-col items-center gap-1">
-                  <span className="h-14 w-14 rounded-full flex items-center justify-center text-white" style={sel ? glowTileStyle(a.color) : undefined}>
+                  <span className={`h-14 w-14 rounded-full flex items-center justify-center ${sel ? "text-white" : "text-white/45"}`} style={sel ? glowTileStyle(a.color) : undefined}>
                     {React.cloneElement(a.icon, { size: 22 })}
                   </span>
                   <span className={`text-[13px] ${sel ? "font-semibold text-white" : "text-white/90"}`}>{a.short}</span>
