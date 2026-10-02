@@ -1169,12 +1169,30 @@ export default function ChatPage() {
     });
     return c;
   }, [history]);
+  // Every agent in one row that scrolls sideways (free, native momentum - no paging): Cerca
+  // first, then by use in the last 30 days, so the 4 on screen are the most used ones.
   const rowAgents = useMemo(() => {
     const others = ACTIONS.filter((a) => a.id !== "info_request").sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
-    let row = [ACTIONS[0], ...others.slice(0, 3)];
-    if (!row.some((a) => a.id === active)) row = [...row.slice(0, 3), ACTIONS.find((a) => a.id === active)];
-    return row;
-  }, [usage, active]);
+    return [ACTIONS[0], ...others];
+  }, [usage]);
+  const agentRowRef = useRef(null);
+  const [rowEdges, setRowEdges] = useState({ start: true, end: false });
+  const onAgentRowScroll = () => {
+    const el = agentRowRef.current;
+    if (!el) return;
+    const start = el.scrollLeft < 4;
+    const end = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+    setRowEdges((e) => (e.start === start && e.end === end ? e : { start, end }));
+  };
+  useEffect(() => { onAgentRowScroll(); }, [rowAgents, isMobile, mobileView]); // eslint-disable-line react-hooks/exhaustive-deps
+  // an agent picked from "Altri" (or restored) slides into view if it's off screen
+  useEffect(() => {
+    const el = agentRowRef.current;
+    const btn = el?.querySelector(`[data-agent="${active}"]`);
+    if (!el || !btn) return;
+    const l = btn.offsetLeft - el.offsetLeft, r = l + btn.offsetWidth;
+    if (l < el.scrollLeft || r > el.scrollLeft + el.clientWidth) el.scrollTo({ left: Math.max(0, l - el.clientWidth / 2 + btn.offsetWidth / 2), behavior: "smooth" });
+  }, [active]);
   const optIcon = (key, Icon, on, onClick, title) => (
     <button
       key={key}
@@ -1339,20 +1357,32 @@ export default function ChatPage() {
             disabled={!canSend}
             title="Invia"
             aria-label="Invia"
-            style={{ background: activeAction.color }}
-            className="h-10 w-10 rounded-full flex items-center justify-center text-white shadow-md disabled:opacity-60"
+            // neutral, the same fill as the diary's days that have an entry - not the agent's color
+            style={{ background: "rgba(255,255,255,0.18)" }}
+            className="h-10 w-10 rounded-full flex items-center justify-center text-white disabled:opacity-60"
           >
             {streaming || transcribing || uploadingFiles.length > 0 ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-5 mt-8" data-testid="agent-row">
+      <div
+        ref={agentRowRef}
+        onScroll={onAgentRowScroll}
+        data-testid="agent-row"
+        className="relative -mx-4 px-4 mt-8 flex overflow-x-auto overscroll-x-contain no-scrollbar"
+        style={{
+          WebkitOverflowScrolling: "touch",
+          // soft fade on the side(s) where more agents are hidden
+          WebkitMaskImage: `linear-gradient(to right, ${rowEdges.start ? "#000" : "transparent"} 0, #000 28px, #000 calc(100% - 28px), ${rowEdges.end ? "#000" : "transparent"} 100%)`,
+          maskImage: `linear-gradient(to right, ${rowEdges.start ? "#000" : "transparent"} 0, #000 28px, #000 calc(100% - 28px), ${rowEdges.end ? "#000" : "transparent"} 100%)`,
+        }}
+      >
         {rowAgents.map((a) => {
           const sel = a.id === active;
           return (
-            <button key={a.id} data-testid={`action-${a.key}`} onClick={() => selectAgent(a.id)} aria-pressed={sel}
-              className="flex flex-col items-center gap-1.5">
+            <button key={a.id} data-agent={a.id} data-testid={`action-${a.key}`} onClick={() => selectAgent(a.id)} aria-pressed={sel}
+              className="basis-1/5 shrink-0 flex flex-col items-center gap-1.5">
               <span className={`h-12 w-12 rounded-full flex items-center justify-center transition-all duration-200 ${sel ? "text-white shadow-[0_6px_18px_rgba(0,0,0,0.25)]" : "text-white/45"}`}
                 style={sel ? glowTileStyle(a.color) : undefined}>
                 {React.cloneElement(a.icon, { size: 20 })}
@@ -1361,7 +1391,7 @@ export default function ChatPage() {
             </button>
           );
         })}
-        <button data-testid="agents-more" onClick={() => setAllAgentsOpen(true)} className="flex flex-col items-center gap-1.5">
+        <button data-testid="agents-more" onClick={() => setAllAgentsOpen(true)} className="basis-1/5 shrink-0 flex flex-col items-center gap-1.5">
           <span className="h-12 w-12 rounded-full flex items-center justify-center text-white/45"><Plus size={22} /></span>
           <span className="text-[11.5px] text-white/60">Altri</span>
         </button>
@@ -1421,7 +1451,7 @@ export default function ChatPage() {
       {allAgentsOpen && (
         <BottomSheet onClose={() => setAllAgentsOpen(false)} testid="all-agents-sheet">
           <div className="text-lg font-semibold text-white">Tutti gli agenti</div>
-          <p className="text-[12.5px] text-white/60 mt-1">Nella riga trovi Cerca e i 3 che usi di più: l'ordine si aggiorna da solo.</p>
+          <p className="text-[12.5px] text-white/60 mt-1">Nella riga scorri col dito per vederli tutti: Cerca è sempre primo, poi quelli che usi di più.</p>
           <div className="grid grid-cols-3 gap-y-5 mt-5">
             {ACTIONS.map((a) => {
               const sel = a.id === active;
