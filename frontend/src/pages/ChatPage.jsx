@@ -1306,7 +1306,7 @@ export default function ChatPage() {
           remounted, so the keyboard stays open when the bar opens up. */}
       <div
         data-testid="chat-input-card"
-        className={`mt-5 flex flex-wrap items-center bg-white/15 border border-white/35 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.45),0_10px_30px_rgba(0,0,0,0.25)] transition-[border-radius] duration-200 ${composerOpen ? "rounded-3xl px-4 pt-3 pb-2 gap-y-1" : "rounded-full pl-3 pr-1.5 py-1.5"}`}
+        className={`mt-5 flex flex-wrap items-center bg-white/15 border border-white/35 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.45),0_10px_30px_rgba(0,0,0,0.25)] rounded-[14px] ${composerOpen ? "px-4 pt-3 pb-2 gap-y-1" : "pl-3 pr-1.5 py-1.5"}`}
       >
         <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
           className={`p-2 rounded-full text-white/85 hover:bg-white/15 ${composerOpen ? "order-3" : "order-1"}`}>
@@ -1359,7 +1359,7 @@ export default function ChatPage() {
             aria-label="Invia"
             // neutral, the same fill as the diary's days that have an entry - not the agent's color
             style={{ background: "rgba(255,255,255,0.18)" }}
-            className="h-10 w-10 rounded-full flex items-center justify-center text-white disabled:opacity-60"
+            className="h-10 w-10 rounded-[10px] flex items-center justify-center text-white disabled:opacity-60"
           >
             {streaming || transcribing || uploadingFiles.length > 0 ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
           </button>
