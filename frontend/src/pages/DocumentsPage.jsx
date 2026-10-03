@@ -44,6 +44,14 @@ export default function DocumentsPage() {
   const [category, setCategory] = useState("all");
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
+  // where files are also saved (Impostazioni → "Dove salvo file ed eventi"); null = not loaded yet
+  const [clouds, setClouds] = useState(null);
+  useEffect(() => {
+    api.get("/integrations/status").then((r) => {
+      const st = r.data || {};
+      setClouds([st.google?.connected && "Google Drive", st.microsoft?.connected && "OneDrive"].filter(Boolean));
+    }).catch(() => setClouds([]));
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -96,7 +104,11 @@ export default function DocumentsPage() {
         <StatCard label="Totale" value={total} />
         <StatCard label="Categorie" value={categories.length} />
         <StatCard label="Caratteri indicizzati" value={new Intl.NumberFormat("it-IT").format(totalChars)} />
-        <StatCard label="Google Drive" value="non collegato" muted />
+        <StatCard
+          label={clouds && clouds.length === 1 ? clouds[0] : "Archivio cloud"}
+          value={clouds === null ? "…" : clouds.length === 0 ? "non collegato" : clouds.length === 1 ? "collegato" : clouds.join(" + ")}
+          muted={!clouds || clouds.length === 0}
+        />
       </div>
 
       {/* Toolbar */}
