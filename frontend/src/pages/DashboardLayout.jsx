@@ -184,9 +184,9 @@ export default function DashboardLayout() {
                 onClick={() => window.dispatchEvent(new CustomEvent("maipal:chat-history"))}
                 title="Cronologia delle chat"
                 aria-label="Cronologia delle chat"
-                className="h-8 w-8 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-white/85"
+                className="lg-glass h-9 w-9 rounded-full flex items-center justify-center text-white"
               >
-                <History size={15} />
+                <History size={16} />
               </button>
             )}
             <button
@@ -195,9 +195,9 @@ export default function DashboardLayout() {
               className="block"
             >
               {user?.picture ? (
-                <img src={user.picture} alt={user?.name || "utente"} className="h-8 w-8 rounded-full object-cover border border-white/20" />
+                <img src={user.picture} alt={user?.name || "utente"} className="h-9 w-9 rounded-full object-cover border border-white/40" />
               ) : (
-                <div className="h-8 w-8 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-xs font-semibold">
+                <div className="lg-glass h-9 w-9 rounded-full flex items-center justify-center text-sm font-semibold">
                   {initial}
                 </div>
               )}
@@ -256,8 +256,19 @@ export default function DashboardLayout() {
           >
             <nav
               data-testid="mobile-bottom-nav"
-              className="pointer-events-auto liquid-glass-panel !border-0 !shadow-[0_8px_30px_rgba(0,0,0,0.25)] rounded-full flex items-center gap-0.5 p-1.5"
+              className="pointer-events-auto lg-glass relative rounded-[26px] grid p-[5px] h-16"
+              style={{ gridTemplateColumns: `repeat(${primaryItems.length}, minmax(0, 1fr))` }}
             >
+              {/* glass bubble under the current section, sliding from one icon to the next */}
+              <span
+                aria-hidden="true"
+                className="lg-bubble absolute top-[5px] bottom-[5px] left-[5px] rounded-[21px]"
+                style={{
+                  width: `calc((100% - 10px) / ${primaryItems.length})`,
+                  transform: `translateX(${Math.max(0, primaryItems.findIndex((i) => i.to === currentItem?.to)) * 100}%)`,
+                  opacity: primaryItems.some((i) => i.to === currentItem?.to) ? 1 : 0,
+                }}
+              />
               {primaryItems.map((item) => {
                 const active = currentItem?.to === item.to;
                 const Icon = item.icon;
@@ -269,9 +280,9 @@ export default function DashboardLayout() {
                     aria-current={active ? "page" : undefined}
                     aria-label={item.label}
                     title={item.label}
-                    className={`min-w-[52px] min-[380px]:min-w-[60px] h-10 flex items-center justify-center px-2 min-[380px]:px-3 rounded-full transition-colors ${active ? "bg-white/20 text-white" : "text-white/60"}`}
+                    className={`relative w-[58px] min-[380px]:w-[66px] h-full flex items-center justify-center rounded-[21px] transition-colors ${active ? "text-white" : "text-white/75"}`}
                   >
-                    <Icon size={20} />
+                    <Icon size={22} strokeWidth={active ? 2.1 : 1.8} />
                   </button>
                 );
               })}
@@ -281,7 +292,7 @@ export default function DashboardLayout() {
               onClick={() => setMoreOpen(true)}
               title="Altre sezioni"
               aria-label="Altre sezioni"
-              className={`pointer-events-auto liquid-glass-panel !border-0 !shadow-[0_8px_30px_rgba(0,0,0,0.25)] h-[52px] w-[52px] shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white bg-white/20" : "text-white/85"}`}
+              className={`pointer-events-auto lg-glass h-16 w-16 shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white !bg-white/30" : "text-white"}`}
             >
               <Plus size={24} />
             </button>

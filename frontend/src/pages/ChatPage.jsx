@@ -1262,7 +1262,7 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <h1
             data-testid="agent-name"
-            className={`font-semibold tracking-tight leading-tight bg-gradient-to-r from-white via-[#E9D5FF] to-[#BFDBFE] bg-clip-text text-transparent transition-all duration-200 ${compactHero ? "text-[30px]" : "text-[42px]"}`}
+            className={`font-semibold tracking-tight leading-tight text-white [text-shadow:0_2px_16px_rgba(60,10,60,0.25)] transition-all duration-200 ${compactHero ? "text-[30px]" : "text-[42px]"}`}
           >
             {activeAction.short}
           </h1>
@@ -1306,7 +1306,7 @@ export default function ChatPage() {
           remounted, so the keyboard stays open when the bar opens up. */}
       <div
         data-testid="chat-input-card"
-        className={`mt-5 flex flex-wrap items-center bg-white/15 border border-white/35 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.45),0_10px_30px_rgba(0,0,0,0.25)] rounded-[14px] ${composerOpen ? "px-4 pt-3 pb-2 gap-y-1" : "pl-3 pr-1.5 py-1.5"}`}
+        className={`lg-glass mt-5 flex flex-wrap items-center rounded-[14px] ${composerOpen ? "px-4 pt-3 pb-2 gap-y-1" : "pl-3 pr-1.5 py-1.5"}`}
       >
         <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
           className={`p-2 rounded-full text-white/85 hover:bg-white/15 ${composerOpen ? "order-3" : "order-1"}`}>
@@ -1358,7 +1358,7 @@ export default function ChatPage() {
             title="Invia"
             aria-label="Invia"
             // neutral, the same fill as the diary's days that have an entry - not the agent's color
-            style={{ background: "rgba(255,255,255,0.18)" }}
+            style={{ background: "rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)" }}
             className="h-10 w-10 rounded-[10px] flex items-center justify-center text-white disabled:opacity-60"
           >
             {streaming || transcribing || uploadingFiles.length > 0 ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
@@ -1383,17 +1383,19 @@ export default function ChatPage() {
           return (
             <button key={a.id} data-agent={a.id} data-testid={`action-${a.key}`} onClick={() => selectAgent(a.id)} aria-pressed={sel}
               className="basis-1/5 shrink-0 flex flex-col items-center gap-1.5">
-              <span className={`h-12 w-12 rounded-full flex items-center justify-center transition-all duration-200 ${sel ? "text-white shadow-[0_6px_18px_rgba(0,0,0,0.25)]" : "text-white/45"}`}
-                style={sel ? glowTileStyle(a.color) : undefined}>
-                {React.cloneElement(a.icon, { size: 20 })}
+              {/* selected: a small borderless glass disc behind the icon */}
+              <span className={`h-12 w-12 flex items-center justify-center transition-colors duration-200 ${sel ? "text-white" : "text-white/60"}`}>
+                <span className={`h-11 w-11 rounded-full flex items-center justify-center transition-all duration-300 ${sel ? "bg-gradient-to-br from-white/50 to-white/15 backdrop-blur-md" : ""}`}>
+                  {React.cloneElement(a.icon, { size: 20 })}
+                </span>
               </span>
-              <span className={`text-[11.5px] ${sel ? "font-semibold text-white" : "text-white/60"}`}>{a.short}</span>
+              <span className={`text-[11.5px] ${sel ? "font-semibold text-white" : "text-white/65"}`}>{a.short}</span>
             </button>
           );
         })}
         <button data-testid="agents-more" onClick={() => setAllAgentsOpen(true)} className="basis-1/5 shrink-0 flex flex-col items-center gap-1.5">
-          <span className="h-12 w-12 rounded-full flex items-center justify-center text-white/45"><Plus size={22} /></span>
-          <span className="text-[11.5px] text-white/60">Altri</span>
+          <span className="h-12 w-12 rounded-full flex items-center justify-center text-white/60"><Plus size={22} /></span>
+          <span className="text-[11.5px] text-white/65">Altri</span>
         </button>
       </div>
 
