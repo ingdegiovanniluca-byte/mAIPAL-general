@@ -3,10 +3,11 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, History,
+  Newspaper, List, FileText, Dumbbell, Repeat, History, Sun, Moon,
 } from "lucide-react";
 import logo3 from "@/assets/logo3.png";
 import { MobileTitleContext } from "@/lib/mobile-title";
+import { applyTheme, getStoredTheme } from "@/lib/theme";
 import { useInstallApp, InstallBanner, InstallIcon } from "@/components/InstallApp";
 
 const NAV_ITEMS = [
@@ -152,6 +153,7 @@ export default function DashboardLayout() {
                   >
                     <LogOut size={14} /> Esci
                   </button>
+                  <ThemeRow />
                 </div>
               )}
             </div>
@@ -225,6 +227,7 @@ export default function DashboardLayout() {
                 >
                   <LogOut size={14} /> Esci
                 </button>
+                <ThemeRow />
               </div>
             )}
           </div>
@@ -334,5 +337,23 @@ function TabLink({ to, label, testid }) {
     >
       {label}
     </NavLink>
+  );
+}
+
+// Under "Esci" in the user menu: sun = light theme, moon = dark theme. The active one is
+// white, the other greyed out; the menu stays open so the change can be seen right away.
+function ThemeRow() {
+  const [theme, setTheme] = useState(getStoredTheme());
+  const pick = (t) => { setTheme(t); applyTheme(t); };
+  const cls = (on) => `flex-1 flex items-center justify-center py-2 rounded-lg transition-colors ${on ? "text-white" : "text-white/35 hover:text-white/60"}`;
+  return (
+    <div className="flex items-center gap-1 px-2 pt-1 mt-1 border-t border-white/10" data-testid="theme-row">
+      <button type="button" data-testid="theme-light-btn" onClick={() => pick("light")} title="Tema chiaro" aria-label="Tema chiaro" aria-pressed={theme === "light"} className={cls(theme === "light")}>
+        <Sun size={17} />
+      </button>
+      <button type="button" data-testid="theme-dark-btn" onClick={() => pick("dark")} title="Tema scuro" aria-label="Tema scuro" aria-pressed={theme === "dark"} className={cls(theme === "dark")}>
+        <Moon size={17} />
+      </button>
+    </div>
   );
 }

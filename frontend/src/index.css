@@ -518,3 +518,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 [data-theme="light"] .border-white\/20 { border-color: rgba(33, 29, 40, 0.20) !important; }
 [data-theme="light"] .border-white\/35 { border-color: rgba(33, 29, 40, 0.35) !important; }
 
+
+/* Impostazioni: text boxes without a border (the soft fill already marks the field) */
+.settings-page input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.settings-page textarea,
+.settings-page select {
+    border-color: transparent !important;
+    box-shadow: none;
+}
+
+/* Light theme: the dark popovers (user menu, tooltips) turn light, so their text - which the
+   light theme already darkens - stays readable. */
+[data-theme="light"] .bg-\[\#403A3C\] {
+    background-color: #FFFFFF !important;
+    border-color: rgba(33, 29, 40, 0.10) !important;
+}

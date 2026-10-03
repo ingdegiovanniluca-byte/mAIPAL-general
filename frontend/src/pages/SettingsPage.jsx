@@ -2,10 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Clock, Users, Shield } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
-import { applyTheme, getStoredTheme } from "@/lib/theme";
 import OrganizationPage from "@/pages/OrganizationPage";
 import AdminPage from "@/pages/AdminPage";
 
@@ -35,14 +34,8 @@ export default function SettingsPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef(null);
-  const [theme, setTheme] = useState(getStoredTheme());
   const [businessVertical, setBusinessVertical] = useState(null);
   const [savingVertical, setSavingVertical] = useState(false);
-
-  const chooseTheme = (t) => {
-    setTheme(t);
-    applyTheme(t);
-  };
 
   const chooseBusinessVertical = async (key) => {
     if (key === businessVertical) return;
@@ -180,241 +173,172 @@ export default function SettingsPage() {
   if (!status) return <div className="kicker">caricamento…</div>;
 
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-4xl settings-page">
       <div className="kicker mb-2">· impostazioni</div>
       <h2 className="text-3xl font-bold tracking-tight">Profilo & integrazioni</h2>
       <p className="text-white/60 mt-2">Modifica il profilo con cui mAIPAL ti conosce e collega i servizi esterni.</p>
 
-      <div className="card-soft p-6 mt-8" data-testid="appearance-card">
-        <div className="text-lg font-semibold">Aspetto</div>
-        <div className="text-sm text-white/60 mt-1">Scegli il tema dell'app.</div>
-        <div className="flex items-center gap-2 mt-4">
-          <button
-            data-testid="theme-dark-btn"
-            onClick={() => chooseTheme("dark")}
-            className="liquid-glass-btn text-sm px-5 py-2 rounded-full"
-            style={theme === "dark" ? { borderColor: "#FFFFFF" } : undefined}
-          >
-            Scuro
-          </button>
-          <button
-            data-testid="theme-light-btn"
-            onClick={() => chooseTheme("light")}
-            className="liquid-glass-btn text-sm px-5 py-2 rounded-full"
-            style={theme === "light" ? { borderColor: "#FFFFFF" } : undefined}
-          >
-            Chiaro
-          </button>
-        </div>
-      </div>
-
-      <div className="card-soft p-6 mt-8" data-testid="vertical-card">
-        <div className="text-lg font-semibold">Verticale</div>
-        <div className="text-sm text-white/60 mt-1">
-          Il settore in cui operi: personalizza le funzionalità dedicate di mAIPAL. In futuro sarà legato al tuo abbonamento.
-        </div>
-        <div className="flex flex-wrap items-center gap-2 mt-4">
-          {BUSINESS_VERTICALS.map((v) => (
-            <button
-              key={v.key}
-              data-testid={`vertical-${v.key}`}
-              onClick={() => chooseBusinessVertical(v.key)}
-              disabled={savingVertical}
-              className="liquid-glass-btn text-sm px-5 py-2 rounded-full disabled:opacity-50"
-              style={businessVertical === v.key ? { borderColor: "#FFFFFF" } : undefined}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="card-soft p-6 mt-8" data-testid="profile-card">
-        <div className="flex items-center gap-4 mb-4">
-          <button
-            data-testid="avatar-upload-btn"
-            onClick={() => avatarInputRef.current?.click()}
-            disabled={uploadingAvatar}
-            title="Cambia foto profilo"
-            className="relative group w-14 h-14 rounded-full overflow-hidden bg-white/10 border border-white/20 flex items-center justify-center shrink-0"
-          >
-            {user?.picture ? (
-              <img src={user.picture} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <UserIcon size={22} />
-            )}
-            <span className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <Camera size={16} className="text-white" />
-            </span>
-          </button>
-          <input ref={avatarInputRef} type="file" accept="image/*" hidden onChange={onAvatarPicked} data-testid="avatar-input" />
-          <div>
-            <div className="text-lg font-semibold">Il tuo profilo</div>
-            <div className="text-sm text-white/60">Queste informazioni personalizzano ogni risposta di mAIPAL</div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <div className="kicker mb-1">professione</div>
-            <Input data-testid="prof-profession" value={profession} onChange={(e) => setProfession(e.target.value)} placeholder="es. Product Manager" className="h-11 rounded-xl bg-white/10" />
-          </div>
-          <div>
-            <div className="kicker mb-1">settore</div>
-            <Input data-testid="prof-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-11 rounded-xl bg-white/10" />
-          </div>
-          <div className="md:col-span-2">
-            <div className="kicker mb-2">verticali d'uso</div>
-            <div className="flex flex-wrap gap-2">
-              {VERTICALS.map((v) => (
-                <button key={v} data-testid={`prof-v-${v}`} onClick={() => toggleV(v)}
-                        style={verticals.includes(v) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white/10  hover:"}`}>
-                  {v}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="md:col-span-2">
-            <div className="kicker mb-1">interessi (separati da virgola)</div>
-            <Input data-testid="prof-interests" value={interests} onChange={(e) => setInterests(e.target.value)} placeholder="palestra, viaggi, cucina" className="h-11 rounded-xl bg-white/10" />
-          </div>
-          <div className="md:col-span-2">
-            <div className="kicker mb-2">tono di risposta</div>
-            <div className="flex flex-wrap gap-2">
-              {TONES.map((t) => (
-                <button key={t} data-testid={`prof-tone-${t}`} onClick={() => setTone(t)}
-                        style={tone === t ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                        className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${tone === t ? "" : "bg-white/10  hover:"}`}>
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="kicker mb-1 flex items-center gap-1"><Home size={11} /> indirizzo casa</div>
-            <Input data-testid="prof-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
-          </div>
-          <div>
-            <div className="kicker mb-1 flex items-center gap-1"><Briefcase size={11} /> indirizzo lavoro</div>
-            <Input data-testid="prof-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
-          </div>
-          <div>
-            <div className="kicker mb-1 flex items-center gap-1"><Clock size={11} /> orario invio news</div>
-            <Input data-testid="prof-news-time" type="time" value={newsTime} onChange={(e) => setNewsTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
-          </div>
-          <div>
-            <div className="kicker mb-1 flex items-center gap-1"><Clock size={11} /> orario riepilogo mattutino</div>
-            <Input data-testid="prof-summary-time" type="time" value={summaryTime} onChange={(e) => setSummaryTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
-          </div>
-        </div>
-
-        <div className="mt-6 flex justify-end">
-          <button data-testid="prof-save" onClick={saveProfile} disabled={savingProfile} className="pill-btn">
-            {savingProfile ? "Salvo…" : "Salva profilo"}
-          </button>
-        </div>
-      </div>
-
       <div className="mt-8 space-y-4">
-        <div className="card-soft p-6" data-testid="google-card">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center">
-              <Cloud size={22} />
+        <Section id="profile" testid="profile-card" icon={UserIcon} title="Profilo" defaultOpen>
+          <div className="flex items-center gap-4 mb-5">
+            <button
+              data-testid="avatar-upload-btn"
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={uploadingAvatar}
+              title="Cambia foto profilo"
+              className="relative group w-14 h-14 rounded-full overflow-hidden bg-white/10 border border-white/20 flex items-center justify-center shrink-0"
+            >
+              {user?.picture ? (
+                <img src={user.picture} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <UserIcon size={22} />
+              )}
+              <span className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <Camera size={16} className="text-white" />
+              </span>
+            </button>
+            <input ref={avatarInputRef} type="file" accept="image/*" hidden onChange={onAvatarPicked} data-testid="avatar-input" />
+            <div className="text-sm text-white/60">Queste informazioni personalizzano ogni risposta di mAIPAL. Tocca la foto per cambiarla.</div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <FieldLabel icon={Briefcase}>professione</FieldLabel>
+              <Input data-testid="prof-profession" value={profession} onChange={(e) => setProfession(e.target.value)} placeholder="es. Product Manager" className="h-11 rounded-xl bg-white/10" />
             </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="text-lg font-semibold">Google Workspace</div>
-                {status.google.connected && (
-                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-500/30">
-                    <Check size={10} className="inline mr-1" /> connesso
-                  </span>
-                )}
-                {!status.google.configured && (
-                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 border border-amber-500/30">
-                    non configurato
-                  </span>
-                )}
-              </div>
-              <div className="text-sm text-white/60 mt-1">
-                Drive: cartella <code className="text-black">mAIPAL</code> per file/allegati. Calendar: eventi dai task con scadenza.
-              </div>
-              {status.google.connected && status.google.email && (
-                <div className="kicker mt-2">connesso come · {status.google.email}</div>
-              )}
-              {!status.google.configured && (
-                <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
-                  <b>Come attivare:</b> l'amministratore deve creare un OAuth Client su
-                  {" "}<a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google Cloud Console</a>{" "}
-                  con scope <code>drive.file</code> + <code>calendar.events</code> e impostare <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.
-                </div>
-              )}
-              <div className="mt-4 flex gap-2">
-                {status.google.connected ? (
-                  <button data-testid="google-disconnect" onClick={disconnectGoogle} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
-                    <Unlink size={14} /> Scollega
+            <div>
+              <FieldLabel icon={Factory}>settore</FieldLabel>
+              <Input data-testid="prof-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-11 rounded-xl bg-white/10" />
+            </div>
+            <div className="md:col-span-2">
+              <FieldLabel icon={LayoutGrid} mb="mb-2">verticali d'uso</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {VERTICALS.map((v) => (
+                  <button key={v} data-testid={`prof-v-${v}`} onClick={() => toggleV(v)}
+                          style={verticals.includes(v) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                          className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white/10  hover:"}`}>
+                    {v}
                   </button>
-                ) : (
-                  <button data-testid="google-connect" onClick={connectGoogle} disabled={!status.google.configured} className="pill-btn">
-                    Collega Google Workspace →
-                  </button>
-                )}
+                ))}
               </div>
+            </div>
+            <div className="md:col-span-2">
+              <FieldLabel icon={Heart}>interessi (separati da virgola)</FieldLabel>
+              <Input data-testid="prof-interests" value={interests} onChange={(e) => setInterests(e.target.value)} placeholder="palestra, viaggi, cucina" className="h-11 rounded-xl bg-white/10" />
+            </div>
+            <div className="md:col-span-2">
+              <FieldLabel icon={MessageSquareText} mb="mb-2">tono di risposta</FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                {TONES.map((t) => (
+                  <button key={t} data-testid={`prof-tone-${t}`} onClick={() => setTone(t)}
+                          style={tone === t ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                          className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${tone === t ? "" : "bg-white/10  hover:"}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <FieldLabel icon={Home}>indirizzo casa</FieldLabel>
+              <Input data-testid="prof-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
+            </div>
+            <div>
+              <FieldLabel icon={Building2}>indirizzo lavoro</FieldLabel>
+              <Input data-testid="prof-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
+            </div>
+            <div>
+              <FieldLabel icon={Newspaper}>orario invio news</FieldLabel>
+              <Input data-testid="prof-news-time" type="time" value={newsTime} onChange={(e) => setNewsTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
+            </div>
+            <div>
+              <FieldLabel icon={Sunrise}>orario riepilogo mattutino</FieldLabel>
+              <Input data-testid="prof-summary-time" type="time" value={summaryTime} onChange={(e) => setSummaryTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
             </div>
           </div>
-        </div>
 
-        <div className="card-soft p-6" data-testid="microsoft-card">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center">
-              <Cloud size={22} />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="text-lg font-semibold">Microsoft · OneDrive e Outlook</div>
-                {status.microsoft?.connected && (
-                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-500/30">
-                    <Check size={10} className="inline mr-1" /> connesso
-                  </span>
-                )}
-                {!status.microsoft?.configured && (
-                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 border border-amber-500/30">
-                    non configurato
-                  </span>
-                )}
-              </div>
-              <div className="text-sm text-white/60 mt-1">
-                OneDrive: i file vanno nella cartella dell'app (<code className="text-black">Apps/mAIPAL</code>). Calendario di Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.
-              </div>
-              {status.microsoft?.connected && status.microsoft?.email && (
-                <div className="kicker mt-2">connesso come · {status.microsoft.email}</div>
-              )}
-              {!status.microsoft?.configured && (
-                <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
-                  <b>Come attivare:</b> l'amministratore registra l'app su
-                  {" "}<a href="https://entra.microsoft.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Microsoft Entra</a>{" "}
-                  e imposta <code>MS_CLIENT_ID</code> / <code>MS_CLIENT_SECRET</code> nel file .env (guida in DEPLOY.md).
-                </div>
-              )}
-              <div className="mt-4 flex gap-2">
-                {status.microsoft?.connected ? (
-                  <button data-testid="microsoft-disconnect" onClick={disconnectMicrosoft} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
-                    <Unlink size={14} /> Scollega
-                  </button>
-                ) : (
-                  <button data-testid="microsoft-connect" onClick={connectMicrosoft} disabled={!status.microsoft?.configured} className="pill-btn">
-                    Collega account Microsoft →
-                  </button>
-                )}
-              </div>
-            </div>
+          <div className="mt-6 flex justify-end">
+            <button data-testid="prof-save" onClick={saveProfile} disabled={savingProfile} className="pill-btn">
+              {savingProfile ? "Salvo…" : "Salva profilo"}
+            </button>
           </div>
-        </div>
+        </Section>
+
+        <Section id="vertical" testid="vertical-card" icon={Compass} title="Verticale"
+          subtitle="Il settore in cui operi: personalizza le funzionalità dedicate di mAIPAL. In futuro sarà legato al tuo abbonamento.">
+          <div className="flex flex-wrap items-center gap-2">
+            {BUSINESS_VERTICALS.map((v) => (
+              <button
+                key={v.key}
+                data-testid={`vertical-${v.key}`}
+                onClick={() => chooseBusinessVertical(v.key)}
+                disabled={savingVertical}
+                className="liquid-glass-btn text-sm px-5 py-2 rounded-full disabled:opacity-50"
+                style={businessVertical === v.key ? { borderColor: "#FFFFFF" } : undefined}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        <Section id="google" testid="google-card" icon={Cloud} title="Google Workspace"
+          badge={<>{status.google.connected && <ConnectedBadge />}{!status.google.configured && <NotConfiguredBadge />}</>}>
+          <div className="text-sm text-white/60">
+            Drive: cartella <code className="text-black">mAIPAL</code> per file/allegati. Calendar: eventi dai task con scadenza.
+          </div>
+          {status.google.connected && status.google.email && (
+            <div className="kicker mt-2">connesso come · {status.google.email}</div>
+          )}
+          {!status.google.configured && (
+            <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
+              <b>Come attivare:</b> l'amministratore deve creare un OAuth Client su
+              {" "}<a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google Cloud Console</a>{" "}
+              con scope <code>drive.file</code> + <code>calendar.events</code> e impostare <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.
+            </div>
+          )}
+          <div className="mt-4 flex gap-2">
+            {status.google.connected ? (
+              <button data-testid="google-disconnect" onClick={disconnectGoogle} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
+                <Unlink size={14} /> Scollega
+              </button>
+            ) : (
+              <button data-testid="google-connect" onClick={connectGoogle} disabled={!status.google.configured} className="pill-btn">
+                Collega Google Workspace →
+              </button>
+            )}
+          </div>
+        </Section>
+
+        <Section id="microsoft" testid="microsoft-card" icon={Cloudy} title="Microsoft · OneDrive e Outlook"
+          badge={<>{status.microsoft?.connected && <ConnectedBadge />}{!status.microsoft?.configured && <NotConfiguredBadge />}</>}>
+          <div className="text-sm text-white/60">
+            OneDrive: i file vanno nella cartella dell'app (<code className="text-black">Apps/mAIPAL</code>). Calendario di Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.
+          </div>
+          {status.microsoft?.connected && status.microsoft?.email && (
+            <div className="kicker mt-2">connesso come · {status.microsoft.email}</div>
+          )}
+          {!status.microsoft?.configured && (
+            <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
+              <b>Come attivare:</b> l'amministratore registra l'app su
+              {" "}<a href="https://entra.microsoft.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Microsoft Entra</a>{" "}
+              e imposta <code>MS_CLIENT_ID</code> / <code>MS_CLIENT_SECRET</code> nel file .env (guida in DEPLOY.md).
+            </div>
+          )}
+          <div className="mt-4 flex gap-2">
+            {status.microsoft?.connected ? (
+              <button data-testid="microsoft-disconnect" onClick={disconnectMicrosoft} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
+                <Unlink size={14} /> Scollega
+              </button>
+            ) : (
+              <button data-testid="microsoft-connect" onClick={connectMicrosoft} disabled={!status.microsoft?.configured} className="pill-btn">
+                Collega account Microsoft →
+              </button>
+            )}
+          </div>
+        </Section>
 
         {(status.google.connected || status.microsoft?.connected) && (
-          <div className="card-soft p-6" data-testid="cloud-targets-card">
-            <div className="text-lg font-semibold">Dove salvo file ed eventi</div>
-            <div className="text-sm text-white/60 mt-1">Puoi sceglierne uno o entrambi.</div>
+          <Section id="cloud-targets" testid="cloud-targets-card" icon={FolderSync} title="Dove salvo file ed eventi">
+            <div className="text-sm text-white/60">Puoi sceglierne uno o entrambi.</div>
             <div className="mt-4 space-y-3">
               {[
                 { kind: "storage", label: "Salva i file su", opts: [["google", "Google Drive", status.google.connected], ["onedrive", "OneDrive", status.microsoft?.connected]] },
@@ -442,92 +366,115 @@ export default function SettingsPage() {
                 );
               })}
             </div>
-          </div>
+          </Section>
         )}
 
-        <div className="card-soft p-6" data-testid="telegram-card">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center">
-              <MessageCircle size={22} />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="text-lg font-semibold">Telegram Bot</div>
-                {status.telegram.connected && (
-                  <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-500/30">
-                    <Check size={10} className="inline mr-1" /> connesso
-                  </span>
-                )}
-              </div>
-              <div className="text-sm text-white/60 mt-1">
-                Chatta con mAIPAL da mobile via <code>@{status.telegram.bot_username || "…"}</code>. Comandi: <code>/ask</code>, <code>/save</code>, <code>/task</code>.
-              </div>
+        <Section id="telegram" testid="telegram-card" icon={MessageCircle} title="Telegram Bot"
+          badge={status.telegram.connected && <ConnectedBadge />}>
+          <div className="text-sm text-white/60">
+            Chatta con mAIPAL da mobile via <code>@{status.telegram.bot_username || "…"}</code>. Comandi: <code>/ask</code>, <code>/save</code>, <code>/task</code>.
+          </div>
 
-              {!status.telegram.connected && (
-                <div className="mt-4">
-                  {!linkCode ? (
-                    <button data-testid="tg-gen-code" onClick={genTelegramCode} className="pill-btn">Genera codice di collegamento</button>
-                  ) : (
-                    <div className="bg-white/10 rounded-xl p-4 space-y-3">
-                      <div className="kicker">codice · usa una volta sola</div>
-                      <div className="flex items-center gap-2">
-                        <code data-testid="tg-code" className="flex-1 bg-white/10 px-3 py-2 rounded-lg font-mono-tight text-sm">/start {linkCode.code}</code>
-                        <button onClick={() => copy(`/start ${linkCode.code}`)} className="p-2 rounded-lg bg-white/10 border"><Copy size={14} /></button>
-                      </div>
-                      <a href={linkCode.deep_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 pill-btn text-sm">
-                        <ExternalLink size={14} /> Apri {"@"}{linkCode.bot_username} su Telegram
-                      </a>
-                      <div className="text-xs text-white/60">
-                        1. Apri il bot · 2. Premi Avvia · 3. Il messaggio <code>/start {linkCode.code}</code> collegherà il tuo account.
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {status.telegram.connected && (
-                <div className="mt-4 flex gap-2">
-                  <button data-testid="tg-disconnect" onClick={disconnectTg} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
-                    <Unlink size={14} /> Scollega Telegram
-                  </button>
+          {!status.telegram.connected && (
+            <div className="mt-4">
+              {!linkCode ? (
+                <button data-testid="tg-gen-code" onClick={genTelegramCode} className="pill-btn">Genera codice di collegamento</button>
+              ) : (
+                <div className="bg-white/10 rounded-xl p-4 space-y-3">
+                  <div className="kicker">codice · usa una volta sola</div>
+                  <div className="flex items-center gap-2">
+                    <code data-testid="tg-code" className="flex-1 bg-white/10 px-3 py-2 rounded-lg font-mono-tight text-sm">/start {linkCode.code}</code>
+                    <button onClick={() => copy(`/start ${linkCode.code}`)} className="p-2 rounded-lg bg-white/10 border"><Copy size={14} /></button>
+                  </div>
+                  <a href={linkCode.deep_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 pill-btn text-sm">
+                    <ExternalLink size={14} /> Apri {"@"}{linkCode.bot_username} su Telegram
+                  </a>
+                  <div className="text-xs text-white/60">
+                    1. Apri il bot · 2. Premi Avvia · 3. Il messaggio <code>/start {linkCode.code}</code> collegherà il tuo account.
+                  </div>
                 </div>
               )}
             </div>
-          </div>
-        </div>
+          )}
 
-        <div className="card-soft p-6" data-testid="team-card-settings">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0">
-              <Users size={20} />
+          {status.telegram.connected && (
+            <div className="mt-4 flex gap-2">
+              <button data-testid="tg-disconnect" onClick={disconnectTg} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
+                <Unlink size={14} /> Scollega Telegram
+              </button>
             </div>
-            <div>
-              <div className="text-lg font-semibold">Team</div>
-              <div className="text-sm text-white/60">Condividi task e liste con le persone del tuo team.</div>
-            </div>
-          </div>
-          <div className="mt-4">
-            <OrganizationPage />
-          </div>
-        </div>
+          )}
+        </Section>
+
+        <Section id="team" testid="team-card-settings" icon={Users} title="Team"
+          subtitle="Condividi task e liste con le persone del tuo team.">
+          <OrganizationPage />
+        </Section>
 
         {user?.role === "admin" && (
-          <div className="card-soft p-6" data-testid="admin-card-settings">
-            <div className="flex items-center gap-3 mb-1">
-              <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0">
-                <Shield size={20} />
-              </div>
-              <div>
-                <div className="text-lg font-semibold">Amministrazione</div>
-                <div className="text-sm text-white/60">Whitelist accessi, utenti e team.</div>
-              </div>
-            </div>
-            <div className="mt-5">
-              <AdminPage />
-            </div>
-          </div>
+          <Section id="admin" testid="admin-card-settings" icon={Shield} title="Amministrazione"
+            subtitle="Whitelist accessi, utenti e team.">
+            <AdminPage />
+          </Section>
         )}
       </div>
     </div>
+  );
+}
+
+// A settings box that opens and closes on its title (only the title row and the arrow when
+// closed); the choice is remembered on this device. Profilo starts open, the rest closed.
+function Section({ id, testid, icon: Icon, title, badge, subtitle, defaultOpen = false, children }) {
+  const key = `maipal.settings.${id}`;
+  const [open, setOpen] = useState(() => {
+    try { const v = localStorage.getItem(key); return v === null ? defaultOpen : v === "1"; } catch { return defaultOpen; }
+  });
+  const toggle = () => setOpen((o) => {
+    try { localStorage.setItem(key, o ? "0" : "1"); } catch { /* private mode */ }
+    return !o;
+  });
+  return (
+    <div className="card-soft" data-testid={testid}>
+      <button type="button" onClick={toggle} aria-expanded={open} data-testid={`${testid}-toggle`}
+        className="w-full flex items-center gap-3 px-5 py-4 text-left">
+        <span className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center shrink-0"><Icon size={18} /></span>
+        <span className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+          <span className="text-lg font-semibold">{title}</span>
+          {badge}
+        </span>
+        <ChevronDown size={20} className={`shrink-0 text-white/60 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="px-5 pb-5">
+          {subtitle && <div className="text-sm text-white/60 mb-4">{subtitle}</div>}
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// field title with a small icon as tall as the title itself
+function FieldLabel({ icon: Icon, mb = "mb-1", children }) {
+  return (
+    <div className={`kicker ${mb} flex items-center gap-1.5`}>
+      <Icon size={12} className="shrink-0" /> {children}
+    </div>
+  );
+}
+
+function ConnectedBadge() {
+  return (
+    <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-500/30">
+      <Check size={10} className="inline mr-1" /> connesso
+    </span>
+  );
+}
+
+function NotConfiguredBadge() {
+  return (
+    <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 border border-amber-500/30">
+      non configurato
+    </span>
   );
 }
