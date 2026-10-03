@@ -1236,6 +1236,16 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     system = build_system_prompt(current, action)
     user_text = payload.content
     attached_ids = [d for d in (payload.attachment_doc_ids or []) if isinstance(d, str)][:10]
+    conv_doc_ids = await _conv_attachment_ids(current.user_id, conv, prior_messages) if payload.conv_id else []
+    if attached_ids:
+        await db.conversations.update_one({"conv_id": conv_id}, {"$addToSet": {"attachment_doc_ids": {"$each": attached_ids}}})
+    # a follow-up about a file sent earlier in this chat ("le canzoni del file", "crea i task
+    # di quello che c'è da fare") - the model only kept what the user typed, not the file's text
+    if not attached_ids and conv_doc_ids and action in ("task_todo", "info_request") and run_primary:
+        att_text = await _attachments_text_for_model(current.user_id, conv_doc_ids, limit=8000)
+        if att_text:
+            user_text = (f"{user_text}\n\nDOCUMENTI ALLEGATI IN QUESTA CONVERSAZIONE (testo completo - usalo quando "
+                         f"la richiesta si riferisce al file o al documento):\n{att_text}")
     if attached_ids and action in ("info_upload", "task_todo"):
         att_text = await _attachments_text_for_model(current.user_id, attached_ids)
         if att_text:
@@ -1510,8 +1520,13 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             yield _json.dumps({"type": "agent", **res}) + "\n"
         # then every @agent piece, each with the whole message as context
         source = linkage.get("source") or {"type": "conversation", "conv_id": conv_id, "created_at": now}
+        docs_text = ""
+        if mention_parts:
+            doc_ids = list(dict.fromkeys(attached_ids + conv_doc_ids))
+            if doc_ids:
+                docs_text = await _attachments_text_for_model(current.user_id, doc_ids, limit=8000)
         for part in mention_parts[:6]:
-            res = await _run_sub_agent(current, part["agent"], part["text"], typed, source, conv_id)
+            res = await _run_sub_agent(current, part["agent"], part["text"], typed, source, conv_id, docs=docs_text)
             await db.conversations.update_one({"conv_id": conv_id}, {"$push": {"messages": {
                 "role": "assistant", "content": res.get("message") or "", "agent": part["agent"],
                 "ts": datetime.now(timezone.utc).isoformat()}}})
@@ -1706,6 +1721,35 @@ async def _link_user_context_to_docs(user_id: str, doc_ids: List[str], context: 
             "text": t, "raw_text": c.get("raw_text") or c.get("text") or "", "user_context": context, "embedding": e,
         }})
     await db.kb_documents.update_many({"user_id": user_id, "doc_id": {"$in": list(doc_ids)}}, {"$set": {"user_context": context}})
+
+
+async def _conv_attachment_ids(user_id: str, conv: Optional[dict], prior_messages: List[dict]) -> List[str]:
+    """The knowledge-base documents attached earlier in this conversation, so a follow-up
+    ("@task aggiungi per domani le cose da fare nel file") can read them. Conversations
+    saved before attachment_doc_ids was stored: the files named on the "📎 nome" lines."""
+    ids = [d for d in ((conv or {}).get("attachment_doc_ids") or []) if isinstance(d, str)]
+    if ids:
+        return ids[-10:]
+    import re as _re
+    names = []
+    for m in prior_messages or []:
+        if m.get("role") != "user":
+            continue
+        for line in (m.get("content") or "").splitlines():
+            line = line.strip()
+            if line.startswith("📎"):
+                name = _re.sub(r"\s*\(https?://[^)]*\)$", "", line.lstrip("📎").split(" · ")[0]).strip()
+                if name:
+                    names.append(name)
+    if not names:
+        return []
+    docs = await db.kb_documents.find({"user_id": user_id, "name": {"$in": list(dict.fromkeys(names))}},
+                                      {"_id": 0, "doc_id": 1, "name": 1, "created_at": 1}).to_list(50)
+    docs.sort(key=lambda d: d.get("created_at") or "", reverse=True)
+    pick: dict = {}
+    for d in docs:
+        pick.setdefault(d["name"], d["doc_id"])
+    return list(pick.values())[:10]
 
 
 async def _attachments_text_for_model(user_id: str, doc_ids: List[str], limit: int = 6000) -> str:
@@ -4477,6 +4521,76 @@ async def _ocr_image_bytes(contents: bytes, filename: str, user_id: Optional[str
     return text
 
 
+def _docx_text(path: str) -> str:
+    """Text of a .docx in reading order: paragraphs AND tables (one row per line, cells joined
+    by " | ", nested tables included), content controls, text boxes, headers and footers.
+    doc.paragraphs alone skips every table - a list of songs or of things to do laid out
+    in a table never reached the knowledge base."""
+    from docx import Document
+    from docx.oxml.ns import qn
+    doc = Document(path)
+    P, TBL, SDT, TR, TC = qn("w:p"), qn("w:tbl"), qn("w:sdt"), qn("w:tr"), qn("w:tc")
+    T, TAB, BR = qn("w:t"), qn("w:tab"), qn("w:br")
+
+    def para(el) -> str:
+        out = []
+        for node in el.iter(T, TAB, BR):
+            out.append((node.text or "") if node.tag == T else (" " if node.tag == TAB else "\n"))
+        return "".join(out).strip()
+
+    def blocks(parent, out: list):
+        for el in parent.iterchildren():
+            if el.tag == P:
+                t = para(el)
+                if t:
+                    out.append(t)
+            elif el.tag == TBL:
+                for tr in el.iterchildren(TR):
+                    cells = []
+                    for tc in tr.iterchildren(TC):
+                        inner: list = []
+                        blocks(tc, inner)
+                        cell = "; ".join(x.replace("\n", "; ") for x in inner).strip()
+                        if cell:
+                            cells.append(cell)
+                    if cells:
+                        out.append(" | ".join(cells))
+            elif el.tag == SDT:
+                content = el.find(qn("w:sdtContent"))
+                if content is not None:
+                    blocks(content, out)
+
+    lines: list = []
+    seen_hf = set()
+    for sec in doc.sections:
+        for hf in (sec.header, sec.first_page_header):
+            try:
+                if hf.is_linked_to_previous:
+                    continue
+                part: list = []
+                blocks(hf._element, part)
+                for t in part:
+                    if t not in seen_hf:
+                        seen_hf.add(t)
+                        lines.append(t)
+            except Exception:
+                pass
+    blocks(doc.element.body, lines)
+    for sec in doc.sections:
+        try:
+            if sec.footer.is_linked_to_previous:
+                continue
+            part = []
+            blocks(sec.footer._element, part)
+            for t in part:
+                if t not in seen_hf:
+                    seen_hf.add(t)
+                    lines.append(t)
+        except Exception:
+            pass
+    return "\n".join(lines)
+
+
 def _extract_text_from_file(path: str, filename: str) -> str:
     """Extract plain text from common file formats. Raises ValueError on unsupported types."""
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
@@ -4492,9 +4606,7 @@ def _extract_text_from_file(path: str, filename: str) -> str:
             except Exception: pass
         return "\n\n".join(pages)
     if ext in ("docx",):
-        from docx import Document
-        doc = Document(path)
-        return "\n".join(p.text for p in doc.paragraphs if p.text)
+        return _docx_text(path)
     if ext in ("xlsx",):
         from openpyxl import load_workbook
         wb = load_workbook(path, read_only=True, data_only=True)
@@ -5626,17 +5738,29 @@ async def _agent_llm(user: User, action: str, text: str, feature: str, channel: 
 
 
 async def _run_sub_agent(user: User, agent: str, piece: str, context: str, source: Optional[dict],
-                         conv_id: str, channel: str = "web") -> dict:
+                         conv_id: str, channel: str = "web", docs: str = "") -> dict:
     """Runs one tagged piece; never raises - a failing agent reports its error and the
-    others still run."""
+    others still run. `docs`: the text of the files attached in the conversation, so a
+    piece like "aggiungi per domani le cose da fare nel file" can act on them."""
     base = {"agent": agent, "label": AGENT_LABELS.get(agent, agent)}
     ctx_block = (f"CONTESTO - il messaggio completo dell'utente, di cui questa richiesta fa parte:\n{context}\n\n"
                  if context and context.strip() != piece.strip() else "")
+    docs_block = (f"DOCUMENTI ALLEGATI IN QUESTA CONVERSAZIONE (testo completo):\n{docs}\n\n" if docs else "")
     try:
         if agent == "task_todo":
-            prompt = (ctx_block + "Usa il contesto per rendere il task completo e specifico: nel titolo i nomi giusti "
+            kb_block = ""
+            if not docs:
+                # "le cose da fare nel file" in a new chat: look the file up in the knowledge base
+                hits = await retrieve_kb(user.user_id, f"{piece}\n{context or ''}"[:1000], scope="kb", org_id=user.org_id)
+                if hits:
+                    kb_block = "CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits) + "\n\n"
+            prompt = (docs_block + kb_block + ctx_block + "Usa il contesto per rendere il task completo e specifico: nel titolo i nomi giusti "
                       "(persona, paziente, cliente...), in 'notes' i dettagli utili per svolgerlo presi dal contesto "
-                      "(senza inventare nulla).\n\nRICHIESTA PER IL TASK:\n" + piece)
+                      "(senza inventare nulla). Se la richiesta si riferisce a un file o documento (\"le cose da fare "
+                      "nel file\", \"gli impegni del documento\"), leggi il documento e crea un task SEPARATO per ogni "
+                      "voce pertinente (lista \"tasks\" nel META), con la data e l'ora indicate nella richiesta; non "
+                      "dire mai che non hai accesso ai documenti quando il loro testo è qui sopra."
+                      "\n\nRICHIESTA PER IL TASK:\n" + piece)
             visible, meta = await _agent_llm(user, "task_todo", prompt, "creazione_task", channel)
             items = meta.get("tasks") if meta and isinstance(meta.get("tasks"), list) else ([meta] if meta else [])
             created = []
@@ -5697,12 +5821,14 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
         if agent == "info_request":
             hits = await retrieve_kb(user.user_id, piece, scope="all", org_id=user.org_id)
             ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)
-            text = (f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{piece}") if ctx else piece
+            text = docs_block + ((f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{piece}") if ctx else piece)
             visible, _ = await _agent_llm(user, "info_request", text, "ricerca_informazioni", channel)
             return {**base, "status": "ok", "message": f"🔍 {visible}"}
 
         if agent == "list_update":
             text = piece + (f"\n\n(Contesto del messaggio, per capire a chi o cosa si riferisce: {context[:600]})" if ctx_block else "")
+            if docs:
+                text += f"\n\n(Testo dei file allegati nella conversazione, se la richiesta vi si riferisce: {docs[:4000]})"
             try:
                 res = await _execute_list_update(user, text, channel=channel)
             except HTTPException as he:
