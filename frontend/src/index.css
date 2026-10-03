@@ -542,6 +542,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
         inset 0 -1px 1px rgba(255, 255, 255, 0.18),
         0 10px 28px rgba(40, 10, 50, 0.22);
 }
+/* no border nor edge highlights (bottom bar and its "+" button) */
+.lg-glass.no-rim {
+    border-color: transparent;
+    box-shadow: 0 10px 28px rgba(40, 10, 50, 0.22);
+}
 /* the bubble that marks the current section in the bottom bar, sliding between icons */
 .lg-bubble {
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.16));

@@ -175,8 +175,9 @@ export default function DashboardLayout() {
               aria-label="mAIPAL"
             />
           </div>
-          <div className="text-sm font-semibold text-white truncate" data-testid="mobile-section-title">{currentItem?.label || ""}{titleSuffix ? ` ${titleSuffix}` : ""}</div>
-          <div className="relative shrink-0 flex items-center gap-2" ref={menuRefMobile}>
+          {/* section name; in Chat the history button sits right next to it */}
+          <div className="min-w-0 flex items-center gap-2">
+            <div className="text-sm font-semibold text-white truncate" data-testid="mobile-section-title">{currentItem?.label || ""}{titleSuffix ? ` ${titleSuffix}` : ""}</div>
             {/* Chat only: the history of old conversations (ChatPage listens for the event). */}
             {currentItem?.to === "/dashboard/chat" && (
               <button
@@ -184,11 +185,13 @@ export default function DashboardLayout() {
                 onClick={() => window.dispatchEvent(new CustomEvent("maipal:chat-history"))}
                 title="Cronologia delle chat"
                 aria-label="Cronologia delle chat"
-                className="lg-glass h-9 w-9 rounded-full flex items-center justify-center text-white"
+                className="lg-glass h-8 w-8 shrink-0 rounded-full flex items-center justify-center text-white"
               >
-                <History size={16} />
+                <History size={15} />
               </button>
             )}
+          </div>
+          <div className="relative shrink-0 flex items-center gap-2" ref={menuRefMobile}>
             <button
               data-testid="user-menu-btn-mobile"
               onClick={() => setMenuOpen((v) => !v)}
@@ -256,7 +259,7 @@ export default function DashboardLayout() {
           >
             <nav
               data-testid="mobile-bottom-nav"
-              className="pointer-events-auto lg-glass relative rounded-[26px] grid p-[5px] h-16"
+              className="pointer-events-auto lg-glass no-rim relative rounded-[26px] grid p-[5px] h-16"
               style={{ gridTemplateColumns: `repeat(${primaryItems.length}, minmax(0, 1fr))` }}
             >
               {/* glass bubble under the current section, sliding from one icon to the next */}
@@ -292,7 +295,7 @@ export default function DashboardLayout() {
               onClick={() => setMoreOpen(true)}
               title="Altre sezioni"
               aria-label="Altre sezioni"
-              className={`pointer-events-auto lg-glass h-16 w-16 shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white !bg-white/30" : "text-white"}`}
+              className={`pointer-events-auto lg-glass no-rim h-16 w-16 shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white !bg-white/30" : "text-white"}`}
             >
               <Plus size={24} />
             </button>
