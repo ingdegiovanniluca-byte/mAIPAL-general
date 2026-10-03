@@ -139,22 +139,27 @@ export default function CollectionsPage() {
             className={`card-soft card-hover p-5 rounded-2xl cursor-grab active:cursor-grabbing relative group transition-transform duration-150 ${dragOverId === c.id && draggedId !== c.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === c.id ? "opacity-50" : ""}`}
             onClick={() => setView({ level: 2, collection: c })}
           >
-            <div className="flex items-start justify-between mb-2">
-              <div className="font-semibold text-lg">{c.name}</div>
-              {isShared(c) ? <Users size={14} className="text-white/40 mt-1" title="Condivisa" /> : <Lock size={14} className="text-white/30 mt-1" title="Privata" />}
+            {/* name, then on the right the lock/people icon and the bin side by side (never on top of each other) */}
+            <div className="flex items-start gap-2 mb-2">
+              <div className="font-semibold text-lg flex-1 min-w-0">{c.name}</div>
+              <span className="shrink-0 h-7 flex items-center" title={isShared(c) ? "Condivisa" : "Privata"}>
+                {isShared(c) ? <Users size={14} className="text-white/40" /> : <Lock size={14} className="text-white/30" />}
+              </span>
+              {c.is_owner !== false && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); del(c); }}
+                  data-testid={`collection-delete-${c.id}`}
+                  className="shrink-0 -mr-1.5 h-7 w-7 flex items-center justify-center rounded-full text-white/30 md:text-white/0 md:group-hover:text-white/40 hover:!text-red-400 hover:bg-red-500/10 transition-colors"
+                  title="Elimina lista"
+                  aria-label="Elimina lista"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
             </div>
             <div className="text-sm text-white/50">{c.item_count || 0} campi</div>
             {sharingLabel(c) && <div className="text-[11px] text-[#7FB3E0] mt-1" data-testid={`collection-sharing-${c.id}`}>{sharingLabel(c)}</div>}
             <div className="text-[11px] text-white/35 mt-2">{(c.fields || []).map((f) => f.label).join(" · ")}</div>
-            {c.is_owner !== false && (
-              <button
-                onClick={(e) => { e.stopPropagation(); del(c); }}
-                className="absolute top-3 right-3 p-1.5 rounded-full text-white/0 group-hover:text-white/40 hover:!text-red-400 hover:bg-red-500/10 transition-colors"
-                title="Elimina lista"
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
           </div>
         ))}
       </div>
