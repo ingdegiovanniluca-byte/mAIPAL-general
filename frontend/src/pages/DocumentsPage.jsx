@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
   FolderOpen, FileText, FileSpreadsheet, FileImage, FileType, File as FileIcon,
-  Search, X, Trash2, ExternalLink, Sparkles, MessageSquareText
+  Search, X, Trash2, ExternalLink, Sparkles, MessageSquareText, LayoutGrid, Type, Cloud
 } from "lucide-react";
 
 const CATEGORY_META = {
@@ -87,6 +87,25 @@ export default function DocumentsPage() {
   };
 
   const total = docs.length;
+  // filters: one row that scrolls sideways on mobile
+  const catRowRef = useRef(null);
+  const [catEdges, setCatEdges] = useState({ start: true, end: true });
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const onCatRowScroll = () => {
+    const el = catRowRef.current;
+    if (!el) return;
+    const start = el.scrollLeft < 4;
+    const end = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+    setCatEdges((e) => (e.start === start && e.end === end ? e : { start, end }));
+  };
+  useEffect(() => { onCatRowScroll(); }, [categories, isMobile]);
+  const catMask = `linear-gradient(to right, ${catEdges.start ? "#000" : "transparent"} 0, #000 24px, #000 calc(100% - 24px), ${catEdges.end ? "#000" : "transparent"} 100%)`;
+
   const totalChars = useMemo(() => docs.reduce((s, d) => s + (d.chars || 0), 0), [docs]);
 
   return (
@@ -94,17 +113,17 @@ export default function DocumentsPage() {
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center"><FolderOpen size={18} /></div>
         <div>
-          <div className="kicker">· documenti</div>
           <h2 className="text-2xl font-bold tracking-tight">La tua knowledge base</h2>
         </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" data-testid="docs-stats">
-        <StatCard label="Totale" value={total} />
-        <StatCard label="Categorie" value={categories.length} />
-        <StatCard label="Caratteri indicizzati" value={new Intl.NumberFormat("it-IT").format(totalChars)} />
+        <StatCard icon={FileText} label="Totale" value={total === 1 ? "1 documento" : `${total} documenti`} />
+        <StatCard icon={LayoutGrid} label="Categorie" value={categories.length} />
+        <StatCard icon={Type} label="Caratteri" value={new Intl.NumberFormat("it-IT").format(totalChars)} />
         <StatCard
+          icon={Cloud}
           label={clouds && clouds.length === 1 ? clouds[0] : "Archivio cloud"}
           value={clouds === null ? "…" : clouds.length === 0 ? "non collegato" : clouds.length === 1 ? "collegato" : clouds.join(" + ")}
           muted={!clouds || clouds.length === 0}
@@ -127,7 +146,18 @@ export default function DocumentsPage() {
               <button data-testid="docs-search-clear" onClick={() => setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"><X size={14} /></button>
             )}
           </div>
-          <div className="flex items-center gap-1 flex-wrap">
+          <div
+            ref={catRowRef}
+            onScroll={onCatRowScroll}
+            data-testid="docs-cat-row"
+            className="w-full md:w-auto min-w-0 flex items-center gap-1 overflow-x-auto overscroll-x-contain no-scrollbar md:flex-wrap md:overflow-visible"
+            style={isMobile ? {
+              WebkitOverflowScrolling: "touch",
+              // soft fade on the side(s) where more filters are hidden, as in the chat's agent row
+              WebkitMaskImage: catMask,
+              maskImage: catMask,
+            } : undefined}
+          >
             <CatButton active={category === "all"} onClick={() => setCategory("all")} label="tutte" count={total} testid="cat-all" />
             {Object.entries(CATEGORY_META).map(([k, meta]) => {
               const found = categories.find((c) => c.category === k);
@@ -224,11 +254,15 @@ export default function DocumentsPage() {
   );
 }
 
-function StatCard({ label, value, muted }) {
+// same size and layout as the tiles in Impostazioni (mobile): icon, title, one-line value
+function StatCard({ icon: Icon, label, value, muted }) {
   return (
-    <div className={`p-4 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm ${muted ? "opacity-70" : ""}`}>
-      <div className="kicker-p">{label}</div>
-      <div className={`mt-1 text-xl font-semibold ${muted ? "text-white/60" : ""}`}>{value}</div>
+    <div className="rounded-[20px] px-3 h-[64px] flex items-center gap-2 backdrop-blur-xl bg-white/[0.07] border border-white/10">
+      <Icon size={17} className={`shrink-0 ${muted ? "text-white/40" : "text-white/70"}`} />
+      <span className="flex-1 min-w-0">
+        <span className="block text-[13px] font-semibold text-white leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{label}</span>
+        <span className={`block text-[11px] leading-tight mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis ${muted ? "text-white/45" : "text-white/60"}`}>{value}</span>
+      </span>
     </div>
   );
 }
@@ -239,7 +273,7 @@ function CatButton({ active, onClick, label, color, count, testid }) {
       data-testid={testid}
       onClick={onClick}
       style={active ? { backgroundColor: color || "#CECAD0", color: "#fff", border: "none" } : {}}
-      className={`px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${active ? "" : "bg-white/5  text-white/60 hover:"}`}
+      className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-full text-[10px] font-mono-tight uppercase tracking-widest inline-flex items-center gap-1 ${active ? "" : "bg-white/5  text-white/60 hover:"}`}
     >
       {label} <span className={`ml-0.5 ${active ? "opacity-80" : "opacity-60"}`}>{count}</span>
     </button>
