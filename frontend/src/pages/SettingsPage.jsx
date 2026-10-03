@@ -438,9 +438,9 @@ export default function SettingsPage() {
   const tiles = [
     { id: "profile", icon: UserIcon, title: "Profilo", sub: profession || "Incompleto", on: !!profession },
     { id: "vertical", icon: Compass, title: "Verticale", sub: BUSINESS_VERTICALS.find((v) => v.key === businessVertical)?.label || "Nessuno", on: !!businessVertical },
-    { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno", on: linksOn > 0, services: linkServices },
+    { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },
-    ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Amministrazione", sub: "Accessi e utenti", on: false }] : []),
+    ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Admin", full: "Amministrazione", sub: "Accessi e utenti", on: false }] : []),
   ];
   const panelTile = tiles.find((t) => t.id === panel);
 
@@ -453,7 +453,7 @@ export default function SettingsPage() {
           </button>
           <div className="flex items-center gap-3 mb-5">
             <span className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center"><panelTile.icon size={19} /></span>
-            <h2 className="text-2xl font-bold tracking-tight">{panelTile.title}</h2>
+            <h2 className="text-2xl font-bold tracking-tight">{panelTile.full || panelTile.title}</h2>
           </div>
           <div className="space-y-3">
             {panel === "profile" && secProfile("bare")}
@@ -482,24 +482,15 @@ export default function SettingsPage() {
               key={t.id}
               data-testid={`settings-tile-${t.id}`}
               onClick={() => openPanel(t.id)}
-              className={`text-left rounded-[22px] px-4 py-3.5 min-h-[76px] flex flex-col justify-center backdrop-blur-xl transition-colors ${t.services ? "col-span-2" : ""} ${t.on ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}
+              className={`text-left rounded-[20px] px-3 h-[64px] flex flex-col justify-center backdrop-blur-xl transition-colors ${t.on ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}
             >
-              <span className="flex items-center gap-2.5">
-                <t.icon size={20} className={`shrink-0 ${t.on ? "text-white" : "text-white/55"}`} />
+              <span className="flex items-center gap-2">
+                <t.icon size={17} className={`shrink-0 ${t.on ? "text-white" : "text-white/55"}`} />
                 <span className="flex-1 min-w-0">
-                  <span className="block text-[15px] font-semibold text-white truncate">{t.title}</span>
-                  <span className="block text-xs text-white/60 truncate">{t.sub}</span>
+                  <span className="block text-[13px] font-semibold text-white leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{t.title}</span>
+                  <span className="block text-[11px] text-white/60 leading-tight mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">{t.sub}</span>
                 </span>
-                {/* Collegamenti: icon-only shortcuts of the services, lit when connected */}
-                {t.services && t.services.length > 0 && (
-                  <span className="flex items-center gap-3.5 mr-1" data-testid="settings-link-icons">
-                    {t.services.map((sv) => (
-                      <sv.icon key={sv.key} size={18} aria-label={`${sv.label}: ${sv.on ? "collegato" : "non collegato"}`}
-                        className={sv.on ? "text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]" : "text-white/30"} />
-                    ))}
-                  </span>
-                )}
-                <ChevronRight size={16} className="shrink-0 text-white/45" />
+                <ChevronRight size={14} className="shrink-0 text-white/45" />
               </span>
             </button>
           ))}
