@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign } from "lucide-react";
+import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { takeSharedPayload } from "@/lib/pwa";
 import SuggestionsTicker from "@/components/SuggestionsTicker";
+import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -209,6 +210,8 @@ export default function ChatPage() {
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const recStartRef = useRef(0);
+  const recCancelRef = useRef(false);   // ✕ while recording: the take is thrown away
+  const [recSeconds, setRecSeconds] = useState(0);
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -417,8 +420,9 @@ export default function ChatPage() {
       recStartRef.current = Date.now();
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         stream.getTracks().forEach((t) => t.stop());
+        if (recCancelRef.current) { recCancelRef.current = false; return; }
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         const seconds = Math.max(1, Math.round((Date.now() - recStartRef.current) / 1000));
         setPendingVoice({ blob, seconds });
         toast.success(`Vocale pronto (${seconds}s). Premi Invia.`);
@@ -434,6 +438,19 @@ export default function ChatPage() {
       setRecording(false);
     }
   };
+  const cancelRec = () => {
+    if (mediaRecorderRef.current && recording) {
+      recCancelRef.current = true;
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  };
+  useEffect(() => {
+    if (!recording) return undefined;
+    setRecSeconds(0);
+    const t = setInterval(() => setRecSeconds(Math.floor((Date.now() - recStartRef.current) / 1000)), 500);
+    return () => clearInterval(t);
+  }, [recording]);
   const discardVoice = () => { setPendingVoice(null); toast.success("Vocale scartato"); };
   const transcribeBlob = async (blob) => {
     const fd = new FormData();
@@ -1175,6 +1192,7 @@ export default function ChatPage() {
     const others = ACTIONS.filter((a) => a.id !== "info_request").sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
     return [ACTIONS[0], ...others];
   }, [usage]);
+  const [composerRef, composerSize] = useMeasure();
   const agentRowRef = useRef(null);
   const [rowEdges, setRowEdges] = useState({ start: true, end: false });
   const onAgentRowScroll = () => {
@@ -1241,7 +1259,7 @@ export default function ChatPage() {
   const visitTypes = [...(vetTemplates.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(vetTemplates.custom || []).map((t) => ({ id: t.id, name: t.name }))];
 
   const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
-  const composerOpen = composerGrown || attachments.length > 0 || uploadingFiles.length > 0 || !!pendingVoice || recording || transcribing
+  const composerOpen = composerGrown || attachments.length > 0 || uploadingFiles.length > 0 || !!pendingVoice || transcribing
     || mentionMatches.length > 0 || typedTags.length > 0 || typedPeople.length > 0 || !!pendingDriveUpload;
   const canSend = !(streaming || transcribing || uploadingFiles.length > 0 || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording));
   const insertAt = () => {
@@ -1302,67 +1320,94 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* One DOM for both shapes (bar / card), only the classes change: the textarea is never
-          remounted, so the keyboard stays open when the bar opens up. */}
-      <div
-        data-testid="chat-input-card"
-        className={`lg-glass mt-5 flex flex-wrap items-center rounded-[14px] ${composerOpen ? "px-4 pt-3 pb-2 gap-y-1" : "pl-3 pr-1.5 py-1.5"}`}
-      >
-        <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
-          className={`p-2 rounded-full text-white/85 hover:bg-white/15 ${composerOpen ? "order-3" : "order-1"}`}>
-          <Paperclip size={19} />
+      {/* Liquid-glass composer, the bottom menu mirrored: the round voice button on the left,
+          joined by a glass neck to the text bar on the right. The bar opens into a card
+          (chips, @) and the glass follows its size. One DOM for both shapes (bar / card),
+          only the classes change: the textarea is never remounted, so the keyboard stays
+          open when the bar opens up. */}
+      <div ref={composerRef} data-testid="chat-composer" className="relative mt-5 flex items-end" style={{ gap: LIQUID_GAP }}>
+        <LiquidGlass d={composerSize.w ? liquidPath(composerSize.w, composerSize.h, true) : null} width={composerSize.w} height={composerSize.h} />
+        <button
+          data-testid="mic-btn"
+          onClick={recording ? stopRec : startRec}
+          disabled={transcribing}
+          title={recording ? "Ferma" : "Messaggio vocale"}
+          aria-label={recording ? "Ferma" : "Messaggio vocale"}
+          className="relative h-16 w-16 shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform"
+        >
+          {recording && <span aria-hidden="true" className="mic-ring absolute inset-1 rounded-full" />}
+          {recording && <span aria-hidden="true" className="mic-rec absolute inset-1 rounded-full" />}
+          {recording ? <Square size={16} fill="currentColor" className="relative" /> : <Mic size={22} strokeWidth={1.9} />}
         </button>
-        <Textarea
-          data-testid="chat-textarea"
-          ref={textareaRef}
-          value={text}
-          onChange={onComposerChange}
-          onClick={(e) => setMentionQuery(mentionQueryAt(text, e.target.selectionStart))}
-          onKeyDown={(e) => {
-            if (mentionMatches.length && (e.key === "Enter" || e.key === "Tab")) { e.preventDefault(); insertMention(mentionMatches[0]); return; }
-            if (e.key === "Escape") setMentionQuery(null);
-          }}
-          placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro…" : activeAction.placeholder}
-          rows={1}
-          className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-2 px-1 resize-none text-white placeholder:text-white/55 overflow-y-hidden no-scrollbar ${composerOpen ? "order-1 basis-full" : "order-2 flex-1 min-w-0 placeholder:truncate"}`}
-        />
-        {composerOpen && (
-          <div className="order-2 basis-full">
-            {mentionMenu}
-            {shareChips}
-            {tagChips}
-            {drivePendingChips}
-            <div className="flex items-center gap-1.5 flex-wrap empty:hidden mb-1">{composerChips}</div>
+        <div
+          data-testid="chat-input-card"
+          className={`relative flex-1 min-w-0 min-h-16 flex flex-wrap items-center ${composerOpen ? "pl-5 pr-3 pt-3 pb-2 gap-y-1" : "pl-5 pr-3"}`}
+        >
+          {recording && (
+            <div data-testid="rec-bar" className="order-1 flex-1 min-w-0 flex items-center gap-2 h-16">
+              <span className="text-[15px] font-semibold tabular-nums">{Math.floor(recSeconds / 60)}:{String(recSeconds % 60).padStart(2, "0")}</span>
+              <span aria-hidden="true" className="flex-1 min-w-0 h-6 flex items-center gap-[3px] overflow-hidden opacity-85">
+                {Array.from({ length: 24 }, (_, i) => (
+                  <span key={i} className="rec-bar shrink-0 w-[3px] h-full rounded-full bg-white"
+                    style={{ animationDuration: `${0.7 + ((i * 37) % 5) / 10}s`, animationDelay: `${i * 0.07}s` }} />
+                ))}
+              </span>
+              <button data-testid="rec-cancel" onClick={cancelRec} title="Annulla" aria-label="Annulla vocale"
+                className="h-10 w-10 shrink-0 rounded-full flex items-center justify-center text-white/80 hover:bg-white/15">
+                <X size={19} />
+              </button>
+            </div>
+          )}
+          <Textarea
+            data-testid="chat-textarea"
+            ref={textareaRef}
+            value={text}
+            onChange={onComposerChange}
+            onClick={(e) => setMentionQuery(mentionQueryAt(text, e.target.selectionStart))}
+            onKeyDown={(e) => {
+              if (mentionMatches.length && (e.key === "Enter" || e.key === "Tab")) { e.preventDefault(); insertMention(mentionMatches[0]); return; }
+              if (e.key === "Escape") setMentionQuery(null);
+            }}
+            placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro…" : activeAction.placeholder}
+            rows={1}
+            className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-2 px-0 resize-none text-white placeholder:text-white/55 overflow-y-hidden no-scrollbar ${recording ? "hidden" : ""} ${composerOpen ? "order-1 basis-full" : "order-1 flex-1 min-w-0 placeholder:truncate"}`}
+          />
+          {composerOpen && (
+            <div className="order-2 basis-full min-w-0 max-w-full">
+              {mentionMenu}
+              {shareChips}
+              {tagChips}
+              {drivePendingChips}
+              <div className="flex items-center gap-1.5 flex-wrap empty:hidden mb-1">{composerChips}</div>
+            </div>
+          )}
+          {composerOpen && <div className="order-2 basis-full h-px bg-white/15" />}
+          {!recording && (
+            <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
+              className={`p-2 rounded-full text-white/85 hover:bg-white/15 ${composerOpen ? "order-3 -ml-2" : "order-2"}`}>
+              <Paperclip size={19} />
+            </button>
+          )}
+          {composerOpen && (
+            <button type="button" data-testid="at-btn" onClick={insertAt} title="Tagga un agente o una persona" aria-label="Tagga"
+              className="order-3 p-2 rounded-full text-white/85 hover:bg-white/15">
+              <AtSign size={19} />
+            </button>
+          )}
+          <div className={`order-3 flex items-center ${composerOpen ? "ml-auto" : "ml-1"}`}>
+            <button
+              data-testid="send-btn"
+              onClick={send}
+              disabled={!canSend}
+              title="Invia"
+              aria-label="Invia"
+              // neutral, the same fill as the diary's days that have an entry - not the agent's color
+              style={{ background: "rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)" }}
+              className="h-10 w-10 rounded-[10px] flex items-center justify-center text-white disabled:opacity-60"
+            >
+              {streaming || transcribing || uploadingFiles.length > 0 ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+            </button>
           </div>
-        )}
-        {composerOpen && (
-          <button type="button" data-testid="at-btn" onClick={insertAt} title="Tagga un agente o una persona" aria-label="Tagga"
-            className="order-3 p-2 rounded-full text-white/85 hover:bg-white/15">
-            <AtSign size={19} />
-          </button>
-        )}
-        {composerOpen && <div className="order-2 basis-full h-px bg-white/15" />}
-        <div className={`order-3 flex items-center gap-1 ${composerOpen ? "ml-auto" : ""}`}>
-          <button
-            data-testid="mic-btn"
-            onClick={recording ? stopRec : startRec}
-            disabled={transcribing}
-            title={recording ? "Ferma" : "Detta"}
-            aria-label={recording ? "Ferma" : "Detta"}
-            className={`p-2 rounded-full transition-colors duration-150 ${recording ? "bg-white/30 text-white animate-pulse" : "text-white/85 hover:bg-white/15"}`}
-          >{recording ? <MicOff size={19} /> : <Mic size={19} />}</button>
-          <button
-            data-testid="send-btn"
-            onClick={send}
-            disabled={!canSend}
-            title="Invia"
-            aria-label="Invia"
-            // neutral, the same fill as the diary's days that have an entry - not the agent's color
-            style={{ background: "rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)" }}
-            className="h-10 w-10 rounded-[10px] flex items-center justify-center text-white disabled:opacity-60"
-          >
-            {streaming || transcribing || uploadingFiles.length > 0 ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
-          </button>
         </div>
       </div>
 
