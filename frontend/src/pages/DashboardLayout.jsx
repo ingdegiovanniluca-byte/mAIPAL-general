@@ -9,6 +9,7 @@ import logo3 from "@/assets/logo3.png";
 import { MobileTitleContext } from "@/lib/mobile-title";
 import { applyTheme, getStoredTheme } from "@/lib/theme";
 import { useInstallApp, InstallBanner, InstallIcon } from "@/components/InstallApp";
+import LiquidDock from "@/components/LiquidDock";
 
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
@@ -248,57 +249,63 @@ export default function DashboardLayout() {
         {!installApp.standalone && !keyboardOpen && <InstallBanner onInstall={installApp.install} />}
         {installApp.dialog}
 
-        {/* ===== Mobile bottom navigation (<768px): a floating liquid-glass pill, only as
-            wide as its four sections and lifted off the bottom edge, plus a separate round
-            "+" button for everything else (News, Liste, Documenti, Impostazioni...). No
-            border or bright rim on either: the glass itself is the only edge. ===== */}
+        {/* ===== Mobile bottom navigation (<768px): a floating liquid-glass pill with the four
+            sections and, joined to it by a liquid neck like two merging drops, the round "+"
+            for everything else (News, Liste, Documenti, Impostazioni...). See LiquidDock. ===== */}
         {!keyboardOpen && (
           <div
-            className="md:hidden fixed left-0 right-0 z-40 flex items-center justify-center gap-1.5 min-[380px]:gap-2 px-2 min-[380px]:px-3 pointer-events-none"
+            className="md:hidden fixed left-0 right-0 z-40 flex items-center justify-center px-2 min-[380px]:px-3 pointer-events-none"
             style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)" }}
           >
-            <nav
-              data-testid="mobile-bottom-nav"
-              className="pointer-events-auto lg-glass no-rim relative rounded-[26px] grid p-[5px] h-16"
-              style={{ gridTemplateColumns: `repeat(${primaryItems.length}, minmax(0, 1fr))` }}
-            >
-              {/* glass bubble under the current section, sliding from one icon to the next */}
-              <span
-                aria-hidden="true"
-                className="lg-bubble absolute top-[5px] bottom-[5px] left-[5px] rounded-[21px]"
-                style={{
-                  width: `calc((100% - 10px) / ${primaryItems.length})`,
-                  transform: `translateX(${Math.max(0, primaryItems.findIndex((i) => i.to === currentItem?.to)) * 100}%)`,
-                  opacity: primaryItems.some((i) => i.to === currentItem?.to) ? 1 : 0,
-                }}
-              />
-              {primaryItems.map((item) => {
-                const active = currentItem?.to === item.to;
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.to}
-                    data-testid={item.testid}
-                    onClick={() => goTo(item.to)}
-                    aria-current={active ? "page" : undefined}
-                    aria-label={item.label}
-                    title={item.label}
-                    className={`relative w-[58px] min-[380px]:w-[66px] h-full flex items-center justify-center rounded-[21px] transition-colors ${active ? "text-white" : "text-white/75"}`}
-                  >
-                    <Icon size={22} strokeWidth={active ? 2.1 : 1.8} />
-                  </button>
-                );
-              })}
-            </nav>
-            <button
-              data-testid="tab-more"
-              onClick={() => setMoreOpen(true)}
-              title="Altre sezioni"
-              aria-label="Altre sezioni"
-              className={`pointer-events-auto lg-glass no-rim h-16 w-16 shrink-0 rounded-full flex items-center justify-center transition-colors ${isMoreActive ? "text-white !bg-white/30" : "text-white"}`}
-            >
-              <Plus size={24} />
-            </button>
+            <LiquidDock
+              bar={
+                <nav
+                  data-testid="mobile-bottom-nav"
+                  className="relative rounded-full grid p-[5px] h-16"
+                  style={{ gridTemplateColumns: `repeat(${primaryItems.length}, minmax(0, 1fr))` }}
+                >
+                  {/* glass bubble under the current section, sliding from one icon to the next */}
+                  <span
+                    aria-hidden="true"
+                    className="lg-bubble absolute top-[5px] bottom-[5px] left-[5px] rounded-full"
+                    style={{
+                      width: `calc((100% - 10px) / ${primaryItems.length})`,
+                      transform: `translateX(${Math.max(0, primaryItems.findIndex((i) => i.to === currentItem?.to)) * 100}%)`,
+                      opacity: primaryItems.some((i) => i.to === currentItem?.to) ? 1 : 0,
+                    }}
+                  />
+                  {primaryItems.map((item) => {
+                    const active = currentItem?.to === item.to;
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.to}
+                        data-testid={item.testid}
+                        onClick={() => goTo(item.to)}
+                        aria-current={active ? "page" : undefined}
+                        aria-label={item.label}
+                        title={item.label}
+                        className={`relative w-[58px] min-[380px]:w-[66px] h-full flex items-center justify-center rounded-full transition-colors ${active ? "text-white" : "text-white/75"}`}
+                      >
+                        <Icon size={22} strokeWidth={active ? 2.1 : 1.8} />
+                      </button>
+                    );
+                  })}
+                </nav>
+              }
+              button={
+                <button
+                  data-testid="tab-more"
+                  onClick={() => setMoreOpen(true)}
+                  title="Altre sezioni"
+                  aria-label="Altre sezioni"
+                  className="relative h-16 w-16 shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform"
+                >
+                  <span aria-hidden="true" className={`lg-bubble absolute inset-[5px] rounded-full ${isMoreActive ? "opacity-100" : "opacity-0"}`} />
+                  <Plus size={24} className="relative" />
+                </button>
+              }
+            />
           </div>
         )}
 
