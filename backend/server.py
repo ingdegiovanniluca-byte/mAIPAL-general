@@ -2967,7 +2967,12 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
         raise HTTPException(status_code=404, detail="Lista non trovata")
     updates = {}
     if payload.name is not None:
-        updates["name"] = payload.name.strip() or existing["name"]
+        new_name = payload.name.strip() or existing["name"]
+        if new_name.lower() != (existing.get("name") or "").strip().lower():
+            others = await db.collections.find({**_lists_query(current), "id": {"$ne": collection_id}}, {"_id": 0, "name": 1}).to_list(500)
+            if any((o.get("name") or "").strip().lower() == new_name.lower() for o in others):
+                raise HTTPException(status_code=400, detail=f"Esiste già una lista chiamata \"{new_name}\".")
+        updates["name"] = new_name[:80]
     if payload.icon is not None:
         updates["icon"] = payload.icon
     if payload.fields is not None:

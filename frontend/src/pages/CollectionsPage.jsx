@@ -4,7 +4,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3 } from "lucide-react";
 import { toast } from "sonner";
 
 // Gerarchia a 3 livelli:
@@ -180,13 +180,12 @@ function RoundBtn({ icon: Icon, label, onClick, testid, big = false }) {
 }
 
 // One cell of the info under a list's name: a small label and its value below.
-function InfoCell({ label, value, sub, icon: Icon, testid, grow = false }) {
-  const numeric = typeof value === "number";
+// An icon on top (its meaning in the tooltip) and the value below, the same size for all.
+function InfoCell({ label, value, icon: Icon, testid, grow = false }) {
   return (
-    <div className={`min-w-0 ${grow ? "flex-1" : "shrink-0"}`} data-testid={testid}>
-      <div className="text-[12px] text-white/80 flex items-center gap-1">{Icon && <Icon size={12} />}{label}</div>
-      <div className={`text-white mt-1 font-light ${numeric ? "text-[30px] leading-none truncate" : "text-[17px] leading-tight line-clamp-2 break-words"}`}>{value}</div>
-      {sub && <div className="text-[11px] text-white/70 truncate mt-0.5">{sub}</div>}
+    <div className={`min-w-0 ${grow ? "flex-1" : "shrink-0"}`} data-testid={testid} title={label}>
+      <Icon size={17} strokeWidth={1.7} className="text-white/85" aria-label={label} />
+      <div className="text-white text-[14px] leading-snug mt-1.5 line-clamp-2 break-words">{value}</div>
     </div>
   );
 }
@@ -399,6 +398,18 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [dragOverId, setDragOverId] = useState(null);
   const [selected, setSelected] = useState(() => new Set());   // campi ticked for a bulk delete
   const [related, setRelated] = useState([]);                  // scheduled actions working on this list
+  const [renaming, setRenaming] = useState(false);
+  const rename = async (value) => {
+    const name = (value || "").trim();
+    setRenaming(false);
+    if (!name || name === coll.name) return;
+    try {
+      const r = await api.patch(`/collections/${coll.id}`, { name });
+      setColl((cur) => ({ ...cur, name: r.data?.name || name }));
+      onCollectionChanged({ ...coll, name: r.data?.name || name });
+      toast.success("Lista rinominata");
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
   const { mates, name: orgName } = useOrg();
   const canShare = coll.is_owner !== false && (mates || []).length > 0;
   useEffect(() => {
@@ -481,14 +492,29 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
         <ArrowLeft size={14} /> Liste
       </button>
 
-      <div className="font-semibold text-2xl">{coll.name}</div>
+      {renaming ? (
+        <input
+          autoFocus
+          data-testid="rename-input"
+          defaultValue={coll.name}
+          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setRenaming(false); }}
+          onBlur={(e) => rename(e.currentTarget.value)}
+          className="w-full bg-white/15 rounded-xl px-3 py-1.5 font-semibold text-2xl text-white outline-none border-0"
+        />
+      ) : (
+        <button type="button" data-testid="rename-list" onClick={() => setRenaming(true)} title="Rinomina la lista"
+          className="group flex items-center gap-2 text-left">
+          <span className="font-semibold text-2xl">{coll.name}</span>
+          <Pencil size={15} className="text-white/60 shrink-0" />
+        </button>
+      )}
       {/* the list at a glance: how many campi, who it's shared with, the actions working on it */}
-      <div className="mt-4 mb-5 flex items-start gap-7" data-testid="collection-info">
-        <InfoCell label="Campi" value={loading ? "…" : items.length} testid="info-items" />
+      <div className="mt-3 mb-5 flex items-start gap-6" data-testid="collection-info">
+        <InfoCell label="Campi" icon={Rows3} value={loading ? "…" : `${items.length} ${items.length === 1 ? "campo" : "campi"}`} testid="info-items" />
         <InfoCell label={shareInfo.label} value={shareInfo.value} icon={shareInfo.label === "Condivisa" ? Users : Lock} testid="collection-sharing" />
         {related.length > 0 && (
-          <InfoCell label={related.length === 1 ? "Azione" : `Azioni · ${related.length}`} icon={Repeat} grow testid="info-actions"
-            value={related[0].title} sub={related[0].schedule_label} />
+          <InfoCell label={related.length === 1 ? "Azione programmata" : `${related.length} azioni programmate`} icon={Repeat} grow testid="info-actions"
+            value={`${related[0].title}${related[0].schedule_label ? ` · ${related[0].schedule_label.charAt(0).toLowerCase()}${related[0].schedule_label.slice(1)}` : ""}`} />
         )}
       </div>
 
@@ -523,7 +549,7 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
             onDrop={(e) => { e.preventDefault(); reorderItems(draggedId, item.id); setDraggedId(null); setDragOverId(null); }}
             onDragEnd={() => { setDraggedId(null); setDragOverId(null); }}
             data-testid={`item-card-${item.id}`}
-className={`lg-card p-4 pr-12 rounded-[22px] relative group cursor-grab active:cursor-grabbing transition-transform duration-150 ${dragOverId === item.id && draggedId !== item.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === item.id ? "opacity-50" : ""}`}
+className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:cursor-grabbing transition-transform duration-150 ${dragOverId === item.id && draggedId !== item.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === item.id ? "opacity-50" : ""}`}
             // tap: while ticking campi it ticks this one too; otherwise opens it (its elementi) or edits it
             onClick={() => (selected.size ? toggleSelected(item.id) : hasSubLevel ? onOpenItem(item) : setEditing(item))}
           >
@@ -545,8 +571,8 @@ className={`lg-card p-4 pr-12 rounded-[22px] relative group cursor-grab active:c
               <button type="button" data-testid={`select-item-${item.id}`} aria-pressed={selected.has(item.id)}
                 aria-label={selected.has(item.id) ? "Deseleziona" : "Seleziona"}
                 onClick={(e) => { e.stopPropagation(); toggleSelected(item.id); }}
-                className={`h-7 w-7 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${selected.has(item.id) ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
-                {selected.has(item.id) && <Check size={15} strokeWidth={2.6} />}
+                className={`h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${selected.has(item.id) ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+                {selected.has(item.id) && <Check size={12} strokeWidth={2.8} />}
               </button>
               {hasSubLevel && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); setEditing(item); }} aria-label="Modifica"
