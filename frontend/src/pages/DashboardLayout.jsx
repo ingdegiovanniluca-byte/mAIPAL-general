@@ -97,6 +97,9 @@ export default function DashboardLayout() {
         <span className="liquid-blob liquid-blob-3" />
         <span className="liquid-blob liquid-blob-4" />
         <span className="liquid-blob liquid-blob-5" />
+        {/* web only: two more, sharper shapes, so the glass panels have colour to bend */}
+        <span className="liquid-blob liquid-blob-6 hidden md:block" />
+        <span className="liquid-blob liquid-blob-7 hidden md:block" />
       </div>
 
       <div className="relative z-10">

@@ -325,6 +325,33 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     .liquid-blob { animation: none; }
 }
 
+/* Web (>=768px): the glass panels sit on wide, smooth areas of the gradient, so there was
+   nothing for their blur to melt - they read as flat tinted boxes. Here the blobs are
+   sharper, deeper and more contrasted (plus a violet and a blue one), and every panel is a
+   real frosted glass: strong blur that saturates the colours behind, a light top rim and
+   a soft drop shadow. */
+.liquid-blob-6 { width: 30vw; height: 30vw; left: 44vw; top: 46vh; background: #6A2BD9; opacity: 0.75; animation: liquid-drift-2 30s ease-in-out infinite; }
+.liquid-blob-7 { width: 24vw; height: 24vw; left: 8vw; top: 40vh; background: #2F6BFF; opacity: 0.6; animation: liquid-drift-4 26s ease-in-out infinite; }
+@media (min-width: 768px) {
+    .liquid-blob { filter: blur(48px); }
+    .liquid-blob-1 { opacity: 0.85; }
+    .liquid-blob-2 { opacity: 0.8; }
+    .liquid-blob-3 { opacity: 0.75; }
+    .liquid-blob-4 { opacity: 0.7; }
+    .liquid-blob-5 { opacity: 0.6; }
+    :root:not([data-theme="light"]) .card-soft,
+    :root:not([data-theme="light"]) .bg-white\/5.backdrop-blur-xl {
+        background: linear-gradient(140deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.08) 55%, rgba(255, 255, 255, 0.12) 100%);
+        backdrop-filter: blur(30px) saturate(150%);
+        -webkit-backdrop-filter: blur(30px) saturate(150%);
+        border-color: transparent;
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.38),
+            inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+            0 18px 44px rgba(40, 5, 50, 0.2);
+    }
+}
+
 .liquid-glass-btn {
     position: relative;
     overflow: hidden;
