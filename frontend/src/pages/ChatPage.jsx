@@ -1311,7 +1311,7 @@ export default function ChatPage() {
             onClick={() => setInfoOpen(true)}
             title={`Cosa fa ${activeAction.short}`}
             aria-label={`Cosa fa ${activeAction.short}`}
-            className="h-[18px] w-[18px] rounded-full border border-white/70 bg-white/10 flex items-center justify-center text-[10px] leading-none italic font-semibold font-serif text-white"
+            className="h-[18px] w-[18px] rounded-full bg-white/25 flex items-center justify-center text-[10px] leading-none italic font-semibold font-serif text-white"
           >
             i
           </button>
