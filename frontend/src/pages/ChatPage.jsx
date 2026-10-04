@@ -664,6 +664,22 @@ export default function ChatPage() {
     }
   };
 
+  const runListCreateFor = async (content) => {
+    setThread((th) => th
+      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      : { conv_id: null, action: "list_update", messages: [{ role: "user", content }], liveAnswer: "" });
+    let reply;
+    try {
+      const r = await api.post("/lists/create-from-text", { text: content });
+      reply = (r.data?.status === "ok" ? "📋 " : "⚠️ ") + (r.data?.message || "");
+      if (r.data?.status === "ok") toast.success(`Lista «${r.data.name}» creata`);
+    } catch (e) {
+      reply = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a creare la lista");
+    }
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: reply }] }));
+    setStreaming(false);
+  };
+
   const resolveListUpdate = async (amb, override) => {
     setStreaming(true);
     try {
@@ -781,26 +797,22 @@ export default function ChatPage() {
     // saved as a generic note - no separate button needed for the two.
     const { main: mainQuestion, parts: taggedParts } = splitMentions(currentQuestion);
     if (active === "info_upload" && attachments.length === 0 && mainQuestion) {
-      if (thread?.action === "list_update") {
-        setText("");
-        await runListUpdateFor(mainQuestion);
-        if (taggedParts.length) await dispatchTagged(currentQuestion);
-        return;
-      }
       // Re-classify on every new message, not just the first one in a thread: a user who
       // uploaded a file (starting an "info_upload" thread) may only ask to act on it - "crea
       // un campo per ogni orario..." - in a LATER message of that same thread, and that must
       // still be caught instead of being treated as a plain conversational follow-up.
-      if (!thread || thread.action === "info_upload") {
+      // "crea una lista ..." (a NEW list) is told apart from edits to an existing one.
+      let kind = null;
+      if (!thread || thread.action === "info_upload" || thread.action === "list_update") {
         try {
-          const cls = await api.post("/classify-save-intent", { text: mainQuestion });
-          if (cls.data?.kind === "list_update") {
-            setText("");
-            await runListUpdateFor(mainQuestion);
-            if (taggedParts.length) await dispatchTagged(currentQuestion);
-            return;
-          }
+          kind = (await api.post("/classify-save-intent", { text: mainQuestion })).data?.kind;
         } catch { /* classification failed: fall through to a normal save */ }
+      }
+      if (kind === "list_create" || kind === "list_update" || thread?.action === "list_update") {
+        setText("");
+        await (kind === "list_create" ? runListCreateFor(mainQuestion) : runListUpdateFor(mainQuestion));
+        if (taggedParts.length) await dispatchTagged(currentQuestion);
+        return;
       }
     }
 

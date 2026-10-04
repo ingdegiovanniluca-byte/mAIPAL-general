@@ -3198,6 +3198,65 @@ async def classify_save_intent(payload: ClassifySaveIntentPayload, current: User
     return {"kind": kind}
 
 
+# ---- Creazione di una Lista da testo libero ("crea una lista della spesa con latte e pane") ----
+def _field_key(label: str, taken: set) -> str:
+    import re as _re, unicodedata
+    base = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode().lower()
+    base = _re.sub(r"[^a-z0-9]+", "_", base).strip("_") or "campo"
+    key, n = base, 2
+    while key in taken:
+        key, n = f"{base}_{n}", n + 1
+    taken.add(key)
+    return key
+
+
+async def _create_list_from_text(current: User, text: str, channel: str = "web") -> dict:
+    """Creates a new list (and its first items) from a sentence. Until now chat could only
+    EDIT existing lists: "crea una lista ..." was either saved as a plain note or sent to
+    the list editor, which found no such list - and nothing was created."""
+    try:
+        hits = await retrieve_kb(current.user_id, text, scope="kb", org_id=current.org_id, limit=6)
+        ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)[:6000]
+    except Exception:
+        ctx = ""
+    spec = await lu.interpret_list_creation(text, ctx, user_id=current.user_id, channel=channel)
+    taken: set = set()
+    fields = [CollectionFieldDef(key=_field_key(f["label"], taken), label=f["label"], type=f["type"]) for f in spec["fields"]]
+    try:
+        coll = await create_collection(CollectionCreatePayload(name=spec["name"], fields=fields), current)
+    except HTTPException as he:
+        return {"status": "error", "message": str(he.detail)}
+    by_label = {f.label.strip().lower(): f.key for f in fields}
+    now = datetime.now(timezone.utc).isoformat()
+    docs, seen = [], set()
+    for raw in spec["items"]:
+        data = {}
+        for k, v in raw.items():
+            key = by_label.get(str(k).strip().lower()) or (fields[0].key if len(raw) == 1 else None)
+            if key and v not in (None, ""):
+                data[key] = v if isinstance(v, (int, float)) else str(v).strip()
+        name = str(data.get(fields[0].key) or "").strip().lower()
+        if not data or not name or name in seen:
+            continue
+        seen.add(name)
+        doc = {"id": f"item_{uuid.uuid4().hex[:12]}", "collection_id": coll["id"], "data": data,
+               "visibility": coll.get("visibility", "private"), "sort_order": len(docs), "created_at": now}
+        _stamp_owner_fields(doc, current)
+        docs.append(doc)
+    if docs:
+        await db.collection_items.insert_many(docs)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
+    cols = ", ".join(f.label for f in fields)
+    what = (f" e {len(docs)} element{'o' if len(docs) == 1 else 'i'}" if docs else "")
+    return {"status": "ok", "collection_id": coll["id"], "name": coll["name"], "items": len(docs),
+            "message": f"Ho creato la lista «{coll['name']}» (colonne: {cols}){what}. La trovi nella sezione Liste."}
+
+
+@api_router.post("/lists/create-from-text")
+async def create_list_from_text(payload: ClassifySaveIntentPayload, current: User = Depends(get_current_user)):
+    return await _create_list_from_text(current, payload.text)
+
+
 # ---- Modifica delle Liste da testo libero (chat web + Telegram) ----
 @api_router.post("/lists/update")
 async def update_list_via_text(payload: ListUpdatePayload, current: User = Depends(get_current_user)):
@@ -5826,6 +5885,12 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             return {**base, "status": "ok", "message": f"🔍 {visible}"}
 
         if agent == "list_update":
+            import re as _re
+            if _re.search(r"\b(crea|creami|crei|fai|fammi|nuova|apri)\b", piece, _re.I):
+                names = [c["name"] for c in await db.collections.find(_lists_query(user), {"_id": 0, "name": 1}).to_list(200)]
+                if await lu.classify_save_intent(piece, names, user_id=user.user_id, channel=channel) == "list_create":
+                    res = await _create_list_from_text(user, piece + (f"\n\n{docs[:4000]}" if docs else ""), channel=channel)
+                    return {**base, "status": res["status"], "message": ("📋 " if res["status"] == "ok" else "⚠️ ") + res["message"]}
             text = piece + (f"\n\n(Contesto del messaggio, per capire a chi o cosa si riferisce: {context[:600]})" if ctx_block else "")
             if docs:
                 text += f"\n\n(Testo dei file allegati nella conversazione, se la richiesta vi si riferisce: {docs[:4000]})"

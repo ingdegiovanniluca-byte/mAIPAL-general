@@ -491,6 +491,8 @@ async def _run_main_message(update, ctx, db, user, content, forced_action, force
         state = await _get_state(db, user["user_id"], chat_id)
         prev_ctx = state if _state_is_fresh(state) else None
         list_names = await _user_list_names(db, user)
+        if await _try_list_create(update, ctx, user, content, list_names):
+            return
         intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"])
         action = intent["action"]
         if action == "list_update":
@@ -661,6 +663,30 @@ async def _cmd_scheduled_list(update: Update, ctx):
         lines.append(f"{'🟢' if a.get('enabled') else '⏸️'} {a.get('title')} — {a.get('schedule_label')}")
     lines.append("\nPer disattivarle o cancellarle apri la sezione Azioni dell'app.")
     await update.message.reply_text("\n".join(lines))
+
+
+_LIST_CREATE_HINT = _re.compile(r"\b(crea|creami|crei|fai|fammi|nuova|apri)\b.{0,40}\blist[ae]\b", _re.I | _re.S)
+
+
+async def _try_list_create(update, ctx, user, content, list_names) -> bool:
+    """"crea una lista della spesa con latte e pane": a NEW list, made right away (the list
+    editor only edits existing ones). A cheap regex first, then the same classifier the web
+    chat uses, so ordinary messages pay nothing."""
+    if not _LIST_CREATE_HINT.search(content or ""):
+        return False
+    import list_updates as lu
+    from server import _create_list_from_text
+    if await lu.classify_save_intent(content, list_names, user_id=user["user_id"], channel="telegram") != "list_create":
+        return False
+    chat_id = update.effective_chat.id
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    try:
+        res = await _create_list_from_text(_to_user_pydantic(user), content, channel="telegram")
+    except Exception as e:
+        logger.exception("tg list create failed")
+        res = {"status": "error", "message": str(getattr(e, "detail", None) or e)[:300]}
+    await ctx.bot.send_message(chat_id=chat_id, text=("📋 " if res.get("status") == "ok" else "⚠️ ") + res.get("message", ""))
+    return True
 
 
 async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None, collection_id=None,

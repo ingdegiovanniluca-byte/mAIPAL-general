@@ -190,11 +190,13 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
     record in one of the user's existing Liste, or just generic information to save as a
     note? Falls back to 'info_upload' (the safe default - nothing gets deleted) on any
     error or when the user has no lists at all."""
-    if not list_names:
-        return "info_upload"
-    names_desc = ", ".join(f'"{n}"' for n in list_names[:50])
+    names_desc = ", ".join(f'"{n}"' for n in list_names[:50]) or "nessuna lista ancora"
     system = (
-        "Devi classificare una frase in una di due categorie:\n"
+        "Devi classificare una frase in una di tre categorie:\n"
+        "- 'list_create': l'utente chiede di CREARE una NUOVA lista (una lista che non è tra le sue liste "
+        f"esistenti: {names_desc}), anche con dentro degli elementi. Esempi: 'crea una lista della spesa con latte, "
+        "pane e uova', 'fammi una lista degli invitati con nome e telefono', 'nuova lista libri da leggere', "
+        "'creami una lista con le canzoni del matrimonio'.\n"
         "- 'list_update': l'utente vuole aggiungere, modificare o rimuovere uno o PIÙ elementi (anche in blocco/"
         f"massa) in una delle sue liste esistenti ({names_desc}). Rientra qui anche una richiesta di creare PIÙ "
         "Campi in un colpo solo, uno per ciascuna voce simile (es. un orario, un giorno, una riga di un documento "
@@ -212,7 +214,9 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         "crea, segna nella lista). Esempi di 'info_upload': 'Martina ha fatto pilates il 19 settembre', 'oggi "
         "Giulia è venuta a lezione', 'Marco ha saltato la lezione di mercoledì', 'Sara ha pagato 10 lezioni', "
         "'il codice del wifi è XYZ'.\n"
-        'Rispondi SOLO con un JSON: {"kind": "list_update"} oppure {"kind": "info_upload"}.'
+        "Se l'utente chiede di creare una lista con un nome che esiste già, è comunque 'list_create' (gli "
+        "dirò io che c'è già).\n"
+        'Rispondi SOLO con un JSON: {"kind": "list_create"}, {"kind": "list_update"} oppure {"kind": "info_upload"}.'
     )
     try:
         client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -225,12 +229,60 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             parsed = json.loads(m.group(0))
-            if parsed.get("kind") in ("list_update", "info_upload"):
-                return parsed["kind"]
+            kind = parsed.get("kind")
+            if kind == "list_update" and not list_names:
+                return "info_upload"   # nothing to edit yet
+            if kind in ("list_update", "info_upload", "list_create"):
+                return kind
     except Exception:
         logger.exception("classify_save_intent failed")
         _track(None, user_id, channel, status="errore", model="gpt-4o-mini")
     return "info_upload"
+
+
+FIELD_TYPES = {"text", "textarea", "number", "date", "phone", "email"}
+
+
+async def interpret_list_creation(text: str, kb_context: str = "", user_id: Optional[str] = None,
+                                  channel: str = "web") -> dict:
+    """A request to create a NEW list ("crea una lista della spesa con latte e pane") ->
+    {"name", "fields": [{"label", "type"}], "items": [{label: value}]}. The first field is the
+    item's name (the convention used everywhere for lists); items are the ones the user listed
+    (or found in their documents, via kb_context), [] if none."""
+    system = (
+        "L'utente vuole creare una NUOVA lista nella sezione Liste di mAIPAL. Estrai:\n"
+        "- name: nome breve della lista, con l'iniziale maiuscola (es. 'Spesa', 'Invitati matrimonio', 'Libri da leggere');\n"
+        "- fields: le colonne di ogni elemento, da 1 a 6. La PRIMA è il nome/titolo dell'elemento. Per ciascuna "
+        "'label' (italiano, iniziale maiuscola) e 'type' tra text, textarea, number, date, phone, email. Se l'utente "
+        "non indica colonne, usane una sola adatta al contenuto (es. 'Prodotto' per la spesa, 'Titolo' per libri o "
+        "canzoni, 'Nome' per persone); aggiungi altre colonne solo se l'utente le chiede o se i suoi elementi hanno "
+        "chiaramente più informazioni (es. 'Mario 333 1234567' -> Nome + Telefono);\n"
+        "- items: gli elementi iniziali che l'utente elenca (o che chiede di prendere dai suoi documenti, nel "
+        "CONTESTO), ciascuno come oggetto {label colonna: valore}; [] se non ne indica. Non inventare elementi.\n"
+        'Rispondi SOLO con un JSON: {"name": "...", "fields": [{"label": "...", "type": "text"}], "items": [{...}]}'
+    )
+    user = (f"CONTESTO (documenti e note dell'utente, se servono):\n{kb_context}\n\nRICHIESTA:\n{text}" if kb_context else text)
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o", max_completion_tokens=2500, response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        )
+        _track(resp, user_id, channel, model="gpt-4o")
+    except Exception:
+        _track(None, user_id, channel, status="errore", model="gpt-4o")
+        raise
+    parsed = json.loads(resp.choices[0].message.content or "{}")
+    fields = []
+    for f in (parsed.get("fields") or [])[:6]:
+        label = str((f or {}).get("label") or "").strip()[:40]
+        if label and label.lower() not in {x["label"].lower() for x in fields}:
+            ftype = (f or {}).get("type")
+            fields.append({"label": label, "type": ftype if ftype in FIELD_TYPES else "text"})
+    if not fields:
+        fields = [{"label": "Nome", "type": "text"}]
+    items = [it for it in (parsed.get("items") or []) if isinstance(it, dict)][:200]
+    return {"name": str(parsed.get("name") or "").strip()[:60] or "Nuova lista", "fields": fields, "items": items}
 
 
 def match_candidates(query_text: str, candidates: list[tuple[str, str]]) -> list[str]:
