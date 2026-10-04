@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -1288,8 +1288,9 @@ export default function ChatPage() {
   };
   const info = AGENT_INFO[active] || { what: "", options: [], examples: [] };
 
-  const mobileChat = (
-    <div data-testid="mobile-chat">
+  // Mobile chat, in pieces: with a conversation open only the conversation and the composer
+  // are shown (the composer moves under the messages), the hero and the agents disappear.
+  const mobileHero = (<>
       {!compactHero && <SuggestionsTicker onSelect={runSuggestion} />}
       <div className={`flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
         <div className="flex items-center gap-2">
@@ -1325,6 +1326,8 @@ export default function ChatPage() {
         )}
       </div>
 
+  </>);
+  const mobileReplyPill = (<>
       {mobileReplyTo && (
         <div data-testid="mobile-reply-pill" className="flex items-center gap-2 mt-3 px-3 py-2 rounded-xl bg-white/10 text-white/85 text-xs">
           <Reply size={13} className="shrink-0" />
@@ -1335,6 +1338,8 @@ export default function ChatPage() {
         </div>
       )}
 
+  </>);
+  const mobileComposer = (<>
       {/* Liquid-glass composer: the round voice button joined by a glass neck to a text block
           twice its height; the button sits level with the block's first row, on the right or
           on the left (Impostazioni -> Profilo, "Microfono"). The text sits on top, attach and
@@ -1424,6 +1429,8 @@ export default function ChatPage() {
         </div>
       </div>
 
+  </>);
+  const mobileAgents = (<>
       <div
         ref={agentRowRef}
         onScroll={onAgentRowScroll}
@@ -1457,6 +1464,10 @@ export default function ChatPage() {
         </button>
       </div>
 
+  </>);
+  const mobileChat = (
+    <div data-testid="mobile-chat">
+      {!thread && <>{mobileHero}{mobileReplyPill}{mobileComposer}{mobileAgents}</>}
       {infoOpen && (
         <BottomSheet onClose={() => setInfoOpen(false)} testid="agent-info-sheet">
           <div className="flex items-center gap-3">
@@ -1732,7 +1743,8 @@ export default function ChatPage() {
         {/* RIGHT 2/3 — scrolls. On mobile (spec v2 §3) this area is either the conversation
             on screen (chat view - nothing at all before the first message is sent) or the
             history of old conversations (history view), never both. */}
-        <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full overflow-hidden ${mobileChatView && !thread ? "hidden" : ""}`}>
+        <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full ${isMobile ? "" : "overflow-hidden"} ${mobileChatView && !thread ? "hidden" : ""}`}
+          style={isMobile && thread && !mobileHistoryView ? { minHeight: "calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px) - 7rem - env(safe-area-inset-bottom, 0px))" } : undefined}>
           {/* Filters (hidden in focus mode when a thread is open; on mobile only in the history view) */}
           {(isMobile ? mobileHistoryView : !(focusMode && thread)) && (
             <div className="flex items-center gap-1.5 md:gap-2 flex-nowrap overflow-x-auto no-scrollbar p-3 md:p-3.5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
@@ -1777,7 +1789,16 @@ export default function ChatPage() {
 
           {/* Thread view (replaces list when open) */}
           {thread && !mobileHistoryView ? (
-            <div className="p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden" data-testid="thread-card">
+            <div className={isMobile ? "flex-1 flex flex-col" : "p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden"} data-testid="thread-card">
+              {isMobile ? (
+                // only the way back to the chat's home, where a new conversation starts
+                <div className="sticky z-20 -mt-1 mb-3 pt-1" style={{ top: "calc(env(safe-area-inset-top, 0px) + 3.75rem)" }}>
+                  <button data-testid="close-thread-btn" onClick={startNewMobileConversation} title="Indietro" aria-label="Indietro"
+                    className="lg-glass h-9 w-9 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
+                    <ArrowLeft size={18} />
+                  </button>
+                </div>
+              ) : (
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
@@ -1799,7 +1820,8 @@ export default function ChatPage() {
                   <button data-testid="close-thread-btn" onClick={closeThread} className="p-1.5 rounded-full hover:bg-white/10 text-white"><X size={14} /></button>
                 </div>
               </div>
-              <div className="space-y-4 flex-1 overflow-y-auto pr-2">
+              )}
+              <div className={isMobile ? "space-y-4" : "space-y-4 flex-1 overflow-y-auto pr-2"}>
                 {thread.messages.map((m, i) => (
                   <div key={i}>
                     <div className="kicker mb-1">{m.role === "user" ? "· tu" : ""}</div>
@@ -1920,6 +1942,12 @@ export default function ChatPage() {
                 )}
                 <div ref={threadEndRef} />
               </div>
+              {/* mobile: the composer to carry on, kept at the bottom just above the menu */}
+              {isMobile && (
+                <div className="sticky z-20 pt-4 mt-auto" style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 100px)" }} data-testid="thread-composer">
+                  {mobileComposer}
+                </div>
+              )}
             </div>
           ) : mobileHistoryView ? (
             // Mobile history (spec: note-style grid): search/filters stay on top, then two
