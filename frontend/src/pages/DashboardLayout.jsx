@@ -10,6 +10,8 @@ import { MobileTitleContext } from "@/lib/mobile-title";
 import { applyTheme, getStoredTheme } from "@/lib/theme";
 import { useInstallApp, InstallBanner, InstallIcon } from "@/components/InstallApp";
 import LiquidDock from "@/components/LiquidDock";
+import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
@@ -42,11 +44,16 @@ export default function DashboardLayout() {
   // checks the container that's actually showing, not whichever rendered last.
   const menuRef = useRef(null);
   const menuRefMobile = useRef(null);
+  const menuPanelRef = useRef(null);
+  const isMobile = useIsMobile();      // the menu itself, portaled out of the header
+  const avatarRef = useRef(null);
+  const avatarRefMobile = useRef(null);
 
   useEffect(() => {
     const onClickOutside = (e) => {
       const insideDesktop = menuRef.current && menuRef.current.contains(e.target);
-      const insideMobile = menuRefMobile.current && menuRefMobile.current.contains(e.target);
+      const insideMobile = (menuRefMobile.current && menuRefMobile.current.contains(e.target))
+        || (menuPanelRef.current && menuPanelRef.current.contains(e.target));
       if (!insideDesktop && !insideMobile) setMenuOpen(false);
     };
     document.addEventListener("mousedown", onClickOutside);
@@ -119,6 +126,7 @@ export default function DashboardLayout() {
 
             <div className="relative shrink-0" ref={menuRef}>
               <button
+                ref={avatarRef}
                 data-testid="user-menu-btn"
                 onClick={() => setMenuOpen((v) => !v)}
                 className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
@@ -136,26 +144,15 @@ export default function DashboardLayout() {
                 </div>
               </button>
 
-              {menuOpen && (
-                <div className="absolute right-0 top-full mt-2 w-48 rounded-xl bg-[#403A3C] shadow-lg border border-white/10 py-1.5 z-40">
+              {menuOpen && !isMobile && (
+                <GlassMenu anchorRef={avatarRef} panelRef={menuPanelRef} testid="user-menu">
                   {!installApp.standalone && (
-                    <button
-                      data-testid="install-app-btn"
-                      onClick={() => { setMenuOpen(false); installApp.install(); }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
-                    >
-                      <InstallIcon size={14} /> Installa l'app
-                    </button>
+                    <GlassMenuItem icon={InstallIcon} label="Installa l'app" testid="install-app-btn"
+                      onClick={() => { setMenuOpen(false); installApp.install(); }} />
                   )}
-                  <button
-                    data-testid="logout-btn"
-                    onClick={() => { setMenuOpen(false); logout(); }}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
-                  >
-                    <LogOut size={14} /> Esci
-                  </button>
+                  <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn" onClick={() => { setMenuOpen(false); logout(); }} />
                   <ThemeRow />
-                </div>
+                </GlassMenu>
               )}
             </div>
           </div>
@@ -194,6 +191,7 @@ export default function DashboardLayout() {
           </div>
           <div className="relative shrink-0 flex items-center gap-2" ref={menuRefMobile}>
             <button
+              ref={avatarRefMobile}
               data-testid="user-menu-btn-mobile"
               onClick={() => setMenuOpen((v) => !v)}
               className="block"
@@ -206,33 +204,16 @@ export default function DashboardLayout() {
                 </div>
               )}
             </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-48 rounded-xl bg-[#403A3C] shadow-lg border border-white/10 py-1.5 z-40">
-                <button
-                  data-testid="settings-btn-mobile"
-                  onClick={() => goTo("/dashboard/settings")}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
-                >
-                  <Settings size={14} /> Impostazioni
-                </button>
+            {menuOpen && isMobile && (
+              <GlassMenu anchorRef={avatarRefMobile} panelRef={menuPanelRef} testid="user-menu-mobile">
+                <GlassMenuItem icon={Settings} label="Impostazioni" testid="settings-btn-mobile" onClick={() => goTo("/dashboard/settings")} />
                 {!installApp.standalone && (
-                  <button
-                    data-testid="install-app-btn-mobile"
-                    onClick={() => { setMenuOpen(false); installApp.install(); }}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
-                  >
-                    <InstallIcon size={14} /> Installa l'app
-                  </button>
+                  <GlassMenuItem icon={InstallIcon} label="Installa l'app" testid="install-app-btn-mobile"
+                    onClick={() => { setMenuOpen(false); installApp.install(); }} />
                 )}
-                <button
-                  data-testid="logout-btn-mobile"
-                  onClick={() => { setMenuOpen(false); logout(); }}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
-                >
-                  <LogOut size={14} /> Esci
-                </button>
+                <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn-mobile" onClick={() => { setMenuOpen(false); logout(); }} />
                 <ThemeRow />
-              </div>
+              </GlassMenu>
             )}
           </div>
         </header>
@@ -366,9 +347,9 @@ function TabLink({ to, label, testid }) {
 function ThemeRow() {
   const [theme, setTheme] = useState(getStoredTheme());
   const pick = (t) => { setTheme(t); applyTheme(t); };
-  const cls = (on) => `flex-1 flex items-center justify-center py-2 rounded-lg transition-colors ${on ? "text-white" : "text-white/35 hover:text-white/60"}`;
+  const cls = (on) => `flex-1 flex items-center justify-center py-2 rounded-full transition-colors ${on ? "text-white bg-white/15" : "text-white/40 hover:text-white/70"}`;
   return (
-    <div className="flex items-center gap-1 px-2 pt-1 mt-1 border-t border-white/10" data-testid="theme-row">
+    <div className="glass-row flex items-center gap-1 px-3 py-2" data-testid="theme-row">
       <button type="button" data-testid="theme-light-btn" onClick={() => pick("light")} title="Tema chiaro" aria-label="Tema chiaro" aria-pressed={theme === "light"} className={cls(theme === "light")}>
         <Sun size={17} />
       </button>

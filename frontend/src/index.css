@@ -501,6 +501,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 [data-theme="light"] .placeholder\:text-white\/70::placeholder { color: rgba(33, 29, 40, 0.70) !important; }
 [data-theme="light"] .placeholder\:text-white\/60::placeholder { color: rgba(33, 29, 40, 0.60) !important; }
 [data-theme="light"] .placeholder\:text-white\/50::placeholder { color: rgba(33, 29, 40, 0.50) !important; }
+[data-theme="light"] .placeholder\:text-white\/55::placeholder { color: rgba(33, 29, 40, 0.55) !important; }
 
 [data-theme="light"] .bg-white\/5 { background-color: rgba(33, 29, 40, 0.04) !important; }
 [data-theme="light"] .bg-white\/10 { background-color: rgba(33, 29, 40, 0.06) !important; }
@@ -572,3 +573,33 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .rec-bar { transform-origin: center; animation: rec-wave 0.9s ease-in-out infinite; }
 @keyframes rec-wave { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
 @media (prefers-reduced-motion: reduce) { .mic-ring, .rec-bar { animation: none; } }
+
+/* Frosted-glass panels (user menu, the agent info card...): the colours behind melt through
+   a strong blur, a faint light rim, rows split by thin inset lines. */
+.glass-panel {
+    border-radius: 28px;
+    background:
+        linear-gradient(160deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0.1) 100%),
+        rgba(70, 20, 70, 0.18);
+    backdrop-filter: blur(30px) saturate(170%);
+    -webkit-backdrop-filter: blur(30px) saturate(170%);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.32),
+        0 24px 60px rgba(30, 5, 40, 0.3);
+}
+/* a card full of text: a little more tint so it stays easy to read */
+.glass-panel.glass-sheet { background-color: rgba(60, 16, 66, 0.34); }
+.glass-panel .glass-row + .glass-row {
+    background-image: linear-gradient(rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.16));
+    background-size: calc(100% - 40px) 1px;
+    background-position: top center;
+    background-repeat: no-repeat;
+}
+[data-theme="light"] .glass-panel {
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.62));
+    box-shadow: inset 0 0 0 1px rgba(33, 29, 40, 0.08), 0 24px 60px rgba(30, 5, 40, 0.18);
+}
+[data-theme="light"] .glass-panel .glass-row + .glass-row {
+    background-image: linear-gradient(rgba(33, 29, 40, 0.1), rgba(33, 29, 40, 0.1));
+}

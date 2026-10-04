@@ -2179,8 +2179,9 @@ function BottomSheet({ onClose, testid, children }) {
   }, [onClose]);
   return createPortal(
     <div className="fixed inset-0 z-[70]" data-testid={testid}>
-      <div className="absolute inset-0 bg-[#0A0819]/50 animate-in fade-in duration-200" onClick={onClose} />
-      <div className="absolute left-0 right-0 bottom-0 max-h-[86vh] overflow-y-auto rounded-t-[28px] bg-[#28223A]/90 backdrop-blur-2xl border-t border-white/20 shadow-[0_-10px_40px_rgba(0,0,0,0.35)] px-5 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] animate-in slide-in-from-bottom duration-300">
+      <div className="absolute inset-0 bg-[#1A0820]/25 animate-in fade-in duration-200" onClick={onClose} />
+      {/* a floating card of frosted glass, the page's colours melting through it */}
+      <div className="glass-panel glass-sheet absolute left-3 right-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] max-h-[84vh] overflow-y-auto no-scrollbar px-5 pt-3 pb-6 animate-in slide-in-from-bottom duration-300">
         <div className="w-10 h-1 rounded-full bg-white/35 mx-auto mb-4" />
         <button onClick={onClose} aria-label="Chiudi" data-testid="sheet-close" className="absolute top-4 right-4 p-1.5 rounded-full text-white/70 hover:bg-white/10"><X size={18} /></button>
         {children}
