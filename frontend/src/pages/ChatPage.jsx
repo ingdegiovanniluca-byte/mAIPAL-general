@@ -1925,7 +1925,7 @@ export default function ChatPage() {
                   onClick={startNewMobileConversation}
                   title="Torna alla chat"
                   aria-label="Torna alla chat"
-                  className="w-full h-36 rounded-3xl flex items-center justify-center bg-white/20 backdrop-blur-xl text-white shadow-md"
+                  className="lg-frost w-full h-36 rounded-3xl flex items-center justify-center text-white"
                 >
                   <Plus size={44} strokeWidth={1.5} />
                 </button>,
@@ -2078,7 +2078,6 @@ function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDe
   const question = (conv.messages && conv.messages.find((m) => m.role === "user")?.content) || conv.user_message || "";
   const isFav = !!conv.favorite;
   const color = ACTION_COLOR[conv.action] || "#6D6181";
-  const questionColor = hexToRgba(shadeHex(color, 0.62), 0.95);
   const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
   return (
     <div
@@ -2087,8 +2086,8 @@ function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDe
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
       data-testid="history-card"
-      className={`rounded-3xl p-4 text-white cursor-pointer ${isReplying ? "ring-2 ring-white/70" : ""}`}
-      style={glowTileStyle(color)}
+      // same frosted glass as the chat composer; the agent shows as a small coloured dot
+      className={`lg-frost rounded-3xl p-4 text-white cursor-pointer ${isReplying ? "ring-2 ring-white/70" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="text-base font-normal leading-tight text-white break-words min-w-0" data-testid="conv-topic">{topic}</div>
@@ -2098,11 +2097,14 @@ function MobileHistoryCard({ conv, isReplying = false, onOpen, onToggleFav, onDe
         </button>
       </div>
       {question && (
-        <div className="mt-2 text-xs leading-snug line-clamp-5 break-words" style={{ color: questionColor }} data-testid="conv-question">{question}</div>
+        <div className="mt-2 text-xs leading-snug line-clamp-5 break-words text-white/75" data-testid="conv-question">{question}</div>
       )}
       <div className="h-3" aria-hidden="true" />
       <div className="flex items-center justify-between gap-2 text-xs text-white">
-        <span className="truncate">{dateLabel}</span>
+        <span className="min-w-0 flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} title={ACTION_LABELS_IT[conv.action] || ""} />
+          <span className="truncate">{dateLabel}</span>
+        </span>
         <button data-testid="delete-conv-btn" onClick={stop(onDelete)} title="Elimina" className="p-1 -mr-1 shrink-0 text-white/70">
           <Trash2 size={13} />
         </button>
@@ -2130,7 +2132,8 @@ function HistoryCard({ conv, index = 0, isReplying = false, onOpen, onToggleFav,
 
   return (
     <div
-      className={`p-4 rounded-2xl bg-white/5 backdrop-blur-xl shadow-sm card-hover card-enter ${isReplying ? "ring-2 ring-white/60" : ""}`}
+      // same frosted glass as the chat composer
+      className={`p-4 rounded-[24px] lg-frost card-hover card-enter ${isReplying ? "ring-2 ring-white/60" : ""}`}
       style={{ ["--i"]: index }}
       data-testid="history-card"
     >

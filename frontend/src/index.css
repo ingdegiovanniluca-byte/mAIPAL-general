@@ -573,6 +573,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     backdrop-filter: blur(18px) saturate(120%);
     -webkit-backdrop-filter: blur(18px) saturate(120%);
 }
+/* the same frosted glass as a plain box (history cards): whitish veil, soft blur, no border */
+.lg-frost {
+    background: linear-gradient(170deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
+    backdrop-filter: blur(18px) saturate(120%);
+    -webkit-backdrop-filter: blur(18px) saturate(120%);
+    box-shadow: 0 10px 26px rgba(60, 10, 40, 0.16);
+}
+.lg-frost.card-hover:hover { box-shadow: 0 14px 34px rgba(60, 10, 40, 0.22); }   /* no ring: no borders */
+[data-theme="light"] .lg-frost {
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 6px 18px rgba(33, 29, 40, 0.08);
+}
 /* the bubble that marks the current section in the bottom bar, sliding between icons */
 .lg-bubble {
     background: rgba(255, 255, 255, 0.26);
