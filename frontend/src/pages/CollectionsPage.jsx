@@ -107,7 +107,7 @@ export default function CollectionsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-end mb-5">
+      <div className="flex items-center justify-start mb-5">
         <RoundBtn icon={Plus} label="Nuova lista" testid="new-collection" onClick={() => setShowCreate(true)} big />
       </div>
 
@@ -173,19 +173,20 @@ export default function CollectionsPage() {
 function RoundBtn({ icon: Icon, label, onClick, testid, big = false }) {
   return (
     <button type="button" data-testid={testid} onClick={onClick} title={label} aria-label={label}
-      className={`lg-glass shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform ${big ? "h-12 w-12" : "h-11 w-11"}`}>
-      <Icon size={big ? 24 : 19} strokeWidth={1.7} />
+      className={`lg-glass shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform ${big ? "h-11 w-11" : "h-9 w-9"}`}>
+      <Icon size={big ? 22 : 17} strokeWidth={1.7} />
     </button>
   );
 }
 
 // One cell of the info under a list's name: a small label and its value below.
 function InfoCell({ label, value, sub, icon: Icon, testid, grow = false }) {
+  const numeric = typeof value === "number";
   return (
     <div className={`min-w-0 ${grow ? "flex-1" : "shrink-0"}`} data-testid={testid}>
-      <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/60 flex items-center gap-1">{Icon && <Icon size={11} />}{label}</div>
-      <div className="text-[14px] font-medium text-white mt-0.5 truncate">{value}</div>
-      {sub && <div className="text-[11px] text-white/65 truncate">{sub}</div>}
+      <div className="text-[12px] text-white/80 flex items-center gap-1">{Icon && <Icon size={12} />}{label}</div>
+      <div className={`text-white mt-1 font-light ${numeric ? "text-[30px] leading-none truncate" : "text-[17px] leading-tight line-clamp-2 break-words"}`}>{value}</div>
+      {sub && <div className="text-[11px] text-white/70 truncate mt-0.5">{sub}</div>}
     </div>
   );
 }
@@ -482,7 +483,7 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
 
       <div className="font-semibold text-2xl">{coll.name}</div>
       {/* the list at a glance: how many campi, who it's shared with, the actions working on it */}
-      <div className="mt-3 mb-5 flex items-start gap-6" data-testid="collection-info">
+      <div className="mt-4 mb-5 flex items-start gap-7" data-testid="collection-info">
         <InfoCell label="Campi" value={loading ? "…" : items.length} testid="info-items" />
         <InfoCell label={shareInfo.label} value={shareInfo.value} icon={shareInfo.label === "Condivisa" ? Users : Lock} testid="collection-sharing" />
         {related.length > 0 && (
@@ -497,13 +498,12 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
         <RoundBtn icon={Settings2} label="Gestisci attributi" testid="manage-fields" onClick={() => setManagingFields(true)} />
         {canShare && <RoundBtn icon={Share2} label="Condividi" testid="share-collection" onClick={() => setSharing(true)} />}
         {selected.size > 0 && (
-          <div className="ml-auto flex items-center gap-2">
-            <button data-testid="clear-selection" onClick={() => setSelected(new Set())} className="h-11 px-3 rounded-full text-sm text-white/80">Annulla</button>
-            <button data-testid="delete-selected" onClick={delSelected}
-              className="lg-glass h-11 px-4 rounded-full flex items-center gap-2 text-sm text-white whitespace-nowrap">
-              <Trash2 size={16} /> Elimina {selected.size}
-            </button>
-          </div>
+          // only a bin, with how many campi are ticked; untick them to cancel
+          <button data-testid="delete-selected" onClick={delSelected} title="Elimina selezionati" aria-label={`Elimina ${selected.size} selezionati`}
+            className="lg-glass ml-auto relative h-9 w-9 shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
+            <Trash2 size={17} strokeWidth={1.7} />
+            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-[#8E2F6B] text-[11px] font-semibold flex items-center justify-center">{selected.size}</span>
+          </button>
         )}
       </div>
 
@@ -545,8 +545,8 @@ className={`lg-card p-4 pr-12 rounded-[22px] relative group cursor-grab active:c
               <button type="button" data-testid={`select-item-${item.id}`} aria-pressed={selected.has(item.id)}
                 aria-label={selected.has(item.id) ? "Deseleziona" : "Seleziona"}
                 onClick={(e) => { e.stopPropagation(); toggleSelected(item.id); }}
-                className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors ${selected.has(item.id) ? "bg-white text-[#8E2F6B]" : "shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.75)]"}`}>
-                {selected.has(item.id) && <Check size={14} strokeWidth={3} />}
+                className={`h-7 w-7 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${selected.has(item.id) ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+                {selected.has(item.id) && <Check size={15} strokeWidth={2.6} />}
               </button>
               {hasSubLevel && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); setEditing(item); }} aria-label="Modifica"

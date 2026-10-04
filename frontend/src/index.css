@@ -585,13 +585,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     background: rgba(255, 255, 255, 0.85);
     box-shadow: 0 6px 18px rgba(33, 29, 40, 0.08);
 }
-/* a stronger liquid glass for cards that must stand out (Liste): more whitish veil and a
-   heavier blur that melts the colours behind, no border, a deeper soft shadow */
+/* clear liquid glass for cards (Liste): barely tinted, a strong blur that melts and
+   saturates the colours behind, so the shapes under the card glow through it; no border */
 .lg-card {
-    background: linear-gradient(170deg, rgba(255, 255, 255, 0.28) 0%, rgba(255, 255, 255, 0.15) 100%);
-    backdrop-filter: blur(30px) saturate(140%);
-    -webkit-backdrop-filter: blur(30px) saturate(140%);
-    box-shadow: 0 16px 36px rgba(60, 10, 40, 0.2);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 100%);
+    backdrop-filter: blur(26px) saturate(170%) brightness(1.04);
+    -webkit-backdrop-filter: blur(26px) saturate(170%) brightness(1.04);
+    box-shadow: 0 14px 34px rgba(60, 10, 40, 0.14);
 }
 [data-theme="light"] .lg-card { background: rgba(255, 255, 255, 0.9); box-shadow: 0 6px 18px rgba(33, 29, 40, 0.08); }
 /* the bubble that marks the current section in the bottom bar, sliding between icons */
