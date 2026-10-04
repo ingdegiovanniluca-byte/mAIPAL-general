@@ -574,24 +574,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @keyframes rec-wave { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
 @media (prefers-reduced-motion: reduce) { .mic-ring, .rec-bar { animation: none; } }
 
-/* Frosted-glass panels (user menu, the agent info card...): the colours behind melt through
-   a strong blur, a faint light rim, rows split by thin inset lines. */
+/* Frosted-glass panels (user menu, the agent info card...): dark smoky glass, little
+   transparency - the colours behind only glow through, darkened and melted by a strong
+   blur - with a faint light rim and rows split by thin inset lines. */
 .glass-panel {
     border-radius: 28px;
     background:
-        linear-gradient(160deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0.1) 100%),
-        rgba(70, 20, 70, 0.18);
-    backdrop-filter: blur(30px) saturate(170%);
-    -webkit-backdrop-filter: blur(30px) saturate(170%);
+        linear-gradient(160deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 50%, rgba(255, 255, 255, 0.05) 100%),
+        rgba(26, 6, 22, 0.5);
+    backdrop-filter: blur(36px) saturate(150%) brightness(0.72);
+    -webkit-backdrop-filter: blur(36px) saturate(150%) brightness(0.72);
     box-shadow:
-        inset 0 0 0 1px rgba(255, 255, 255, 0.2),
-        inset 0 1px 0 rgba(255, 255, 255, 0.32),
-        0 24px 60px rgba(30, 5, 40, 0.3);
+        inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.22),
+        0 24px 60px rgba(20, 2, 20, 0.4);
 }
-/* a card full of text: a little more tint so it stays easy to read */
-.glass-panel.glass-sheet { background-color: rgba(60, 16, 66, 0.34); }
+/* a card full of text: a touch darker still, for reading */
+.glass-panel.glass-sheet { background-color: rgba(26, 6, 22, 0.58); }
 .glass-panel .glass-row + .glass-row {
-    background-image: linear-gradient(rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.16));
+    background-image: linear-gradient(rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.13));
     background-size: calc(100% - 40px) 1px;
     background-position: top center;
     background-repeat: no-repeat;
