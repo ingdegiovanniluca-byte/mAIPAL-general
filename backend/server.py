@@ -5348,6 +5348,10 @@ def _public_action(a: dict) -> dict:
     a = {k: v for k, v in a.items() if k != "_id"}
     a["next_run_label"] = _fmt_local_dt(a.get("next_run_at")) if a.get("enabled") else ""
     a["last_run_label"] = _fmt_local_dt(a.get("last_run_at"))
+    try:
+        a["schedule_label"] = sa.schedule_label(a.get("schedule") or {})
+    except Exception:
+        a["schedule_label"] = ""
     return a
 
 

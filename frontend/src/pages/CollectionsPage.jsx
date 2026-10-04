@@ -4,7 +4,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat } from "lucide-react";
 import { toast } from "sonner";
 
 // Gerarchia a 3 livelli:
@@ -107,14 +107,8 @@ export default function CollectionsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div className="flex items-center gap-2">
-          <List size={20} className="text-white/70" />
-          <div className="kicker">le tue liste</div>
-        </div>
-        <button data-testid="new-collection" onClick={() => setShowCreate(true)} className="pill-btn text-sm">
-          <Plus size={14} /> Nuova lista
-        </button>
+      <div className="flex items-center justify-end mb-5">
+        <RoundBtn icon={Plus} label="Nuova lista" testid="new-collection" onClick={() => setShowCreate(true)} big />
       </div>
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
@@ -136,14 +130,14 @@ export default function CollectionsPage() {
             onDrop={(e) => { e.preventDefault(); reorder(draggedId, c.id); setDraggedId(null); setDragOverId(null); }}
             onDragEnd={() => { setDraggedId(null); setDragOverId(null); }}
             data-testid={`collection-card-${c.id}`}
-            className={`card-soft card-hover p-5 rounded-2xl cursor-grab active:cursor-grabbing relative group transition-transform duration-150 ${dragOverId === c.id && draggedId !== c.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === c.id ? "opacity-50" : ""}`}
+            className={`lg-card p-5 rounded-[24px] cursor-grab active:cursor-grabbing relative group transition-transform duration-150 ${dragOverId === c.id && draggedId !== c.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === c.id ? "opacity-50" : ""}`}
             onClick={() => setView({ level: 2, collection: c })}
           >
             {/* name, then on the right the lock/people icon and the bin side by side (never on top of each other) */}
             <div className="flex items-start gap-2 mb-2">
               <div className="font-semibold text-lg flex-1 min-w-0">{c.name}</div>
               <span className="shrink-0 h-7 flex items-center" title={isShared(c) ? "Condivisa" : "Privata"}>
-                {isShared(c) ? <Users size={14} className="text-white/40" /> : <Lock size={14} className="text-white/30" />}
+                {isShared(c) ? <Users size={14} className="text-white/70" /> : <Lock size={14} className="text-white/50" />}
               </span>
               {c.is_owner !== false && (
                 <button
@@ -157,9 +151,9 @@ export default function CollectionsPage() {
                 </button>
               )}
             </div>
-            <div className="text-sm text-white/50">{c.item_count || 0} campi</div>
-            {sharingLabel(c) && <div className="text-[11px] text-[#7FB3E0] mt-1" data-testid={`collection-sharing-${c.id}`}>{sharingLabel(c)}</div>}
-            <div className="text-[11px] text-white/35 mt-2">{(c.fields || []).map((f) => f.label).join(" · ")}</div>
+            <div className="text-sm text-white/70">{c.item_count || 0} campi</div>
+            {sharingLabel(c) && <div className="text-[11px] text-white/85 mt-1 flex items-center gap-1" data-testid={`collection-sharing-${c.id}`}><Users size={11} className="shrink-0" />{sharingLabel(c)}</div>}
+            <div className="text-[11px] text-white/60 mt-2">{(c.fields || []).map((f) => f.label).join(" · ")}</div>
           </div>
         ))}
       </div>
@@ -171,6 +165,27 @@ export default function CollectionsPage() {
           onCreated={async (c) => { setShowCreate(false); await load(); setView({ level: 2, collection: c }); }}
         />
       )}
+    </div>
+  );
+}
+
+// Round frosted-glass icon button, the same as the bottom menu's "+".
+function RoundBtn({ icon: Icon, label, onClick, testid, big = false }) {
+  return (
+    <button type="button" data-testid={testid} onClick={onClick} title={label} aria-label={label}
+      className={`lg-glass shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform ${big ? "h-12 w-12" : "h-11 w-11"}`}>
+      <Icon size={big ? 24 : 19} strokeWidth={1.7} />
+    </button>
+  );
+}
+
+// One cell of the info under a list's name: a small label and its value below.
+function InfoCell({ label, value, sub, icon: Icon, testid, grow = false }) {
+  return (
+    <div className={`min-w-0 ${grow ? "flex-1" : "shrink-0"}`} data-testid={testid}>
+      <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/60 flex items-center gap-1">{Icon && <Icon size={11} />}{label}</div>
+      <div className="text-[14px] font-medium text-white mt-0.5 truncate">{value}</div>
+      {sub && <div className="text-[11px] text-white/65 truncate">{sub}</div>}
     </div>
   );
 }
@@ -189,13 +204,20 @@ function sharingLabel(c) {
 
 // Team-mates (me excluded), loaded once per picker; [] when not in a team.
 function useTeamMates() {
+  return useOrg().mates;
+}
+
+// The team: { mates (me excluded; null while loading, [] without a team), name }.
+function useOrg() {
   const { user } = useAuth();
-  const [mates, setMates] = useState(null);
+  const [org, setOrg] = useState({ mates: null, name: "" });
   useEffect(() => {
-    if (!user?.org_id) { setMates([]); return; }
-    api.get("/org").then((r) => setMates((r.data?.members || []).filter((m) => m.user_id !== user.user_id))).catch(() => setMates([]));
+    if (!user?.org_id) { setOrg({ mates: [], name: "" }); return; }
+    api.get("/org")
+      .then((r) => setOrg({ mates: (r.data?.members || []).filter((m) => m.user_id !== user.user_id), name: r.data?.name || "" }))
+      .catch(() => setOrg({ mates: [], name: "" }));
   }, [user?.org_id, user?.user_id]);
-  return mates;
+  return org;
 }
 
 // Who the list is shared with: nobody, the whole team, or chosen team-mates. Whoever it is
@@ -244,7 +266,7 @@ function ShareDialog({ collection, onClose, onSaved }) {
   };
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg bg-[color:var(--app-bg)]" data-testid="share-collection-dialog">
+      <DialogContent overlayClassName="bg-black/25" className="glass-panel glass-sheet border-0 rounded-[28px] text-white w-[calc(100%-24px)] max-w-lg" data-testid="share-collection-dialog">
         <DialogHeader><DialogTitle>Condividi «{collection.name}»</DialogTitle></DialogHeader>
         <SharePicker value={value} onChange={setValue} />
         <div className="flex justify-end mt-4">
@@ -336,13 +358,13 @@ function CreateCollectionDialog({ existingCollections, onClose, onCreated }) {
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="create-collection-dialog">
+      <DialogContent overlayClassName="bg-black/25" className="glass-panel glass-sheet border-0 rounded-[28px] text-white w-[calc(100%-24px)] max-w-lg max-h-[90vh] overflow-y-auto" data-testid="create-collection-dialog">
         <DialogHeader><DialogTitle>Nuova lista</DialogTitle></DialogHeader>
 
         <div className="space-y-4">
           <div>
             <div className="kicker mb-1">nome lista</div>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="es. Clienti, Esercizi, Commesse…" className="h-11 rounded-xl bg-white/10" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="es. Clienti, Esercizi, Commesse…" className="h-11 rounded-xl bg-white/10 border-0" />
           </div>
 
           <SharePicker value={share} onChange={setShare} />
@@ -374,8 +396,46 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [sharing, setSharing] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
-  const mates = useTeamMates();
+  const [selected, setSelected] = useState(() => new Set());   // campi ticked for a bulk delete
+  const [related, setRelated] = useState([]);                  // scheduled actions working on this list
+  const { mates, name: orgName } = useOrg();
   const canShare = coll.is_owner !== false && (mates || []).length > 0;
+  useEffect(() => {
+    api.get("/scheduled-actions")
+      .then((r) => setRelated((r.data || []).filter((a) => a.enabled && a.kind === "list_update" && a.list_op?.collection_id === collection.id)))
+      .catch(() => {});
+  }, [collection.id]);
+  const toggleSelected = (id) => setSelected((cur) => {
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const delSelected = () => {
+    const ids = [...selected];
+    toast(`Eliminare ${ids.length === 1 ? "il campo selezionato" : `i ${ids.length} campi selezionati`}?`, {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const res = await Promise.allSettled(ids.map((id) => api.delete(`/collections/${coll.id}/items/${id}`)));
+          const failed = res.filter((r) => r.status === "rejected").length;
+          setSelected(new Set());
+          await load();
+          if (failed) toast.error(`${failed} non eliminat${failed === 1 ? "o" : "i"}`);
+          else toast.success(ids.length === 1 ? "Eliminato" : `${ids.length} campi eliminati`);
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
+    });
+  };
+  // "Condivisa" / the team's name, or who it's shared with; "Privata" otherwise
+  const shareInfo = coll.is_owner === false
+    ? { label: "Condivisa", value: `di ${coll.owner?.name || "un collega"}` }
+    : coll.visibility === "org"
+      ? { label: "Condivisa", value: orgName || "tutto il team" }
+      : (coll.shared_with_users || []).length
+        ? { label: "Condivisa", value: joinNames((coll.shared_with_users || []).map((u) => u.name.split(" ")[0])) }
+        : { label: "Privata", value: "solo tu" };
 
   const load = async () => {
     try {
@@ -414,47 +474,37 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
     });
   };
 
-  const delItem = (item) => {
-    toast("Eliminare questo campo?", {
-      action: {
-        label: "Elimina",
-        onClick: async () => {
-          try {
-            await api.delete(`/collections/${coll.id}/items/${item.id}`);
-            await load();
-            toast.success("Eliminato");
-          } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
-        },
-      },
-      cancel: { label: "Annulla", onClick: () => {} },
-      duration: 6000,
-    });
-  };
-
   return (
     <div>
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white mb-4">
         <ArrowLeft size={14} /> Liste
       </button>
 
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div>
-          <div className="font-semibold text-xl">{coll.name}</div>
-          {sharingLabel(coll) && <div className="text-xs text-[#7FB3E0] mt-0.5" data-testid="collection-sharing">{sharingLabel(coll)}</div>}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {canShare && (
-            <button data-testid="share-collection" onClick={() => setSharing(true)} className="pill-btn text-sm bg-white/10 text-white">
-              <Share2 size={14} /> Condividi
+      <div className="font-semibold text-2xl">{coll.name}</div>
+      {/* the list at a glance: how many campi, who it's shared with, the actions working on it */}
+      <div className="mt-3 mb-5 flex items-start gap-6" data-testid="collection-info">
+        <InfoCell label="Campi" value={loading ? "…" : items.length} testid="info-items" />
+        <InfoCell label={shareInfo.label} value={shareInfo.value} icon={shareInfo.label === "Condivisa" ? Users : Lock} testid="collection-sharing" />
+        {related.length > 0 && (
+          <InfoCell label={related.length === 1 ? "Azione" : `Azioni · ${related.length}`} icon={Repeat} grow testid="info-actions"
+            value={related[0].title} sub={related[0].schedule_label} />
+        )}
+      </div>
+
+      {/* +, Gestisci attributi, Condividi: round glass buttons on one row, like the rest of the app */}
+      <div className="flex items-center gap-2.5 mb-5" data-testid="collection-actions">
+        <RoundBtn icon={Plus} label="Nuovo campo" testid="new-item" onClick={() => setEditing({})} />
+        <RoundBtn icon={Settings2} label="Gestisci attributi" testid="manage-fields" onClick={() => setManagingFields(true)} />
+        {canShare && <RoundBtn icon={Share2} label="Condividi" testid="share-collection" onClick={() => setSharing(true)} />}
+        {selected.size > 0 && (
+          <div className="ml-auto flex items-center gap-2">
+            <button data-testid="clear-selection" onClick={() => setSelected(new Set())} className="h-11 px-3 rounded-full text-sm text-white/80">Annulla</button>
+            <button data-testid="delete-selected" onClick={delSelected}
+              className="lg-glass h-11 px-4 rounded-full flex items-center gap-2 text-sm text-white whitespace-nowrap">
+              <Trash2 size={16} /> Elimina {selected.size}
             </button>
-          )}
-          <button data-testid="manage-fields" onClick={() => setManagingFields(true)} className="pill-btn text-sm bg-white/10 text-white">
-            <Settings2 size={14} /> Gestisci attributi
-          </button>
-          <button data-testid="new-item" onClick={() => setEditing({})} className="pill-btn text-sm">
-            <Plus size={14} /> Nuovo campo
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
@@ -473,25 +523,35 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
             onDrop={(e) => { e.preventDefault(); reorderItems(draggedId, item.id); setDraggedId(null); setDragOverId(null); }}
             onDragEnd={() => { setDraggedId(null); setDragOverId(null); }}
             data-testid={`item-card-${item.id}`}
-            className={`card-soft p-4 rounded-2xl relative group cursor-grab active:cursor-grabbing transition-transform duration-150 ${hasSubLevel ? "card-hover" : ""} ${dragOverId === item.id && draggedId !== item.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === item.id ? "opacity-50" : ""}`}
-            onClick={hasSubLevel ? () => onOpenItem(item) : undefined}
+className={`lg-card p-4 pr-12 rounded-[22px] relative group cursor-grab active:cursor-grabbing transition-transform duration-150 ${dragOverId === item.id && draggedId !== item.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === item.id ? "opacity-50" : ""}`}
+            // tap: while ticking campi it ticks this one too; otherwise opens it (its elementi) or edits it
+            onClick={() => (selected.size ? toggleSelected(item.id) : hasSubLevel ? onOpenItem(item) : setEditing(item))}
           >
             {(coll.fields || []).slice(0, 5).map((f) => (
               item.data?.[f.key] ? (
                 <div key={f.key} className="mb-1.5">
-                  <div className="text-[10px] uppercase tracking-widest text-white/40">{f.label}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
                   <div className="text-sm">{String(item.data[f.key])}</div>
                 </div>
               ) : null
             ))}
             {hasSubLevel && (
-              <div className="flex items-center gap-1 text-[11px] text-white/50 mt-2">
+              <div className="flex items-center gap-1 text-[11px] text-white/70 mt-2">
                 <ChevronRight size={12} /> {item.sub_item_count || 0} elementi
               </div>
             )}
-            <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={(e) => { e.stopPropagation(); setEditing(item); }} className="p-1.5 rounded-full text-white/50 hover:bg-white/10"><Pencil size={13} /></button>
-              <button onClick={(e) => { e.stopPropagation(); delItem(item); }} className="p-1.5 rounded-full text-white/50 hover:bg-red-500/10 hover:text-red-400"><Trash2 size={13} /></button>
+            {/* round tick to select it (several at once, then "Elimina"); the pencil where a tap opens the elementi */}
+            <div className="absolute top-3 right-3 flex flex-col items-center gap-1.5">
+              <button type="button" data-testid={`select-item-${item.id}`} aria-pressed={selected.has(item.id)}
+                aria-label={selected.has(item.id) ? "Deseleziona" : "Seleziona"}
+                onClick={(e) => { e.stopPropagation(); toggleSelected(item.id); }}
+                className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors ${selected.has(item.id) ? "bg-white text-[#8E2F6B]" : "shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.75)]"}`}>
+                {selected.has(item.id) && <Check size={14} strokeWidth={3} />}
+              </button>
+              {hasSubLevel && (
+                <button type="button" onClick={(e) => { e.stopPropagation(); setEditing(item); }} aria-label="Modifica"
+                  className="p-1 rounded-full text-white/70 hover:bg-white/10"><Pencil size={13} /></button>
+              )}
             </div>
           </div>
         ))}
@@ -597,11 +657,11 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {subItems.map((sub) => (
-          <div key={sub.id} className="card-soft p-4 rounded-2xl relative group">
+          <div key={sub.id} className="lg-card p-4 rounded-[22px] relative group">
             {(coll.sub_item_fields || []).slice(0, 5).map((f) => (
               sub.data?.[f.key] ? (
                 <div key={f.key} className="mb-1.5">
-                  <div className="text-[10px] uppercase tracking-widest text-white/40">{f.label}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
                   <div className="text-sm">{String(sub.data[f.key])}</div>
                 </div>
               ) : null
@@ -668,7 +728,7 @@ function ManageAttributesDialog({ collection, onClose, onSaved }) {
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="manage-fields-dialog">
+      <DialogContent overlayClassName="bg-black/25" className="glass-panel glass-sheet border-0 rounded-[28px] text-white w-[calc(100%-24px)] max-w-lg max-h-[90vh] overflow-y-auto" data-testid="manage-fields-dialog">
         <DialogHeader><DialogTitle>Gestisci attributi — {collection.name}</DialogTitle></DialogHeader>
 
         <div className="space-y-5">
@@ -743,7 +803,7 @@ function ItemFormDialog({ title, fields, initialData, onClose, onSave }) {
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="item-dialog">
+      <DialogContent overlayClassName="bg-black/25" className="glass-panel glass-sheet border-0 rounded-[28px] text-white w-[calc(100%-24px)] max-w-lg max-h-[90vh] overflow-y-auto" data-testid="item-dialog">
         <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
 
         <div className="space-y-3">
@@ -751,7 +811,7 @@ function ItemFormDialog({ title, fields, initialData, onClose, onSave }) {
             <div key={f.key}>
               <div className="kicker mb-1">{f.label}</div>
               {f.type === "textarea" && (
-                <Textarea value={data[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)} className="bg-white/10 rounded-xl min-h-[70px]" />
+                <Textarea value={data[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)} className="bg-white/10 border-0 rounded-xl min-h-[70px]" />
               )}
               {f.type === "select" && (
                 <select value={data[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)} className="w-full h-11 rounded-xl bg-white/10 px-3 text-white">
@@ -768,12 +828,12 @@ function ItemFormDialog({ title, fields, initialData, onClose, onSave }) {
                   })}
                 </select>
               )}
-              {["text", "number", "date", "phone", "email"].includes(f.type) && (
+              {(!f.type || ["text", "number", "date", "phone", "email"].includes(f.type)) && (
                 <Input
                   type={f.type === "number" ? "number" : f.type === "date" ? "date" : f.type === "email" ? "email" : "text"}
                   value={data[f.key] || ""}
                   onChange={(e) => setField(f.key, e.target.value)}
-                  className="h-11 rounded-xl bg-white/10"
+                  className="h-11 rounded-xl bg-white/10 border-0"
                 />
               )}
             </div>

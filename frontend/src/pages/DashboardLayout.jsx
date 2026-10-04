@@ -27,9 +27,9 @@ const NAV_ITEMS = [
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings", icon: Settings },
 ];
 
-// On the mobile bottom bar these 4 sections get their own button; everything else (except
+// On the mobile bottom bar these 4 sections get their own button (Liste in place of Diario); everything else (except
 // Impostazioni, reached from the avatar) lives inside "Altro".
-const MOBILE_PRIMARY = ["/dashboard/chat", "/dashboard/tasks", "/dashboard/todos", "/dashboard/journal"];
+const MOBILE_PRIMARY = ["/dashboard/chat", "/dashboard/tasks", "/dashboard/todos", "/dashboard/liste"];
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
