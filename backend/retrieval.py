@@ -81,6 +81,19 @@ _TOPIC_SYNONYMS = {
 }
 
 
+# "ogni mese spendo 30 € per internet", "abbonamento palestra 40 euro al mese": something that
+# repeats, so a note saved in September still counts for October.
+_RECURRING = re.compile(
+    r"\b(ogni|tutti\s+i|tutte\s+le)\s+(mese|mesi|settimana|settimane|anno|anni|giorno|giorni|lunedì|martedì|mercoledì|"
+    r"giovedì|venerdì|sabato|domenica|bimestre|trimestre)\b|\bal\s+(mese|giorno|anno)\b|\ba\s+settimana\b|"
+    r"\b(mensil|settimanal|annual|bimestral|trimestral|semestral|ricorrent|abbonament|rat[ae]\b|canone|affitto|domiciliazion)",
+    re.I)
+
+
+def is_recurring(text: str) -> bool:
+    return bool(_RECURRING.search(text or ""))
+
+
 def _month_bounds(y: int, m: int) -> Tuple[date, date]:
     return date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
 
@@ -152,7 +165,11 @@ def period_hint(query: str, today: Optional[date] = None) -> str:
     span = format_it_date(lo.isoformat()) if lo == hi else f"da {format_it_date(lo.isoformat())} a {format_it_date(hi.isoformat())}"
     return (f"PERIODO DELLA DOMANDA: {label} ({span}). Considera solo le voci di questo periodo (la data con cui "
             f"sono state salvate, oppure la data scritta nel testo se ce n'è una) ed elencale TUTTE, senza fermarti "
-            f"alle prime; se servono, fai anche il totale.")
+            f"alle prime; se servono, fai anche il totale. Le voci segnate [Ricorrente] (es. 'ogni mese 30 € di "
+            f"internet') sono state salvate prima ma valgono anche per questo periodo: includile, contando l'importo "
+            f"tante volte quante la ricorrenza cade nel periodo (una spesa mensile = una volta per ogni mese); se il "
+            f"periodo è più corto della ricorrenza e non sai il giorno, mettila a parte come ricorrente invece di "
+            f"sommarla. Indica sempre quali voci sono ricorrenti.")
 
 
 def _local_day(value) -> Optional[date]:
@@ -558,7 +575,10 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
         in_period = []
         for (_tot, sem, hits, c) in scored:
             d = c.get("day")
-            if not d or d < lo or d > hi:
+            if not d or d > hi:
+                continue
+            recurring = d < lo and c.get("source") == "kb" and is_recurring(c["text"])
+            if d < lo and not recurring:
                 continue
             if terms:
                 toks = token_cache.get(id(c)) or _tokens(c["text"])
@@ -566,6 +586,8 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                     or ("€" in c["text"] and any(p in ("euro", "spes") for p in syn))
                 if not topical:
                     continue
+            if recurring and not c["display"].startswith("[Ricorrente"):
+                c["display"] = "[Ricorrente] " + c["display"]
             in_period.append(c)
         in_period.sort(key=lambda c: c["day"])
         for c in in_period[:PERIOD_RECALL_CAP]:
