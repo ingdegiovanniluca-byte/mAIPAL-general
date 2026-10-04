@@ -195,12 +195,27 @@ def looks_like_note(text: str) -> bool:
     return bool(_SAVE_VERB.search(text or "")) and not _LIST_WORD.search(text or "")
 
 
+_CREATE_WORD = re.compile(r"\b(crea|creami|crei|nuova|fammi)\b", re.I)
+
+
+def names_an_existing_list(text: str, list_names: list[str]) -> bool:
+    """"salva questi campi nella lista della spesa", "aggiungili alla lista Spesa": the word
+    "lista" plus the name of one of the user's lists - a list edit, no model needed (the
+    model, warned that "spesa" can be an expense, once sent this to the notes)."""
+    t = (text or "").lower()
+    if not _LIST_WORD.search(t) or _CREATE_WORD.search(t):
+        return False
+    return any(n and re.search(rf"\b{re.escape(n.strip().lower())}\b", t) for n in list_names)
+
+
 async def classify_save_intent(text: str, list_names: list[str], user_id: Optional[str] = None, channel: str = "web") -> str:
     """Cheap pre-classification used to merge "salva informazione" and "modifica lista"
     into a single chat action: is this free text an instruction to add/edit/remove a
     record in one of the user's existing Liste, or just generic information to save as a
     note? Falls back to 'info_upload' (the safe default - nothing gets deleted) on any
     error or when the user has no lists at all."""
+    if names_an_existing_list(text, list_names):
+        return "list_update"
     names_desc = ", ".join(f'"{n}"' for n in list_names[:50]) or "nessuna lista ancora"
     system = (
         "Devi classificare una frase in una di tre categorie:\n"

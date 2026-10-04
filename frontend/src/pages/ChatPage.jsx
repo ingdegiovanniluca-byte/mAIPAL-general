@@ -649,12 +649,13 @@ export default function ChatPage() {
   // Shared by the auto-classifier below and by follow-up messages inside a thread that
   // already turned out to be a list edit - `content` is already fully resolved (voice
   // transcribed if needed) by the caller.
-  const runListUpdateFor = async (content, docIds = [], shown = content) => {
+  const runListUpdateFor = async (content, docIds = [], shown = content, convId = thread?.conv_id) => {
     setThread((th) => th
       ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
       : { conv_id: null, action: "list_update", messages: [{ role: "user", content: shown }], liveAnswer: "" });
     try {
-      const r = await api.post("/lists/update", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}) });
+      // the conversation's id: files sent earlier in it ("aggiungili alla lista") are read too
+      const r = await api.post("/lists/update", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}), ...(convId ? { conv_id: convId } : {}) });
       appendListUpdateResult(r.data);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella modifica della lista");
@@ -664,13 +665,13 @@ export default function ChatPage() {
     }
   };
 
-  const runListCreateFor = async (content, docIds = [], shown = content) => {
+  const runListCreateFor = async (content, docIds = [], shown = content, convId = thread?.conv_id) => {
     setThread((th) => th
       ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
       : { conv_id: null, action: "list_update", messages: [{ role: "user", content: shown }], liveAnswer: "" });
     let reply;
     try {
-      const r = await api.post("/lists/create-from-text", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}) });
+      const r = await api.post("/lists/create-from-text", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}), ...(convId ? { conv_id: convId } : {}) });
       reply = (r.data?.status === "ok" ? "📋 " : "⚠️ ") + (r.data?.message || "");
       if (r.data?.status === "ok") toast.success(`Lista «${r.data.name}» creata`);
     } catch (e) {
@@ -743,6 +744,14 @@ export default function ChatPage() {
     setStreaming(true);
     setText("");
     const replyTarget = mobileReplyTo;
+    if (replyTarget.action === "info_upload" || replyTarget.action === "list_update") {
+      let kind = null;
+      try { kind = (await api.post("/classify-save-intent", { text: content })).data?.kind; } catch { /* note */ }
+      if (kind === "list_create" || kind === "list_update" || replyTarget.action === "list_update") {
+        await (kind === "list_create" ? runListCreateFor(content, [], content, replyTarget.conv_id) : runListUpdateFor(content, [], content, replyTarget.conv_id));
+        return;
+      }
+    }
     setThread((th) => (th && th.conv_id === replyTarget.conv_id)
       ? { ...th, messages: [...th.messages, { role: "user", content }], liveAnswer: "" }
       : th);

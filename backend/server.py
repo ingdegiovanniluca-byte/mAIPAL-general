@@ -299,6 +299,9 @@ class ListUpdatePayload(BaseModel):
     # Files attached to this very message (already in the KB): their text is what the request
     # is about - "aggiungi questi prodotti alla lista della spesa" + a photo of a receipt.
     attachment_doc_ids: Optional[List[str]] = None
+    # The chat conversation this request belongs to: the files sent earlier in it are the
+    # context of "aggiungili alla lista della spesa" sent right after a photo.
+    conv_id: Optional[str] = None
 
 
 class NewsFeedbackPayload(BaseModel):
@@ -3270,11 +3273,17 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
 class ListCreatePayload(BaseModel):
     text: str
     attachment_doc_ids: Optional[List[str]] = None
+    conv_id: Optional[str] = None
 
 
 @api_router.post("/lists/create-from-text")
 async def create_list_from_text(payload: ListCreatePayload, current: User = Depends(get_current_user)):
-    return await _create_list_from_text(current, payload.text, attachment_doc_ids=payload.attachment_doc_ids)
+    doc_ids = payload.attachment_doc_ids
+    if not doc_ids and payload.conv_id:
+        conv = await db.conversations.find_one({"conv_id": payload.conv_id, "user_id": current.user_id}, {"_id": 0})
+        if conv:
+            doc_ids = await _conv_attachment_ids(current.user_id, conv, conv.get("messages") or [])
+    return await _create_list_from_text(current, payload.text, attachment_doc_ids=doc_ids)
 
 
 # ---- Modifica delle Liste da testo libero (chat web + Telegram) ----
@@ -3285,6 +3294,7 @@ async def update_list_via_text(payload: ListUpdatePayload, current: User = Depen
         item_id=payload.item_id, sub_item_id=payload.sub_item_id, fields=payload.fields,
         item_query=payload.item_query, sub_item_query=payload.sub_item_query, confirm=payload.confirm,
         new_sub_items=payload.sub_items, new_items=payload.items, attachment_doc_ids=payload.attachment_doc_ids,
+        conv_id=payload.conv_id,
     )
 
 
@@ -3293,7 +3303,7 @@ async def _execute_list_update(
     item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
     item_query: Optional[str] = None, sub_item_query: Optional[str] = None, confirm: bool = False,
     new_sub_items: Optional[List[dict]] = None, new_items: Optional[List[dict]] = None, channel: str = "web",
-    attachment_doc_ids: Optional[List[str]] = None,
+    attachment_doc_ids: Optional[List[str]] = None, conv_id: Optional[str] = None,
 ) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
 
@@ -3328,6 +3338,10 @@ async def _execute_list_update(
         kb_context = ""
         try:
             doc_ids = [d for d in (attachment_doc_ids or []) if isinstance(d, str)][:10]
+            if not doc_ids and conv_id:   # files sent earlier in the same chat
+                conv = await db.conversations.find_one({"conv_id": conv_id, "user_id": current.user_id}, {"_id": 0})
+                if conv:
+                    doc_ids = await _conv_attachment_ids(current.user_id, conv, conv.get("messages") or [])
             if doc_ids:   # the files sent with this message ARE the subject: use them, not a search
                 kb_context = (await _attachments_text_for_model(current.user_id, doc_ids, limit=6000))
             else:
