@@ -211,7 +211,10 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         kb = await retrieve_kb(user_doc["user_id"], content, scope="all", org_id=user_doc.get("org_id"))
         if kb:
             def _fmt(c): return c.get("display") or c.get("text","")[:400]
-            user_text = f"CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {_fmt(c)}" for c in kb) + f"\n\nDOMANDA:\n{content}"
+            import retrieval
+            period = retrieval.period_hint(content)
+            user_text = (f"CONTESTO KB PERSONALE:\n" + "\n\n".join(f"- {_fmt(c)}" for c in kb)
+                         + (f"\n\n{period}" if period else "") + f"\n\nDOMANDA:\n{content}")
     elif action == "task_todo":
         # Same idea as info_request's RAG above, scoped to the personal KB only (not other
         # tasks/journal entries) - lets "crea un task per ogni lezione di pilates" see a

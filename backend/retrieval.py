@@ -18,11 +18,13 @@ scope="all" also tasks, to-dos, diary, vet reports and Liste):
 
 Kept free of FastAPI/server imports (the db is passed in) so it can be tested directly.
 """
+import calendar
 import logging
 import math
 import re
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -54,8 +56,141 @@ _IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "lug
               "agosto", "settembre", "ottobre", "novembre", "dicembre"]
 _IT_WEEKDAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 
+LOCAL_TZ = ZoneInfo("Europe/Rome")
 ENTITY_RECALL_CAP = 40     # max records pulled in by a rare term (e.g. every note naming a person)
 EXTRA_SUB_ITEM_SCAN = 5000  # list sub-elements (e.g. people enrolled in a lesson) scanned for names
+
+
+PERIOD_RECALL_CAP = 60     # max records pulled in because they fall in the period asked about
+
+# Words that only say WHEN ("ottobre", "questo mese", "settimana scorsa"): once the period is
+# turned into dates they must not be searched as words - "mese" used to match the one note
+# saying "30 euro al mese" and nothing else from October.
+_TIME_WORDS = set(_IT_MONTHS) | {
+    "mese", "mesi", "settimana", "settimane", "giorno", "giorni", "anno", "anni", "oggi", "ieri",
+    "scorso", "scorsa", "scorsi", "scorse", "prossimo", "prossima", "ultimo", "ultima", "ultimi",
+    "ultime", "corrente", "passato", "passata", "inizio", "fine", "mensile", "settimanale",
+}
+
+# A few everyday topics written in many ways: "spese" should also find "ho speso", "pagato",
+# "20 euro" (stems, matched as word prefixes).
+_TOPIC_SYNONYMS = {
+    "spes": ["spes", "spend", "pagat", "pagament", "pago", "euro", "cost", "acquist", "comprat", "scontrin", "fattur", "bollett"],
+    "pagament": ["pagat", "pagament", "pago", "spes", "spend", "euro", "bonific"],
+    "entrat": ["entrat", "incass", "guadagn", "stipend", "ricevut", "euro"],
+}
+
+
+def _month_bounds(y: int, m: int) -> Tuple[date, date]:
+    return date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
+
+
+def time_window(query: str, today: Optional[date] = None) -> Optional[Tuple[date, date, str]]:
+    """The period a question is about, as (first day, last day, label), or None.
+    "le spese di ottobre", "questo mese", "il mese scorso", "questa settimana", "la settimana
+    scorsa", "oggi", "ieri", "negli ultimi 10 giorni", "nel 2025"."""
+    today = today or datetime.now(LOCAL_TZ).date()
+    q = (query or "").lower()
+    if re.search(r"\bl'altro\s*ieri\b|\baltroieri\b", q):
+        d = today - timedelta(days=2)
+        return d, d, "l'altro ieri"
+    if re.search(r"\bieri\b", q):
+        d = today - timedelta(days=1)
+        return d, d, "ieri"
+    if re.search(r"\boggi\b", q):
+        return today, today, "oggi"
+    m = re.search(r"\bultim[ie]\s+(\d{1,3})\s+giorni\b", q)
+    if m:
+        n = max(1, int(m.group(1)))
+        return today - timedelta(days=n - 1), today, f"ultimi {n} giorni"
+    if re.search(r"\bultima\s+settimana\b", q):
+        return today - timedelta(days=6), today, "ultimi 7 giorni"
+    if re.search(r"\bultimo\s+mese\b", q):
+        return today - timedelta(days=29), today, "ultimi 30 giorni"
+    month = next((i + 1 for i, name in enumerate(_IT_MONTHS) if re.search(rf"\b{name}\b", q)), None)
+    year_m = re.search(r"\b(19|20)\d{2}\b", q)
+    if month:
+        if year_m:
+            y = int(year_m.group(0))
+        elif month <= today.month:
+            y = today.year
+        else:  # a month still to come this year: this year if close, otherwise last year's
+            y = today.year if month - today.month <= 2 else today.year - 1
+        lo, hi = _month_bounds(y, month)
+        return lo, hi, f"{_IT_MONTHS[month - 1]} {y}"
+    if re.search(r"\b(mese\s+scorso|scorso\s+mese|mese\s+passato)\b", q):
+        y, mo = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+        lo, hi = _month_bounds(y, mo)
+        return lo, hi, f"{_IT_MONTHS[mo - 1]} {y}"
+    if re.search(r"\b(mese\s+prossimo|prossimo\s+mese)\b", q):
+        y, mo = (today.year, today.month + 1) if today.month < 12 else (today.year + 1, 1)
+        lo, hi = _month_bounds(y, mo)
+        return lo, hi, f"{_IT_MONTHS[mo - 1]} {y}"
+    if re.search(r"\b(questo\s+mese|del\s+mese|nel\s+mese|mese\s+corrente|di\s+questo\s+mese)\b", q):
+        lo, hi = _month_bounds(today.year, today.month)
+        return lo, hi, f"{_IT_MONTHS[today.month - 1]} {today.year}"
+    monday = today - timedelta(days=today.weekday())
+    if re.search(r"\b(settimana\s+scorsa|scorsa\s+settimana|settimana\s+passata)\b", q):
+        return monday - timedelta(days=7), monday - timedelta(days=1), "la settimana scorsa"
+    if re.search(r"\b(settimana\s+prossima|prossima\s+settimana)\b", q):
+        return monday + timedelta(days=7), monday + timedelta(days=13), "la settimana prossima"
+    if re.search(r"\bsettimana\b", q):
+        return monday, monday + timedelta(days=6), "questa settimana"
+    if year_m and re.search(r"\b(nel|del|anno)\s+(19|20)\d{2}\b", q):
+        y = int(year_m.group(0))
+        return date(y, 1, 1), date(y, 12, 31), str(y)
+    return None
+
+
+def period_hint(query: str, today: Optional[date] = None) -> str:
+    """A line for the answering model: which dates the question covers, so it lists every
+    record of that period (and only those) instead of the few best-matching ones."""
+    w = time_window(query, today)
+    if not w:
+        return ""
+    lo, hi, label = w
+    span = format_it_date(lo.isoformat()) if lo == hi else f"da {format_it_date(lo.isoformat())} a {format_it_date(hi.isoformat())}"
+    return (f"PERIODO DELLA DOMANDA: {label} ({span}). Considera solo le voci di questo periodo (la data con cui "
+            f"sono state salvate, oppure la data scritta nel testo se ce n'è una) ed elencale TUTTE, senza fermarti "
+            f"alle prime; se servono, fai anche il totale.")
+
+
+def _local_day(value) -> Optional[date]:
+    """The (Rome) day of an ISO date / datetime string, or None."""
+    if not value:
+        return None
+    v = str(value)
+    try:
+        if "T" in v or " " in v.strip():
+            dt = datetime.fromisoformat(v.strip().replace("Z", "+00:00").replace(" ", "T", 1))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(LOCAL_TZ)
+            return dt.date()
+        return date.fromisoformat(v[:10])
+    except ValueError:
+        return None
+
+
+_DMY = re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b")
+
+
+def _data_day(data: dict) -> Optional[date]:
+    """A date written in a list element's fields ("2026-10-03", "3/10/2026"), if any."""
+    for v in (data or {}).values():
+        if not isinstance(v, str):
+            continue
+        d = _local_day(v) if re.match(r"^\d{4}-\d{2}-\d{2}", v) else None
+        if d:
+            return d
+        m = _DMY.search(v)
+        if m:
+            dd, mm, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            yy = yy + 2000 if yy < 100 else yy
+            try:
+                return date(yy, mm, dd)
+            except ValueError:
+                continue
+    return None
 
 
 def query_terms(query: str) -> List[str]:
@@ -149,14 +284,17 @@ def _is_strong_match(score: int, n_tied: int) -> bool:
 
 async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "kb",
                    org_id: Optional[str] = None, today: Optional[date] = None) -> List[dict]:
-    today = today or date.today()
+    today = today or datetime.now(LOCAL_TZ).date()
     try:
         q_emb = await emb.embed_query(query)
     except Exception:
         logger.exception("embed_query failed, falling back to keyword-only")
         q_emb = None
 
+    window = time_window(query, today)
     terms = query_terms(query)
+    if window:
+        terms = [t for t in terms if t not in _TIME_WORDS and not re.fullmatch(r"(19|20)\d{2}|\d{1,2}", t)]
     stems = {t: _stem(t) for t in terms}
 
     candidates: List[dict] = []
@@ -173,6 +311,7 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title"), "doc_id": c.get("doc_id"),
                      "chunk_index": c.get("chunk_index", 0), "created_at": c.get("created_at")},
             "embedding": c.get("embedding"),
+            "day": _local_day(c.get("created_at")),
         }
         candidates.append(item)
         if c.get("doc_id"):
@@ -193,7 +332,8 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             when = t.get("due_date", "") + (f" {t.get('due_time', '')}" if t.get("due_time") else "")
             done = " · completato" if t.get("completed") else ""
             display = f"[Task] {t.get('title', '')} — {when} · priorità {t.get('priority', 'media')}{done}. {t.get('description', '') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": t.get("embedding")})
+            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": t.get("embedding"),
+                               "day": _local_day(t.get("due_date"))})
         for td in await db.todos.find({"user_id": user_id}, {"_id": 0}).to_list(1000):
             txt = " · ".join(p for p in [td.get("title", ""), td.get("description", ""), td.get("notes", "")] if p)
             if not txt:
@@ -207,7 +347,8 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             # The whole day (up to 1500 chars), not just its opening: a name mentioned late in a
             # long entry used to be cut off before the model ever saw it.
             display = f"[Diario · {j.get('date', '')} ({format_it_date(j.get('date'))})] {j.get('title', '')}. {txt[:1500]}".strip()
-            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": j.get("embedding")})
+            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": j.get("embedding"),
+                               "day": _local_day(j.get("date"))})
         for vrp in await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(1000):
             txt = (vrp.get("transcript") or "").strip()
             if not txt:
@@ -217,7 +358,7 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             display = f"[Referto veterinario · {visit_date}] {who} — {vrp.get('template_name', '')}. {txt[:600]}".strip()
             candidates.append({"text": f"{who} {txt}", "display": display, "source": "vet_report",
                                "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
-                               "embedding": vrp.get("embedding")})
+                               "embedding": vrp.get("embedding"), "day": _local_day(visit_date)})
 
     # ---- Liste ----
     extra_scan: List[dict] = []  # list sub-elements, searched by name only (no embedding cost)
@@ -239,8 +380,11 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             if not parts:
                 continue
             txt = " · ".join(parts)
-            cand = {"text": txt, "display": f"[Lista: {coll.get('name', '')}] {txt}", "source": "collection_item",
-                    "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": it.get("embedding")}
+            day = _data_day(it.get("data")) or _local_day(it.get("created_at"))
+            added = "" if _data_day(it.get("data")) else (f" (aggiunto {format_it_date(it.get('created_at'))})" if it.get("created_at") else "")
+            cand = {"text": txt, "display": f"[Lista: {coll.get('name', '')}] {txt}{added}", "source": "collection_item",
+                    "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": it.get("embedding"),
+                    "day": day}
             item_candidates.append(cand)
             item_display_map[it["id"]] = txt
         if scope == "all":
@@ -405,6 +549,29 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
         for _n, c in entity_hits[:ENTITY_RECALL_CAP]:
             forced.add(id(c))
 
+    # ---- period recall: "le spese di ottobre" = every record of October about spending ----
+    # (the dates come from the record - saved on, due on, diary day - never from words)
+    period_hits = 0
+    if window:
+        lo, hi = window[0], window[1]
+        syn = [s_ for t in terms for k, v in _TOPIC_SYNONYMS.items() if stems[t].startswith(k) or k.startswith(stems[t]) for s_ in v]
+        in_period = []
+        for (_tot, sem, hits, c) in scored:
+            d = c.get("day")
+            if not d or d < lo or d > hi:
+                continue
+            if terms:
+                toks = token_cache.get(id(c)) or _tokens(c["text"])
+                topical = hits >= 1 or sem >= 0.30 or any(w.startswith(p) for p in syn for w in toks) \
+                    or ("€" in c["text"] and any(p in ("euro", "spes") for p in syn))
+                if not topical:
+                    continue
+            in_period.append(c)
+        in_period.sort(key=lambda c: c["day"])
+        for c in in_period[:PERIOD_RECALL_CAP]:
+            forced.add(id(c))
+        period_hits = len(in_period)
+
     forced_list = [c for c in candidates + extra_scan if id(c) in forced]
     rest = [s for s in scored if id(s[3]) not in forced and (s[1] >= 0.20 or s[2] >= 1)]
     rest.sort(key=lambda x: x[0], reverse=True)
@@ -473,5 +640,6 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                 if len(top) >= limit:
                     break
 
-    logger.info(f"[retrieve] q={query[:60]!r} terms={terms} entity={entity_terms} pool={pool_size} forced={len(forced_list)} returned={len(top)}")
+    logger.info(f"[retrieve] q={query[:60]!r} terms={terms} entity={entity_terms} period={window[2] if window else None}:{period_hits} "
+                f"pool={pool_size} forced={len(forced_list)} returned={len(top)}")
     return top

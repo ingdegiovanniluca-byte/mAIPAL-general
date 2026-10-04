@@ -1283,7 +1283,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             return c.get("text", "")
         ctx = "\n\n".join([f"- {_fmt(c)}" for c in kb_context])
         label = "RICHIESTA" if action == "task_todo" else "DOMANDA"
-        user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\n{label}:\n{user_text}"
+        period = retrieval.period_hint(payload.content) if action == "info_request" else ""
+        user_text = f"CONTESTO KB PERSONALE:\n{ctx}\n\n{period + chr(10) + chr(10) if period else ''}{label}:\n{user_text}"
 
     initial = [{"role": "system", "content": system}]
     for m in prior_messages:
