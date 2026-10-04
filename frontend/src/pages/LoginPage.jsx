@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import PageBackground from "@/components/PageBackground";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { ArrowRight, ShieldAlert } from "lucide-react";
 import { api } from "@/lib/api";
@@ -244,13 +245,7 @@ export default function LoginPage() {
 
   return (
     <div className="font-poppins h-screen w-full relative overflow-hidden">
-      <div className="liquid-page-bg" aria-hidden="true">
-        <span className="liquid-blob liquid-blob-1" />
-        <span className="liquid-blob liquid-blob-2" />
-        <span className="liquid-blob liquid-blob-3" />
-        <span className="liquid-blob liquid-blob-4" />
-        <span className="liquid-blob liquid-blob-5" />
-      </div>
+      <PageBackground />
 
       <div className="relative z-10 h-full w-full flex flex-col p-6 md:p-10 xl:p-14">
         <div className="flex items-center justify-between shrink-0">

@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2 } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Mic } from "lucide-react";
+import { usePref } from "@/lib/prefs";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -34,6 +35,7 @@ export default function SettingsPage() {
   const [verticals, setVerticals] = useState([]);
   const [interests, setInterests] = useState("");
   const [tone, setTone] = useState("informale");
+  const [micSide, setMicSide] = usePref("micSide");   // this device only, applied at once
   const [homeAddress, setHomeAddress] = useState("");
   const [workAddress, setWorkAddress] = useState("");
   const [newsTime, setNewsTime] = useState("08:00");
@@ -240,6 +242,19 @@ export default function SettingsPage() {
               </button>
             ))}
           </div>
+        </div>
+        <div className="md:col-span-2">
+          <FieldLabel icon={Mic} mb="mb-2">microfono nella chat</FieldLabel>
+          <div className="flex flex-wrap gap-2" data-testid="mic-side">
+            {[["left", "Sinistra"], ["right", "Destra"]].map(([v, label]) => (
+              <button key={v} data-testid={`mic-side-${v}`} onClick={() => setMicSide(v)}
+                      style={micSide === v ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
+                      className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${micSide === v ? "" : "bg-white/10  hover:"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs text-white/50 mt-1.5">Da che lato della barra di scrittura sta il tasto dei vocali. Vale su questo dispositivo, subito.</div>
         </div>
         <div>
           <FieldLabel icon={Home}>indirizzo casa</FieldLabel>

@@ -8,8 +8,10 @@ const R = H / 2;
    corners of the same radius) joined by a neck, like two drops of glass merging.
    `blockH` is the block's height (>= H); the circle sits level with its last row.
    Every piece is drawn clockwise, so with the default nonzero fill they add up to a
-   single shape. Mirrored with `circleLeft`. */
-export function liquidPath(W, blockH = H, circleLeft = false) {
+   single shape. Mirrored with `circleLeft`; with `circleTop` the circle sits level with the
+   block's FIRST row instead (the chat composer: voice button up top, a taller text block). */
+export function liquidPath(W, blockH = H, circleLeft = false, circleTop = false) {
+  if (circleTop) return flipY(liquidPath(W, blockH, circleLeft), Math.max(H, blockH));
   const bh = Math.max(H, blockH);
   const cy = bh - R;                                   // circle's (and neck's) centre line
   const a = (50 * Math.PI) / 180;                      // where the neck leaves each round end
@@ -44,8 +46,26 @@ export function liquidPath(W, blockH = H, circleLeft = false) {
   return `${blockMirrored} ${circ} ${neck}`;
 }
 
-/* The glass itself, cut to `d`: a soft shadow, the blurred frosted layer and the light on
-   its top. A single element, so the blur flows through the neck without a seam (a CSS
+/* Upside-down copy of a path made of M/L/H/V/C/A/Z commands: y -> height - y, and every
+   arc's sweep flag flipped. Every piece turns the other way alike, so a union stays one. */
+function flipY(d, height) {
+  const tokens = d.match(/[MLHVCAZ]|-?\d*\.?\d+/g) || [];
+  const arity = { M: 2, L: 2, H: 1, V: 1, C: 6, A: 7, Z: 0 };
+  const out = [];
+  let cmd = null, i = 0;
+  for (const t of tokens) {
+    if (/[A-Z]/.test(t)) { cmd = t; i = 0; out.push(t); continue; }
+    const n = arity[cmd], j = i % n;
+    let v = parseFloat(t);
+    if (cmd === "V" || ((cmd === "M" || cmd === "L" || cmd === "C") && j % 2 === 1) || (cmd === "A" && j === 6)) v = height - v;
+    else if (cmd === "A" && j === 4) v = v ? 0 : 1;
+    out.push(cmd === "A" && j >= 2 && j <= 4 ? String(v) : v.toFixed(2));
+    i += 1;
+  }
+  return out.join(" ");
+}
+
+/* The glass itself, cut to `d`: a soft shadow and the blurred frosted layer (no rim). A single element, so the blur flows through the neck without a seam (a CSS
    filter on it would turn the backdrop blur off - hence the shadow in its own SVG). */
 export function LiquidGlass({ d, width, height }) {
   const uid = useId().replace(/:/g, "");
@@ -59,21 +79,10 @@ export function LiquidGlass({ d, width, height }) {
             <feGaussianBlur stdDeviation="11" />
           </filter>
         </defs>
-        <path d={d} transform="translate(0 10)" fill="rgba(40,10,50,0.24)" filter={`url(#ls-${uid})`} />
+        <path d={d} transform="translate(0 10)" fill="rgba(60,10,40,0.16)" filter={`url(#ls-${uid})`} />
       </svg>
       <div aria-hidden="true" className="lg-goo absolute left-0 top-0 pointer-events-none"
            style={{ width, height, clipPath: `path('${d}')`, WebkitClipPath: `path('${d}')` }} />
-      <svg aria-hidden="true" width={width} height={height} viewBox={`0 0 ${width} ${height}`}
-           className="absolute left-0 top-0 pointer-events-none">
-        <defs>
-          <linearGradient id={`lh-${uid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#fff" stopOpacity="0.22" />
-            <stop offset={Math.min(0.45, 30 / height)} stopColor="#fff" stopOpacity="0.04" />
-            <stop offset="1" stopColor="#fff" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={d} fill={`url(#lh-${uid})`} />
-      </svg>
     </>
   );
 }

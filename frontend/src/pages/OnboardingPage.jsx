@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import PageBackground from "@/components/PageBackground";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
@@ -121,13 +122,7 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen relative">
-      <div className="liquid-page-bg" aria-hidden="true">
-        <span className="liquid-blob liquid-blob-1" />
-        <span className="liquid-blob liquid-blob-2" />
-        <span className="liquid-blob liquid-blob-3" />
-        <span className="liquid-blob liquid-blob-4" />
-        <span className="liquid-blob liquid-blob-5" />
-      </div>
+      <PageBackground />
 
       <div className="relative z-10 p-10 md:p-16 max-w-3xl mx-auto flex flex-col min-h-screen">
         <div className="kicker">onboarding · {step + 1} / {steps.length}</div>

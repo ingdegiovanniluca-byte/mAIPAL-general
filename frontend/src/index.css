@@ -53,11 +53,11 @@ html, body, #root {
    (iOS ignores background-attachment: fixed reliably). Body inherits transparent so #root
    controls the visible area, but the html fallback covers the "bounce/overscroll" region too. */
 html {
-    background: linear-gradient(155deg, #FF9A3C 0%, #F7356F 36%, #B5157A 60%, #5B2C8A 82%, #1F6E9E 100%);
+    background: linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%);
     background-repeat: no-repeat;
     background-size: 100% 100%;
     /* iOS Safari overscroll fill */
-    background-color: #B5157A;
+    background-color: #93306C;
 }
 
 *, *::before, *::after {
@@ -66,7 +66,7 @@ html {
 
 body {
     margin: 0;
-    background: linear-gradient(155deg, #FF9A3C 0%, #F7356F 36%, #B5157A 60%, #5B2C8A 82%, #1F6E9E 100%);
+    background: linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%);
     color: #FFFFFF;
     font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -78,7 +78,7 @@ body {
 }
 
 #root {
-    background: linear-gradient(155deg, #FF9A3C 0%, #F7356F 36%, #B5157A 60%, #5B2C8A 82%, #1F6E9E 100%);
+    background: linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%);
     min-height: 100vh;
     min-height: 100svh;
     min-height: -webkit-fill-available;
@@ -293,62 +293,61 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
    backdrop-filter blur, inspired by Apple's Liquid Glass material. Used on the login
    page: the blobs drift slowly behind everything, and every glass button/panel on top
    is translucent enough to show the moving color through the blur. */
-/* "Tramonto": the logo's colors (amber, magenta, berry, violet, petrol) on a diagonal,
-   with slow blobs of the same hues drifting over it. */
+/* "Vinaccia": a pale warm base with big, very blurred shapes (wine, orange, pink, peach and
+   a powder blue #CBDFE4 in the top-left and bottom-right corners) seen through a
+   wine-tinted glass (.liquid-tint), so the screen reads wine/pink on top and warm orange
+   below, with white text on it. The powder blue is painted again over the tint
+   (.liquid-blob-over-*), or the wine glass turns it lilac-grey. Sizes and places come from
+   the mobile mockup (390x844); on wide screens the shapes are capped so they stay shapes. */
 .liquid-page-bg {
     position: fixed;
     inset: 0;
     z-index: 0;
     overflow: hidden;
-    background: linear-gradient(155deg, #FF9A3C 0%, #F7356F 36%, #B5157A 60%, #5B2C8A 82%, #1F6E9E 100%);
+    background: radial-gradient(120% 80% at 50% 40%, #E6E1DC 0%, #D6D0CA 60%, #CFC9C3 100%);
 }
 .liquid-blob {
     position: absolute;
-    border-radius: 50%;
-    filter: blur(90px);
-    opacity: 0.55;
+    filter: blur(46px);
     will-change: transform;
 }
-.liquid-blob-1 { width: 60vw; height: 60vw; left: -12vw; top: -18vw; background: #FFA228; animation: liquid-drift-1 22s ease-in-out infinite; }
-.liquid-blob-2 { width: 55vw; height: 55vw; right: -16vw; top: 30vh; background: #F20262; opacity: 0.45; animation: liquid-drift-2 26s ease-in-out infinite; }
-.liquid-blob-3 { width: 50vw; height: 50vw; left: -8vw; bottom: -22vw; background: #017C99; animation: liquid-drift-3 20s ease-in-out infinite; }
-.liquid-blob-4 { width: 45vw; height: 45vw; right: 4vw; bottom: -16vw; background: #B3046C; opacity: 0.35; animation: liquid-drift-4 24s ease-in-out infinite; }
-.liquid-blob-5 { width: 38vw; height: 38vw; left: 32vw; top: 18vh; background: #FE7D00; opacity: 0.3; animation: liquid-drift-5 28s ease-in-out infinite; }
+.liquid-blob-1 { left: 31vw;  top: 9.5vh;  width: min(77vw, 760px); height: min(77vw, 760px); background: #8E2F6B; opacity: 0.9;  border-radius: 48% 52% 40% 60%; animation: liquid-drift-1 22s ease-in-out infinite; }
+.liquid-blob-2 { left: -31vw; top: 55.7vh; width: min(92vw, 880px); height: min(92vw, 880px); background: #F2701E; opacity: 0.95; border-radius: 60% 40% 55% 45%; animation: liquid-drift-2 19s ease-in-out infinite; }
+.liquid-blob-3 { left: 41vw;  top: 66.4vh; width: min(67vw, 640px); height: min(62vw, 590px); background: #FF8A3D; opacity: 0.7;  border-radius: 50%; animation: liquid-drift-3 24s ease-in-out infinite; }
+.liquid-blob-4 { left: -15vw; top: 19vh;   width: min(56vw, 540px); height: min(62vw, 590px); background: #C2457F; opacity: 0.8;  border-radius: 50%; animation: liquid-drift-2 26s ease-in-out infinite; }
+.liquid-blob-5 { left: 56vw;  top: 45vh;   width: min(51vw, 500px); height: min(51vw, 500px); background: #E9A7B8; opacity: 0.6;  border-radius: 50%; animation: liquid-drift-1 20s ease-in-out infinite; }
+.liquid-blob-6 { left: -10vw; top: -7vh;   width: min(56vw, 540px); height: min(46vw, 440px); background: #F4C9A8; opacity: 0.5;  border-radius: 50%; animation: liquid-drift-3 30s ease-in-out infinite; }
+.liquid-blob-7 { left: -28vw; top: -12vh;  width: min(72vw, 690px); height: min(67vw, 640px); background: #CBDFE4; opacity: 0.95; border-radius: 50% 50% 45% 55%; animation: liquid-drift-3 29s ease-in-out infinite; }
+.liquid-blob-8 { left: 46vw;  top: 73.5vh; width: min(77vw, 760px); height: min(77vw, 760px); background: #CBDFE4; opacity: 0.95; border-radius: 55% 45% 50% 50%; animation: liquid-drift-2 23s ease-in-out infinite; }
+.liquid-blob-9 { left: 69vw;  top: 50vh;   width: min(41vw, 400px); height: min(44vw, 420px); background: #CBDFE4; opacity: 0.7;  border-radius: 50%; animation: liquid-drift-1 27s ease-in-out infinite; }
+.liquid-tint {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(170deg, rgba(150, 40, 95, 0.42) 0%, rgba(120, 28, 80, 0.36) 55%, rgba(150, 50, 90, 0.3) 100%);
+}
+.liquid-blob-over-1 { left: -31vw; top: -13vh; width: min(72vw, 690px); height: min(64vw, 610px); background: #CBDFE4; opacity: 0.5;  border-radius: 50% 50% 45% 55%; animation: liquid-drift-3 29s ease-in-out infinite; }
+.liquid-blob-over-2 { left: 44vw;  top: 71vh;  width: min(77vw, 760px); height: min(77vw, 760px); background: #CBDFE4; opacity: 0.55; border-radius: 55% 45% 50% 50%; animation: liquid-drift-2 23s ease-in-out infinite; }
+.liquid-blob-over-3 { left: 72vw;  top: 51vh;  width: min(36vw, 350px); height: min(38vw, 370px); background: #CBDFE4; opacity: 0.35; border-radius: 50%; animation: liquid-drift-1 27s ease-in-out infinite; }
 
-@keyframes liquid-drift-1 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(8vw, 6vh) scale(1.15); } }
-@keyframes liquid-drift-2 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-6vw, 8vh) scale(0.9); } }
-@keyframes liquid-drift-3 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(6vw, -6vh) scale(1.1); } }
-@keyframes liquid-drift-4 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-5vw, -8vh) scale(1.2); } }
-@keyframes liquid-drift-5 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(4vw, 5vh) scale(1.25); } }
+@keyframes liquid-drift-1 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(8vw, 3vh) scale(1.08); } }
+@keyframes liquid-drift-2 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-6vw, 3.5vh) scale(0.94); } }
+@keyframes liquid-drift-3 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(5vw, -3vh) scale(1.06); } }
 
 @media (prefers-reduced-motion: reduce) {
     .liquid-blob { animation: none; }
 }
 
-/* Web (>=768px): the glass panels sit on wide, smooth areas of the gradient, so there was
-   nothing for their blur to melt - they read as flat tinted boxes. Here the blobs are
-   sharper, deeper and more contrasted (plus a violet and a blue one), and every panel is a
-   real frosted glass: strong blur that saturates the colours behind, a light top rim and
-   a soft drop shadow. */
-.liquid-blob-6 { width: 30vw; height: 30vw; left: 44vw; top: 46vh; background: #6A2BD9; opacity: 0.75; animation: liquid-drift-2 30s ease-in-out infinite; }
-.liquid-blob-7 { width: 24vw; height: 24vw; left: 8vw; top: 40vh; background: #2F6BFF; opacity: 0.6; animation: liquid-drift-4 26s ease-in-out infinite; }
+/* Web (>=768px): every panel is a frosted glass on the blurred shapes - a whitish veil,
+   a soft blur, no border, a soft drop shadow. */
 @media (min-width: 768px) {
-    .liquid-blob { filter: blur(48px); }
-    .liquid-blob-1 { opacity: 0.85; }
-    .liquid-blob-2 { opacity: 0.8; }
-    .liquid-blob-3 { opacity: 0.75; }
-    .liquid-blob-4 { opacity: 0.7; }
-    .liquid-blob-5 { opacity: 0.6; }
+    .liquid-blob { filter: blur(70px); }
     :root:not([data-theme="light"]) .card-soft,
     :root:not([data-theme="light"]) .bg-white\/5.backdrop-blur-xl {
-        background: linear-gradient(140deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.08) 55%, rgba(255, 255, 255, 0.12) 100%);
-        backdrop-filter: blur(30px) saturate(150%);
-        -webkit-backdrop-filter: blur(30px) saturate(150%);
+        background: linear-gradient(170deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
+        backdrop-filter: blur(18px) saturate(120%);
+        -webkit-backdrop-filter: blur(18px) saturate(120%);
         border-color: transparent;
-        box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.38),
-            inset 0 0 0 1px rgba(255, 255, 255, 0.14),
-            0 18px 44px rgba(40, 5, 50, 0.2);
+        box-shadow: 0 14px 36px rgba(60, 10, 40, 0.16);
     }
 }
 
@@ -501,7 +500,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
    stay exclusive to the dark theme, unchanged. */
 [data-theme="light"] .liquid-page-bg { background: #FFFFFF; }
 [data-theme="light"] .liquid-page-bg::after { background: transparent; }
-[data-theme="light"] .liquid-blob { display: none; }
+[data-theme="light"] .liquid-blob,
+[data-theme="light"] .liquid-tint { display: none; }
 
 [data-theme="light"] .card-soft {
     background: #F5F4F8;
@@ -558,33 +558,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     border-color: rgba(33, 29, 40, 0.10) !important;
 }
 
-/* "Tramonto" liquid glass: a frosted sheet with a soft inner sheen and a light rim on
-   both the top and the bottom edge (mobile chat, header buttons, bottom bar, "+"). */
+/* Liquid glass on the "Vinaccia" background: a frosted whitish veil, soft blur, no border
+   or rim (header buttons, the bottom dock and the chat composer). */
 .lg-glass {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.08));
-    backdrop-filter: blur(22px) saturate(170%);
-    -webkit-backdrop-filter: blur(22px) saturate(170%);
-    border: 1px solid rgba(255, 255, 255, 0.38);
-    box-shadow:
-        inset 0 1px 1px rgba(255, 255, 255, 0.65),
-        inset 0 -1px 1px rgba(255, 255, 255, 0.18),
-        0 10px 28px rgba(40, 10, 50, 0.22);
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(18px) saturate(120%);
+    -webkit-backdrop-filter: blur(18px) saturate(120%);
+    box-shadow: 0 8px 22px rgba(60, 10, 40, 0.14);
 }
-/* no border nor edge highlights (bottom bar and its "+" button) */
-.lg-glass.no-rim {
-    border-color: transparent;
-    box-shadow: 0 10px 28px rgba(40, 10, 50, 0.22);
-}
-/* the bottom dock's glass, cut to the pill + neck + circle outline (LiquidDock) */
+.lg-glass.no-rim { box-shadow: 0 8px 22px rgba(60, 10, 40, 0.14); }
+/* the dock's / composer's glass, cut to the liquid outline (LiquidDock) */
 .lg-goo {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.1));
-    backdrop-filter: blur(22px) saturate(170%);
-    -webkit-backdrop-filter: blur(22px) saturate(170%);
+    background: linear-gradient(170deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
+    backdrop-filter: blur(18px) saturate(120%);
+    -webkit-backdrop-filter: blur(18px) saturate(120%);
 }
 /* the bubble that marks the current section in the bottom bar, sliding between icons */
 .lg-bubble {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.16));
-    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.8), 0 4px 12px rgba(40, 10, 50, 0.18);
+    background: rgba(255, 255, 255, 0.26);
     transition: transform 0.55s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.25s;
 }
 @media (prefers-reduced-motion: reduce) { .lg-bubble { transition: none; } }

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import PageBackground from "@/components/PageBackground";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
@@ -91,16 +92,7 @@ export default function DashboardLayout() {
 
   return (
     <div className="min-h-screen relative">
-      <div className="liquid-page-bg" aria-hidden="true">
-        <span className="liquid-blob liquid-blob-1" />
-        <span className="liquid-blob liquid-blob-2" />
-        <span className="liquid-blob liquid-blob-3" />
-        <span className="liquid-blob liquid-blob-4" />
-        <span className="liquid-blob liquid-blob-5" />
-        {/* web only: two more, sharper shapes, so the glass panels have colour to bend */}
-        <span className="liquid-blob liquid-blob-6 hidden md:block" />
-        <span className="liquid-blob liquid-blob-7 hidden md:block" />
-      </div>
+      <PageBackground />
 
       <div className="relative z-10">
         {/* ===== Desktop / tablet header (>=768px) — unchanged content, now fixed in place

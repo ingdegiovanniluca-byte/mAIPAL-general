@@ -10,6 +10,7 @@ import { useIsMobile } from "@/hooks/use-is-mobile";
 import { takeSharedPayload } from "@/lib/pwa";
 import SuggestionsTicker from "@/components/SuggestionsTicker";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
+import { usePref } from "@/lib/prefs";
 import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -1193,6 +1194,8 @@ export default function ChatPage() {
     return [ACTIONS[0], ...others];
   }, [usage]);
   const [composerRef, composerSize] = useMeasure();
+  const [micSide] = usePref("micSide");
+  const micRight = micSide !== "left";
   const agentRowRef = useRef(null);
   const [rowEdges, setRowEdges] = useState({ start: true, end: false });
   const onAgentRowScroll = () => {
@@ -1320,13 +1323,14 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* Liquid-glass composer, the bottom menu mirrored: the round voice button on the left,
-          joined by a glass neck to the text bar on the right. The bar opens into a card
-          (chips, @) and the glass follows its size. One DOM for both shapes (bar / card),
-          only the classes change: the textarea is never remounted, so the keyboard stays
-          open when the bar opens up. */}
-      <div ref={composerRef} data-testid="chat-composer" className="relative mt-5 flex items-end" style={{ gap: LIQUID_GAP }}>
-        <LiquidGlass d={composerSize.w ? liquidPath(composerSize.w, composerSize.h, true) : null} width={composerSize.w} height={composerSize.h} />
+      {/* Liquid-glass composer: the round voice button joined by a glass neck to a text block
+          twice its height; the button sits level with the block's first row, on the right or
+          on the left (Impostazioni -> Profilo, "Microfono"). The text sits on top, attach and
+          send at the bottom; chips and @ open up in between and the glass follows the size.
+          The textarea is never remounted, so the keyboard stays open as the block grows. */}
+      <div ref={composerRef} data-testid="chat-composer" data-mic-side={micRight ? "right" : "left"}
+        className={`relative mt-5 flex items-start ${micRight ? "flex-row-reverse" : ""}`} style={{ gap: LIQUID_GAP }}>
+        <LiquidGlass d={composerSize.w ? liquidPath(composerSize.w, composerSize.h, !micRight, true) : null} width={composerSize.w} height={composerSize.h} />
         <button
           data-testid="mic-btn"
           onClick={recording ? stopRec : startRec}
@@ -1337,14 +1341,11 @@ export default function ChatPage() {
         >
           {recording && <span aria-hidden="true" className="mic-ring absolute inset-1 rounded-full" />}
           {recording && <span aria-hidden="true" className="mic-rec absolute inset-1 rounded-full" />}
-          {recording ? <Square size={16} fill="currentColor" className="relative" /> : <Mic size={22} strokeWidth={1.9} />}
+          {recording ? <Square size={16} fill="currentColor" className="relative" /> : <Mic size={22} strokeWidth={1.8} />}
         </button>
-        <div
-          data-testid="chat-input-card"
-          className={`relative flex-1 min-w-0 min-h-16 flex flex-wrap items-center ${composerOpen ? "pl-5 pr-3 pt-3 pb-2 gap-y-1" : "pl-5 pr-3"}`}
-        >
+        <div data-testid="chat-input-card" className="relative flex-1 min-w-0 min-h-[128px] flex flex-col pl-5 pr-3 pt-3 pb-3">
           {recording && (
-            <div data-testid="rec-bar" className="order-1 flex-1 min-w-0 flex items-center gap-2 h-16">
+            <div data-testid="rec-bar" className="flex items-center gap-2 h-10">
               <span className="text-[15px] font-semibold tabular-nums">{Math.floor(recSeconds / 60)}:{String(recSeconds % 60).padStart(2, "0")}</span>
               <span aria-hidden="true" className="flex-1 min-w-0 h-6 flex items-center gap-[3px] overflow-hidden opacity-85">
                 {Array.from({ length: 24 }, (_, i) => (
@@ -1370,10 +1371,10 @@ export default function ChatPage() {
             }}
             placeholder={(thread || mobileReplyTo) ? "Rispondi o chiedi altro…" : activeAction.placeholder}
             rows={1}
-            className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-2 px-0 resize-none text-white placeholder:text-white/55 overflow-y-hidden no-scrollbar ${recording ? "hidden" : ""} ${composerOpen ? "order-1 basis-full" : "order-1 flex-1 min-w-0 placeholder:truncate"}`}
+            className={`border-0 focus-visible:ring-0 bg-transparent shadow-none min-h-0 text-[15px] leading-relaxed py-1 px-0 resize-none text-white placeholder:text-white/70 overflow-y-hidden no-scrollbar ${recording ? "hidden" : ""}`}
           />
           {composerOpen && (
-            <div className="order-2 basis-full min-w-0 max-w-full">
+            <div className="min-w-0 max-w-full mt-1">
               {mentionMenu}
               {shareChips}
               {tagChips}
@@ -1381,20 +1382,20 @@ export default function ChatPage() {
               <div className="flex items-center gap-1.5 flex-wrap empty:hidden mb-1">{composerChips}</div>
             </div>
           )}
-          {composerOpen && <div className="order-2 basis-full h-px bg-white/15" />}
-          {!recording && (
-            <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
-              className={`p-2 rounded-full text-white/85 hover:bg-white/15 ${composerOpen ? "order-3 -ml-2" : "order-2"}`}>
-              <Paperclip size={19} />
-            </button>
-          )}
-          {composerOpen && (
-            <button type="button" data-testid="at-btn" onClick={insertAt} title="Tagga un agente o una persona" aria-label="Tagga"
-              className="order-3 p-2 rounded-full text-white/85 hover:bg-white/15">
-              <AtSign size={19} />
-            </button>
-          )}
-          <div className={`order-3 flex items-center ${composerOpen ? "ml-auto" : "ml-1"}`}>
+          <div className="mt-auto pt-1 flex items-center gap-1">
+            {composerOpen && (
+              <button type="button" data-testid="at-btn" onClick={insertAt} title="Tagga un agente o una persona" aria-label="Tagga"
+                className="-ml-2 p-2 rounded-full text-white/85 hover:bg-white/15">
+                <AtSign size={19} />
+              </button>
+            )}
+            <span className="flex-1" />
+            {!recording && (
+              <button data-testid="attach-btn" onClick={onAttachClick} title="Allega" aria-label="Allega"
+                className="p-2 rounded-full text-white/90 hover:bg-white/15">
+                <Paperclip size={19} />
+              </button>
+            )}
             <button
               data-testid="send-btn"
               onClick={send}
@@ -1430,7 +1431,7 @@ export default function ChatPage() {
               className="basis-1/5 shrink-0 flex flex-col items-center gap-1.5">
               {/* selected: a small borderless glass disc behind the icon */}
               <span className={`h-12 w-12 flex items-center justify-center transition-colors duration-200 ${sel ? "text-white" : "text-white/60"}`}>
-                <span className={`h-11 w-11 rounded-full flex items-center justify-center transition-all duration-300 ${sel ? "bg-gradient-to-br from-white/50 to-white/15 backdrop-blur-md" : ""}`}>
+                <span className={`h-11 w-11 rounded-full flex items-center justify-center transition-all duration-300 ${sel ? "bg-white/20" : ""}`}>
                   {React.cloneElement(a.icon, { size: 20 })}
                 </span>
               </span>
