@@ -773,6 +773,23 @@ export default function ChatPage() {
     );
   };
 
+  // The wrong-agent suggestion's buttons: the same message goes, as a new chat, to the
+  // suggested agent (or to the chosen one anyway). send() runs once the state is in place.
+  const skipAgentGuardRef = useRef(false);
+  const [resendTick, setResendTick] = useState(0);
+  const resendTo = (agentId, content) => {
+    skipAgentGuardRef.current = true;
+    setThread(null);
+    setMobileReplyTo(null);
+    setActive(agentId);
+    setText(content);
+    setResendTick((n) => n + 1);
+  };
+  useEffect(() => {
+    if (resendTick) send();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resendTick]);
+
   const send = async () => {
     if (isMobile && mobileReplyTo) { await sendMobileReply(); return; }
     if (active === "vet_report") { await sendVetReport(); return; }
@@ -805,6 +822,33 @@ export default function ChatPage() {
     // "aggiungi Mario alla lista clienti" is routed to the list editor instead of being
     // saved as a generic note - no separate button needed for the two.
     const { main: mainQuestion, parts: taggedParts } = splitMentions(currentQuestion);
+
+    // Wrong agent? ("salva che ..." sent to Cerca): only on a new chat, and the backend
+    // speaks up only when it is sure - then the chat suggests the right agent instead.
+    const skipGuard = skipAgentGuardRef.current;
+    skipAgentGuardRef.current = false;
+    if (!skipGuard && !thread && attachments.length === 0 && !taggedParts.length && mainQuestion
+        && ["info_request", "info_upload", "task_todo", "journal"].includes(active)) {
+      let suggestion = null;
+      try { suggestion = (await api.post("/agents/check", { action: active, text: mainQuestion })).data?.suggestion; }
+      catch { /* no check: the chosen agent answers */ }
+      if (suggestion) {
+        setText("");
+        setThread({
+          conv_id: null, action: active, liveAnswer: "",
+          messages: [
+            { role: "user", content: currentQuestion },
+            {
+              role: "assistant",
+              content: `${suggestion.reason ? suggestion.reason + " " : ""}Per questa richiesta è meglio l'agente ${suggestion.label}: vuoi mandarla a lui?`,
+              wrongAgent: { text: currentQuestion, agent: suggestion.agent, label: suggestion.label, from: active },
+            },
+          ],
+        });
+        setStreaming(false);
+        return;
+      }
+    }
     // Files already read into the knowledge base can go along: "aggiungi questi prodotti alla
     // lista della spesa" + a photo of the receipt is a list edit about that photo, not a note.
     const listDocIds = attachments.filter((a) => a.kb && a.id).map((a) => a.id);
@@ -1929,6 +1973,26 @@ export default function ChatPage() {
                       >
                         <Repeat size={12} /> Vai alla sezione Azioni
                       </button>
+                    )}
+                    {m.wrongAgent && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="wrong-agent-choices">
+                        <button
+                          data-testid="wrong-agent-switch"
+                          onClick={() => resendTo(m.wrongAgent.agent, m.wrongAgent.text)}
+                          disabled={streaming}
+                          className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-white/90 hover:bg-white text-[#8E2F6B] font-medium"
+                        >
+                          Manda a {m.wrongAgent.label}
+                        </button>
+                        <button
+                          data-testid="wrong-agent-keep"
+                          onClick={() => resendTo(m.wrongAgent.from, m.wrongAgent.text)}
+                          disabled={streaming}
+                          className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-white/10 hover:bg-white/20 text-white"
+                        >
+                          Invia comunque a {ACTIONS.find((a) => a.id === m.wrongAgent.from)?.short || "questo agente"}
+                        </button>
+                      </div>
                     )}
                     {m.taskAmbiguous && (
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-task-choices">

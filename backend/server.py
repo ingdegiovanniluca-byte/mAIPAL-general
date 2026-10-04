@@ -46,6 +46,7 @@ import recurrence as rec
 import conversation_retention as cr
 import mentions as mn
 import usage_tracking as ut
+import agent_guard
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1165,6 +1166,18 @@ _ACTION_TO_FEATURE = {
     "task_todo": "creazione_task",
     "journal": "diario",
 }
+
+
+class AgentCheckPayload(BaseModel):
+    action: str
+    text: str
+
+
+@api_router.post("/agents/check")
+async def agents_check(payload: AgentCheckPayload, current: User = Depends(get_current_user)):
+    """Before a NEW chat goes to the chosen agent: is it surely the wrong one? Then the chat
+    suggests the right agent instead of answering (see agent_guard.py)."""
+    return {"suggestion": await agent_guard.check(payload.text, payload.action, user_id=current.user_id)}
 
 
 @api_router.post("/chat/stream")
