@@ -649,12 +649,12 @@ export default function ChatPage() {
   // Shared by the auto-classifier below and by follow-up messages inside a thread that
   // already turned out to be a list edit - `content` is already fully resolved (voice
   // transcribed if needed) by the caller.
-  const runListUpdateFor = async (content) => {
+  const runListUpdateFor = async (content, docIds = [], shown = content) => {
     setThread((th) => th
-      ? { ...th, messages: [...th.messages, { role: "user", content }] }
-      : { conv_id: null, action: "list_update", messages: [{ role: "user", content }], liveAnswer: "" });
+      ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
+      : { conv_id: null, action: "list_update", messages: [{ role: "user", content: shown }], liveAnswer: "" });
     try {
-      const r = await api.post("/lists/update", { text: content });
+      const r = await api.post("/lists/update", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}) });
       appendListUpdateResult(r.data);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella modifica della lista");
@@ -664,13 +664,13 @@ export default function ChatPage() {
     }
   };
 
-  const runListCreateFor = async (content) => {
+  const runListCreateFor = async (content, docIds = [], shown = content) => {
     setThread((th) => th
-      ? { ...th, messages: [...th.messages, { role: "user", content }] }
-      : { conv_id: null, action: "list_update", messages: [{ role: "user", content }], liveAnswer: "" });
+      ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
+      : { conv_id: null, action: "list_update", messages: [{ role: "user", content: shown }], liveAnswer: "" });
     let reply;
     try {
-      const r = await api.post("/lists/create-from-text", { text: content });
+      const r = await api.post("/lists/create-from-text", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}) });
       reply = (r.data?.status === "ok" ? "📋 " : "⚠️ ") + (r.data?.message || "");
       if (r.data?.status === "ok") toast.success(`Lista «${r.data.name}» creata`);
     } catch (e) {
@@ -796,7 +796,10 @@ export default function ChatPage() {
     // "aggiungi Mario alla lista clienti" is routed to the list editor instead of being
     // saved as a generic note - no separate button needed for the two.
     const { main: mainQuestion, parts: taggedParts } = splitMentions(currentQuestion);
-    if (active === "info_upload" && attachments.length === 0 && mainQuestion) {
+    // Files already read into the knowledge base can go along: "aggiungi questi prodotti alla
+    // lista della spesa" + a photo of the receipt is a list edit about that photo, not a note.
+    const listDocIds = attachments.filter((a) => a.kb && a.id).map((a) => a.id);
+    if (active === "info_upload" && attachments.length === listDocIds.length && mainQuestion) {
       // Re-classify on every new message, not just the first one in a thread: a user who
       // uploaded a file (starting an "info_upload" thread) may only ask to act on it - "crea
       // un campo per ogni orario..." - in a LATER message of that same thread, and that must
@@ -810,7 +813,9 @@ export default function ChatPage() {
       }
       if (kind === "list_create" || kind === "list_update" || thread?.action === "list_update") {
         setText("");
-        await (kind === "list_create" ? runListCreateFor(mainQuestion) : runListUpdateFor(mainQuestion));
+        const shown = [mainQuestion, ...attachments.map((a) => `📎 ${a.name}`)].join("\n");
+        setAttachments([]);
+        await (kind === "list_create" ? runListCreateFor(mainQuestion, listDocIds, shown) : runListUpdateFor(mainQuestion, listDocIds, shown));
         if (taggedParts.length) await dispatchTagged(currentQuestion);
         return;
       }

@@ -296,6 +296,9 @@ class ListUpdatePayload(BaseModel):
     items: Optional[List[dict]] = None
     # Set on the follow-up call confirming a clear_items/clear_sub_items/bulk_add_items bulk op.
     confirm: bool = False
+    # Files attached to this very message (already in the KB): their text is what the request
+    # is about - "aggiungi questi prodotti alla lista della spesa" + a photo of a receipt.
+    attachment_doc_ids: Optional[List[str]] = None
 
 
 class NewsFeedbackPayload(BaseModel):
@@ -992,6 +995,9 @@ def build_system_prompt(user: User, action: str) -> str:
     if action == "info_upload":
         base += (
             " L'utente sta caricando un'informazione. Conferma cosa hai memorizzato in modo naturale (1-3 frasi). "
+            "Tu salvi SOLO informazioni e note: non puoi aggiungere, togliere o modificare elementi delle Liste "
+            "(lista della spesa, clienti...). Non dire MAI di averlo fatto; se l'utente lo chiedeva, digli che hai "
+            "salvato l'informazione come nota e che può chiedere di nuovo la modifica alla lista. "
             "REGOLA CRITICA SU GOOGLE DRIVE: il salvataggio del file su Google Drive (se richiesto) è un processo "
             "separato ed eseguito da un altro componente, di cui NON hai visibilità diretta in questo momento — "
             "NON dare mai per scontato che un file sia stato salvato su Drive o in una cartella specifica solo perché "
@@ -3215,13 +3221,17 @@ def _field_key(label: str, taken: set) -> str:
     return key
 
 
-async def _create_list_from_text(current: User, text: str, channel: str = "web") -> dict:
+async def _create_list_from_text(current: User, text: str, channel: str = "web", attachment_doc_ids: Optional[List[str]] = None) -> dict:
     """Creates a new list (and its first items) from a sentence. Until now chat could only
     EDIT existing lists: "crea una lista ..." was either saved as a plain note or sent to
     the list editor, which found no such list - and nothing was created."""
     try:
-        hits = await retrieve_kb(current.user_id, text, scope="kb", org_id=current.org_id, limit=6)
-        ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)[:6000]
+        doc_ids = [d for d in (attachment_doc_ids or []) if isinstance(d, str)][:10]
+        if doc_ids:
+            ctx = await _attachments_text_for_model(current.user_id, doc_ids, limit=6000)
+        else:
+            hits = await retrieve_kb(current.user_id, text, scope="kb", org_id=current.org_id, limit=6)
+            ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)[:6000]
     except Exception:
         ctx = ""
     spec = await lu.interpret_list_creation(text, ctx, user_id=current.user_id, channel=channel)
@@ -3257,9 +3267,14 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web")
             "message": f"Ho creato la lista «{coll['name']}» (colonne: {cols}){what}. La trovi nella sezione Liste."}
 
 
+class ListCreatePayload(BaseModel):
+    text: str
+    attachment_doc_ids: Optional[List[str]] = None
+
+
 @api_router.post("/lists/create-from-text")
-async def create_list_from_text(payload: ClassifySaveIntentPayload, current: User = Depends(get_current_user)):
-    return await _create_list_from_text(current, payload.text)
+async def create_list_from_text(payload: ListCreatePayload, current: User = Depends(get_current_user)):
+    return await _create_list_from_text(current, payload.text, attachment_doc_ids=payload.attachment_doc_ids)
 
 
 # ---- Modifica delle Liste da testo libero (chat web + Telegram) ----
@@ -3269,7 +3284,7 @@ async def update_list_via_text(payload: ListUpdatePayload, current: User = Depen
         current, payload.text, op=payload.op, collection_id=payload.collection_id,
         item_id=payload.item_id, sub_item_id=payload.sub_item_id, fields=payload.fields,
         item_query=payload.item_query, sub_item_query=payload.sub_item_query, confirm=payload.confirm,
-        new_sub_items=payload.sub_items, new_items=payload.items,
+        new_sub_items=payload.sub_items, new_items=payload.items, attachment_doc_ids=payload.attachment_doc_ids,
     )
 
 
@@ -3278,6 +3293,7 @@ async def _execute_list_update(
     item_id: Optional[str] = None, sub_item_id: Optional[str] = None, fields: Optional[dict] = None,
     item_query: Optional[str] = None, sub_item_query: Optional[str] = None, confirm: bool = False,
     new_sub_items: Optional[List[dict]] = None, new_items: Optional[List[dict]] = None, channel: str = "web",
+    attachment_doc_ids: Optional[List[str]] = None,
 ) -> dict:
     """Shared by the web endpoint and the Telegram bot (same process, no HTTP round-trip).
 
@@ -3311,8 +3327,12 @@ async def _execute_list_update(
         # the schedule that was OCR'd/extracted into the KB in an earlier message.
         kb_context = ""
         try:
-            kb_hits = await retrieve_kb(current.user_id, text, limit=4, scope="kb", org_id=current.org_id)
-            kb_context = "\n---\n".join((h.get("text") or "").strip() for h in kb_hits if (h.get("text") or "").strip())[:6000]
+            doc_ids = [d for d in (attachment_doc_ids or []) if isinstance(d, str)][:10]
+            if doc_ids:   # the files sent with this message ARE the subject: use them, not a search
+                kb_context = (await _attachments_text_for_model(current.user_id, doc_ids, limit=6000))
+            else:
+                kb_hits = await retrieve_kb(current.user_id, text, limit=4, scope="kb", org_id=current.org_id)
+                kb_context = "\n---\n".join((h.get("text") or "").strip() for h in kb_hits if (h.get("text") or "").strip())[:6000]
         except Exception:
             logger.exception("KB context retrieval for list update failed")
         try:
