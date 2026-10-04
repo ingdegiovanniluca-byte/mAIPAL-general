@@ -181,10 +181,11 @@ def _state_is_fresh(state: dict) -> bool:
 
 
 # ============ ACTION EXECUTION ============
-async def _process_action(db, user_doc: dict, action: str, content: str, conv_id: str | None, images: Optional[list] = None) -> tuple[str, str]:
+async def _process_action(db, user_doc: dict, action: str, content: str, conv_id: str | None, images: Optional[list] = None,
+                          channel: str = "telegram") -> tuple[str, str]:
     """Execute one action against a specific conv_id (new if None). Returns (answer, conv_id).
     `images` (data URIs) is only used when action == "journal" - a photo attached to a diary
-    entry from Telegram (see _msg_photo)."""
+    entry from Telegram (see _msg_photo). Also used by the Galaxy Watch app (channel "watch")."""
     from server import (
         build_system_prompt, _parse_task_json, _create_task_or_todo, _extract_meta, retrieve_kb,
         _find_created_in_conv, _update_task_or_todo_from_meta, _resolve_journal_date, _save_journal_entry,
@@ -192,7 +193,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
 
     new_conv = conv_id is None
     if new_conv:
-        conv_id = f"conv_tg_{uuid.uuid4().hex[:12]}"
+        conv_id = f"conv_{'tg' if channel == 'telegram' else channel}_{uuid.uuid4().hex[:12]}"
 
     # Load prior messages for continuity
     prior_messages = []
@@ -225,7 +226,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
         session_id=conv_id,
         system_message=system,
         user_id=user_doc["user_id"], feature=_TG_ACTION_TO_FEATURE.get(action, "altro"),
-        channel="telegram", trigger="utente", org_id=user_doc.get("org_id"),
+        channel=channel, trigger="utente", org_id=user_doc.get("org_id"),
     ).with_model("openai", "gpt-4o")
 
     # Rebuild history so Claude "remembers" what was said in this thread
@@ -248,7 +249,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
             "conv_id": conv_id,
             "user_id": user_doc["user_id"],
             "action": action,
-            "channel": "telegram",
+            "channel": channel,
             "created_at": now_iso,
             "updated_at": now_iso,
             "messages": [turn_user, turn_bot],
@@ -277,7 +278,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
             "text": content,
             "summary": visible,
             "conv_id": conv_id,
-            "channel": "telegram",
+            "channel": channel,
             "created_at": now_iso,
         })
         # Same "auto task from an embedded reminder" behavior as the web chat - only
@@ -318,7 +319,7 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
 
     ut.fire_and_forget_feature_event(
         user_id=user_doc["user_id"], feature=_TG_ACTION_TO_FEATURE.get(action, "altro"),
-        channel="telegram", trigger="utente", org_id=user_doc.get("org_id"),
+        channel=channel, trigger="utente", org_id=user_doc.get("org_id"),
     )
     return visible, conv_id
 

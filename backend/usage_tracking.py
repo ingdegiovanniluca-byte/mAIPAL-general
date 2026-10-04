@@ -46,7 +46,7 @@ FEATURES = {
     "altro":                    {"label": "Non classificato",                     "category": "sistema"},
 }
 VALID_FEATURES = set(FEATURES)
-VALID_CHANNELS = {"web", "telegram", "sistema"}
+VALID_CHANNELS = {"web", "telegram", "watch", "sistema"}
 VALID_TRIGGERS = {"utente", "automatico"}
 
 _db = None  # impostato da server.py all'avvio via init(db)

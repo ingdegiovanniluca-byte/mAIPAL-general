@@ -5101,6 +5101,251 @@ async def telegram_disconnect(current: User = Depends(get_current_user)):
     return {"ok": True}
 
 
+# ============ OROLOGIO (Galaxy Watch / Wear OS) ============
+# The watch has no keyboard to log in with: it asks for a 6-digit code (shown on its
+# screen), the user types it in the app (Impostazioni › Collegamenti › Orologio) and the
+# watch, which keeps polling, receives its own long-lived session token. It then calls the
+# /watch/* endpoints below (and /voice/transcribe) with "Authorization: Bearer <token>".
+WATCH_PAIR_TTL_MIN = 10
+WATCH_SESSION_DAYS = 365
+WATCH_MAX_FAILED_CODES = 5      # wrong codes per user every WATCH_PAIR_TTL_MIN minutes
+
+
+class WatchPairConfirmPayload(BaseModel):
+    code: str
+
+
+class WatchAskPayload(BaseModel):
+    agent: Literal["info_request", "info_upload", "task_todo", "journal", "scheduled_action"]
+    text: str
+    conv_id: Optional[str] = None
+
+
+@api_router.post("/watch/pair/start")
+async def watch_pair_start():
+    now = datetime.now(timezone.utc)
+    await db.watch_pairings.delete_many({"expires_at": {"$lt": now}})
+    for _ in range(20):
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        if not await db.watch_pairings.find_one({"code": code}, {"_id": 1}):
+            break
+    else:
+        raise HTTPException(status_code=503, detail="Riprova tra poco")
+    pair_id = secrets.token_urlsafe(24)
+    await db.watch_pairings.insert_one({
+        "pair_id": pair_id, "code": code, "user_id": None, "session_token": None,
+        "created_at": now, "expires_at": now + timedelta(minutes=WATCH_PAIR_TTL_MIN),
+    })
+    return {"pair_id": pair_id, "code": code, "expires_in": WATCH_PAIR_TTL_MIN * 60}
+
+
+@api_router.get("/watch/pair/status")
+async def watch_pair_status(pair_id: str):
+    p = await db.watch_pairings.find_one({"pair_id": pair_id}, {"_id": 0})
+    if not p:
+        return {"status": "expired"}
+    exp = p.get("expires_at")
+    if exp and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if not p.get("session_token"):
+        if exp and exp < datetime.now(timezone.utc):
+            await db.watch_pairings.delete_one({"pair_id": pair_id})
+            return {"status": "expired"}
+        return {"status": "pending"}
+    # handed over once, then forgotten: the token only lives in the session and on the watch
+    await db.watch_pairings.delete_one({"pair_id": pair_id})
+    return {"status": "linked", "token": p["session_token"], "name": p.get("user_name") or ""}
+
+
+@api_router.post("/watch/pair/confirm")
+async def watch_pair_confirm(payload: WatchPairConfirmPayload, current: User = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(minutes=WATCH_PAIR_TTL_MIN)
+    failed = await db.watch_pair_failures.count_documents({"user_id": current.user_id, "at": {"$gt": since}})
+    if failed >= WATCH_MAX_FAILED_CODES:
+        raise HTTPException(status_code=429, detail="Troppi codici sbagliati: riprova tra qualche minuto")
+    code = "".join(ch for ch in payload.code if ch.isdigit())
+    p = await db.watch_pairings.find_one({"code": code, "session_token": None, "expires_at": {"$gt": now}}, {"_id": 0})
+    if not p:
+        await db.watch_pair_failures.insert_one({"user_id": current.user_id, "at": now})
+        raise HTTPException(status_code=404, detail="Codice non valido o scaduto: controlla quello mostrato sull'orologio")
+    token = secrets.token_urlsafe(32)
+    device_id = f"watch_{uuid.uuid4().hex[:12]}"
+    await db.user_sessions.insert_one({
+        "user_id": current.user_id, "session_token": token, "device": "watch", "device_id": device_id,
+        "expires_at": now + timedelta(days=WATCH_SESSION_DAYS), "created_at": now,
+    })
+    await db.watch_devices.insert_one({
+        "device_id": device_id, "user_id": current.user_id, "name": "Galaxy Watch",
+        "created_at": now.isoformat(), "last_seen": None,
+    })
+    await db.watch_pairings.update_one({"pair_id": p["pair_id"]}, {"$set": {
+        "user_id": current.user_id, "session_token": token, "user_name": current.name,
+    }})
+    return {"ok": True, "device_id": device_id}
+
+
+@api_router.get("/watch/devices")
+async def watch_devices(current: User = Depends(get_current_user)):
+    return await db.watch_devices.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
+
+
+@api_router.delete("/watch/devices/{device_id}")
+async def watch_device_delete(device_id: str, current: User = Depends(get_current_user)):
+    await db.watch_devices.delete_one({"device_id": device_id, "user_id": current.user_id})
+    await db.user_sessions.delete_many({"device_id": device_id, "user_id": current.user_id})
+    return {"ok": True}
+
+
+async def _watch_seen(request: Request, current: User):
+    token = request.headers.get("authorization", "")[7:]
+    s = await db.user_sessions.find_one({"session_token": token, "device": "watch"}, {"_id": 0, "device_id": 1})
+    if s:
+        await db.watch_devices.update_one({"device_id": s["device_id"]}, {"$set": {"last_seen": datetime.now(timezone.utc).isoformat()}})
+
+
+@api_router.get("/watch/me")
+async def watch_me(request: Request, current: User = Depends(get_current_user)):
+    await _watch_seen(request, current)
+    return {"name": current.name, "email": current.email}
+
+
+def _day_of(value) -> str:
+    return str(value or "")[:10]
+
+
+@api_router.get("/watch/tasks")
+async def watch_tasks(current: User = Depends(get_current_user)):
+    """Today's tasks, the overdue ones and the next week's, light enough for the watch."""
+    today = datetime.now(LOCAL_TZ).date()
+    horizon = (today + timedelta(days=7)).isoformat()
+    t = today.isoformat()
+    docs = await db.tasks.find(_visible_query(current), {"_id": 0, "id": 1, "title": 1, "due_date": 1, "due_time": 1,
+                                                        "completed": 1, "completed_at": 1}).to_list(1000)
+    out = []
+    for d in docs:
+        day = _day_of(d.get("due_date"))
+        if not day:
+            continue
+        done = bool(d.get("completed"))
+        if done:
+            if day != t:
+                continue
+            status = "done"
+        elif day < t:
+            status = "late"
+        elif day == t:
+            status = "today"
+        elif day <= horizon:
+            status = "upcoming"
+        else:
+            continue
+        time = d.get("due_time") or (str(d.get("due_date"))[11:16] if len(str(d.get("due_date") or "")) > 10 else "")
+        out.append({"id": d["id"], "title": d.get("title") or "", "date": day, "time": time or "", "status": status})
+    out.sort(key=lambda x: (x["date"], x["time"] or "99:99"))
+    return {"today": t, "tasks": out}
+
+
+@api_router.post("/watch/tasks/{task_id}/done")
+async def watch_task_done(task_id: str, current: User = Depends(get_current_user)):
+    q = {"id": task_id, **_editable_query(current)}
+    res = await db.tasks.update_one(q, {"$set": {"completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Task non trovato")
+    return {"ok": True}
+
+
+@api_router.get("/watch/todos")
+async def watch_todos(current: User = Depends(get_current_user)):
+    docs = await db.todos.find({"user_id": current.user_id, "status": {"$ne": "fatto"}},
+                               {"_id": 0, "id": 1, "title": 1, "status": 1, "completion_percent": 1}).sort("created_at", -1).to_list(200)
+    return [{"id": d["id"], "title": d.get("title") or "", "status": d.get("status") or "da_fare",
+             "percent": d.get("completion_percent") or 0} for d in docs]
+
+
+@api_router.post("/watch/todos/{todo_id}/done")
+async def watch_todo_done(todo_id: str, current: User = Depends(get_current_user)):
+    res = await db.todos.update_one({"id": todo_id, "user_id": current.user_id},
+                                    {"$set": {"status": "fatto", "completion_percent": 100}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="To-do non trovato")
+    return {"ok": True}
+
+
+@api_router.get("/watch/lists")
+async def watch_lists(current: User = Depends(get_current_user)):
+    colls = await list_collections(current)
+    return [{"id": c["id"], "name": c.get("name") or "", "count": c.get("item_count", 0)} for c in colls]
+
+
+@api_router.get("/watch/lists/{collection_id}")
+async def watch_list_items(collection_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    items = await list_collection_items(collection_id, current)
+    keys = [f["key"] for f in (coll.get("fields") or []) if f.get("key")]
+    out = []
+    for it in items[:300]:
+        data = it.get("data") or {}
+        vals = [str(data.get(k)).strip() for k in keys if data.get(k) not in (None, "", [], False)]
+        if not keys:
+            vals = [str(v).strip() for v in data.values() if v not in (None, "", [], False)]
+        out.append({"id": it["id"], "label": vals[0] if vals else "—", "detail": " · ".join(vals[1:3])})
+    return {"id": coll["id"], "name": coll.get("name") or "", "items": out}
+
+
+@api_router.post("/watch/ask")
+async def watch_ask(payload: WatchAskPayload, request: Request, current: User = Depends(get_current_user)):
+    """One message from the watch to an agent; the answer comes back whole (no streaming),
+    after the same routing the phone does: lists for "Salva", complete/delete for "Task"."""
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Messaggio vuoto")
+    await _watch_seen(request, current)
+    agent = payload.agent
+
+    if agent == "scheduled_action":
+        res = await _build_scheduled_draft(current, text, channel="watch")
+        if res.get("status") != "confirm":
+            return {"kind": "message", "reply": res.get("message") or "Non ho capito l'azione"}
+        return {"kind": "confirm_action", "reply": res["preview"], "draft": res["draft"]}
+
+    if agent == "task_todo":
+        res = await _execute_task_command(current.user_id, text, channel="watch")
+        if res is not None:
+            if res["status"] == "ok":
+                return {"kind": "message", "reply": res.get("message") or "Fatto"}
+            if res["status"] == "ambiguous":
+                titles = ", ".join(c["title"] for c in res["candidates"][:4])
+                return {"kind": "message", "reply": f"Ho trovato più corrispondenze ({titles}): ripeti con il nome preciso."}
+            return {"kind": "message", "reply": f"Non ho trovato nessun task o to-do che corrisponda a \"{res.get('query') or text}\"."}
+
+    if agent == "info_upload":
+        colls = await db.collections.find(_lists_query(current), {"_id": 0, "name": 1}).to_list(200)
+        names = [c["name"] for c in colls]
+        kind = await lu.classify_save_intent(text, names, user_id=current.user_id, channel="watch")
+        if kind == "list_create":
+            res = await _create_list_from_text(current, text, channel="watch")
+            return {"kind": "message", "reply": res.get("message") or ""}
+        if kind == "list_update" and not lu.looks_like_note(text):
+            res = await _execute_list_update(current, text, channel="watch")
+            status = res.get("status")
+            if status in ("ambiguous_list", "ambiguous_item", "ambiguous_sub_item"):
+                labels = ", ".join((c.get("name") or c.get("label") or "") for c in res.get("candidates", [])[:4])
+                return {"kind": "message", "reply": f"Non so quale intendi ({labels}): ripeti con il nome preciso."}
+            if status in ("confirm_clear", "confirm_bulk_add"):
+                return {"kind": "message", "reply": "È una modifica grande: confermala dall'app sul telefono."}
+            return {"kind": "message", "reply": res.get("message") or "Fatto"}
+
+    conv_id = payload.conv_id
+    if conv_id and not await db.conversations.find_one({"conv_id": conv_id, "user_id": current.user_id, "action": agent}, {"_id": 1}):
+        conv_id = None
+    user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
+    reply, conv_id = await tg._process_action(db, user_doc, agent, text, conv_id, channel="watch")
+    return {"kind": "answer", "reply": reply, "conv_id": conv_id}
+
+
 # ============ VOICE STT ============
 @api_router.post("/voice/transcribe")
 async def voice_transcribe(file: UploadFile = File(...), action: str = Form(""), current: User = Depends(get_current_user)):

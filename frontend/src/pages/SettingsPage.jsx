@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Mic } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Mic, Watch, Trash2 } from "lucide-react";
 import { usePref } from "@/lib/prefs";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const { user, setUser } = useAuth();
   const [status, setStatus] = useState(null);
   const [linkCode, setLinkCode] = useState(null);
+  const [watches, setWatches] = useState([]);
+  const [watchCode, setWatchCode] = useState("");
+  const [watchBusy, setWatchBusy] = useState(false);
   const [params, setParams] = useSearchParams();
   const isMobile = useIsMobile();
   const [orgName, setOrgName] = useState("");
@@ -78,6 +81,7 @@ export default function SettingsPage() {
   const load = async () => {
     const r = await api.get("/integrations/status");
     setStatus(r.data);
+    api.get("/watch/devices").then((w) => setWatches(w.data || [])).catch(() => {});
   };
 
   useEffect(() => {
@@ -176,6 +180,26 @@ export default function SettingsPage() {
     await api.post("/integrations/telegram/disconnect");
     toast.success("Telegram scollegato");
     setLinkCode(null);
+    load();
+  };
+
+  // Galaxy Watch: the watch shows a 6-digit code, typed here to link it to this account
+  const pairWatch = async () => {
+    const code = watchCode.replace(/\D/g, "");
+    if (code.length !== 6) { toast.error("Il codice ha 6 cifre"); return; }
+    setWatchBusy(true);
+    try {
+      await api.post("/watch/pair/confirm", { code });
+      toast.success("Orologio collegato");
+      setWatchCode("");
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setWatchBusy(false); }
+  };
+
+  const unpairWatch = async (id) => {
+    await api.delete(`/watch/devices/${id}`);
+    toast.success("Orologio scollegato");
     load();
   };
 
@@ -428,6 +452,36 @@ export default function SettingsPage() {
       )}
     </Section>
   );
+  const secWatch = (mode) => (
+    <Section mode={mode} id="watch" testid="watch-card" icon={Watch} title="Orologio · Galaxy Watch"
+      badge={watches.length > 0 && <ConnectedBadge />}>
+      <div className="text-sm text-white/60">
+        Parla con gli agenti e guarda task, to-do e liste dal polso. Apri mAIPAL sull'orologio: mostra un codice di 6 cifre, scrivilo qui.
+      </div>
+      <div className="mt-4 flex gap-2">
+        <Input data-testid="watch-code" inputMode="numeric" maxLength={7} placeholder="123456" value={watchCode}
+          onChange={(e) => setWatchCode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && pairWatch()}
+          className="w-36 font-mono-tight tracking-[0.3em] text-center" />
+        <button data-testid="watch-pair" onClick={pairWatch} disabled={watchBusy} className="pill-btn disabled:opacity-60">Collega</button>
+      </div>
+      {watches.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {watches.map((w) => (
+            <div key={w.device_id} data-testid="watch-device" className="flex items-center gap-3 bg-white/10 rounded-xl px-3 py-2.5">
+              <Watch size={16} className="shrink-0" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm">{w.name}</span>
+                <span className="block text-xs text-white/55">
+                  {w.last_seen ? `usato il ${new Date(w.last_seen).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "collegato, mai usato"}
+                </span>
+              </span>
+              <button onClick={() => unpairWatch(w.device_id)} title="Scollega" className="p-2 rounded-full hover:bg-white/10 text-red-300"><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
   const secTeam = (mode) => (
     <Section mode={mode} id="team" testid="team-card-settings" icon={Users} title="Team"
       subtitle="Condividi task e liste con le persone del tuo team.">
@@ -448,6 +502,7 @@ export default function SettingsPage() {
     status.google.configured && { key: "google", icon: Cloud, label: "Google", on: status.google.connected },
     status.microsoft?.configured && { key: "microsoft", icon: Cloudy, label: "Microsoft", on: !!status.microsoft?.connected },
     status.telegram.configured && { key: "telegram", icon: MessageCircle, label: "Telegram", on: status.telegram.connected },
+    { key: "watch", icon: Watch, label: "Orologio", on: watches.length > 0 },
   ].filter(Boolean);
   const linksOn = linkServices.filter((l) => l.on).length;
   const tiles = [
@@ -473,7 +528,7 @@ export default function SettingsPage() {
           <div className="space-y-3">
             {panel === "profile" && secProfile("bare")}
             {panel === "vertical" && secVertical("bare")}
-            {panel === "links" && <>{secGoogle("static")}{secMicrosoft("static")}{secTargets("static")}{secTelegram("static")}</>}
+            {panel === "links" && <>{secGoogle("static")}{secMicrosoft("static")}{secTargets("static")}{secTelegram("static")}{secWatch("static")}</>}
             {panel === "team" && secTeam("bare")}
             {panel === "admin" && secAdmin("bare")}
           </div>
@@ -527,6 +582,7 @@ export default function SettingsPage() {
         {secMicrosoft()}
         {secTargets()}
         {secTelegram()}
+        {secWatch()}
         {secTeam()}
         {secAdmin()}
       </div>
