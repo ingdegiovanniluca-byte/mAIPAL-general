@@ -6312,6 +6312,10 @@ async def start_services():
     except Exception:
         logger.exception("failed to start daily news loop")
     try:
+        asyncio.create_task(_news_cleanup_loop())
+    except Exception:
+        logger.exception("failed to start news cleanup loop")
+    try:
         asyncio.create_task(_usage_aggregation_loop())
     except Exception:
         logger.exception("failed to start usage aggregation loop")
@@ -6715,8 +6719,11 @@ async def _daily_summary_loop():
 
 async def _news_source_preferences(user_id: str) -> dict:
     """Learns which news sources the user tends to like/dislike from past feedback, so
-    future searches can be steered toward (or away from) them."""
+    future searches can be steered toward (or away from) them. Disliked news are deleted
+    after NEWS_KEEP_DAYS (see _cleanup_old_news): their votes live on in news_source_feedback."""
     scores = {}
+    async for row in db.news_source_feedback.find({"user_id": user_id}, {"_id": 0}):
+        scores[row["source"]] = scores.get(row["source"], 0) - (row.get("dislikes") or 0)
     cursor = db.news_items.aggregate([
         {"$match": {"user_id": user_id, "source": {"$nin": [None, ""]}, "feedback": {"$in": ["like", "dislike"]}}},
         {"$group": {"_id": {"source": "$source", "feedback": "$feedback"}, "n": {"$sum": 1}}},
@@ -6892,6 +6899,41 @@ async def _usage_aggregation_loop():
         except Exception:
             logger.exception("usage aggregation loop iteration failed")
         await asyncio.sleep(60 * 60)
+
+
+NEWS_KEEP_DAYS = 5
+
+
+async def _cleanup_old_news() -> int:
+    """News the user didn't give a thumbs up to go away NEWS_KEEP_DAYS days after they
+    arrived; the liked ones stay. A thumbs down is still remembered (per source) so the
+    next searches keep avoiding that source."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=NEWS_KEEP_DAYS)).isoformat()
+    q = {"created_at": {"$lt": cutoff}, "feedback": {"$ne": "like"}}
+    disliked = await db.news_items.find({**q, "feedback": "dislike", "source": {"$nin": [None, ""]}},
+                                        {"_id": 0, "user_id": 1, "source": 1}).to_list(100000)
+    counts: dict = {}
+    for d in disliked:
+        key = (d["user_id"], d["source"])
+        counts[key] = counts.get(key, 0) + 1
+    for (user_id, source), n in counts.items():
+        await db.news_source_feedback.update_one({"user_id": user_id, "source": source},
+                                                 {"$inc": {"dislikes": n}}, upsert=True)
+    res = await db.news_items.delete_many(q)
+    if res.deleted_count:
+        logger.info(f"news cleanup: {res.deleted_count} news older than {NEWS_KEEP_DAYS} days without a like deleted")
+    return res.deleted_count
+
+
+async def _news_cleanup_loop():
+    """Every 6 hours (and shortly after start-up)."""
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await _cleanup_old_news()
+        except Exception:
+            logger.exception("news cleanup failed")
+        await asyncio.sleep(6 * 3600)
 
 
 async def _daily_news_loop():

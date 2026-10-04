@@ -103,6 +103,11 @@ export default function NewsPage() {
           {refreshing ? "Ricerca in corso…" : "Aggiorna ora"}
         </button>
       </div>
+      {items.length > 0 && (
+        <div className="-mt-3 mb-6 text-xs text-white/55" data-testid="news-retention">
+          Le news senza pollice in su si cancellano da sole dopo 5 giorni.
+        </div>
+      )}
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
 
