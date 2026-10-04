@@ -184,6 +184,17 @@ def item_display(item: dict) -> str:
     return " · ".join(parts) if parts else "(vuoto)"
 
 
+_SAVE_VERB = re.compile(r"^\W*(salva|salvami|ricorda|ricordati|memorizza|annota|annotati|prendi nota|tieni a mente|segnati)\b", re.I)
+_LIST_WORD = re.compile(r"\blist[ae]\b", re.I)
+
+
+def looks_like_note(text: str) -> bool:
+    """"salva questa spesa ricorrente: 30 euro al mese per internet": a request to SAVE
+    information that doesn't mention a list at all. Even if a word in it matches a list's
+    name ("spesa"), it's a note, not an edit of that list - the model got this wrong once."""
+    return bool(_SAVE_VERB.search(text or "")) and not _LIST_WORD.search(text or "")
+
+
 async def classify_save_intent(text: str, list_names: list[str], user_id: Optional[str] = None, channel: str = "web") -> str:
     """Cheap pre-classification used to merge "salva informazione" and "modifica lista"
     into a single chat action: is this free text an instruction to add/edit/remove a
@@ -214,6 +225,11 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         "crea, segna nella lista). Esempi di 'info_upload': 'Martina ha fatto pilates il 19 settembre', 'oggi "
         "Giulia è venuta a lezione', 'Marco ha saltato la lezione di mercoledì', 'Sara ha pagato 10 lezioni', "
         "'il codice del wifi è XYZ'.\n"
+        "ATTENZIONE alle parole che coincidono per caso con il nome di una lista: 'spesa' come uscita di denaro "
+        "('ogni mese spendo 30 euro per internet', 'salva questa spesa ricorrente', 'spesa del veterinario 80 euro') "
+        "NON è la lista 'Spesa' delle cose da comprare: è 'info_upload'. Perché sia 'list_update' l'utente deve "
+        "chiedere chiaramente di mettere qualcosa DENTRO quella lista (es. 'aggiungi il latte alla spesa', 'metti "
+        "le uova nella lista della spesa').\n"
         "Se l'utente chiede di creare una lista con un nome che esiste già, è comunque 'list_create' (gli "
         "dirò io che c'è già).\n"
         'Rispondi SOLO con un JSON: {"kind": "list_create"}, {"kind": "list_update"} oppure {"kind": "info_upload"}.'
@@ -230,8 +246,8 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         if m:
             parsed = json.loads(m.group(0))
             kind = parsed.get("kind")
-            if kind == "list_update" and not list_names:
-                return "info_upload"   # nothing to edit yet
+            if kind == "list_update" and (not list_names or looks_like_note(text)):
+                return "info_upload"   # nothing to edit yet / "salva che ..." without naming a list
             if kind in ("list_update", "info_upload", "list_create"):
                 return kind
     except Exception:

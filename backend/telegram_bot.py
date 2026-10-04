@@ -496,8 +496,12 @@ async def _run_main_message(update, ctx, db, user, content, forced_action, force
         intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"])
         action = intent["action"]
         if action == "list_update":
-            await _run_list_update_flow(update, ctx, db, user, content)
-            return
+            import list_updates as lu
+            if lu.looks_like_note(content):   # "salva che ogni mese spendo 30 € per internet"
+                action = "info_upload"
+            else:
+                await _run_list_update_flow(update, ctx, db, user, content)
+                return
         if action == "task_todo" and await _try_task_command(update, ctx, db, user, content):
             return
         force_new = (intent["continuation"] == "new") or (prev_ctx is None) or (state.get("current_action") != action)
