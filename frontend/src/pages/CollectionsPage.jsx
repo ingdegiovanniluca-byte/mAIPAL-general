@@ -4,7 +4,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3 } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus } from "lucide-react";
 import { toast } from "sonner";
 
 // Gerarchia a 3 livelli:
@@ -170,10 +170,10 @@ export default function CollectionsPage() {
 }
 
 // Round frosted-glass icon button, the same as the bottom menu's "+".
-function RoundBtn({ icon: Icon, label, onClick, testid, big = false }) {
+function RoundBtn({ icon: Icon, label, onClick, testid, big = false, active = false, disabled = false }) {
   return (
-    <button type="button" data-testid={testid} onClick={onClick} title={label} aria-label={label}
-      className={`lg-glass shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform ${big ? "h-11 w-11" : "h-9 w-9"}`}>
+    <button type="button" data-testid={testid} onClick={onClick} title={label} aria-label={label} aria-pressed={active} disabled={disabled}
+      className={`lg-glass shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform disabled:opacity-60 ${active ? "!bg-white/35" : ""} ${big ? "h-11 w-11" : "h-9 w-9"}`}>
       <Icon size={big ? 22 : 17} strokeWidth={1.7} />
     </button>
   );
@@ -400,6 +400,28 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [selected, setSelected] = useState(() => new Set());   // campi ticked for a bulk delete
   const [related, setRelated] = useState([]);                  // scheduled actions working on this list
   const [shown, setShown] = useState(PAGE_ITEMS);              // a long list is drawn a page at a time
+  const [folderBusy, setFolderBusy] = useState(false);
+  // the list's folder on Drive / OneDrive: made on the first tap, opened afterwards
+  const folderLink = (f) => Object.values(f?.links || {}).find(Boolean);
+  const openOrCreateFolder = async () => {
+    if (coll.drive_folder && folderLink(coll.drive_folder)) {
+      window.open(folderLink(coll.drive_folder), "_blank", "noopener");
+      return;
+    }
+    setFolderBusy(true);
+    try {
+      const r = await api.post(`/collections/${coll.id}/folder`);
+      const next = { ...coll, drive_folder: r.data.drive_folder };
+      setColl(next);
+      onCollectionChanged(next);
+      const link = folderLink(r.data.drive_folder);
+      toast.success(r.data.message || "Cartella creata", link ? { action: { label: "Apri", onClick: () => window.open(link, "_blank", "noopener") } } : undefined);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Non sono riuscito a creare la cartella");
+    } finally {
+      setFolderBusy(false);
+    }
+  };
   const [renaming, setRenaming] = useState(false);
   const rename = async (value) => {
     const name = (value || "").trim();
@@ -525,6 +547,9 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
         <RoundBtn icon={Plus} label="Nuovo campo" testid="new-item" onClick={() => setEditing({})} />
         <RoundBtn icon={Settings2} label="Gestisci attributi" testid="manage-fields" onClick={() => setManagingFields(true)} />
         {canShare && <RoundBtn icon={Share2} label="Condividi" testid="share-collection" onClick={() => setSharing(true)} />}
+        <RoundBtn icon={coll.drive_folder ? FolderOpen : FolderPlus} testid="list-folder" active={!!coll.drive_folder} disabled={folderBusy}
+          label={coll.drive_folder ? `Apri la cartella «${coll.drive_folder.name}» su Drive` : "Crea la cartella della lista su Drive"}
+          onClick={openOrCreateFolder} />
         {selected.size > 0 && (
           // only a bin, with how many campi are ticked; untick them to cancel
           <button data-testid="delete-selected" onClick={delSelected} title="Elimina selezionati" aria-label={`Elimina ${selected.size} selezionati`}

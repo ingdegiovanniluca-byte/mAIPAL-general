@@ -137,6 +137,13 @@ async def find_or_create_folder(db, user_id: str, token: str, name: Optional[str
     return r.json()["id"]
 
 
+async def item_web_url(token: str, item_id: str) -> Optional[str]:
+    """The OneDrive web address of a file or folder (to open it from the app)."""
+    r = await _graph(token, "GET", f"/me/drive/items/{item_id}?$select=webUrl")
+    r.raise_for_status()
+    return r.json().get("webUrl")
+
+
 async def upload_file(token: str, folder_id: str, tmp_path: str, filename: str, content_type: Optional[str]) -> dict:
     name = filename or "file"
     size = os.path.getsize(tmp_path)

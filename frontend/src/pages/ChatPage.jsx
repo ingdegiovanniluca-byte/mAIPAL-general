@@ -676,7 +676,7 @@ export default function ChatPage() {
     try {
       const r = await api.post("/lists/create-from-text", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}), ...(convId ? { conv_id: convId } : {}) });
       reply = (r.data?.status === "ok" ? "📋 " : "⚠️ ") + (r.data?.message || "");
-      if (r.data?.status === "ok") toast.success(`Lista «${r.data.name}» creata`);
+      if (r.data?.status === "ok") toast.success(r.data.folder_only ? `Cartella «${r.data.name}» creata` : `Lista «${r.data.name}» creata`);
     } catch (e) {
       reply = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a creare la lista");
     }

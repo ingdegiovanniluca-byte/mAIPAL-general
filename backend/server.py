@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 import os
 import logging
+import re
 import uuid
 import secrets
 import tempfile
@@ -2849,6 +2850,8 @@ async def list_collections(current: User = Depends(get_current_user)):
     pos = {cid: i for i, cid in enumerate(me.get("list_order") or [])}
     collections.sort(key=lambda c: (pos.get(c["id"], len(pos)), c["sort_order"]))
     await _add_sharing_info(collections, current)
+    for c in collections:
+        _public_list_folder(c, current.user_id)
     ids = [c["id"] for c in collections]
     if ids:
         counts = await db.collection_items.aggregate([
@@ -2980,7 +2983,7 @@ async def get_collection(collection_id: str, current: User = Depends(get_current
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
-    return (await _add_sharing_info([coll], current))[0]
+    return _public_list_folder((await _add_sharing_info([coll], current))[0], current.user_id)
 
 
 @api_router.patch("/collections/{collection_id}")
@@ -3240,6 +3243,75 @@ def _field_key(label: str, taken: set) -> str:
     return key
 
 
+# ---- a list's own folder on Drive / OneDrive ----
+# "crea la lista Clienti e la relativa cartella su drive", or the folder button of a list: a
+# folder named like the list inside the mAIPAL folder of every chosen storage - the same
+# folders smart-upload saves into, so "salva questo file nella cartella Clienti" lands there.
+_FOLDER_ASK = re.compile(r"\b(crea|creami|crei|creare|fai|fammi|apri|aggiungi|anche|con)\b.{0,60}\bcartell[ae]\b"
+                         r"|\bcartell[ae]\b.{0,40}\b(drive|onedrive|cloud)\b", re.I | re.S)
+_FOLDER_CLAUSE = re.compile(r"[,;]?\s*(?:e\s+)?(?:(?:crea|creami|fai|fammi)\s+)?(?:anche\s+)?(?:con\s+)?(?:la\s+|una\s+)?"
+                            r"(?:relativa\s+|sua\s+)?cartell[ae]\b[^.;\n]*", re.I)
+
+
+def _wants_list_folder(text: str) -> bool:
+    return bool(_FOLDER_ASK.search(text or ""))
+
+
+def _public_list_folder(coll: dict, user_id: str) -> dict:
+    """The list as the API returns it: only the caller's own folder (each person's is on their Drive)."""
+    folders = coll.pop("drive_folders", None) or {}
+    coll["drive_folder"] = folders.get(user_id)
+    return coll
+
+
+async def _ensure_list_folder(current: User, coll: dict) -> dict:
+    """The list's folder on every chosen storage (made once, then reused)."""
+    existing = (coll.get("drive_folders") or {}).get(current.user_id)
+    if existing and existing.get("ids"):
+        return existing
+    targets = await _storage_targets(current.user_id)
+    if not targets:
+        raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
+    name = re.sub(r"[\\/:*?\"<>|]+", " ", coll.get("name") or "Lista").strip()[:100] or "Lista"
+    ids, links, errors = {}, {}, {}
+    for t in targets:
+        try:
+            if t == "google":
+                creds = await gi.get_credentials(db, current.user_id)
+                fid = await gi.find_or_create_subfolder(db, current.user_id, creds, name)
+                ids[t], links[t] = fid, f"https://drive.google.com/drive/folders/{fid}"
+            else:
+                token = await ms.get_token(db, current.user_id)
+                fid = await ms.find_or_create_folder(db, current.user_id, token, name)
+                ids[t] = fid
+                try:
+                    links[t] = await ms.item_web_url(token, fid)
+                except Exception:
+                    links[t] = None
+        except Exception as e:
+            logger.exception(f"list folder on {t} failed")
+            errors[t] = str(e)[:200]
+    if not ids:
+        raise HTTPException(status_code=500, detail="Cartella non creata: " + "; ".join(f"{STORAGE_LABELS[k]}: {v}" for k, v in errors.items()))
+    info = {"name": name, "ids": ids, "links": links, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.collections.update_one({"id": coll["id"]}, {"$set": {"drive_folders": {**(coll.get("drive_folders") or {}), current.user_id: info}}})
+    coll.setdefault("drive_folders", {})[current.user_id] = info
+    return info
+
+
+def _folder_where(info: dict) -> str:
+    return " e ".join(STORAGE_LABELS[t] for t in (info.get("ids") or {}))
+
+
+@api_router.post("/collections/{collection_id}/folder")
+async def create_list_folder(collection_id: str, current: User = Depends(get_current_user)):
+    coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    info = await _ensure_list_folder(current, coll)
+    return {"drive_folder": info, "message": f"Cartella «{info['name']}» pronta su {_folder_where(info)}."}
+
+
 async def _create_list_from_text(current: User, text: str, channel: str = "web", attachment_doc_ids: Optional[List[str]] = None) -> dict:
     """Creates a new list (and its first items) from a sentence. Until now chat could only
     EDIT existing lists: "crea una lista ..." was either saved as a plain note or sent to
@@ -3253,12 +3325,19 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
             ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)[:6000]
     except Exception:
         ctx = ""
-    spec = await lu.interpret_list_creation(text, ctx, user_id=current.user_id, channel=channel)
+    want_folder = _wants_list_folder(text)
+    list_text = (_FOLDER_CLAUSE.sub("", text).strip() or text) if want_folder else text
+    spec = await lu.interpret_list_creation(list_text, ctx, user_id=current.user_id, channel=channel)
     taken: set = set()
     fields = [CollectionFieldDef(key=_field_key(f["label"], taken), label=f["label"], type=f["type"]) for f in spec["fields"]]
     try:
         coll = await create_collection(CollectionCreatePayload(name=spec["name"], fields=fields), current)
     except HTTPException as he:
+        if want_folder:   # "crea la cartella della lista Spesa" read as a new list: the list is there, make its folder
+            same = next((c for c in await db.collections.find(_lists_query(current), {"_id": 0}).to_list(200)
+                         if (c.get("name") or "").strip().lower() == (spec["name"] or "").strip().lower()), None)
+            if same:
+                return await _list_folder_reply(current, same, already=True)
         return {"status": "error", "message": str(he.detail)}
     by_label = {f.label.strip().lower(): f.key for f in fields}
     now = datetime.now(timezone.utc).isoformat()
@@ -3282,8 +3361,28 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
     cols = ", ".join(f.label for f in fields)
     what = (f" e {len(docs)} element{'o' if len(docs) == 1 else 'i'}" if docs else "")
-    return {"status": "ok", "collection_id": coll["id"], "name": coll["name"], "items": len(docs),
-            "message": f"Ho creato la lista «{coll['name']}» (colonne: {cols}){what}. La trovi nella sezione Liste."}
+    message = f"Ho creato la lista «{coll['name']}» (colonne: {cols}){what}. La trovi nella sezione Liste."
+    if want_folder:
+        try:
+            info = await _ensure_list_folder(current, coll)
+            message += f" Ho creato anche la cartella «{info['name']}» su {_folder_where(info)}: la apri dall'icona cartella della lista."
+        except HTTPException as he:
+            message += f" La cartella non l'ho creata: {he.detail}"
+    return {"status": "ok", "collection_id": coll["id"], "name": coll["name"], "items": len(docs), "message": message}
+
+
+async def _list_folder_reply(current: User, coll: dict, already: bool = False) -> dict:
+    had = bool(((coll.get("drive_folders") or {}).get(current.user_id) or {}).get("ids"))
+    try:
+        info = await _ensure_list_folder(current, coll)
+    except HTTPException as he:
+        return {"status": "error", "message": f"Non ho creato la cartella della lista «{coll['name']}»: {he.detail}"}
+    head = f"La lista «{coll['name']}» c'era già. " if already else ""
+    did = (f"La cartella «{info['name']}» su {_folder_where(info)} c'era già" if had
+           else f"Ho creato la cartella «{info['name']}» su {_folder_where(info)}")
+    return {"status": "ok", "collection_id": coll["id"], "name": coll["name"], "folder_only": True,
+            "message": f"{head}{did} per la lista «{coll['name']}». "
+                       f"La apri dall'icona cartella della lista; i file che salvi \"nella cartella {info['name']}\" finiscono lì."}
 
 
 class ListCreatePayload(BaseModel):
@@ -3345,6 +3444,13 @@ async def _execute_list_update(
     if not colls:
         raise HTTPException(status_code=400, detail="Non hai ancora nessuna lista. Creane una nella sezione Liste prima di poter usare questa funzione.")
     coll_by_id = {c["id"]: c for c in colls}
+    if not op and _wants_list_folder(text):
+        named = lu.match_candidates(text, [(c["id"], c.get("name") or "") for c in colls if (c.get("name") or "").strip()])
+        if len(named) == 1:
+            res = await _list_folder_reply(current, coll_by_id[named[0]])
+            if res["status"] == "ok":
+                ut.fire_and_forget_feature_event(user_id=current.user_id, feature="gestione_liste", channel=channel, trigger="utente", org_id=current.org_id)
+            return res
 
     if not op or not collection_id:
         catalog = [{"id": c["id"], "name": c["name"], "fields": c.get("fields", []), "sub_item_fields": c.get("sub_item_fields", [])} for c in colls]

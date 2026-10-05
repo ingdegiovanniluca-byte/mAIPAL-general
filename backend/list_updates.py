@@ -247,7 +247,8 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         "chiedere chiaramente di mettere qualcosa DENTRO quella lista (es. 'aggiungi il latte alla spesa', 'metti "
         "le uova nella lista della spesa').\n"
         "Se l'utente chiede di creare una lista con un nome che esiste già, è comunque 'list_create' (gli "
-        "dirò io che c'è già).\n"
+        "dirò io che c'è già).\n"        "Chiedere di creare la cartella su Drive/OneDrive di una lista ESISTENTE (es. 'crea la cartella su "
+        "drive per la lista della spesa') è 'list_update'; una lista NUOVA con la sua cartella è 'list_create'.\n"
         'Rispondi SOLO con un JSON: {"kind": "list_create"}, {"kind": "list_update"} oppure {"kind": "info_upload"}.'
     )
     try:
