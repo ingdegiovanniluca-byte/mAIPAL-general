@@ -25,7 +25,8 @@ const FIELD_TYPES = [
 ];
 
 const slugify = (label) =>
-  (label || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "campo";
+  (label || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "campo";
 
 export default function CollectionsPage() {
   const [collections, setCollections] = useState([]);
@@ -284,9 +285,9 @@ function FieldsEditor({ fields, setFields, existingCollections, emptyHint }) {
   const removeField = (i) => setFields((f) => f.filter((_, idx) => idx !== i));
   const updateField = (i, patch) => setFields((f) => f.map((fl, idx) => {
     if (idx !== i) return fl;
-    const next = { ...fl, ...patch };
-    if (patch.label !== undefined && !fl.key) next.key = slugify(patch.label);
-    return next;
+    // a new attribute gets its key when saved, from its whole name (see toApiFields): taken
+    // while typing it was the first letter only, the same for "Descrizione" and "Data inizio"
+    return { ...fl, ...patch };
   }));
 
   return (
@@ -328,8 +329,18 @@ function FieldsEditor({ fields, setFields, existingCollections, emptyHint }) {
 }
 
 function toApiFields(fields) {
-  return fields.filter((f) => f.label.trim()).map((f) => ({
-    key: f.key || slugify(f.label),
+  const kept = fields.filter((f) => f.label.trim());
+  const taken = new Set();
+  const uniqueKey = (f) => {
+    if (f.key && !taken.has(f.key)) { taken.add(f.key); return f.key; }
+    const base = slugify(f.label);
+    let key = base, n = 2;
+    while (taken.has(key) || kept.some((o) => o !== f && o.key === key)) key = `${base}_${n++}`;
+    taken.add(key);
+    return key;
+  };
+  return kept.map((f) => ({
+    key: uniqueKey(f),
     label: f.label.trim(),
     type: f.type,
     options: f.type === "select" ? (f.optionsText || "").split(",").map((s) => s.trim()).filter(Boolean) : null,

@@ -2851,6 +2851,7 @@ async def list_collections(current: User = Depends(get_current_user)):
     collections.sort(key=lambda c: (pos.get(c["id"], len(pos)), c["sort_order"]))
     await _add_sharing_info(collections, current)
     for c in collections:
+        await _repair_field_keys(c)
         _public_list_folder(c, current.user_id)
     ids = [c["id"] for c in collections]
     if ids:
@@ -2957,8 +2958,8 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
         "id": f"coll_{uuid.uuid4().hex[:12]}",
         "name": name,
         "icon": payload.icon,
-        "fields": [f.model_dump() for f in payload.fields],
-        "sub_item_fields": [f.model_dump() for f in payload.sub_item_fields],
+        "fields": _unique_field_keys([f.model_dump() for f in payload.fields]),
+        "sub_item_fields": _unique_field_keys([f.model_dump() for f in payload.sub_item_fields]),
         "visibility": payload.visibility,
         "shared_with": await _team_mate_ids(current, payload.shared_with),
         "max_items": payload.max_items,
@@ -2983,6 +2984,7 @@ async def get_collection(collection_id: str, current: User = Depends(get_current
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    await _repair_field_keys(coll)
     return _public_list_folder((await _add_sharing_info([coll], current))[0], current.user_id)
 
 
@@ -3002,9 +3004,9 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
     if payload.icon is not None:
         updates["icon"] = payload.icon
     if payload.fields is not None:
-        updates["fields"] = [f.model_dump() for f in payload.fields]
+        updates["fields"] = _unique_field_keys([f.model_dump() for f in payload.fields])
     if payload.sub_item_fields is not None:
-        updates["sub_item_fields"] = [f.model_dump() for f in payload.sub_item_fields]
+        updates["sub_item_fields"] = _unique_field_keys([f.model_dump() for f in payload.sub_item_fields])
     if payload.visibility is not None and payload.visibility != existing.get("visibility", "private"):
         if existing.get("user_id") != current.user_id:
             raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può cambiare con chi è condivisa.")
@@ -3232,6 +3234,38 @@ async def classify_save_intent(payload: ClassifySaveIntentPayload, current: User
 
 
 # ---- Creazione di una Lista da testo libero ("crea una lista della spesa con latte e pane") ----
+def _unique_field_keys(fields: list) -> list:
+    """Every attribute of a list needs its own key: "Descrizione", "Data inizio" and "Data
+    fine" all ended up as "d" (the key was taken from the first letter typed), so editing
+    one changed them all. A repeated or missing key gets a new one from the label; the
+    first attribute keeps the key (and the values already saved under it)."""
+    taken: set = set()
+    out = []
+    for f in fields or []:
+        f = dict(f)
+        key = (f.get("key") or "").strip()
+        if not key or key in taken:
+            key = _field_key(f.get("label") or "campo", taken)
+        else:
+            taken.add(key)
+        f["key"] = key
+        out.append(f)
+    return out
+
+
+async def _repair_field_keys(coll: dict) -> dict:
+    """Lists saved with the old bug: fix their keys once, on the next read."""
+    upd = {}
+    for name in ("fields", "sub_item_fields"):
+        keys = [f.get("key") for f in coll.get(name) or []]
+        if len(set(keys)) != len(keys) or any(not k for k in keys):
+            upd[name] = _unique_field_keys(coll.get(name) or [])
+    if upd:
+        await db.collections.update_one({"id": coll["id"]}, {"$set": upd})
+        coll.update(upd)
+    return coll
+
+
 def _field_key(label: str, taken: set) -> str:
     import re as _re, unicodedata
     base = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode().lower()
@@ -5716,6 +5750,10 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
         period = parsed.get("period") if parsed.get("period") in sa.PERIODS else "none"
         draft.update({"report_instruction": instruction, "period": period})
         what = f"{instruction[0].lower() + instruction[1:]}" + (f", usando i dati del periodo: {sa.PERIOD_PREVIEW[period]}" if period != "none" else "")
+        rl = _report_list_for(colls, str(parsed.get("report_list") or ""), instruction)
+        if rl:
+            draft["report_list_id"] = rl["id"]
+            what += f", controllando uno per uno gli elementi della lista «{rl['name']}» nelle informazioni salvate"
     elif kind == "message":
         msg = str(parsed.get("message_text") or "").strip()
         if not msg:
@@ -5808,6 +5846,8 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
     elif kind == "report":
         doc["report_instruction"] = str(draft.get("report_instruction") or doc["text"])[:1000]
         doc["period"] = draft.get("period") if draft.get("period") in sa.PERIODS else "none"
+        if draft.get("report_list_id"):
+            doc["report_list_id"] = str(draft["report_list_id"])
     elif kind == "message":
         doc["message_text"] = str(draft.get("message_text") or "")[:1000]
     else:
@@ -5898,7 +5938,63 @@ async def _send_telegram_text(chat_id, text: str) -> bool:
     return ok
 
 
-async def _gather_report_data(user: User, instruction: str, rng) -> str:
+def _report_list_for(colls: list, name: str, instruction: str) -> Optional[dict]:
+    """The list a report goes through element by element: the one the interpreter named, or
+    one the instruction clearly names."""
+    name = (name or "").strip().lower()
+    if name:
+        exact = [c for c in colls if (c.get("name") or "").strip().lower() == name]
+        if exact:
+            return exact[0]
+        ids = lu.match_candidates(name, [(c["id"], c.get("name") or "") for c in colls])
+        if len(ids) == 1:
+            return next(c for c in colls if c["id"] == ids[0])
+        return None
+    score, ids = retrieval._match_scored(instruction, [(c["id"], c.get("name") or "") for c in colls if (c.get("name") or "").strip()])
+    if len(ids) == 1 and score >= 1000:   # the list's whole name is in the instruction
+        return next(c for c in colls if c["id"] == ids[0])
+    return None
+
+
+async def _list_items_with_kb(user: User, coll: dict, today) -> List[str]:
+    """For every element of a list: what is saved about it in the knowledge base (notes,
+    documents, diary, tasks) and when the latest piece was saved - computed here, so "i
+    clienti senza informazioni da più di un mese" is a matter of reading a number."""
+    uid = user.user_id
+    items = await db.collection_items.find({"collection_id": coll["id"]}, {"_id": 0, "embedding": 0}).to_list(2000)
+    key = ((coll.get("fields") or [{}])[0] or {}).get("key")
+    records = []   # (day, kind, text)
+    for c in await db.kb_chunks.find({"user_id": uid}, {"_id": 0, "text": 1, "created_at": 1, "source_name": 1}).to_list(20000):
+        records.append((retrieval._local_day(c.get("created_at")), "nota" if not c.get("source_name") else f"documento «{c['source_name']}»", c.get("text") or ""))
+    for j in await db.journal_entries.find({"user_id": uid}, {"_id": 0, "date": 1, "cleaned_text": 1, "raw_text": 1}).to_list(5000):
+        records.append((retrieval._local_day(j.get("date")), "diario", j.get("cleaned_text") or j.get("raw_text") or ""))
+    for t in await db.tasks.find(_visible_query(user), {"_id": 0, "title": 1, "notes": 1, "description": 1, "created_at": 1}).to_list(3000):
+        records.append((retrieval._local_day(t.get("created_at")), "task", " ".join(x for x in (t.get("title"), t.get("description"), t.get("notes")) if x)))
+    prepared = [(d, k, txt, txt.lower(), retrieval._tokens(txt)) for d, k, txt in records if txt]
+    out = [f"--- Elementi della lista «{coll['name']}» ({len(items)}) con le informazioni salvate su ciascuno nella knowledge base "
+           f"(oggi è {retrieval.format_it_date(today.isoformat())}) ---"]
+    for it in items[:400]:
+        name = str(((it.get("data") or {}).get(key) if key else "") or "").strip()
+        display = lu.item_display(it)
+        if not name:
+            continue
+        low = name.lower()
+        words = [w for w in retrieval._tokens(low) if len(w) >= 3]
+        hits = [(d, k, txt) for d, k, txt, tl, toks in prepared
+                if low in tl or (len(words) >= 2 and all(w in toks for w in words))]
+        if not hits:
+            out.append(f"• {display} — nessuna informazione salvata")
+            continue
+        dated = [h for h in hits if h[0]]
+        last = max(dated, key=lambda h: h[0]) if dated else hits[0]
+        ago = f", {(today - last[0]).days} giorni fa" if last[0] else ""
+        when = retrieval.format_it_date(last[0].isoformat()) if last[0] else "data sconosciuta"
+        n = f"1 informazione salvata" if len(hits) == 1 else f"{len(hits)} informazioni salvate"
+        out.append(f"• {display} — {n}; l'ultima il {when}{ago} ({last[1]}: «{last[2][:120]}»)")
+    return out
+
+
+async def _gather_report_data(user: User, instruction: str, rng, list_id: Optional[str] = None) -> str:
     """Everything the report may need: all records dated inside the period (notes, diary,
     tasks, to-dos, list entries) plus the best search hits for the instruction itself (e.g.
     a "Spese" list whose rows carry no date)."""
@@ -5913,6 +6009,10 @@ async def _gather_report_data(user: User, instruction: str, rng) -> str:
     uid = user.user_id
     colls = await db.collections.find(_lists_query(user), {"_id": 0}).to_list(200)
     coll_by_id = {c["id"]: c for c in colls}
+    per_item = coll_by_id.get(list_id) if list_id else _report_list_for(colls, "", instruction)
+    if per_item:
+        for line in await _list_items_with_kb(user, per_item, datetime.now(LOCAL_TZ).date()):
+            add(line)
     if rng:
         s, e, _ = rng
         start_iso = datetime(s.year, s.month, s.day, tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
@@ -5953,8 +6053,9 @@ async def _gather_report_data(user: User, instruction: str, rng) -> str:
         for h in hits:
             add(h.get("display") or retrieval._kb_display(h))
     out, total = [], 0
+    cap = 60000 if per_item else 30000   # one line per element of the list comes first
     for line in lines:
-        if total + len(line) > 30000:
+        if total + len(line) > cap:
             break
         out.append(line)
         total += len(line) + 1
@@ -5996,7 +6097,7 @@ async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for
         elif kind == "report":
             now_local = started.astimezone(LOCAL_TZ)
             rng = sa.period_range(a.get("period") or "none", now_local)
-            data_block = await _gather_report_data(user, a.get("report_instruction") or a.get("text", ""), rng)
+            data_block = await _gather_report_data(user, a.get("report_instruction") or a.get("text", ""), rng, a.get("report_list_id"))
             result = await sa.write_report(a.get("report_instruction") or a.get("text", ""), data_block, now_local,
                                            rng[2] if rng else None, user_name=user.name, user_id=user.user_id)
             if not result:
