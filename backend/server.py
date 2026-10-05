@@ -3298,6 +3298,9 @@ def _public_list_folder(coll: dict, user_id: str) -> dict:
     return coll
 
 
+LIST_FOLDER_TIMEOUT = 40
+
+
 async def _ensure_list_folder(current: User, coll: dict) -> dict:
     """The list's folder on every chosen storage (made once, then reused)."""
     existing = (coll.get("drive_folders") or {}).get(current.user_id)
@@ -3310,18 +3313,26 @@ async def _ensure_list_folder(current: User, coll: dict) -> dict:
     ids, links, errors = {}, {}, {}
     for t in targets:
         try:
+            # Drive's client blocks: in a thread, and never longer than LIST_FOLDER_TIMEOUT - a
+            # stuck call used to leave the chat waiting forever on "crea la cartella su drive"
             if t == "google":
                 creds = await gi.get_credentials(db, current.user_id)
-                fid = await gi.find_or_create_subfolder(db, current.user_id, creds, name)
+                if not creds:
+                    raise RuntimeError("Google Drive non collegato")
+                parent = await asyncio.wait_for(gi.ensure_maipal_folder(db, current.user_id, creds), LIST_FOLDER_TIMEOUT)
+                fid = await asyncio.wait_for(asyncio.to_thread(gi.find_or_create_subfolder_sync, creds, parent, name), LIST_FOLDER_TIMEOUT)
                 ids[t], links[t] = fid, f"https://drive.google.com/drive/folders/{fid}"
             else:
                 token = await ms.get_token(db, current.user_id)
-                fid = await ms.find_or_create_folder(db, current.user_id, token, name)
+                fid = await asyncio.wait_for(ms.find_or_create_folder(db, current.user_id, token, name), LIST_FOLDER_TIMEOUT)
                 ids[t] = fid
                 try:
                     links[t] = await ms.item_web_url(token, fid)
                 except Exception:
                     links[t] = None
+        except asyncio.TimeoutError:
+            logger.error(f"list folder on {t}: no answer in {LIST_FOLDER_TIMEOUT}s")
+            errors[t] = "non ha risposto in tempo, riprova tra poco"
         except Exception as e:
             logger.exception(f"list folder on {t} failed")
             errors[t] = str(e)[:200]
@@ -3402,6 +3413,9 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
             message += f" Ho creato anche la cartella «{info['name']}» su {_folder_where(info)}: la apri dall'icona cartella della lista."
         except HTTPException as he:
             message += f" La cartella non l'ho creata: {he.detail}"
+        except Exception:
+            logger.exception("list folder after list creation failed")
+            message += " La cartella non sono riuscito a crearla: riprova dall'icona cartella della lista."
     return {"status": "ok", "collection_id": coll["id"], "name": coll["name"], "items": len(docs), "message": message}
 
 

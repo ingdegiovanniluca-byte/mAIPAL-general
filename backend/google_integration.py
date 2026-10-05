@@ -214,6 +214,12 @@ async def list_subfolders(db, user_id: str, creds: Credentials) -> list:
 async def find_or_create_subfolder(db, user_id: str, creds: Credentials, name: str) -> str:
     """Find (or create) a subfolder by name directly inside mAIPAL. Returns its Drive file id."""
     parent_id = await ensure_maipal_folder(db, user_id, creds)
+    return find_or_create_subfolder_sync(creds, parent_id, name)
+
+
+def find_or_create_subfolder_sync(creds: Credentials, parent_id: str, name: str) -> str:
+    """The Drive calls of find_or_create_subfolder, blocking: run them in a thread
+    (asyncio.to_thread) so a slow Drive doesn't freeze the whole server."""
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
     safe_name = name.replace("'", "\\'")
     q = f"name='{safe_name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
