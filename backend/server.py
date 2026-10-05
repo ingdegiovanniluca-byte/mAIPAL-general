@@ -1912,6 +1912,36 @@ _SAME_ONE = re.compile(r"\b(ricrea\w*|rifallo|rifalla|di nuovo|crealo|creala|non
 _CLAIM = re.compile(r"\b(ho (creato|aggiunto|salvato|ricreato|inserito|registrato|preso nota|segnato)|(è|e') stat[oa] (creat|aggiunt|salvat)\w*|fatto|creato)\b", re.I)
 
 
+# "aggiungi le seguenti note: 1) ... 2) ...", "aggiungi quest'altra nota: 3) ...": the text goes
+# INTO the to-do/task's notes, added to the ones already there (it used to be only "said")
+_NOTE_VERB = r"(aggiungi|aggiungici|aggiungimi|scrivi|scrivici|metti|mettici|inserisci|annota|annotati|segna|segnati)"
+_NOTE_ASK = re.compile(r"^\s*(per favore,?\s*)?" + _NOTE_VERB + r"\b[^\n:]{0,60}\bnot[ae]\b|\bnot[ae]\s*:", re.I)
+_NOTE_LEAD = re.compile(
+    r"^\s*(per favore,?\s*)?" + _NOTE_VERB + r"\s+(anche\s+)?"
+    r"((le|la|questa|queste|quest['’]altra|queste altre|un['’]altra|una|delle|alcune|altre|nelle|nella|alle|alla|tra le|fra le)\s+)?"
+    r"(seguent[ei]\s+)?not[ae]\b(?:\s*:|[^:\n]*:)?\s*(che\s+)?",
+    re.I)
+
+
+def _note_text(typed: str) -> tuple:
+    """(what names the target - the words before the note -, the note itself)."""
+    t = (typed or "").strip()
+    m = _NOTE_LEAD.match(t)
+    if m:
+        return t[:m.end()], t[m.end():].strip()
+    if ":" in t[:120]:
+        head, body = t.split(":", 1)
+        return head, body.strip()
+    return "", t
+
+
+def _merge_notes(old: str, new: str) -> str:
+    old, new = (old or "").strip(), (new or "").strip()
+    if not new or new in old:
+        return old
+    return f"{old}\n{new}" if old else new
+
+
 def _wanted_kind(text: str) -> Optional[str]:
     todo, task = bool(_TODO_WORD.search(text or "")), bool(_TASK_WORD.search(text or ""))
     return "todo" if todo and not task else "task" if task and not todo else None
@@ -1961,6 +1991,33 @@ async def _apply_task_todo_turn(user_id: str, typed: str, meta: Optional[dict], 
             for k in ("due_date", "due_time", "recurrence", "duration_minutes", "reminder_minutes_before"):
                 m.pop(k, None)
         return m
+
+    if _NOTE_ASK.search(typed or ""):
+        head, note = _note_text(typed)
+        target = None
+        existing = await _find_created_in_conv(conv_id)
+        if existing:
+            target = existing
+        else:   # in another chat: the to-do/task the request names ("aggiungi alla nota del to-do modifiche maipal: ...")
+            todos = await db.todos.find({"user_id": user_id, "status": {"$ne": "fatto"}}, {"_id": 0, "id": 1, "title": 1, "notes": 1}).to_list(300)
+            tasks = await db.tasks.find({"user_id": user_id, "completed": {"$ne": True}}, {"_id": 0, "id": 1, "title": 1, "notes": 1, "due_date": 1, "due_time": 1}).to_list(300)
+            ids = lu.match_candidates(head, [(d["id"], d.get("title") or "") for d in todos + tasks]) if head.strip() else []
+            if len(ids) == 1:
+                d = next(x for x in todos + tasks if x["id"] == ids[0])
+                target = ("task" if d["id"].startswith("task_") else "todo", d)
+            elif not ids:
+                return "⚠️ A quale to-do o task aggiungo la nota? Scrivimi il titolo, es. «aggiungi al to-do modifiche maipal la nota: ...»."
+            else:
+                return "⚠️ Più to-do o task corrispondono: scrivimi il titolo esatto a cui aggiungere la nota."
+        if not note:
+            return "⚠️ Non ho trovato il testo della nota: scrivilo dopo i due punti, es. «aggiungi la nota: ...»."
+        kind, doc = target
+        coll = db.tasks if kind == "task" else db.todos
+        fresh = await coll.find_one({"id": doc["id"]}, {"_id": 0}) or doc
+        merged = _merge_notes(fresh.get("notes"), note)
+        await coll.update_one({"id": doc["id"]}, {"$set": {"notes": merged, "embedding": None}})
+        where = "To-Do" if kind == "todo" else "Task"
+        return f"📝 Nota aggiunta a «{fresh.get('title')}» (sezione {where}). Ora le note sono:\n{merged}"
 
     bulk = meta.get("tasks") if meta and isinstance(meta.get("tasks"), list) else None
     if bulk:
@@ -2036,7 +2093,10 @@ async def _update_task_or_todo_from_meta(kind: str, doc_id: str, meta: dict):
     fields: dict = {}
     if meta.get("title"): fields["title"] = meta["title"]
     if meta.get("description"): fields["description"] = meta["description"]
-    if meta.get("notes"): fields["notes"] = meta["notes"]
+    if meta.get("notes"):
+        coll = db.tasks if kind == "task" else db.todos
+        old = (await coll.find_one({"id": doc_id}, {"_id": 0, "notes": 1}) or {}).get("notes")
+        fields["notes"] = _merge_notes(old, meta["notes"])   # added to the notes already there, never swapped
     if meta.get("priority"): fields["priority"] = meta["priority"]
     if meta.get("tags"): fields["tags"] = meta["tags"]
     if kind == "task":
