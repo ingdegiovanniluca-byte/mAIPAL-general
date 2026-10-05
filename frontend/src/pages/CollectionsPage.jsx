@@ -119,7 +119,7 @@ export default function CollectionsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${collections.length > 12 ? "lg-many" : ""}`}>
         {collections.map((c) => (
           <div
             key={c.id}
@@ -387,6 +387,7 @@ function CreateCollectionDialog({ existingCollections, onClose, onCreated }) {
 }
 
 /* ============ LIVELLO 2 — CAMPI ============ */
+const PAGE_ITEMS = 60;
 function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged }) {
   const [coll, setColl] = useState(collection);
   const [items, setItems] = useState([]);
@@ -398,6 +399,7 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [dragOverId, setDragOverId] = useState(null);
   const [selected, setSelected] = useState(() => new Set());   // campi ticked for a bulk delete
   const [related, setRelated] = useState([]);                  // scheduled actions working on this list
+  const [shown, setShown] = useState(PAGE_ITEMS);              // a long list is drawn a page at a time
   const [renaming, setRenaming] = useState(false);
   const rename = async (value) => {
     const name = (value || "").trim();
@@ -538,8 +540,8 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
         <div className="text-center text-white/40 py-24 kicker">nessun campo ancora</div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {items.map((item) => (
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${items.length > 12 ? "lg-many" : ""}`}>
+        {items.slice(0, shown).map((item) => (
           <div
             key={item.id}
             draggable
@@ -582,6 +584,13 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
           </div>
         ))}
       </div>
+
+      {items.length > shown && (
+        <button data-testid="show-more-items" onClick={() => setShown((n) => n + PAGE_ITEMS)}
+          className="mt-4 mb-28 md:mb-0 w-full py-2.5 rounded-full lg-glass text-sm text-white">
+          Mostra altri {Math.min(PAGE_ITEMS, items.length - shown)} di {items.length - shown}
+        </button>
+      )}
 
       {editing && (
         <ItemFormDialog
@@ -681,7 +690,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
         <div className="text-center text-white/40 py-24 kicker">nessun elemento ancora</div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${subItems.length > 12 ? "lg-many" : ""}`}>
         {subItems.map((sub) => (
           <div key={sub.id} className="lg-card p-4 rounded-[22px] relative group">
             {(coll.sub_item_fields || []).slice(0, 5).map((f) => (

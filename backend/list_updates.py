@@ -208,7 +208,8 @@ def names_an_existing_list(text: str, list_names: list[str]) -> bool:
     return any(n and re.search(rf"\b{re.escape(n.strip().lower())}\b", t) for n in list_names)
 
 
-async def classify_save_intent(text: str, list_names: list[str], user_id: Optional[str] = None, channel: str = "web") -> str:
+async def classify_save_intent(text: str, list_names: list[str], user_id: Optional[str] = None, channel: str = "web",
+                               context: str = "") -> str:
     """Cheap pre-classification used to merge "salva informazione" and "modifica lista"
     into a single chat action: is this free text an instruction to add/edit/remove a
     record in one of the user's existing Liste, or just generic information to save as a
@@ -253,7 +254,9 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         resp = await client.chat.completions.create(
             model="gpt-4o-mini", max_completion_tokens=20,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": text if not context else (
+                f"{text}\n\n(Conversazione precedente, solo per capire a cosa si riferisce la frase - es. 'elimina il "
+                f"latte' subito dopo aver letto la lista della spesa è una modifica di quella lista: {context[-1500:]})")}],
         )
         _track(resp, user_id, channel, model="gpt-4o-mini")
         raw = resp.choices[0].message.content or ""

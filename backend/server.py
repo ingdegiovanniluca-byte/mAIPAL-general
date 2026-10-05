@@ -2394,7 +2394,7 @@ async def _conversation_cleanup_loop():
 # ============ TASKS ============
 @api_router.get("/tasks")
 async def list_tasks(current: User = Depends(get_current_user)):
-    cursor = db.tasks.find(_visible_query(current), {"_id": 0}).sort("created_at", -1)
+    cursor = db.tasks.find(_visible_query(current), {"_id": 0, "embedding": 0}).sort("created_at", -1)   # the search's vectors stay on the server
     return await cursor.to_list(500)
 
 
@@ -2720,7 +2720,7 @@ async def _task_series_loop():
 # ============ TODOS ============
 @api_router.get("/todos")
 async def list_todos(current: User = Depends(get_current_user)):
-    cursor = db.todos.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1)
+    cursor = db.todos.find({"user_id": current.user_id}, {"_id": 0, "embedding": 0}).sort("created_at", -1)
     return await cursor.to_list(500)
 
 
@@ -3047,7 +3047,9 @@ async def list_collection_items(collection_id: str, current: User = Depends(get_
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
-    cursor = db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).sort("created_at", -1)
+    # without the search's cached vectors (384 numbers per element): the phone downloaded
+    # hundreds of KB for a shopping list
+    cursor = db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "embedding": 0}).sort("created_at", -1)
     items = await cursor.to_list(1000)
     # Backfill sort_order (added for drag-to-reorder) for Campi that predate it, keeping
     # the order they already had (by creation date) instead of jumping around on first load.
@@ -3158,7 +3160,7 @@ async def list_sub_items(collection_id: str, item_id: str, current: User = Depen
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
-    cursor = db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0}).sort("created_at", -1)
+    cursor = db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "embedding": 0}).sort("created_at", -1)
     return await cursor.to_list(1000)
 
 
@@ -4095,7 +4097,7 @@ async def list_journal(
             {"tags": {"$regex": safe, "$options": "i"}},
         ]
     limit = 2000 if (date_from or date_to) else 365
-    cursor = db.journal_entries.find(query, {"_id": 0}).sort("date", -1).limit(limit)
+    cursor = db.journal_entries.find(query, {"_id": 0, "embedding": 0}).sort("date", -1).limit(limit)
     return await cursor.to_list(limit)
 
 
@@ -6158,6 +6160,21 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             return {**base, "status": "ok", "message": f"📔 Aggiunto al diario del {_short_it_date(jr.get('date'))}."}
 
         if agent == "info_upload":
+            # "@salva elimina il latte" right after reading the shopping list is a list edit,
+            # not a note to save (it used to be saved as a note, with "fatto" as the answer)
+            names = [c["name"] for c in await db.collections.find(_lists_query(user), {"_id": 0, "name": 1}).to_list(200)]
+            conv_ctx = ""
+            if names and conv_id:
+                conv = await db.conversations.find_one({"conv_id": conv_id, "user_id": user.user_id}, {"_id": 0, "messages": 1})
+                conv_ctx = "\n".join(f"{'Utente' if m.get('role') == 'user' else 'Assistente'}: {(m.get('content') or '')[:600]}"
+                                      for m in ((conv or {}).get("messages") or [])[-4:])
+            kind = await lu.classify_save_intent(piece, names, user_id=user.user_id, channel=channel, context=conv_ctx) if names else "info_upload"
+            if kind == "list_create" or (kind == "list_update" and not lu.looks_like_note(piece)):
+                agent = "list_update"
+                base = {**base, "agent": "list_update", "label": AGENT_LABELS.get("list_update", "Lista")}
+                if conv_ctx:
+                    context = f"{context}\n\nConversazione precedente:\n{conv_ctx}" if context else f"Conversazione precedente:\n{conv_ctx}"
+        if agent == "info_upload":
             try:
                 e = await emb.embed_texts([piece])
                 embedding = e[0] if e else None
@@ -6193,7 +6210,8 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
                 if await lu.classify_save_intent(piece, names, user_id=user.user_id, channel=channel) == "list_create":
                     res = await _create_list_from_text(user, piece + (f"\n\n{docs[:4000]}" if docs else ""), channel=channel)
                     return {**base, "status": res["status"], "message": ("📋 " if res["status"] == "ok" else "⚠️ ") + res["message"]}
-            text = piece + (f"\n\n(Contesto del messaggio, per capire a chi o cosa si riferisce: {context[:600]})" if ctx_block else "")
+            text = piece + (f"\n\n(Contesto del messaggio, per capire a chi o cosa si riferisce: {context[:2400]})"
+                            if context and context.strip() != piece.strip() else "")
             if docs:
                 text += f"\n\n(Testo dei file allegati nella conversazione, se la richiesta vi si riferisce: {docs[:4000]})"
             try:

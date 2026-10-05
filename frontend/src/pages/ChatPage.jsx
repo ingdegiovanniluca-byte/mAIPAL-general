@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -250,6 +250,9 @@ export default function ChatPage() {
   const connectedClouds = [googleOn && "google", msOn && "onedrive"].filter(Boolean);
   // until the user touches the icons, the clouds chosen in Impostazioni
   const cloudTargets = (chatOpts.cloud || integ?.storage_targets || connectedClouds).filter((t) => connectedClouds.includes(t));
+  // Salva: read the files' content into the knowledge base (OCR / text) - on by default; off,
+  // a file only goes to Drive/OneDrive (no extraction cost, no wait)
+  const extractOn = chatOpts.extract !== false;
   const setChatOpt = (patch) => setChatOpts((o) => {
     const next = { ...o, ...patch };
     try { localStorage.setItem(CHAT_OPTS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
@@ -801,6 +804,11 @@ export default function ChatPage() {
     }
     if (!text.trim() && attachments.length === 0 && !pendingVoice) return;
     if (streaming || transcribing) return;
+    if (active === "info_upload" && !text.trim() && !pendingVoice && attachments.length > 0 && attachments.every((a) => a.noExtract)
+        && !(isMobile ? cloudTargets.length > 0 : attachments.some((a) => a.driveExplicit))) {
+      toast.warning("Niente da salvare: accendi Drive o l'estrazione del contenuto");
+      return;
+    }
 
     let voiceText = "";
     if (pendingVoice) {
@@ -901,11 +909,11 @@ export default function ChatPage() {
     const journalDocs = attachments.filter((a) => a.journalDocument).map((a) => ({ name: a.name, url: a.url }));
     if (attachments.length > 0) {
       const kbLine = attachments.filter((a) => a.kb).map((a) => `📎 ${a.name} · ${a.chunks} chunk indicizzati (~${a.chars} caratteri)`).join("\n");
-      const driveLine = attachments.filter((a) => !a.kb && !a.journalImage && !a.journalDocument).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
+      const driveLine = attachments.filter((a) => !a.kb && !a.journalImage && !a.journalDocument && !a.noExtract).map((a) => `📎 ${a.name}${a.url ? ` (${a.url})` : ""}`).join("\n");
       const parts = [];
       if (kbLine) parts.push(`Allegati caricati nella knowledge base personale:\n${kbLine}`);
       if (driveLine) parts.push(`Allegati caricati su Drive:\n${driveLine}`);
-      currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
+      if (parts.length) currentQuestion = (currentQuestion ? currentQuestion + "\n\n" : "") + parts.join("\n\n");
     }
     // mobile: no cloud icon on -> the files stay in the knowledge base only
     const driveFiles = attachments.filter((a) => a.driveFile && !(isMobile && cloudTargets.length === 0));
@@ -1027,15 +1035,30 @@ export default function ChatPage() {
     // attached schedule/program and create a task per event, instead of it going straight
     // to Drive unread. In other actions: keep the previous behaviour (upload to Drive as
     // attachment).
-    const useKb = active === "info_upload" || active === "task_todo";
+    const useKb = (active === "info_upload" && extractOn) || active === "task_todo";
+    // where a Salva file ends up without extraction: Drive/OneDrive if chosen, else nowhere
+    const driveOn = isMobile ? cloudTargets.length > 0 : saveToDrive;
+    const keepForDrive = (f, why) => {
+      setAttachments((a) => [...a, { name: f.name, driveFile: f, driveExplicit: saveToDrive, noExtract: true }]);
+      if (driveOn) toast.success(`${f.name}${why ? ` (${why})` : ""} → verrà salvato su ${isMobile && cloudTargets.length === 1 && cloudTargets[0] === "onedrive" ? "OneDrive" : "Drive"} all'invio`);
+      else toast.warning(`${f.name}${why ? `: ${why}` : ""} — attiva Drive per salvarlo, ${why ? "così" : "altrimenti"} non viene salvato`);
+    };
     for (const original of files) {
       setUploadingFiles((u) => [...u, original.name]);
       const f = await prepareImageForUpload(original);
+      if (active === "info_upload" && !extractOn) {
+        keepForDrive(f, "");
+        setUploadingFiles((u) => u.filter((n) => n !== original.name));
+        continue;
+      }
       try {
         const fd = new FormData();
         fd.append("file", f, f.name);
         const endpoint = useKb ? "/kb/upload" : "/attachments/upload";
         const res = await fetch(`${API}${endpoint}`, { method: "POST", body: fd, credentials: "include" });
+        // a photo with no text in it (a landscape, a pet...): nothing to read, but it can
+        // still go to Drive - it used to be refused altogether
+        if (useKb && active === "info_upload" && res.status === 422) { keepForDrive(f, "nessun testo da estrarre"); continue; }
         if (!res.ok) throw new Error(await uploadErrorMessage(res));
         const j = await res.json();
         if (useKb) {
@@ -1311,6 +1334,10 @@ export default function ChatPage() {
       optIcon("scope-kb", Database, scope === "kb", () => { setScope("kb"); flash("Cerco solo nella base di conoscenza"); }, "Solo base di conoscenza"),
     );
   } else if (active === "info_upload") {
+    agentOptions.push(optIcon("extract", ScanText, extractOn, () => {
+      setChatOpt({ extract: !extractOn });
+      flash(extractOn ? "Estrazione spenta: i file vanno solo su Drive" : "Leggo il contenuto dei file");
+    }, "Estrai il contenuto dei file"));
     if (googleOn) agentOptions.push(optIcon("cloud-google", HardDrive, cloudTargets.includes("google"), () => toggleCloud("google", "Google Drive"), "Salva anche su Google Drive"));
     if (msOn) agentOptions.push(optIcon("cloud-onedrive", Cloud, cloudTargets.includes("onedrive"), () => toggleCloud("onedrive", "OneDrive"), "Salva anche su OneDrive"));
     if (cloudTargets.length) agentOptions.push(optIcon("ask-folder", Folder, !!chatOpts.askFolder, () => {
@@ -1767,6 +1794,17 @@ export default function ChatPage() {
             <div className="flex items-center justify-between pt-2 border-t ">
               <div className="flex items-center gap-1.5 text-white/85 flex-wrap">
                 <button data-testid="attach-btn" onClick={onAttachClick} className="p-2 rounded-full hover:bg-white/15"><Paperclip size={16} /></button>
+                {active === "info_upload" && (
+                  <button
+                    data-testid="extract-toggle"
+                    onClick={() => setChatOpt({ extract: !extractOn })}
+                    title={extractOn ? "Estrai il contenuto dei file (acceso)" : "Estrazione spenta: i file vanno solo su Drive"}
+                    aria-pressed={extractOn}
+                    className={`p-2 rounded-full transition-colors duration-150 ${extractOn ? "bg-white/30 text-white" : "hover:bg-white/15"}`}
+                  >
+                    <ScanText size={16} />
+                  </button>
+                )}
                 {active === "info_upload" && (
                   <button
                     data-testid="drive-save-toggle"
