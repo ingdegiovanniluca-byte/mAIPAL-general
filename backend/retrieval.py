@@ -172,6 +172,13 @@ def period_hint(query: str, today: Optional[date] = None) -> str:
             f"sommarla. Indica sempre quali voci sono ricorrenti.")
 
 
+# "dimmi l'elenco dei to-do", "quali task ho?", "cosa devo fare?": questions about the to-dos /
+# tasks themselves. "to-do" is two short words the term filter drops, and similarity alone
+# doesn't find them - so these get ALL the open ones, always.
+_ASK_TODOS = re.compile(r"\bto[\s-]?do\b|\bcos[ae] da fare\b|\bcosa devo fare\b|\bcose che devo fare\b", re.I)
+_ASK_TASKS = re.compile(r"\btask\b|\bimpegni\b|\bscadenze\b|\bappuntamenti\b|\bcosa devo fare\b", re.I)
+
+
 def _local_day(value) -> Optional[date]:
     """The (Rome) day of an ISO date / datetime string, or None."""
     if not value:
@@ -297,6 +304,12 @@ def _is_strong_match(score: int, n_tied: int) -> bool:
     person - forcing all of them (and their enrolled people) is what used to crowd the note
     that actually answered it out of the context."""
     return score >= 20 or n_tied <= 3
+
+
+def _owned(user_id: str, org_id: Optional[str]) -> dict:
+    if org_id:
+        return {"$or": [{"user_id": user_id}, {"org_id": org_id, "visibility": "org"}]}
+    return {"user_id": user_id}
 
 
 async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "kb",
@@ -625,6 +638,34 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                 expanded.append(c)
                 seen_other.add(key)
     top = expanded
+
+    # ---- questions about the to-dos / tasks themselves: every open one ----
+    if scope == "all" and (_ASK_TODOS.search(query_low) or (_ASK_TASKS.search(query_low) and not window)):
+        have = {(c.get("source"), (c.get("meta") or {}).get("id")) for c in top}
+        listed = []
+        if _ASK_TODOS.search(query_low):
+            open_todos = await db.todos.find({"user_id": user_id, "status": {"$ne": "fatto"}}, {"_id": 0, "embedding": 0}).sort("created_at", -1).to_list(200)
+            for td in open_todos:
+                if ("todo", td.get("id")) in have:
+                    continue
+                state = {"da_fare": "da fare", "in_corso": "in corso"}.get(td.get("status"), td.get("status") or "da fare")
+                pct = f" ({td.get('completion_percent')}%)" if td.get("completion_percent") else ""
+                listed.append({"text": td.get("title", ""), "source": "todo", "meta": {"id": td.get("id")},
+                               "display": f"[To-Do aperto] {td.get('title', '')} — {state}{pct}. {td.get('description', '') or ''}".strip()})
+            listed.insert(0, {"text": "", "source": "summary", "meta": {},
+                              "display": f"[Riepilogo] To-Do aperti: {len(open_todos)} (quelli fatti non sono elencati)."})
+        if _ASK_TASKS.search(query_low) and not window:
+            open_tasks = await db.tasks.find({**_owned(user_id, org_id), "completed": {"$ne": True}}, {"_id": 0, "embedding": 0}).sort("due_date", 1).to_list(200)
+            for t in open_tasks:
+                if ("task", t.get("id")) in have:
+                    continue
+                when = (t.get("due_date") or "senza data") + (f" {t.get('due_time')}" if t.get("due_time") else "")
+                late = " · SCADUTO" if t.get("due_date") and str(t["due_date"])[:10] < today.isoformat() else ""
+                listed.append({"text": t.get("title", ""), "source": "task", "meta": {"id": t.get("id")},
+                               "display": f"[Task aperto] {t.get('title', '')} — {when}{late} · priorità {t.get('priority', 'media')}"})
+            listed.insert(0, {"text": "", "source": "summary", "meta": {},
+                              "display": f"[Riepilogo] Task non completati: {len(open_tasks)}."})
+        top = listed + top
 
     # ---- temporal questions about tasks ("oggi", "domani", "questa settimana", "scaduti") ----
     if scope == "all":

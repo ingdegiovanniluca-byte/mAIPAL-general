@@ -292,28 +292,18 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
             except Exception:
                 logger.exception("auto task creation from info_upload failed")
     elif action == "task_todo":
+        # same as the web chat: the app saves and says what was saved, and where. A Telegram/
+        # watch task has no reminder toggle like the web app, so the reminder defaults ON.
+        from server import _apply_task_todo_turn
         parsed = _parse_task_json(answer) or meta
-        bulk_tasks = parsed.get("tasks") if parsed else None
-        if isinstance(bulk_tasks, list) and bulk_tasks:
-            # Multiple events read from the KB (e.g. "un task per ogni lezione di pilates"):
-            # one task/todo per item, all sharing this conv_id.
-            for item in bulk_tasks:
-                if isinstance(item, dict) and item.get("title"):
-                    try:
-                        await _create_task_or_todo(user_doc["user_id"], item, conv_id, default_reminder_enabled=True)
-                    except Exception:
-                        logger.exception(f"bulk task creation failed for item={item!r}")
-        elif parsed:
-            # A follow-up turn in the SAME thread updates what was already created there
-            # instead of creating a duplicate every time the user adds more detail.
-            existing = await _find_created_in_conv(conv_id)
-            if existing is None:
-                # A Telegram-created task has no reminder-toggle button like the web app
-                # does, so the reminder defaults ON here - otherwise it silently never fires.
-                await _create_task_or_todo(user_doc["user_id"], parsed, conv_id, default_reminder_enabled=True)
-            else:
-                kind, existing_doc = existing
-                await _update_task_or_todo_from_meta(kind, existing_doc["id"], parsed)
+        try:
+            saved = await _apply_task_todo_turn(user_doc["user_id"], content, parsed, conv_id, visible,
+                                                channel=channel, default_reminder_enabled=True)
+        except Exception:
+            logger.exception("task_todo save failed")
+            saved = "⚠️ Non sono riuscito a salvarlo: riprova."
+        if saved:
+            visible = f"{visible}\n\n{saved}" if visible else saved
     elif action == "journal":
         # Same date resolution + append-or-create as the web chat: the entry lands on the
         # day the user is actually talking about (e.g. "ieri"), not always on today's page.

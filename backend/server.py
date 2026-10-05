@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 import os
+import json
 import logging
 import re
 import uuid
@@ -1454,24 +1455,19 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             # mobile chat icons: put the new tasks on the calendar / turn their reminder on
             task_opts = {"default_reminder_enabled": bool((payload.filters or {}).get("reminder")),
                          "sync_calendar": bool((payload.filters or {}).get("calendar"))}
-            bulk_tasks = meta.get("tasks") if meta else None
-            if isinstance(bulk_tasks, list) and bulk_tasks:
-                # Multiple events read from an attached/KB document (e.g. "un task per ogni
-                # lezione di pilates"): one task/todo per item, all sharing this conv_id -
-                # no dedup-into-an-update here, each item is its own new record.
-                for item in bulk_tasks:
-                    if isinstance(item, dict) and item.get("title"):
-                        try:
-                            await _create_task_or_todo(current.user_id, item, conv_id, **task_opts)
-                        except Exception:
-                            logger.exception(f"bulk task creation failed for item={item!r}")
-            elif meta:
-                existing = await _find_created_in_conv(conv_id)
-                if existing is None:
-                    await _create_task_or_todo(current.user_id, meta, conv_id, **task_opts)
-                else:
-                    kind, existing_doc = existing
-                    await _update_task_or_todo_from_meta(kind, existing_doc["id"], meta)
+            try:
+                saved = await _apply_task_todo_turn(current.user_id, main_text or typed, meta, conv_id, visible_answer, **task_opts)
+            except Exception:
+                logger.exception("task_todo save failed")
+                saved = "⚠️ Non sono riuscito a salvarlo: riprova."
+            if saved:
+                # the line saying what was really saved (and where), in the chat and in the history
+                yield _json.dumps({"type": "delta", "content": ("\n\n" if visible_answer else "") + saved}) + "\n"
+                conv_doc = await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "messages": 1}) or {}
+                msgs = conv_doc.get("messages") or []
+                if msgs and msgs[-1].get("role") == "assistant":
+                    msgs[-1]["content"] = (msgs[-1].get("content") or "") + ("\n\n" if visible_answer else "") + saved
+                    await db.conversations.update_one({"conv_id": conv_id}, {"$set": {"messages": msgs, "agent_response": msgs[-1]["content"]}})
         # journal: side-effect only on first exchange - a follow-up turn is normally a
         # refinement of the SAME entry, not a brand new one.
         elif not prior_messages and action == "journal":
@@ -1902,6 +1898,121 @@ async def _save_journal_entry(
     }
     await db.journal_entries.insert_one(jr)
     return jr
+
+
+# ---- what a task_todo chat turn really saved ----
+# The answer is written by the model BEFORE anything is saved, so it used to say "fatto" also
+# when nothing was saved (no META), when the to-do became a TASK (the model put a date: it
+# went to the Task section), or when "ricrealo" just updated the one already there. Now the
+# app decides from what the user asked, saves, and appends a line saying what and where.
+_TODO_WORD = re.compile(r"\bto[\s-]?do\b|\bcos[ae] da fare\b", re.I)
+_TASK_WORD = re.compile(r"\btask\b|\bpromemoria\b|\bappuntament", re.I)
+_CREATE_ASK = re.compile(r"\b(crea\w*|ricrea\w*|aggiung\w*|rifa\w*|mett\w*|segna\w*|inserisc\w*|salva\w*|ricordami)\b", re.I)
+_SAME_ONE = re.compile(r"\b(ricrea\w*|rifallo|rifalla|di nuovo|crealo|creala|non (lo|la) vedo|non c'[eè]|dov'[eè])\b", re.I)
+_CLAIM = re.compile(r"\b(ho (creato|aggiunto|salvato|ricreato|inserito|registrato|preso nota|segnato)|(è|e') stat[oa] (creat|aggiunt|salvat)\w*|fatto|creato)\b", re.I)
+
+
+def _wanted_kind(text: str) -> Optional[str]:
+    todo, task = bool(_TODO_WORD.search(text or "")), bool(_TASK_WORD.search(text or ""))
+    return "todo" if todo and not task else "task" if task and not todo else None
+
+
+def _norm_title(t: str) -> str:
+    return re.sub(r"[^a-z0-9àèéìòù]+", " ", (t or "").lower()).strip()
+
+
+async def _extract_task_meta(text: str, user_id: str, channel: str = "web") -> Optional[dict]:
+    """The model answered without saying what to save: read it straight from the request."""
+    system = (
+        f"Oggi è {_today_it_string()}. Estrai dal messaggio il task o to-do da salvare. Rispondi SOLO con JSON: "
+        '{"title": "titolo breve, es. le parole tra virgolette se ci sono", "due_date": "YYYY-MM-DD o null", '
+        '"due_time": "HH:MM o null", "priority": "alta|media|bassa"}. Se il messaggio non chiede di salvare nulla: {"title": null}.'
+    )
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"taskx_{uuid.uuid4().hex[:8]}", system_message=system,
+                       user_id=user_id, feature="creazione_task", channel=channel, trigger="utente").with_model("openai", "gpt-4o-mini")
+        raw = (await chat.send_message(UserMessage(text=text))).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group(0)) if m else {}
+    except Exception:
+        logger.exception("task meta extraction failed")
+        return None
+    if not str(data.get("title") or "").strip():
+        return None
+    return {k: v for k, v in data.items() if v not in (None, "", "null")}
+
+
+def _saved_line(doc: dict, verb: str = "Salvato") -> str:
+    if doc["id"].startswith("task_"):
+        when = _short_it_date(doc.get("due_date"), doc.get("due_time"))
+        return f"📌 {verb} nei Task: «{doc.get('title')}»" + (f" · {when}" if when else "") + " (sezione Task)."
+    return f"✅ {verb} nei To-Do: «{doc.get('title')}» (sezione To-Do)."
+
+
+async def _apply_task_todo_turn(user_id: str, typed: str, meta: Optional[dict], conv_id: str, visible: str,
+                                channel: str = "web", **opts) -> str:
+    """Saves what this task_todo turn asks for and returns the line saying what was saved
+    and where (or that nothing was)."""
+    wanted = _wanted_kind(typed)
+
+    def shaped(m: dict) -> dict:
+        m = dict(m)
+        if wanted == "todo":   # "crea un to-do ...": a to-do even if the model put a date on it
+            for k in ("due_date", "due_time", "recurrence", "duration_minutes", "reminder_minutes_before"):
+                m.pop(k, None)
+        return m
+
+    bulk = meta.get("tasks") if meta and isinstance(meta.get("tasks"), list) else None
+    if bulk:
+        made = []
+        for item in bulk:
+            if isinstance(item, dict) and item.get("title"):
+                try:
+                    made.append(await _create_task_or_todo(user_id, shaped(item), conv_id, **opts))
+                except Exception:
+                    logger.exception(f"bulk task creation failed for item={item!r}")
+        if not made:
+            return "⚠️ Non sono riuscito a salvare nulla: riprova."
+        return "\n".join(_saved_line(d) for d in made[:12]) + (f"\n… e altri {len(made) - 12}." if len(made) > 12 else "")
+
+    if not meta and (_SAME_ONE.search(typed or "") or _CLAIM.search(visible or "")):
+        # "non lo vedo", "ricrealo": the one saved in this chat is there - say where
+        existing = await _find_created_in_conv(conv_id)
+        if existing:
+            kind, old = existing
+            if wanted and wanted != kind:
+                await (db.tasks if kind == "task" else db.todos).delete_one({"id": old["id"], "user_id": user_id})
+                return _saved_line(await _create_task_or_todo(user_id, shaped({"title": old.get("title"), "notes": old.get("notes", "")}), conv_id, **opts), "Spostato")
+            return _saved_line(old, "È salvato")
+    if not meta and _CREATE_ASK.search(typed or "") and (wanted or _CLAIM.search(visible or "")):
+        meta = await _extract_task_meta(typed, user_id, channel)
+    if not meta or not (meta.get("title") or "").strip():
+        if _CLAIM.search(visible or "") and _CREATE_ASK.search(typed or ""):
+            return "⚠️ In realtà non ho salvato niente: riscrivimi cosa salvare, es. «crea il to-do modifiche progetto»."
+        return ""
+    meta = shaped(meta)
+    if wanted == "task" and not meta.get("due_date"):
+        pass   # no date: it can only be a to-do - the line below says so
+
+    existing = await _find_created_in_conv(conv_id)
+    if existing:
+        kind, old = existing
+        same = (not meta.get("title")) or _norm_title(meta["title"]) == _norm_title(old.get("title")) or bool(_SAME_ONE.search(typed or ""))
+        if not same and _CREATE_ASK.search(typed or ""):
+            doc = await _create_task_or_todo(user_id, meta, conv_id, **opts)   # another one, in the same chat
+            return _saved_line(doc)
+        if wanted and wanted != kind:   # it was saved as the other kind: move it
+            await (db.tasks if kind == "task" else db.todos).delete_one({"id": old["id"], "user_id": user_id})
+            doc = await _create_task_or_todo(user_id, {**{"title": old.get("title")}, **meta}, conv_id, **opts)
+            return _saved_line(doc, "Spostato")
+        await _update_task_or_todo_from_meta(kind, old["id"], meta)
+        doc = await (db.tasks if kind == "task" else db.todos).find_one({"id": old["id"]}, {"_id": 0}) or old
+        return _saved_line(doc, "È salvato" if _SAME_ONE.search(typed or "") else "Aggiornato")
+    doc = await _create_task_or_todo(user_id, meta, conv_id, **opts)
+    line = _saved_line(doc)
+    if wanted == "task" and doc["id"].startswith("todo_"):
+        line += " Senza una data non può essere un task: se vuoi, dimmi per quando."
+    return line
 
 
 async def _find_created_in_conv(conv_id: str) -> Optional[tuple]:
