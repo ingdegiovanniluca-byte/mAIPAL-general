@@ -137,6 +137,20 @@ async def find_or_create_folder(db, user_id: str, token: str, name: Optional[str
     return r.json()["id"]
 
 
+async def find_or_create_child_folder(token: str, parent_id: str, name: str) -> str:
+    """A folder named `name` directly inside `parent_id` (for nested paths like
+    Clienti/<cliente>/<commessa>)."""
+    r = await _graph(token, "GET", f"/me/drive/items/{parent_id}/children?$top=200&$select=id,name,folder")
+    r.raise_for_status()
+    for i in r.json().get("value", []):
+        if "folder" in i and i["name"].strip().lower() == name.strip().lower():
+            return i["id"]
+    r = await _graph(token, "POST", f"/me/drive/items/{parent_id}/children",
+                     json={"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "rename"})
+    r.raise_for_status()
+    return r.json()["id"]
+
+
 async def item_web_url(token: str, item_id: str) -> Optional[str]:
     """The OneDrive web address of a file or folder (to open it from the app)."""
     r = await _graph(token, "GET", f"/me/drive/items/{item_id}?$select=webUrl")

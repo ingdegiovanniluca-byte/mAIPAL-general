@@ -381,7 +381,8 @@ async def _cmd_help(update: Update, ctx):
         "  /save <info>\n"
         "  /task <task>\n"
         "  /journal <racconto>\n"
-        "  /report — genera un referto veterinario (scegli il tipo, poi detta la visita)\n"
+        "  /report — genera un report (referto veterinario o, per gli artigiani, primo sopralluogo): "
+        "scegli il tipo, poi detta\n"
         "  /lista <richiesta> — aggiungi/modifica/rimuovi un elemento da una lista, es. "
         "\"/lista aggiungi Mario Rossi alla lista clienti\"\n"
         "  /azione <comando> — programma un'azione ricorrente, es. \"/azione ogni domenica a mezzanotte "
@@ -452,7 +453,7 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         content = text
         state = await _get_state(db, user["user_id"], chat_id)
         if state.get("pending_report_type"):
-            await _run_vet_report_flow(update, ctx, db, user, content, state["pending_report_type"])
+            await _run_report_flow(update, ctx, db, user, content, state["pending_report_type"])
             return
         if state.get("pending_list_update"):
             await _run_list_update_flow(update, ctx, db, user, content)
@@ -548,8 +549,18 @@ async def _cmd_report(update: Update, ctx):
     if not user:
         await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
         return
-    buttons = [[InlineKeyboardButton(t["name"], callback_data=f"vetrep:{key}")] for key, t in vr.BUILTIN_TEMPLATES.items()]
     current = _to_user_pydantic(user)
+    if user.get("business_vertical") == "artigiano":
+        import work_reports as wr
+        buttons = [[InlineKeyboardButton(t["name"], callback_data=f"wrkrep:{key}")] for key, t in wr.BUILTIN_TEMPLATES.items()]
+        for t in await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(20):
+            buttons.append([InlineKeyboardButton(t["name"], callback_data=f"wrkrep:{t['id']}")])
+        await update.message.reply_text(
+            "📋 Che report? Scegli il tipo, poi mandami il resoconto (testo o vocale): cliente, indirizzo, cosa hai visto e cosa proponi.",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+    buttons = [[InlineKeyboardButton(t["name"], callback_data=f"vetrep:{key}")] for key, t in vr.BUILTIN_TEMPLATES.items()]
     custom = await db.vet_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(20)
     for t in custom:
         buttons.append([InlineKeyboardButton(t["name"], callback_data=f"vetrep:{t['id']}")])
@@ -557,6 +568,49 @@ async def _cmd_report(update: Update, ctx):
         "📋 Che tipo di visita? Scegli il template, poi mandami il resoconto (testo o vocale).",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
+
+
+async def _run_report_flow(update, ctx, db, user, content, pending_type):
+    """pending_report_type is "work:<tipo>" for the artigiano's reports, the vet visit type otherwise."""
+    if str(pending_type).startswith("work:"):
+        await _run_work_report_flow(update, ctx, db, user, content, pending_type[5:])
+    else:
+        await _run_vet_report_flow(update, ctx, db, user, content, pending_type)
+
+
+async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_type, client_item_id=None, new_client=False):
+    from server import _generate_work_report
+    chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    current = _to_user_pydantic(user)
+    try:
+        rep = await _generate_work_report(current, content, report_type, client_item_id, new_client, channel="telegram")
+    except Exception as e:
+        logger.exception("tg work report failed")
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Errore nella generazione del report: {str(getattr(e, 'detail', e))[:200]}")
+        await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
+        return
+    if rep.get("status") == "ambiguous_client":
+        buttons = [[InlineKeyboardButton(c["name"] + (f" · {c['address']}" if c.get("address") else ""), callback_data=f"wrkcli:{c['item_id']}")]
+                   for c in rep["candidates"]]
+        buttons.append([InlineKeyboardButton("➕ È un cliente nuovo", callback_data="wrkcli:new")])
+        await _set_state(db, chat_id, user["user_id"], pending_report_type=None,
+                         pending_report_context={"report_type": report_type, "text": content, "work": True})
+        await ctx.bot.send_message(chat_id=chat_id, text="👷 Ho più clienti con questo nome. Quale intendi?",
+                                   reply_markup=InlineKeyboardMarkup(buttons))
+        return
+    lines = [f"✅ Report generato: {rep['template_name']}"]
+    if rep.get("client_name"):
+        lines.append(f"👤 Cliente: {rep['client_name']}" + (" (nuovo, aggiunto alla lista Clienti)" if rep.get("client_created") else ""))
+    else:
+        lines.append("👤 Cliente non indicato: il report non è collegato a nessun cliente")
+    if rep.get("commessa_title"):
+        lines.append(f"🧱 Commessa: {rep['commessa_title']}" + (" (nuova, stato «preventivo»)" if rep.get("commessa_created") else ""))
+    if rep.get("drive_link"):
+        lines.append(f"📁 Salvato in \"{rep['drive_folder']}\" (cloud)")
+    lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: resta salvato in app/Drive.")
+    await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
 
 
 async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_type, patient_item_id=None):
@@ -813,6 +867,18 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         visit_type = data.split(":", 1)[1]
         await _set_state(db, chat_id, user["user_id"], pending_report_type=visit_type)
         await ctx.bot.send_message(chat_id=chat_id, text="🩺 Ok. Ora scrivi o manda un vocale con il resoconto della visita.")
+    elif data.startswith("wrkrep:"):
+        await _set_state(db, chat_id, user["user_id"], pending_report_type="work:" + data.split(":", 1)[1])
+        await ctx.bot.send_message(chat_id=chat_id, text="👷 Ok. Ora scrivi o manda un vocale con il resoconto del sopralluogo.")
+    elif data.startswith("wrkcli:"):
+        target = data.split(":", 1)[1]
+        state = await _get_state(db, user["user_id"], chat_id)
+        pctx = state.get("pending_report_context") or {}
+        if not pctx.get("text") or not pctx.get("work"):
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto del report, rifai /report.")
+            return
+        await _run_work_report_flow(q, ctx, db, user, pctx["text"], pctx["report_type"],
+                                    client_item_id=None if target == "new" else target, new_client=target == "new")
     elif data.startswith("vetpat:"):
         patient_id = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)
@@ -968,7 +1034,7 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         state = await _get_state(db, user["user_id"], chat_id)
         if state.get("pending_report_type"):
             _track_stt("creazione_report")
-            await _run_vet_report_flow(update, ctx, db, user, transcript, state["pending_report_type"])
+            await _run_report_flow(update, ctx, db, user, transcript, state["pending_report_type"])
             return
         if state.get("pending_list_update"):
             _track_stt("gestione_liste")

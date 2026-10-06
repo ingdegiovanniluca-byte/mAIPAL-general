@@ -56,7 +56,7 @@ class _Coll:
 
 class _DB:
     def __init__(self, **cols):
-        for name in ["kb_chunks", "tasks", "todos", "journal_entries", "vet_reports", "collections",
+        for name in ["kb_chunks", "tasks", "todos", "journal_entries", "vet_reports", "work_reports", "collections",
                      "collection_items", "collection_sub_items"]:
             setattr(self, name, _Coll(cols.get(name)))
 

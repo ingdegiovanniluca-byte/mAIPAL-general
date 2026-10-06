@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,7 +15,7 @@ import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleD
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
 
-const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
+const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Referto", work_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
 const HISTORY_RETENTION_NOTE = "Le chat non preferite si cancellano da sole 10 giorni dopo l'ultimo messaggio: segna con la stella quelle da tenere. Note, task e diario salvati restano.";
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
@@ -25,7 +25,7 @@ const formatReplyLabel = (conv) => {
   return `${ACTION_LABELS_IT[conv.action] || conv.action}${when ? ` · ${when}` : ""}`;
 };
 
-const ACTIONS = [
+const ALL_ACTIONS = [
   {
     id: "info_request", key: "query", short: "Cerca", icon: <Search size={22} />,
     title: "Richiesta informazioni",
@@ -62,6 +62,13 @@ const ACTIONS = [
     color: "#2E7D63",
   },
   {
+    id: "work_report", key: "workreport", short: "Report", icon: <HardHat size={22} />,
+    title: "Report di lavoro",
+    subtitle: "Detta il sopralluogo: genero il report e lo collego al cliente e alla commessa",
+    placeholder: 'Es. "Sopralluogo dal signor Rossi in via Roma 5: impianto della cucina da rifare…"',
+    color: "#A0672E",
+  },
+  {
     id: "scheduled_action", key: "scheduled", short: "Azioni", icon: <Repeat size={22} />,
     title: "Azioni programmate",
     subtitle: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi",
@@ -69,6 +76,13 @@ const ACTIONS = [
     color: "#3E7C8C",
   },
 ];
+
+// Agents that belong to a vertical: Referto for vets (and for whoever has no vertical, as
+// before), Report only for artigiani. Everything else is the shared engine, always there.
+const actionsFor = (vertical) => ALL_ACTIONS.filter((a) =>
+  a.id === "vet_report" ? (!vertical || vertical === "veterinario")
+  : a.id === "work_report" ? vertical === "artigiano"
+  : true);
 
 // Mobile chat: what the ⓘ next to the agent's name explains - what it does, what the icons
 // under the name mean, and examples (tapping one fills the box).
@@ -98,6 +112,11 @@ const AGENT_INFO = {
     options: [[ClipboardList, "Scegli il tipo di visita o carica un tuo modello di referto"]],
     examples: ["Ho visitato Fester, controllo ecografico di routine, tutto nella norma"],
   },
+  work_report: {
+    what: "Detta o scrivi com'è andato il sopralluogo: genero il report (Word, con lo spazio per le firme), riconosco il cliente nella lista Clienti e la commessa — se non ci sono li aggiungo io — e lo salvo su Drive/OneDrive nella cartella del cliente.",
+    options: [[ClipboardList, "Scegli il tipo di report o carica un tuo modello"]],
+    examples: ["Sopralluogo dal signor Mario Rossi in via Roma 5 a Torino: impianto elettrico della cucina da rifare, manca il differenziale, propongo nuovo quadro e 6 punti presa"],
+  },
   scheduled_action: {
     what: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi. Prima di attivarlo ti mostro cosa farò.",
     options: [],
@@ -110,8 +129,8 @@ const SCHED_YES = /^[\s"'«(]*(s[iì]|ok|okay|confermo|conferma|procedi|vai|eseg
 const SCHED_NO = /^[\s"'«(]*(no|annulla|lascia stare|non farlo|stop)(?![a-zàèéìòù])/i;
 const readChatOpts = () => { try { return JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || "{}"); } catch { return {}; } };
 
-const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
-const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 
 // Images over 1 MB for the knowledge base / Drive (typical PC screenshots or camera photos)
 // are re-encoded client-side into a JPEG of at most 2560px before upload - whichever of the
@@ -188,6 +207,9 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
 
 export default function ChatPage() {
   const isMobile = useIsMobile();
+  const { user: authUser } = useAuth();
+  const vertical = authUser?.business_vertical || null;
+  const ACTIONS = useMemo(() => actionsFor(vertical), [vertical]);
   const navigate = useNavigate();
   const activeRef = useRef(null);
   const location = useLocation();
@@ -197,6 +219,8 @@ export default function ChatPage() {
     const wanted = location.state?.action || new URLSearchParams(location.search).get("action");
     return ACTIONS.some((a) => a.id === wanted) ? wanted : "info_request";
   });
+  // the vertical changed (Impostazioni) and this agent isn't in it anymore
+  useEffect(() => { if (!ACTIONS.some((a) => a.id === active)) setActive("info_request"); }, [ACTIONS, active]);
   const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -294,8 +318,22 @@ export default function ChatPage() {
     } catch { /* silent: la sezione report resta usabile con i template built-in */ }
   };
   useEffect(() => { if (active === "vet_report") loadVetTemplates(); }, [active]);
+  const [workType, setWorkType] = useState("sopralluogo"); // chiave built-in o id template personalizzato
+  const [workTemplates, setWorkTemplates] = useState({ builtin: [], custom: [] });
+  const loadWorkTemplates = async () => {
+    try {
+      const r = await api.get("/work/templates");
+      setWorkTemplates({ builtin: r.data?.builtin || [], custom: r.data?.custom || [] });
+    } catch { /* silent: resta il Primo sopralluogo */ }
+  };
+  useEffect(() => { if (active === "work_report") loadWorkTemplates(); }, [active]);
+  // the selector, the menu and the upload dialog are shared by Referto and Report
+  const isWork = active === "work_report";
+  const tplList = isWork ? workTemplates : vetTemplates;
+  const tplSel = isWork ? workType : visitType;
+  const setTplSel = isWork ? setWorkType : setVisitType;
 
-  const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active), [active]);
+  const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active) || ACTIONS[0], [ACTIONS, active]);
   activeRef.current = active;
 
   // ===== @agenti =====
@@ -507,6 +545,72 @@ export default function ChatPage() {
       rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
     ].filter(Boolean).join("\n");
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id }] }));
+  };
+
+  const appendWorkReportResult = (rep) => {
+    if (rep.status === "ambiguous_client") {
+      setThread((th) => ({ ...th, messages: [...th.messages, {
+        role: "assistant",
+        content: "👷 Ho più clienti con questo nome. Quale intendi?",
+        clientAmbiguous: { candidates: rep.candidates, text: rep.text, report_type: rep.report_type },
+      }] }));
+      return;
+    }
+    const lines = [
+      `✅ Report generato: ${rep.template_name}`,
+      rep.client_name
+        ? `👤 Cliente: ${rep.client_name}${rep.client_created ? " (nuovo, aggiunto alla lista Clienti)" : ""}`
+        : "👤 Cliente non indicato: il report non è collegato a nessun cliente",
+      rep.commessa_title ? `🧱 Commessa: ${rep.commessa_title}${rep.commessa_created ? " (nuova, stato «preventivo»)" : ""}` : null,
+      rep.drive_link ? `📁 Salvato nella cartella "${rep.drive_folder}" (Drive/OneDrive)` : "⚠️ Non salvato nel cloud (collega Google Drive o OneDrive in Impostazioni)",
+      rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
+    ].filter(Boolean).join("\n");
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id, reportKind: "work" }] }));
+  };
+
+  const sendWorkReport = async () => {
+    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    let content = text.trim();
+    if (pendingVoice) {
+      setTranscribing(true);
+      try { content = [content, await transcribeBlob(pendingVoice.blob)].filter(Boolean).join(" ").trim(); }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    if (!content) { toast.error("Descrivi il sopralluogo"); return; }
+    if (streaming || transcribing) return;
+    setStreaming(true);
+    setThread((th) => (th && th.action === "work_report")
+      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      : { conv_id: null, action: "work_report", messages: [{ role: "user", content }], liveAnswer: "" });
+    setText("");
+    try {
+      const { main: workText } = splitMentions(content);
+      const r = await api.post("/work/generate-report", { text: workText || content, report_type: workType });
+      appendWorkReportResult(r.data);
+      await dispatchTagged(content, r.data?.id ? { type: "work_report", id: r.data.id, preview: (workText || "").slice(0, 200) } : null);
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  const resolveWorkClient = async (amb, clientId) => {
+    setStreaming(true);
+    try {
+      const r = await api.post("/work/generate-report", clientId
+        ? { text: amb.text, report_type: amb.report_type, client_item_id: clientId }
+        : { text: amb.text, report_type: amb.report_type, new_client: true });
+      setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.clientAmbiguous === amb ? { ...m, clientAmbiguous: { ...amb, done: true } } : m)) }));
+      appendWorkReportResult(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore nella generazione del report");
+    } finally {
+      setStreaming(false);
+    }
   };
 
   const sendVetReport = async () => {
@@ -810,6 +914,7 @@ export default function ChatPage() {
   const send = async () => {
     if (isMobile && mobileReplyTo) { await sendMobileReply(); return; }
     if (active === "vet_report") { await sendVetReport(); return; }
+    if (active === "work_report") { await sendWorkReport(); return; }
     if (active === "scheduled_action") { await sendScheduledAction(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
@@ -1299,7 +1404,7 @@ export default function ChatPage() {
   const rowAgents = useMemo(() => {
     const others = ACTIONS.filter((a) => a.id !== "info_request").sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
     return [ACTIONS[0], ...others];
-  }, [usage]);
+  }, [usage, ACTIONS]);
   const [composerRef, composerSize] = useMeasure();
   const [micSide] = usePref("micSide");
   const micRight = micSide !== "left";
@@ -1367,10 +1472,10 @@ export default function ChatPage() {
       setChatOpt({ taskBell: !chatOpts.taskBell });
       flash(chatOpts.taskBell ? "Promemoria: spento" : "Promemoria acceso per i nuovi task");
     }, "Promemoria"));
-  } else if (active === "vet_report") {
-    agentOptions.push(optIcon("visit-type", ClipboardList, true, () => setVisitMenuOpen((v) => !v), "Tipo di visita"));
+  } else if (active === "vet_report" || active === "work_report") {
+    agentOptions.push(optIcon("visit-type", ClipboardList, true, () => setVisitMenuOpen((v) => !v), isWork ? "Tipo di report" : "Tipo di visita"));
   }
-  const visitTypes = [...(vetTemplates.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(vetTemplates.custom || []).map((t) => ({ id: t.id, name: t.name }))];
+  const visitTypes = [...(tplList.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(tplList.custom || []).map((t) => ({ id: t.id, name: t.name }))];
 
   const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
   const composerOpen = composerGrown || attachments.length > 0 || uploadingFiles.length > 0 || !!pendingVoice || transcribing
@@ -1412,11 +1517,11 @@ export default function ChatPage() {
         </div>
         {/* always as tall as one row of icons, so name, bar and agents never move between agents */}
         <div className="h-8 flex items-center justify-center gap-3" data-testid="agent-options">{agentOptions}</div>
-        {visitMenuOpen && active === "vet_report" && (
+        {visitMenuOpen && (active === "vet_report" || active === "work_report") && (
           <div className="mt-2 flex flex-wrap justify-center gap-1.5" data-testid="visit-type-menu">
             {visitTypes.map((t) => (
-              <button key={t.id} onClick={() => { setVisitType(t.id); setVisitMenuOpen(false); }}
-                className={`text-xs px-3 py-1.5 rounded-full ${visitType === t.id ? "bg-white text-[#403A3C]" : "bg-white/10 text-white/85"}`}>{t.name}</button>
+              <button key={t.id} onClick={() => { setTplSel(t.id); setVisitMenuOpen(false); }}
+                className={`text-xs px-3 py-1.5 rounded-full ${tplSel === t.id ? "bg-white text-[#403A3C]" : "bg-white/10 text-white/85"}`}>{t.name}</button>
             ))}
             <button onClick={() => { setShowTemplateUpload(true); setVisitMenuOpen(false); }} className="text-xs px-3 py-1.5 rounded-full bg-white/10 text-white/85 inline-flex items-center gap-1">
               <UploadCloud size={12} /> carica modello
@@ -1728,7 +1833,7 @@ export default function ChatPage() {
           <div className="chat-input-card p-4 md:p-5 rounded-2xl shadow-lg mt-2 md:min-h-[340px] flex flex-col" data-testid="chat-input-card">
             {/* The selected action is already shown by the highlighted icon above - no title in the box;
                 this row only exists for the per-action selectors. */}
-            {(active === "info_request" || active === "vet_report") && !thread && (
+            {(active === "info_request" || active === "vet_report" || active === "work_report") && !thread && (
               <div className="flex items-center mb-3 gap-2 flex-wrap">
                 {active === "info_request" && !thread && (
                   <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5" data-testid="scope-selector">
@@ -1750,25 +1855,25 @@ export default function ChatPage() {
                     </button>
                   </div>
                 )}
-                {active === "vet_report" && !thread && (
+                {(active === "vet_report" || active === "work_report") && !thread && (
                   <div className="flex items-center gap-1 flex-wrap" data-testid="visit-type-selector">
                     <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
-                      {vetTemplates.builtin.map((t) => (
+                      {tplList.builtin.map((t) => (
                         <button
                           key={t.key}
                           data-testid={`visit-type-${t.key}`}
-                          onClick={() => setVisitType(t.key)}
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.key ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                          onClick={() => setTplSel(t.key)}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${tplSel === t.key ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
                         >
                           {t.name}
                         </button>
                       ))}
-                      {vetTemplates.custom.map((t) => (
+                      {tplList.custom.map((t) => (
                         <button
                           key={t.id}
                           data-testid={`visit-type-${t.id}`}
-                          onClick={() => setVisitType(t.id)}
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${visitType === t.id ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
+                          onClick={() => setTplSel(t.id)}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-mono-tight uppercase tracking-widest transition-all ${tplSel === t.id ? "bg-[#CECAD0] text-[#403A3C]" : "text-white/80 hover:bg-white/10"}`}
                         >
                           {t.name}
                         </button>
@@ -1913,7 +2018,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
                   <div className="kicker">
-                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "report" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
+                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -1954,13 +2059,13 @@ export default function ChatPage() {
                     )}
                     {m.reportId && (
                       <a
-                        href={`${API}/vet/reports/${m.reportId}/download`}
+                        href={`${API}/${m.reportKind === "work" ? "work" : "vet"}/reports/${m.reportId}/download`}
                         target="_blank"
                         rel="noreferrer"
                         data-testid="download-report-btn"
                         className="ml-4 mt-1 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
                       >
-                        <Download size={12} /> Scarica il referto (.docx)
+                        <Download size={12} /> {m.reportKind === "work" ? "Scarica il report (.docx)" : "Scarica il referto (.docx)"}
                       </a>
                     )}
                     {m.ambiguous && (
@@ -1975,6 +2080,28 @@ export default function ChatPage() {
                             {c.name}{c.owner ? ` · ${c.owner}` : ""}{c.species ? ` (${c.species})` : ""}
                           </button>
                         ))}
+                      </div>
+                    )}
+                    {m.clientAmbiguous && !m.clientAmbiguous.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="ambiguous-client-choices">
+                        {m.clientAmbiguous.candidates.map((c) => (
+                          <button
+                            key={c.item_id}
+                            onClick={() => resolveWorkClient(m.clientAmbiguous, c.item_id)}
+                            disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
+                          >
+                            {c.name}{c.address ? ` · ${c.address}` : ""}
+                          </button>
+                        ))}
+                        <button
+                          data-testid="client-new-btn"
+                          onClick={() => resolveWorkClient(m.clientAmbiguous, null)}
+                          disabled={streaming}
+                          className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50 inline-flex items-center gap-1"
+                        >
+                          <UserPlus size={12} /> È un cliente nuovo
+                        </button>
                       </div>
                     )}
                     {m.listAmbiguous && (
@@ -2151,15 +2278,19 @@ export default function ChatPage() {
 
       {showTemplateUpload && (
         <VetTemplateUploadDialog
+          endpoint={isWork ? "/work/templates" : "/vet/templates"}
           onClose={() => setShowTemplateUpload(false)}
-          onUploaded={async (tpl) => { setShowTemplateUpload(false); await loadVetTemplates(); setVisitType(tpl.id); }}
+          onUploaded={async (tpl) => {
+            setShowTemplateUpload(false);
+            if (isWork) { await loadWorkTemplates(); setWorkType(tpl.id); } else { await loadVetTemplates(); setVisitType(tpl.id); }
+          }}
         />
       )}
     </div>
   );
 }
 
-function VetTemplateUploadDialog({ onClose, onUploaded }) {
+function VetTemplateUploadDialog({ endpoint = "/vet/templates", onClose, onUploaded }) {
   const [name, setName] = useState("");
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2171,7 +2302,7 @@ function VetTemplateUploadDialog({ onClose, onUploaded }) {
       const fd = new FormData();
       fd.append("file", file, file.name);
       fd.append("name", name.trim() || file.name);
-      const res = await fetch(`${API}/vet/templates`, { method: "POST", body: fd, credentials: "include" });
+      const res = await fetch(`${API}${endpoint}`, { method: "POST", body: fd, credentials: "include" });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.detail || `HTTP ${res.status}`);

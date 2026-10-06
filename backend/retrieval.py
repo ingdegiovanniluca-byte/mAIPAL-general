@@ -390,6 +390,18 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                                "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
                                "embedding": vrp.get("embedding"), "day": _local_day(visit_date)})
 
+        for wrp in await db.work_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(1000):
+            txt = (wrp.get("transcript") or "").strip()
+            if not txt:
+                continue
+            who = wrp.get("client_name") or "cliente non indicato"
+            job = f" · {wrp['commessa_title']}" if wrp.get("commessa_title") else ""
+            rep_date = (wrp.get("created_at") or "")[:10]
+            display = f"[{wrp.get('template_name', 'Report')} · {rep_date}] {who}{job}. {txt[:600]}".strip()
+            candidates.append({"text": f"{who}{job} {txt}", "display": display, "source": "work_report",
+                               "meta": {"id": wrp.get("id"), "client_item_id": wrp.get("client_item_id"), "date": rep_date},
+                               "embedding": wrp.get("embedding"), "day": _local_day(rep_date)})
+
     # ---- Liste ----
     extra_scan: List[dict] = []  # list sub-elements, searched by name only (no embedding cost)
     lists_q = _owned_or_shared()
@@ -531,7 +543,7 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                 coll_by_source = {
                     "task": db.tasks, "todo": db.todos, "journal": db.journal_entries,
                     "collection_item": db.collection_items, "collection_sub_item": db.collection_sub_items,
-                    "vet_report": db.vet_reports,
+                    "vet_report": db.vet_reports, "work_report": db.work_reports,
                 }
                 for c, e in zip(non_kb, await emb.embed_texts([c["text"] for c in non_kb])):
                     c["embedding"] = e

@@ -42,6 +42,7 @@ import embeddings as emb
 import retrieval
 import news_service
 import vet_reports
+import work_reports
 import list_updates as lu
 import scheduled_actions as sa
 import recurrence as rec
@@ -49,6 +50,7 @@ import conversation_retention as cr
 import mentions as mn
 import usage_tracking as ut
 import agent_guard
+import verticals as vx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -357,6 +359,13 @@ class GenerateLessonPayload(BaseModel):
 
 
 # ---- Verticale veterinario: report visita ----
+class GenerateWorkReportPayload(BaseModel):
+    text: str
+    report_type: str = "sopralluogo"   # chiave built-in o id di un template personalizzato
+    client_item_id: Optional[str] = None   # forza un cliente (risoluzione ambiguità nome)
+    new_client: bool = False               # "è un cliente nuovo" anche se il nome somiglia a uno esistente
+
+
 class GenerateVetReportPayload(BaseModel):
     text: str
     visit_type: str  # "imaging" | "general" | id di un template personalizzato
@@ -791,10 +800,74 @@ async def update_profile(payload: ProfilePatch, current: User = Depends(get_curr
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     if updates:
         await db.users.update_one({"user_id": current.user_id}, {"$set": updates})
-    if updates.get("business_vertical") == "veterinario":
-        await _ensure_vet_patients_list(current)
     user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
+    if updates.get("business_vertical"):
+        await _apply_vertical(User(**user_doc), updates["business_vertical"])
+        user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     return User(**user_doc)
+
+
+# ============ PACCHETTI VERTICALI (see verticals.py) ============
+async def _apply_vertical(current: User, key: str) -> None:
+    """Idempotent: what turning a vertical on needs - its team, its system lists. Never
+    deletes or rewrites anything the user already has."""
+    if key == "veterinario":
+        await _ensure_vet_patients_list(current)
+        return
+    if key != "artigiano":
+        return
+    if not current.org_id:   # the titolare's own team: collaborators will join it
+        org_doc = {
+            "id": f"org_{uuid.uuid4().hex[:12]}",
+            "name": f"Impresa di {(current.name or 'te').split(' ')[0]}",
+            "join_code": _gen_org_code(),
+            "created_by": current.user_id,
+            "vertical": "artigiano",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.organizations.insert_one(org_doc)
+        await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org_doc["id"], "org_role": "owner"}})
+        current = current.model_copy(update={"org_id": org_doc["id"], "org_role": "owner"})
+    await _ensure_clienti_list(current)
+
+
+async def _ensure_clienti_list(current: User) -> dict:
+    """The artigiano's "Clienti" list, with a "Commessa" under each client. A list already
+    called Clienti is adopted (its attributes and data stay, the missing base ones are added)."""
+    existing = await db.collections.find_one({**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 0})
+    if existing:
+        return existing
+    named = next((c for c in await db.collections.find({"user_id": current.user_id}, {"_id": 0}).to_list(500)
+                  if (c.get("name") or "").strip().lower() == vx.CLIENTI_NAME.lower()), None)
+    if named:
+        fields, fmap = vx.merge_system_fields(named.get("fields"), vx.CLIENTI_FIELDS)
+        subs, smap = vx.merge_system_fields(named.get("sub_item_fields"), vx.COMMESSA_FIELDS)
+        upd = {"fields": _unique_field_keys(fields), "sub_item_fields": _unique_field_keys(subs),
+               "system_key": vx.CLIENTI_KEY, "system_map": fmap, "system_sub_map": smap}
+        if current.org_id:
+            upd.update({"visibility": "org", "org_id": current.org_id})
+        await db.collections.update_one({"id": named["id"]}, {"$set": upd})
+        return {**named, **upd}
+    fields, fmap = vx.merge_system_fields([], vx.CLIENTI_FIELDS)
+    subs, smap = vx.merge_system_fields([], vx.COMMESSA_FIELDS)
+    others = await db.collections.find(_lists_query(current), {"_id": 0, "sort_order": 1}).to_list(500)
+    doc = {
+        "id": f"coll_{uuid.uuid4().hex[:12]}",
+        "name": vx.CLIENTI_NAME,
+        "icon": None,
+        "fields": fields,
+        "sub_item_fields": subs,
+        "system_key": vx.CLIENTI_KEY,
+        "system_map": fmap,
+        "system_sub_map": smap,
+        "visibility": "org" if current.org_id else "private",
+        "sort_order": min([o.get("sort_order", 0) for o in others], default=0) - 1,   # first in the page
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.collections.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 
 @api_router.post("/profile/avatar")
@@ -2390,11 +2463,17 @@ async def _storage_folder_names(user_id: str) -> List[str]:
     return out
 
 
+def _drive_safe(name: str) -> str:
+    """A folder name both Drive and OneDrive accept (OneDrive refuses \\ / : * ? " < > |)."""
+    return " ".join(re.sub(r'[\\/:*?"<>|]+', " ", str(name or "")).split()).strip(" .")[:120] or "Senza nome"
+
+
 async def _storage_save(user_id: str, folder_name: Optional[str], tmp_path: str, filename: str, content_type: Optional[str],
-                        only: Optional[List[str]] = None) -> dict:
+                        only: Optional[List[str]] = None, subfolders: Optional[List[str]] = None) -> dict:
     """Saves a file into <mAIPAL>/<folder_name> (or the mAIPAL folder itself) on every chosen
     storage - or only on `only` (the cloud icons picked for this message in the mobile chat),
-    always limited to the connected ones.
+    always limited to the connected ones. `subfolders` nests further inside folder_name
+    (e.g. Clienti / Rossi Mario / Bagno), each level found or created.
     -> {"saved": [...], "links": {target: url}, "web_view_link": first url, "errors": {...}}"""
     targets = await _storage_targets(user_id)
     if only is not None:
@@ -2408,10 +2487,14 @@ async def _storage_save(user_id: str, folder_name: Optional[str], tmp_path: str,
             if t == "google":
                 creds = await gi.get_credentials(db, user_id)
                 folder_id = (await gi.find_or_create_subfolder(db, user_id, creds, folder_name)) if folder_name else await gi.ensure_maipal_folder(db, user_id, creds)
+                for sub in subfolders or []:
+                    folder_id = await asyncio.to_thread(gi.find_or_create_subfolder_sync, creds, folder_id, _drive_safe(sub))
                 res = gi.upload_file_to_folder(creds, folder_id, tmp_path, filename, content_type)
             else:
                 token = await ms.get_token(db, user_id)
                 folder_id = await ms.find_or_create_folder(db, user_id, token, folder_name)
+                for sub in subfolders or []:
+                    folder_id = await ms.find_or_create_child_folder(token, folder_id, _drive_safe(sub))
                 res = await ms.upload_file(token, folder_id, tmp_path, filename, content_type)
             out["saved"].append(t)
             out["links"][t] = res.get("web_view_link")
@@ -3000,6 +3083,10 @@ async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current
 # ============ COLLEZIONI (liste personalizzate: clienti, esercizi, commesse, ecc.) ============
 @api_router.get("/collections")
 async def list_collections(current: User = Depends(get_current_user)):
+    if current.business_vertical == "artigiano" and not await db.collections.find_one(
+            {**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 1}):
+        await _apply_vertical(current, "artigiano")
+        current = User(**(await db.users.find_one({"user_id": current.user_id}, {"_id": 0})))
     cursor = db.collections.find(_lists_query(current), {"_id": 0}).sort("created_at", 1)
     collections = await cursor.to_list(200)
     # Backfill sort_order (added for drag-to-reorder) for lists that predate it, keeping
@@ -3178,6 +3265,10 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
         updates["fields"] = _unique_field_keys([f.model_dump() for f in payload.fields])
     if payload.sub_item_fields is not None:
         updates["sub_item_fields"] = _unique_field_keys([f.model_dump() for f in payload.sub_item_fields])
+    if existing.get("system_key") and ("fields" in updates or "sub_item_fields" in updates):
+        gone = vx.missing_system_fields({**existing, **updates})
+        if gone:
+            raise HTTPException(status_code=400, detail="Questi attributi sono quelli di base del tuo settore e non si possono togliere: " + ", ".join(gone) + ". Puoi aggiungerne altri.")
     if payload.visibility is not None and payload.visibility != existing.get("visibility", "private"):
         if existing.get("user_id") != current.user_id:
             raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può cambiare con chi è condivisa.")
@@ -3212,6 +3303,8 @@ async def delete_collection(collection_id: str, current: User = Depends(get_curr
         raise HTTPException(status_code=404, detail="Lista non trovata")
     if existing.get("user_id") != current.user_id:
         raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può eliminarla.")
+    if existing.get("system_key"):
+        raise HTTPException(status_code=400, detail=f"«{existing['name']}» è la lista di base del tuo settore: non si può eliminare.")
     await db.collections.delete_one({"id": collection_id})
     await db.collection_items.delete_many({"collection_id": collection_id})
     await db.collection_sub_items.delete_many({"collection_id": collection_id})
@@ -4394,6 +4487,276 @@ async def download_vet_report(report_id: str, current: User = Depends(get_curren
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ============ ARTIGIANO: REPORT (primo sopralluogo, ...) ============
+def _sysval(data: dict, mapping: dict, base_key: str) -> str:
+    return str((data or {}).get((mapping or {}).get(base_key, base_key)) or "").strip()
+
+
+def _norm_title(t: str) -> str:
+    return " ".join(re.findall(r"[\wàèéìòù]+", (t or "").lower()))
+
+
+async def _find_or_create_commessa(clienti: dict, client: dict, job_title: str, address: str, text: str,
+                                   description: str) -> tuple[Optional[dict], bool]:
+    """The commessa (sub-item of the client) this report is about: one whose title is named in
+    the text or equals the job title; otherwise a new one in stato "preventivo"."""
+    smap = clienti.get("system_sub_map") or {}
+    tkey = smap.get("titolo", "titolo")
+    subs = await db.collection_sub_items.find({"collection_id": clienti["id"], "item_id": client["id"]}, {"_id": 0}).to_list(500)
+    low, jt = _norm_title(text), _norm_title(job_title)
+    for sub in subs:
+        title = _norm_title((sub.get("data") or {}).get(tkey))
+        if title and (title == jt or re.search(rf"\b{re.escape(title)}\b", low)):
+            return sub, False
+    if not job_title:
+        return None, False
+    data = {tkey: job_title, smap.get("stato", "stato"): "preventivo"}
+    if address:
+        data[smap.get("indirizzo_cantiere", "indirizzo_cantiere")] = address
+    if description:
+        data[smap.get("descrizione", "descrizione")] = description
+    doc = {"id": f"sub_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "item_id": client["id"],
+           "data": data, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.collection_sub_items.insert_one(doc)
+    doc.pop("_id", None)
+    return doc, True
+
+
+@api_router.get("/work/templates")
+async def list_work_templates(current: User = Depends(get_current_user)):
+    custom = await db.work_templates.find(_visible_query(current), {"_id": 0}).sort("created_at", -1).to_list(200)
+    builtin = [{"key": k, "name": v["name"]} for k, v in work_reports.BUILTIN_TEMPLATES.items()]
+    return {"builtin": builtin, "custom": custom}
+
+
+@api_router.post("/work/templates")
+async def upload_work_template(file: UploadFile = File(...), name: str = Form(...), current: User = Depends(get_current_user)):
+    contents = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        sections = vet_reports.extract_template_structure(tmp_path)
+    except Exception as e:
+        logger.exception("work template parse failed")
+        raise HTTPException(status_code=400, detail=f"Impossibile leggere il template: {e}")
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
+    doc = {
+        "id": f"wtpl_{uuid.uuid4().hex[:12]}",
+        "name": name.strip() or (file.filename or "Template"),
+        "sections": sections,
+        "source_filename": file.filename,
+        "visibility": "org" if current.org_id else "private",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.work_templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.delete("/work/templates/{template_id}")
+async def delete_work_template(template_id: str, current: User = Depends(get_current_user)):
+    r = await db.work_templates.delete_one({"id": template_id, **_editable_query(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Template non trovato")
+    return {"ok": True}
+
+
+@api_router.post("/work/generate-report")
+async def generate_work_report(payload: GenerateWorkReportPayload, current: User = Depends(get_current_user)):
+    return await _generate_work_report(current, payload.text, payload.report_type, payload.client_item_id, payload.new_client)
+
+
+async def _generate_work_report(current: User, text: str, report_type: str = "sopralluogo", client_item_id: Optional[str] = None,
+                                new_client: bool = False, channel: str = "web") -> dict:
+    """The artigiano's report from a dictation. The client is recognized deterministically in the
+    Clienti list (several clients with that name -> {"status": "ambiguous_client", "candidates"}
+    and the caller re-calls with client_item_id, or new_client); a client or a commessa that
+    isn't there yet is added (commessa in stato "preventivo"). The .docx goes to the report
+    archive, to Drive/OneDrive in mAIPAL/Clienti/<cliente>/<commessa> and to Telegram."""
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Descrivi il sopralluogo o l'intervento")
+    if report_type in work_reports.BUILTIN_TEMPLATES:
+        template_name = work_reports.BUILTIN_TEMPLATES[report_type]["name"]
+        skeleton = work_reports.BUILTIN_TEMPLATES[report_type]["sections"]
+    else:
+        tmpl = await db.work_templates.find_one({"id": report_type, **_visible_query(current)}, {"_id": 0})
+        if not tmpl:
+            raise HTTPException(status_code=404, detail="Template non trovato")
+        template_name, skeleton = tmpl["name"], tmpl["sections"]
+
+    clienti = await _ensure_clienti_list(current)
+    fmap = clienti.get("system_map") or {}
+    name_key = fmap.get("nome", "nome")
+    clients = await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "embedding": 0}).to_list(2000)
+    client = None
+    if client_item_id:
+        client = next((c for c in clients if c["id"] == client_item_id), None)
+        if not client:
+            raise HTTPException(status_code=404, detail="Cliente non trovato")
+    elif not new_client:
+        matches = work_reports.find_matching_clients(text, clients, name_key)
+        if len(matches) > 1:
+            return {"status": "ambiguous_client", "text": text, "report_type": report_type, "candidates": [
+                {"item_id": c["id"], "name": _sysval(c.get("data"), fmap, "nome"),
+                 "address": _sysval(c.get("data"), fmap, "indirizzo"), "phone": _sysval(c.get("data"), fmap, "telefono")}
+                for c in matches]}
+        client = matches[0] if matches else None
+
+    try:
+        interpreted = await work_reports.interpret(text, skeleton, user_name=current.name or "", user_id=current.user_id, channel=channel)
+    except Exception as e:
+        logger.exception("work report interpretation failed")
+        raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
+    sections, said = interpreted["sections"], interpreted["client"]
+
+    client_created = False
+    if not client and said.get("name"):
+        # the model may have caught a client the name match missed (e.g. "dalla signora Bianchi")
+        again = work_reports.find_matching_clients(said["name"], clients, name_key) if not new_client else []
+        exact = [c for c in again if _norm_title(_sysval(c.get("data"), fmap, "nome")) == _norm_title(said["name"])]
+        if len(exact) == 1:
+            client = exact[0]
+        else:
+            data = {name_key: said["name"]}
+            for base, val in (("telefono", said.get("phone")), ("email", said.get("email")), ("indirizzo", said.get("address"))):
+                if val:
+                    data[fmap.get(base, base)] = val
+            orders = [c.get("sort_order") for c in clients if c.get("sort_order") is not None]
+            client = {"id": f"item_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "data": data,
+                      "visibility": clienti.get("visibility", "private"), "sort_order": max(orders, default=-1) + 1,
+                      "created_at": datetime.now(timezone.utc).isoformat()}
+            _stamp_owner_fields(client, current)
+            await db.collection_items.insert_one(client)
+            client.pop("_id", None)
+            client_created = True
+    elif client:
+        # complete the client's card with what was said, never overwriting what's there
+        data = dict(client.get("data") or {})
+        for base, val in (("telefono", said.get("phone")), ("email", said.get("email")), ("indirizzo", said.get("address"))):
+            if val and not _sysval(data, fmap, base):
+                data[fmap.get(base, base)] = val
+        if data != (client.get("data") or {}):
+            await db.collection_items.update_one({"id": client["id"]}, {"$set": {"data": data, "embedding": None}})
+            client["data"] = data
+
+    client_name = _sysval(client.get("data"), fmap, "nome") if client else ""
+    commessa, commessa_created = None, False
+    if client:
+        oggetto = next((s["fields"].get("Oggetto dell'intervento") for s in sections if "Oggetto dell'intervento" in s["fields"]), "")
+        site = said.get("address") or _sysval(client.get("data"), fmap, "indirizzo")
+        commessa, commessa_created = await _find_or_create_commessa(clienti, client, interpreted["job_title"], site, text, oggetto or "")
+    smap = clienti.get("system_sub_map") or {}
+    commessa_title = _sysval(commessa.get("data"), smap, "titolo") if commessa else ""
+
+    # what the app knows wins over what the model heard
+    if client:
+        work_reports.set_field(sections, "Cliente", client_name)
+        work_reports.set_field(sections, "Telefono", _sysval(client.get("data"), fmap, "telefono"))
+        work_reports.set_field(sections, "Email", _sysval(client.get("data"), fmap, "email"))
+    if commessa:
+        work_reports.set_field(sections, "Indirizzo del cantiere", _sysval(commessa.get("data"), smap, "indirizzo_cantiere"), overwrite=False)
+    if client:
+        work_reports.set_field(sections, "Indirizzo del cantiere", _sysval(client.get("data"), fmap, "indirizzo"), overwrite=False)
+    work_reports.set_field(sections, "Eseguito da", current.name or "", overwrite=False)
+    work_reports.set_field(sections, "Data", datetime.now(work_reports.LOCAL_TZ).strftime("%d/%m/%Y"), overwrite=False)
+
+    company = ""
+    if current.org_id:
+        org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
+        company = (org or {}).get("name") or ""
+    docx_bytes = work_reports.build_docx(template_name, client_name or None, commessa_title or None, sections, company=company)
+    stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
+    fname = f"{template_name} - {client_name or 'senza cliente'} - {stamp}.docx".replace("/", "-")
+
+    drive_link, drive_folder = None, None
+    try:
+        if await _storage_targets(current.user_id):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(docx_bytes)
+                tmp_path = tmp.name
+            try:
+                if client:
+                    folder, subs = (clienti.get("name") or vx.CLIENTI_NAME), [client_name] + ([commessa_title] if commessa_title else [])
+                else:
+                    folder, subs = "Report", []
+                res = await _storage_save(current.user_id, _drive_safe(folder), tmp_path, fname,
+                                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document", subfolders=subs)
+                drive_link = res.get("web_view_link")
+                drive_folder = " / ".join([_drive_safe(folder)] + [_drive_safe(x) for x in subs])
+            finally:
+                try: os.unlink(tmp_path)
+                except Exception: pass
+    except Exception:
+        logger.exception("work report drive/onedrive save failed")
+
+    telegram_sent = False
+    if current.telegram_chat_id:
+        try:
+            from telegram import Bot
+            import io as _io
+            await Bot(token=tg.bot_token()).send_document(
+                chat_id=current.telegram_chat_id, document=_io.BytesIO(docx_bytes), filename=fname,
+                caption=f"📄 {template_name}" + (f" — {client_name}" if client_name else ""))
+            telegram_sent = True
+        except Exception:
+            logger.exception("work report telegram send failed")
+
+    import base64 as _b64
+    report_doc = {
+        "id": f"wrep_{uuid.uuid4().hex[:12]}",
+        "status": "ok",
+        "user_id": current.user_id,
+        "org_id": current.org_id,
+        "report_type": report_type,
+        "template_name": template_name,
+        "collection_id": clienti["id"],
+        "client_item_id": client["id"] if client else None,
+        "client_name": client_name or None,
+        "client_created": client_created,
+        "commessa_id": commessa["id"] if commessa else None,
+        "commessa_title": commessa_title or None,
+        "commessa_created": commessa_created,
+        "transcript": text,
+        "sections": sections,
+        "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
+        "docx_filename": fname,
+        "drive_link": drive_link,
+        "drive_folder": drive_folder,
+        "telegram_sent": telegram_sent,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.work_reports.insert_one(report_doc)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_report", channel=channel, trigger="utente", org_id=current.org_id)
+    report_doc.pop("_id", None)
+    report_doc.pop("docx_b64", None)
+    return report_doc
+
+
+@api_router.get("/work/reports")
+async def list_work_reports(current: User = Depends(get_current_user)):
+    return await db.work_reports.find({"user_id": current.user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(200)
+
+
+@api_router.get("/work/reports/{report_id}/download")
+async def download_work_report(report_id: str, current: User = Depends(get_current_user)):
+    doc = await db.work_reports.find_one({"id": report_id, "user_id": current.user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report non trovato")
+    import base64 as _b64
+    from urllib.parse import quote as _q
+    filename = doc.get("docx_filename") or "report.docx"
+    return Response(
+        content=_b64.b64decode(doc["docx_b64"]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename=\"report.docx\"; filename*=UTF-8''{_q(filename)}"},
     )
 
 
@@ -5991,6 +6354,8 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
             return {"status": "unsupported", "message": f"Non ho capito quale lista eliminare. Le tue liste: {names}."}
         if coll.get("user_id") != current.user_id:
             return {"status": "unsupported", "message": f"La lista «{coll['name']}» te l'ha condivisa un collega: solo chi l'ha creata può eliminarla."}
+        if coll.get("system_key"):
+            return {"status": "unsupported", "message": f"«{coll['name']}» è la lista di base del tuo settore: non si può eliminare."}
         n = await db.collection_items.count_documents({"collection_id": coll["id"]})
         draft["list_delete"] = {"collection_id": coll["id"], "collection_name": coll["name"]}
         draft["title"] = f"Elimina la lista «{coll['name']}»"[:80]
@@ -6585,7 +6950,7 @@ def _source_label(source: Optional[dict]) -> str:
         return ""
     when = _short_it_date((source.get("created_at") or "")[:10])
     return {"note": f"Nota del {when}", "journal": f"Diario del {_short_it_date(source.get('date'))}",
-            "vet_report": f"Referto del {when}"}.get(source.get("type"), f"Chat del {when}")
+            "vet_report": f"Referto del {when}", "work_report": f"Report del {when}"}.get(source.get("type"), f"Chat del {when}")
 
 
 async def _agent_llm(user: User, action: str, text: str, feature: str, channel: str) -> tuple[str, Optional[dict]]:
