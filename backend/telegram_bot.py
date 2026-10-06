@@ -460,6 +460,14 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         if state.get("pending_sched_text"):
             await _run_scheduled_draft_flow(chat_id, ctx, db, user, content)
             return
+        if state.get("pending_sched_draft") and (_YES.match(content) or _NO.match(content)):
+            draft = state["pending_sched_draft"]
+            await _set_state(db, chat_id, user["user_id"], pending_sched_draft=None)
+            if _NO.match(content):
+                await update.message.reply_text("Ok, non ho fatto nulla.")
+            else:
+                await _confirm_sched_draft(chat_id, ctx, user, draft)
+            return
         if state.get("pending_drive_upload_id"):
             await _run_drive_pending_flow(update, ctx, db, user, state["pending_drive_upload_id"], content)
             return
@@ -639,10 +647,30 @@ async def _run_scheduled_draft_flow(chat_id, ctx, db, user, content):
         return
     await _set_state(db, chat_id, user["user_id"], pending_sched_draft=res["draft"])
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Attiva", callback_data="sched:ok"),
+        InlineKeyboardButton("✅ " + ("Conferma" if (res["draft"].get("schedule") or {}).get("freq") == "now" else "Attiva"), callback_data="sched:ok"),
         InlineKeyboardButton("✖️ Annulla", callback_data="sched:no"),
     ]])
-    await ctx.bot.send_message(chat_id=chat_id, text=f"🔁 Ho capito così:\n\n{res['preview']}\n\nLa attivo?", reply_markup=kb)
+    ask = "Confermi? Premi il pulsante o rispondi «sì»." if (res["draft"].get("schedule") or {}).get("freq") == "now" else "La attivo? (puoi anche rispondere «sì»)"
+    await ctx.bot.send_message(chat_id=chat_id, text=f"🔁 Ho capito così:\n\n{res['preview']}\n\n{ask}", reply_markup=kb)
+
+
+async def _confirm_sched_draft(chat_id, ctx, user, draft):
+    """The user confirmed (button or "sì"): a recurring action is saved, a one-off ("now")
+    one is run right away and not saved."""
+    from server import _create_scheduled_action
+    try:
+        a = await _create_scheduled_action(_to_user_pydantic(user), draft)
+    except Exception as e:
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {getattr(e, 'detail', None) or e}")
+        return
+    if a.get("ran"):
+        await ctx.bot.send_message(chat_id=chat_id, text=f"{'✅' if a.get('status') == 'ok' else '⚠️'} {a.get('result') or 'Fatto.'}")
+    else:
+        await ctx.bot.send_message(chat_id=chat_id, text=f"✅ Azione attivata: {a['title']}.\nProssima esecuzione: {a['next_run_label']}.")
+
+
+_YES = _re.compile(r"^\W*(s[iì]|ok|okay|confermo|conferma|procedi|vai|esegui|fallo|elimina(la)?|cancella(la)?|attiva(la)?)\b", _re.I)
+_NO = _re.compile(r"^\W*(no|annulla|lascia stare|non farlo|stop|fermo)\b", _re.I)
 
 
 async def _cmd_scheduled_list(update: Update, ctx):
@@ -827,16 +855,11 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         if data == "sched:no":
-            await ctx.bot.send_message(chat_id=chat_id, text="Ok, non ho attivato nulla.")
+            await ctx.bot.send_message(chat_id=chat_id, text="Ok, non ho fatto nulla.")
         elif not draft:
             await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto, rifai /azione.")
         else:
-            from server import _create_scheduled_action
-            try:
-                a = await _create_scheduled_action(_to_user_pydantic(user), draft)
-                await ctx.bot.send_message(chat_id=chat_id, text=f"✅ Azione attivata: {a['title']}.\nProssima esecuzione: {a['next_run_label']}.")
-            except Exception as e:
-                await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {getattr(e, 'detail', None) or e}")
+            await _confirm_sched_draft(chat_id, ctx, user, draft)
     elif data.startswith("taskcmd:"):
         _, op, target_id = data.split(":", 2)
         from server import _apply_task_command

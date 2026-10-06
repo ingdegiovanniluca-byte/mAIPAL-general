@@ -15,6 +15,11 @@ Kinds of action (kept deliberately small - "azioni semplici basate su dati a dis
                calculation (sums are computed here, see fill_totals).
 - message:     a fixed reminder text.
 - create_task: create a task due on the day of the run.
+- list_delete: delete a whole list (always confirmed by the user first).
+- news_delete: delete the app's own News (older than N days, keeping the liked ones...).
+
+Besides the schedules, {"freq": "now"} is a one-off action run right away once confirmed,
+and never saved ("una tantum").
 """
 import json
 import logging
@@ -35,8 +40,8 @@ MODEL = "gpt-4o"
 FEATURE = "azioni_programmate"
 MAX_ACTIVE_PER_USER = 20
 
-KINDS = {"list_update", "report", "message", "create_task"}
-FREQS = {"daily", "weekly", "monthly", "once"}
+KINDS = {"list_update", "report", "message", "create_task", "list_delete", "news_delete"}
+FREQS = {"daily", "weekly", "monthly", "once", "now"}
 PERIODS = {"none", "today", "yesterday", "this_week", "last_week", "last_7_days", "this_month", "last_month", "last_30_days"}
 
 IT_WEEKDAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
@@ -79,6 +84,8 @@ def normalize_schedule(raw) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
     freq = raw.get("freq")
+    if freq == "now":   # una tantum: run once, right after the user confirms
+        return {"freq": "now"}
     t = _norm_time(raw.get("time"))
     if freq not in FREQS or not t:
         return None
@@ -133,6 +140,8 @@ def next_run_after(schedule: dict, after: datetime, tz: ZoneInfo = LOCAL_TZ) -> 
     """First run strictly after `after` (aware datetime), as an aware UTC datetime; None
     when a one-off schedule is already in the past. Times are local (Europe/Rome), so a
     "ogni giorno alle 9" stays at 9 across daylight-saving changes."""
+    if schedule["freq"] == "now":
+        return after
     hh, mm = map(int, schedule["time"].split(":"))
     start = after.astimezone(tz).date()
     if schedule["freq"] == "once":
@@ -156,6 +165,8 @@ def _join_it(words: list[str]) -> str:
 def schedule_label(schedule: dict) -> str:
     """Human description, e.g. "Ogni venerdì alle 01:00". A 00:00 run is spelled out as the
     midnight between two days, since "domenica a mezzanotte" is exactly where people differ."""
+    if schedule["freq"] == "now":
+        return "Adesso, una volta sola"
     t = schedule["time"]
     midnight = t == "00:00"
 
@@ -285,6 +296,8 @@ async def interpret_command(text: str, catalog: list[dict], now_local: datetime,
         "di assistenza personale (liste, task, note, diario, Telegram). "
         f"Adesso è {IT_WEEKDAYS[today.weekday()]} {today.isoformat()} ore {now_local.strftime('%H:%M')} (Europe/Rome). "
         f"Liste dell'utente: {lists_desc}. Telegram collegato: {'sì' if telegram_linked else 'no'}.\n"
+        "Le 'news' (o 'notizie') sono quelle della sezione News DELL'APP, che l'app cerca ogni giorno per l'utente: "
+        "non sono siti esterni, le azioni possono eliminarle.\n"
         "La 'knowledge base' (o 'informazioni salvate', 'note', 'documenti', 'archivio') è l'archivio PERSONALE "
         "dell'utente DENTRO quest'app: le note e i file salvati con l'agente Salva, più liste, task, to-do e diario. "
         "Le azioni lo leggono sempre: non è un sistema esterno e non dire MAI che non hai accesso alla knowledge base.\n\n"
@@ -306,8 +319,17 @@ async def interpret_command(text: str, catalog: list[dict], now_local: datetime,
         "- message: mandare un promemoria fisso (es. 'ogni mattina alle 8 ricordami di prendere la pillola'): "
         "testo in 'message_text'.\n"
         "- create_task: creare un task con scadenza il giorno dell'esecuzione (es. 'il primo di ogni mese crea "
-        "il task pagare l'affitto'): 'task': {\"title\", \"priority\": \"alta|media|bassa\", \"due_time\": \"HH:MM o null\"}.\n\n"
+        "il task pagare l'affitto'): 'task': {\"title\", \"priority\": \"alta|media|bassa\", \"due_time\": \"HH:MM o null\"}.\n"
+        "- list_delete: ELIMINARE UNA LISTA INTERA (non svuotarla: per svuotarla è list_update). Metti in 'list_name' "
+        "il nome esatto della lista. L'utente confermerà sempre prima.\n"
+        "- news_delete: eliminare le news della sezione News dell'app: 'news': {\"older_than_days\": numero di giorni "
+        "o null per tutte, \"keep_liked\": true per tenere quelle col pollice in su (default true), \"only_disliked\": "
+        "true per eliminare solo quelle col pollice in giù}. Es. 'ogni giorno elimina le news più vecchie di 3 giorni', "
+        "'cancella le news che non mi piacciono'.\n\n"
         "Cadenza ('schedule'), orari in ora italiana:\n"
+        "- {\"freq\": \"now\"} UNA TANTUM: da fare subito, una volta sola, senza salvarla (es. 'elimina la lista "
+        "invitati', 'adesso cancella le news vecchie', 'fai subito il riepilogo delle spese'). Usala quando l'utente "
+        "dice adesso/ora/subito/una tantum, oppure quando non indica NESSUN momento né cadenza.\n"
         "- {\"freq\": \"daily\", \"time\": \"HH:MM\"}\n"
         "- {\"freq\": \"weekly\", \"weekdays\": [0-6, 0=lunedì ... 6=domenica], \"time\": \"HH:MM\"}\n"
         "- {\"freq\": \"monthly\", \"day_of_month\": 1-31 o -1 per l'ultimo giorno, \"time\": \"HH:MM\"}\n"
@@ -315,7 +337,7 @@ async def interpret_command(text: str, catalog: list[dict], now_local: datetime,
         "Regole orari: 'l'una di notte di venerdì' / 'venerdì all'una di notte' = venerdì 01:00. 'X a mezzanotte' = "
         "fine del giorno X, cioè 00:00 del giorno SUCCESSIVO (es. 'domenica a mezzanotte' -> weekdays [0] lunedì "
         "alle 00:00; così 'la settimana passata' è quella lunedì-domenica appena conclusa). 'Mattina' senza orario "
-        "= 08:00, 'sera' = 20:00. Se l'orario manca del tutto usa 09:00.\n\n"
+        "= 08:00, 'sera' = 20:00. Se c'è un giorno o una cadenza ma manca l'orario usa 09:00 (se non c'è nessun momento: 'now').\n\n"
         "'delivery': 'telegram' se l'utente chiede di mandargli qualcosa su Telegram (o per report/message in "
         "generale, se Telegram è collegato), altrimenti 'app'. 'notify': true se per list_update/create_task "
         "l'utente chiede di essere avvisato quando l'azione viene eseguita.\n\n"
@@ -326,7 +348,8 @@ async def interpret_command(text: str, catalog: list[dict], now_local: datetime,
         "troppo vago per capire cosa fare o quando, supported=false e in 'reason' chiedi cosa manca.\n\n"
         "Rispondi SOLO con JSON: {\"supported\": true|false, \"reason\": \"\", \"title\": \"titolo breve (max 60 "
         "caratteri) di cosa fa l'azione\", \"kind\": \"...\", \"schedule\": {...}, \"list_request\": \"\", "
-        "\"report_instruction\": \"\", \"period\": \"none\", \"report_list\": \"\", \"message_text\": \"\", \"task\": null, "
+        "\"report_instruction\": \"\", \"period\": \"none\", \"report_list\": \"\", \"list_name\": \"\", \"news\": null, "
+        "\"message_text\": \"\", \"task\": null, "
         "\"delivery\": \"telegram|app\", \"notify\": false}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])

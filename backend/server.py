@@ -3458,6 +3458,10 @@ _FOLDER_CLAUSE = re.compile(r"[,;]?\s*(?:e\s+)?(?:(?:crea|creami|fai|fammi)\s+)?
                             r"(?:relativa\s+|sua\s+)?cartell[ae]\b[^.;\n]*", re.I)
 
 
+_WHOLE_LIST_DELETE = re.compile(r"^\W*(elimina|eliminami|cancella|rimuovi|butta)\s+(via\s+)?(tutta\s+)?(la|questa|quella)\s+lista\b", re.I)
+_LIST_CONTENT_WORDS = re.compile(r"\b(element\w*|camp[oi]|voc[ei]|righe|riga|iscritt\w*|tutti|tutte|dalla|dalle|dai|dal)\b", re.I)
+
+
 def _wants_list_folder(text: str) -> bool:
     return bool(_FOLDER_ASK.search(text or ""))
 
@@ -3663,6 +3667,9 @@ async def _execute_list_update(
     if not colls:
         raise HTTPException(status_code=400, detail="Non hai ancora nessuna lista. Creane una nella sezione Liste prima di poter usare questa funzione.")
     coll_by_id = {c["id"]: c for c in colls}
+    if not op and _WHOLE_LIST_DELETE.search(text) and not _LIST_CONTENT_WORDS.search(text):
+        # deleting a WHOLE list goes through Azioni, which always asks for a yes first
+        return {"status": "error", "message": "Per eliminare un'intera lista usa l'agente Azioni: scrivi «elimina la lista …» e ti chiederò conferma prima di farlo."}
     if not op and _wants_list_folder(text):
         named = lu.match_candidates(text, [(c["id"], c.get("name") or "") for c in colls if (c.get("name") or "").strip()])
         if len(named) == 1:
@@ -5875,6 +5882,41 @@ async def _describe_list_op(lo: dict, coll: dict) -> str:
     return f"modificherò la lista \"{name}\""
 
 
+def _list_named(colls: list, name: str, text: str) -> Optional[dict]:
+    """The list a command names: exact name first, then the best unique match."""
+    for q in (name, text):
+        q = (q or "").strip()
+        if not q:
+            continue
+        exact = [c for c in colls if (c.get("name") or "").strip().lower() == q.lower()]
+        if len(exact) == 1:
+            return exact[0]
+        ids = lu.match_candidates(q, [(c["id"], c.get("name") or "") for c in colls if (c.get("name") or "").strip()])
+        if len(ids) == 1:
+            return next(c for c in colls if c["id"] == ids[0])
+    return None
+
+
+def _news_rule(raw) -> dict:
+    raw = raw if isinstance(raw, dict) else {}
+    try:
+        days = int(raw.get("older_than_days")) if raw.get("older_than_days") not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        days = None
+    if days is not None:
+        days = max(0, min(days, 3650))
+    return {"older_than_days": days, "keep_liked": raw.get("keep_liked") is not False, "only_disliked": raw.get("only_disliked") is True}
+
+
+def _news_rule_label(nw: dict) -> str:
+    what = "le news col pollice in giù" if nw.get("only_disliked") else "le news"
+    if nw.get("older_than_days") is not None:
+        what += f" più vecchie di {nw['older_than_days']} giorn{'o' if nw['older_than_days'] == 1 else 'i'}"
+    if nw.get("keep_liked") and not nw.get("only_disliked"):
+        what += " (tranne quelle col pollice in su)"
+    return what
+
+
 async def _build_scheduled_draft(current: User, text: str, channel: str = "web") -> dict:
     text = (text or "").strip()
     if not text:
@@ -5896,8 +5938,11 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
     if parsed.get("supported") is False or kind not in sa.KINDS:
         return {"status": "unsupported", "message": parsed.get("reason") or "Non riesco a trasformare questa richiesta in un'azione programmata."}
     schedule = sa.normalize_schedule(parsed.get("schedule"))
+    if not schedule and kind in ("list_delete", "news_delete"):
+        schedule = {"freq": "now"}
     if not schedule:
         return {"status": "unsupported", "message": "Non ho capito quando eseguire l'azione: indicami il giorno (o la cadenza) e l'orario."}
+    now_run = schedule["freq"] == "now"
     next_run = sa.next_run_after(schedule, now_utc)
     if not next_run:
         return {"status": "unsupported", "message": "La data indicata è già passata: indicami un momento futuro."}
@@ -5939,6 +5984,22 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
         if rl:
             draft["report_list_id"] = rl["id"]
             what += f", controllando uno per uno gli elementi della lista «{rl['name']}» nelle informazioni salvate"
+    elif kind == "list_delete":
+        coll = _list_named(colls, str(parsed.get("list_name") or ""), text)
+        if not coll:
+            names = ", ".join(f"«{c['name']}»" for c in colls[:12]) or "nessuna"
+            return {"status": "unsupported", "message": f"Non ho capito quale lista eliminare. Le tue liste: {names}."}
+        if coll.get("user_id") != current.user_id:
+            return {"status": "unsupported", "message": f"La lista «{coll['name']}» te l'ha condivisa un collega: solo chi l'ha creata può eliminarla."}
+        n = await db.collection_items.count_documents({"collection_id": coll["id"]})
+        draft["list_delete"] = {"collection_id": coll["id"], "collection_name": coll["name"]}
+        draft["title"] = f"Elimina la lista «{coll['name']}»"[:80]
+        what = (f"eliminerò la lista «{coll['name']}» con {'il suo campo' if n == 1 else f'i suoi {n} campi'} e tutti i loro "
+                f"elementi. Non si può annullare")
+    elif kind == "news_delete":
+        nw = _news_rule(parsed.get("news"))
+        draft["news"] = nw
+        what = "eliminerò " + _news_rule_label(nw)
     elif kind == "message":
         msg = str(parsed.get("message_text") or "").strip()
         if not msg:
@@ -5960,6 +6021,12 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
     if draft["delivery"] == "telegram" and not linked:
         draft["delivery"] = "app"
         warnings.append("Telegram non è collegato: finché non lo colleghi (Impostazioni → Telegram) il risultato lo trovi nella sezione Azioni.")
+    if now_run:
+        draft["schedule_label"] = sa.schedule_label(schedule)
+        preview = f"Adesso, una volta sola (l'azione non resta salvata): {what}."
+        if warnings:
+            preview += "\n⚠️ " + " ".join(warnings)
+        return {"status": "confirm", "draft": draft, "preview": preview}
     if kind in ("report", "message"):
         where = "su Telegram" if draft["delivery"] == "telegram" else "nella sezione Azioni"
         what += f"; il risultato arriverà {where}"
@@ -5997,14 +6064,15 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
     schedule = sa.normalize_schedule(draft.get("schedule"))
     if kind not in sa.KINDS or not schedule:
         raise HTTPException(status_code=400, detail="Azione non valida, riprova a descriverla")
-    active = await db.scheduled_actions.count_documents({"user_id": current.user_id, "enabled": True})
+    now_run = schedule["freq"] == "now"
+    active = 0 if now_run else await db.scheduled_actions.count_documents({"user_id": current.user_id, "enabled": True})
     if active >= sa.MAX_ACTIVE_PER_USER:
         raise HTTPException(status_code=400, detail=f"Hai già {active} azioni attive (massimo {sa.MAX_ACTIVE_PER_USER}): disattivane o cancellane qualcuna.")
     next_run = sa.next_run_after(schedule, datetime.now(timezone.utc))
     if not next_run:
         raise HTTPException(status_code=400, detail="La data indicata è già passata")
     doc = {
-        "id": f"sched_{uuid.uuid4().hex[:12]}",
+        "id": f"{'once' if now_run else 'sched'}_{uuid.uuid4().hex[:12]}",
         "user_id": current.user_id,
         "org_id": current.org_id,
         "text": str(draft.get("text") or "")[:2000],
@@ -6033,6 +6101,16 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
         doc["period"] = draft.get("period") if draft.get("period") in sa.PERIODS else "none"
         if draft.get("report_list_id"):
             doc["report_list_id"] = str(draft["report_list_id"])
+    elif kind == "list_delete":
+        ld = draft.get("list_delete") or {}
+        coll = await db.collections.find_one({"id": ld.get("collection_id"), **_lists_query(current)}, {"_id": 0})
+        if not coll:
+            raise HTTPException(status_code=400, detail="Lista non trovata (forse è già stata eliminata)")
+        if coll.get("user_id") != current.user_id:
+            raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può eliminarla.")
+        doc["list_delete"] = {"collection_id": coll["id"], "collection_name": coll["name"]}
+    elif kind == "news_delete":
+        doc["news"] = _news_rule(draft.get("news"))
     elif kind == "message":
         doc["message_text"] = str(draft.get("message_text") or "")[:1000]
     else:
@@ -6040,6 +6118,9 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
         doc["task"] = {"title": str(t.get("title") or doc["title"])[:200],
                        "priority": t.get("priority") if t.get("priority") in ("alta", "media", "bassa") else "media",
                        "due_time": sa._norm_time(t.get("due_time"))}
+    if now_run:   # una tantum: done right now, nothing saved
+        run = await _execute_scheduled_action(doc, manual=True)
+        return {"ran": True, "title": doc["title"], "status": run.get("status"), "result": run.get("result") or ""}
     await db.scheduled_actions.insert_one(doc)
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="azioni_programmate", channel="web", trigger="utente", org_id=current.org_id)
     return _public_action(doc)
@@ -6289,6 +6370,32 @@ async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for
                 status, result = "error", "Il riepilogo è risultato vuoto."
             elif a.get("delivery") == "telegram" and chat_id:
                 delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n\n{result}")
+        elif kind == "list_delete":
+            ld = a.get("list_delete") or {}
+            coll = await db.collections.find_one({"id": ld.get("collection_id"), "user_id": user.user_id}, {"_id": 0})
+            if not coll:
+                status, result = "error", f"La lista «{ld.get('collection_name') or ''}» non c'è più (forse è già stata eliminata)."
+            else:
+                n = await db.collection_items.count_documents({"collection_id": coll["id"]})
+                await delete_collection(coll["id"], user)
+                result = f"Eliminata la lista «{coll['name']}» ({n} camp{'o' if n == 1 else 'i'})."
+            if a.get("notify") and chat_id:
+                delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n{'✅' if status == 'ok' else '⚠️'} {result}")
+        elif kind == "news_delete":
+            nw = _news_rule(a.get("news"))
+            q = {"user_id": user.user_id}
+            if nw["older_than_days"] is not None:
+                q["created_at"] = {"$lt": (started - timedelta(days=nw["older_than_days"])).isoformat()}
+            if nw["only_disliked"]:
+                q["feedback"] = "dislike"
+            elif nw["keep_liked"]:
+                q["feedback"] = {"$ne": "like"}
+            await _remember_disliked_sources(q)
+            res = await db.news_items.delete_many(q)
+            n = res.deleted_count
+            result = (f"Eliminate {n} news" if n != 1 else "Eliminata 1 news") + f": {_news_rule_label(nw)}." if n else f"Nessuna news da eliminare ({_news_rule_label(nw)})."
+            if a.get("notify") and chat_id:
+                delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n✅ {result}")
         elif kind == "message":
             result = a.get("message_text") or a.get("title")
             if a.get("delivery") == "telegram" and chat_id:
@@ -6622,7 +6729,8 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             res = await _build_scheduled_draft(user, piece, channel=channel)
             if res.get("status") != "confirm":
                 return {**base, "status": "error", "message": f"⚠️ {res.get('message')}"}
-            return {**base, "status": "pending", "message": f"🔁 Ho capito così:\n\n{res['preview']}\n\nLa attivo?", "draft": res["draft"]}
+            ask = "Confermi?" if (res["draft"].get("schedule") or {}).get("freq") == "now" else "La attivo?"
+            return {**base, "status": "pending", "message": f"🔁 Ho capito così:\n\n{res['preview']}\n\n{ask}", "draft": res["draft"]}
     except Exception as e:
         logger.exception(f"sub-agent {agent} failed")
         return {**base, "status": "error", "message": f"⚠️ {getattr(e, 'detail', None) or 'non sono riuscito a completare questa parte'}"}
@@ -7328,12 +7436,9 @@ async def _usage_aggregation_loop():
 NEWS_KEEP_DAYS = 5
 
 
-async def _cleanup_old_news() -> int:
-    """News the user didn't give a thumbs up to go away NEWS_KEEP_DAYS days after they
-    arrived; the liked ones stay. A thumbs down is still remembered (per source) so the
-    next searches keep avoiding that source."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=NEWS_KEEP_DAYS)).isoformat()
-    q = {"created_at": {"$lt": cutoff}, "feedback": {"$ne": "like"}}
+async def _remember_disliked_sources(q: dict):
+    """Before deleting news: their thumbs-down are kept per source (news_source_feedback),
+    so the next searches still avoid those sources."""
     disliked = await db.news_items.find({**q, "feedback": "dislike", "source": {"$nin": [None, ""]}},
                                         {"_id": 0, "user_id": 1, "source": 1}).to_list(100000)
     counts: dict = {}
@@ -7343,6 +7448,15 @@ async def _cleanup_old_news() -> int:
     for (user_id, source), n in counts.items():
         await db.news_source_feedback.update_one({"user_id": user_id, "source": source},
                                                  {"$inc": {"dislikes": n}}, upsert=True)
+
+
+async def _cleanup_old_news() -> int:
+    """News the user didn't give a thumbs up to go away NEWS_KEEP_DAYS days after they
+    arrived; the liked ones stay. A thumbs down is still remembered (per source) so the
+    next searches keep avoiding that source."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=NEWS_KEEP_DAYS)).isoformat()
+    q = {"created_at": {"$lt": cutoff}, "feedback": {"$ne": "like"}}
+    await _remember_disliked_sources(q)
     res = await db.news_items.delete_many(q)
     if res.deleted_count:
         logger.info(f"news cleanup: {res.deleted_count} news older than {NEWS_KEEP_DAYS} days without a like deleted")

@@ -105,6 +105,9 @@ const AGENT_INFO = {
   },
 };
 const CHAT_OPTS_KEY = "maipal.chatOptions";
+// (the end of the word is a lookahead: in JS, \b doesn't see "ì" as a letter, so "sì" never matched)
+const SCHED_YES = /^[\s"'«(]*(s[iì]|ok|okay|confermo|conferma|procedi|vai|esegui|fallo|elimina(la)?|cancella(la)?|attiva(la)?)(?![a-zàèéìòù])/i;
+const SCHED_NO = /^[\s"'«(]*(no|annulla|lascia stare|non farlo|stop)(?![a-zàèéìòù])/i;
 const readChatOpts = () => { try { return JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || "{}"); } catch { return {}; } };
 
 const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
@@ -556,6 +559,14 @@ export default function ChatPage() {
     const pendingDraft = thread?.action === "scheduled_action"
       ? [...thread.messages].reverse().find((m) => m.schedDraft && !m.schedDone)
       : null;
+    // "sì" / "confermo" / "elimina" (or "no" / "annulla") answers the action waiting for a yes
+    if (pendingDraft && (SCHED_YES.test(content) || SCHED_NO.test(content))) {
+      setText("");
+      const idx = thread.messages.indexOf(pendingDraft);
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content }] }));
+      await resolveScheduledDraft(idx, SCHED_YES.test(content));
+      return;
+    }
     setStreaming(true);
     setText("");
     setThread((th) => (th && th.action === "scheduled_action")
@@ -567,8 +578,10 @@ export default function ChatPage() {
         ? await api.post("/scheduled-actions/interpret", { text: schedText, previous_text: pendingDraft?.schedDraft?.text || null })
         : { data: null };
       if (r.data) {
+        const once = r.data.draft?.schedule?.freq === "now";
         const msg = r.data.status === "confirm"
-          ? { role: "assistant", content: `Ho capito così:\n\n${r.data.preview}\n\nLa attivo? Se qualcosa non va, scrivimi cosa correggere.`, schedDraft: r.data.draft }
+          ? { role: "assistant", schedDraft: r.data.draft,
+              content: `Ho capito così:\n\n${r.data.preview}\n\n${once ? "Confermi? Premi il pulsante o rispondi «sì»." : "La attivo? Puoi premere il pulsante o rispondere «sì»; se qualcosa non va, scrivimi cosa correggere."}` }
           : { role: "assistant", content: `⚠️ ${r.data.message}` };
         setThread((th) => ({ ...th, messages: [...th.messages, msg] }));
       }
@@ -588,7 +601,7 @@ export default function ChatPage() {
     if (!activate) {
       setThread((th) => {
         const next = mark("cancelled")(th);
-        return { ...next, messages: [...next.messages, { role: "assistant", content: "Ok, non ho attivato nulla." }] };
+        return { ...next, messages: [...next.messages, { role: "assistant", content: "Ok, non ho fatto nulla." }] };
       });
       return;
     }
@@ -597,12 +610,13 @@ export default function ChatPage() {
       const r = await api.post("/scheduled-actions", { draft: target.schedDraft });
       setThread((th) => {
         const next = mark("activated")(th);
-        return { ...next, messages: [...next.messages, {
-          role: "assistant",
-          content: `✅ Azione attivata: "${r.data.title}".\nProssima esecuzione: ${r.data.next_run_label}.`,
-          schedLink: true,
-        }] };
+        // una tantum: already done, nothing saved - the outcome; otherwise the saved action
+        const reply = r.data.ran
+          ? { role: "assistant", content: `${r.data.status === "ok" ? "✅" : "⚠️"} ${r.data.result || "Fatto."}` }
+          : { role: "assistant", content: `✅ Azione attivata: "${r.data.title}".\nProssima esecuzione: ${r.data.next_run_label}.`, schedLink: true };
+        return { ...next, messages: [...next.messages, reply] };
       });
+      if (r.data.ran && target.schedDraft?.kind === "list_delete") toast.success("Lista eliminata");
     } catch (e) {
       toast.error(e.response?.data?.detail || "Errore nell'attivazione");
     } finally {
@@ -1989,9 +2003,9 @@ export default function ChatPage() {
                           data-testid="scheduled-activate"
                           onClick={() => resolveScheduledDraft(i, true)}
                           disabled={streaming}
-                          className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-[#3E7C8C] hover:bg-[#4A8D9E] text-white"
+                          className={`text-xs px-3 py-1.5 rounded-full disabled:opacity-50 text-white ${m.schedDraft.kind === "list_delete" ? "bg-[#C2304A] hover:bg-[#D23A55]" : "bg-[#3E7C8C] hover:bg-[#4A8D9E]"}`}
                         >
-                          Attiva
+                          {m.schedDraft.kind === "list_delete" ? "Elimina la lista" : m.schedDraft.schedule?.freq === "now" ? "Esegui" : "Attiva"}
                         </button>
                         <button
                           data-testid="scheduled-cancel"

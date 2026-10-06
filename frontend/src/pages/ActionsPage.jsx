@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Repeat, Plus, Play, Trash2, List, BarChart3, Bell, CheckSquare, Send, Smartphone, Loader2, ChevronDown } from "lucide-react";
+import { Repeat, Plus, Play, Trash2, List, BarChart3, Bell, CheckSquare, Send, Smartphone, Loader2, ChevronDown, Newspaper } from "lucide-react";
 import { api } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 
@@ -12,6 +12,8 @@ const KIND_META = {
   report: { label: "Riepilogo", icon: BarChart3 },
   message: { label: "Promemoria", icon: Bell },
   create_task: { label: "Crea task", icon: CheckSquare },
+  list_delete: { label: "Elimina lista", icon: Trash2 },
+  news_delete: { label: "Pulizia news", icon: Newspaper },
 };
 
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
