@@ -210,7 +210,7 @@ function ClientCard({ client, commesse, onOpen }) {
 }
 
 // The chat button: a glass circle (the bottom menu's "+" glass, a bit smaller) floating on
-// the right at 2/3 of the screen's height, over the page that scrolls under it. It slides
+// the right at 3/4 of the screen's height, over the page that scrolls under it. It slides
 // away while the page scrolls and comes back when it stops (one passive listener and a
 // timer; the state changes only twice per scroll).
 function ChatFab({ onClick }) {
@@ -231,7 +231,7 @@ function ChatFab({ onClick }) {
       title="Chat della commessa: chiedi o scrivi nel diario" aria-label="Chat della commessa"
       className="fixed z-40 right-3.5 md:right-8 h-[52px] w-[52px] rounded-full flex items-center justify-center text-white active:scale-95"
       style={{
-        top: "calc(66.667vh - 26px)",
+        top: "calc(75vh - 26px)",
         transform: hidden ? "translateX(calc(100% + 24px))" : "none",
         opacity: hidden ? 0 : 1,
         pointerEvents: hidden ? "none" : "auto",
