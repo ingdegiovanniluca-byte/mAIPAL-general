@@ -43,6 +43,7 @@ import retrieval
 import news_service
 import vet_reports
 import work_reports
+import job_logs as jl
 import list_updates as lu
 import scheduled_actions as sa
 import recurrence as rec
@@ -4760,6 +4761,472 @@ async def download_work_report(report_id: str, current: User = Depends(get_curre
     )
 
 
+# ============ ARTIGIANO: DIARIO DI COMMESSA ============
+# What was done on each job, day by day, by the owner and (Fase 3) the collaborators: text,
+# hours per person, materials, problems, photos. The Clienti list's commesse are the jobs.
+JOB_PHOTO_MAX_DIM = 1600
+JOB_PHOTO_MAX_BYTES = 900 * 1024
+JOB_PICK_MAX = 12
+# titles that are ordinary words in any entry ("finiti i lavori"): never matched in the text
+JOB_GENERIC_TITLES = {"lavori", "lavoro", "commessa", "cantiere", "intervento", "interventi", "manutenzione", "manutenzioni"}
+
+
+class JobLogPayload(BaseModel):
+    text: str
+    images: List[str] = []                    # data URI JPEG, compressed in the browser
+    commessa_id: Optional[str] = None         # chosen (commessa page, or answer to "quale commessa?")
+    hint_commessa_id: Optional[str] = None    # the one the conversation is about: used if the text names none
+    new_client_name: Optional[str] = None     # "è un cliente nuovo": client + commessa created
+    client_item_id: Optional[str] = None      # chosen among namesakes: its open commessa, or a new one
+    conv_id: Optional[str] = None
+
+
+class JobLogPatch(BaseModel):
+    text: Optional[str] = None
+    date: Optional[str] = None
+    hours: Optional[List[dict]] = None
+    materials: Optional[List[dict]] = None
+    problems: Optional[List[str]] = None
+
+
+class JobPhotosPayload(BaseModel):
+    images: List[str]
+
+
+class CommessaStatoPayload(BaseModel):
+    stato: str
+
+
+def _first_name(name: Optional[str]) -> str:
+    return (name or "").strip().split(" ")[0] or "Io"
+
+
+async def _clienti_list(current: User) -> Optional[dict]:
+    return await db.collections.find_one({**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 0})
+
+
+def _commessa_view(sub: dict, client: Optional[dict], clienti: dict) -> dict:
+    smap, fmap = clienti.get("system_sub_map") or {}, clienti.get("system_map") or {}
+    d, cd = sub.get("data") or {}, (client or {}).get("data") or {}
+    return {
+        "id": sub["id"], "client_item_id": sub.get("item_id"), "collection_id": clienti["id"],
+        "title": _sysval(d, smap, "titolo") or "Commessa senza titolo",
+        "stato": _sysval(d, smap, "stato") or "",
+        "address": _sysval(d, smap, "indirizzo_cantiere") or _sysval(cd, fmap, "indirizzo"),
+        "data_inizio": _sysval(d, smap, "data_inizio"), "data_fine": _sysval(d, smap, "data_fine"),
+        "descrizione": _sysval(d, smap, "descrizione"),
+        "client_name": _sysval(cd, fmap, "nome"), "client_phone": _sysval(cd, fmap, "telefono"),
+    }
+
+
+async def _all_commesse(clienti: dict) -> tuple[list, dict]:
+    """-> ([commessa view, ...], {client id: client item})"""
+    clients = {c["id"]: c for c in await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "embedding": 0}).to_list(3000)}
+    subs = await db.collection_sub_items.find({"collection_id": clienti["id"]}, {"_id": 0, "embedding": 0}).to_list(5000)
+    return [_commessa_view(sb, clients.get(sb.get("item_id")), clienti) for sb in subs if sb.get("item_id") in clients], clients
+
+
+async def _commessa_or_404(current: User, commessa_id: str) -> tuple[dict, dict, Optional[dict]]:
+    """(clienti list, commessa sub-item, client item) of a commessa the user can see."""
+    clienti = await _clienti_list(current)
+    sub = await db.collection_sub_items.find_one({"id": commessa_id, "collection_id": clienti["id"]}, {"_id": 0}) if clienti else None
+    if not sub:
+        raise HTTPException(status_code=404, detail="Commessa non trovata")
+    client = await db.collection_items.find_one({"id": sub.get("item_id"), "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
+    return clienti, sub, client
+
+
+async def _last_activity(commessa_ids: list) -> dict:
+    out = {}
+    for lg in await db.job_logs.find({"commessa_id": {"$in": commessa_ids}}, {"_id": 0, "commessa_id": 1, "date": 1, "hours": 1}).to_list(20000):
+        cur = out.setdefault(lg["commessa_id"], {"last_day": None, "entries": 0, "hours": 0.0})
+        cur["entries"] += 1
+        cur["hours"] = round(cur["hours"] + sum(float(h.get("hours") or 0) for h in lg.get("hours") or []), 2)
+        if lg.get("date") and (not cur["last_day"] or lg["date"] > cur["last_day"]):
+            cur["last_day"] = lg["date"]
+    return out
+
+
+def _pick_rows(commesse: list, activity: dict) -> list:
+    rows = sorted(commesse, key=lambda c: ((activity.get(c["id"]) or {}).get("last_day") or "", c["title"]), reverse=True)
+    return [{"commessa_id": c["id"], "title": c["title"], "client_name": c["client_name"], "stato": c["stato"]} for c in rows[:JOB_PICK_MAX]]
+
+
+async def _resolve_commessa(clienti: dict, text: str, said_client: str, said_commessa: str,
+                            hint_id: Optional[str]) -> dict:
+    """Which commessa a diary entry is about. Names in the text win; then the conversation's
+    commessa; else the user is asked. -> {"commessa": view} | {"create_for": client item,
+    "title": ...} | {"pick": [rows], "reason": ...}"""
+    commesse, clients = await _all_commesse(clienti)
+    fmap = clienti.get("system_map") or {}
+    name_key = fmap.get("nome", "nome")
+    open_ = [c for c in commesse if c["stato"] != "chiusa"]
+    probe = " ".join(x for x in (text, said_client, said_commessa) if x)
+    low = _norm_title(probe)
+
+    named_clients = work_reports.find_matching_clients(text, list(clients.values()), name_key)
+    if not named_clients and said_client:
+        named_clients = work_reports.find_matching_clients(said_client, list(clients.values()), name_key)
+    named_ids = {c["id"] for c in named_clients}
+
+    def _title_hit(c):
+        t = _norm_title(c["title"])
+        return len(t) >= 4 and t not in JOB_GENERIC_TITLES and (re.search(rf"\b{re.escape(t)}\b", low) is not None
+                                or (said_commessa and _norm_title(said_commessa) == t))
+    by_title = [c for c in commesse if _title_hit(c)]
+    if named_ids:
+        by_title = [c for c in by_title if c["client_item_id"] in named_ids]
+    if by_title:
+        opened = [c for c in by_title if c["stato"] != "chiusa"] or by_title
+        if len(opened) == 1:
+            return {"commessa": opened[0]}
+        hinted = next((c for c in opened if c["id"] == hint_id), None)
+        if hinted:
+            return {"commessa": hinted}
+        return {"pick": _pick_rows(opened, await _last_activity([c["id"] for c in opened])), "reason": "several"}
+
+    if named_ids:
+        theirs = [c for c in open_ if c["client_item_id"] in named_ids]
+        if len(theirs) == 1:
+            return {"commessa": theirs[0]}
+        if len(theirs) > 1:
+            hinted = next((c for c in theirs if c["id"] == hint_id), None)
+            if hinted:
+                return {"commessa": hinted}
+            return {"pick": _pick_rows(theirs, await _last_activity([c["id"] for c in theirs])), "reason": "several"}
+        if len(named_ids) == 1:
+            closed = [c for c in commesse if c["client_item_id"] in named_ids]
+            if not closed:   # the client has no commessa at all: the first one is opened
+                return {"create_for": named_clients[0], "title": said_commessa}
+            # only closed ones: one of them (work after closing) or a new one - the user says
+            return {"pick": _pick_rows(closed, await _last_activity([c["id"] for c in closed])), "reason": "closed",
+                    "new_commessa_for": [{"item_id": named_clients[0]["id"], "name": _sysval(named_clients[0].get("data"), fmap, "nome")}]}
+        return {"pick": [], "reason": "clients", "clients": [
+            {"item_id": c["id"], "name": _sysval(c.get("data"), fmap, "nome")} for c in named_clients]}
+
+    if hint_id:
+        hinted = next((c for c in commesse if c["id"] == hint_id), None)
+        if hinted:
+            return {"commessa": hinted}
+    if said_client:   # a client not in the list: the user confirms it's new (no silent duplicates)
+        return {"pick": _pick_rows(open_, await _last_activity([c["id"] for c in open_])), "reason": "unknown_client",
+                "client_said": said_client}
+    if len(open_) == 1:
+        return {"commessa": open_[0]}
+    return {"pick": _pick_rows(open_, await _last_activity([c["id"] for c in open_])), "reason": "none"}
+
+
+async def _new_commessa(clienti: dict, client: dict, title: str, stato: str = "in corso") -> dict:
+    smap = clienti.get("system_sub_map") or {}
+    data = {smap.get("titolo", "titolo"): (title or "Lavori").strip()[:80], smap.get("stato", "stato"): stato,
+            smap.get("data_inizio", "data_inizio"): jl.today_local().isoformat()}
+    doc = {"id": f"sub_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "item_id": client["id"],
+           "data": data, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.collection_sub_items.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+async def _new_client(current: User, clienti: dict, name: str) -> dict:
+    fmap = clienti.get("system_map") or {}
+    orders = [c.get("sort_order") for c in await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "sort_order": 1}).to_list(3000)
+              if c.get("sort_order") is not None]
+    doc = {"id": f"item_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "data": {fmap.get("nome", "nome"): name.strip()[:120]},
+           "visibility": clienti.get("visibility", "private"), "sort_order": max(orders, default=-1) + 1,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    _stamp_owner_fields(doc, current)
+    await db.collection_items.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+def _data_uri_bytes(uri: str) -> Optional[bytes]:
+    import base64 as _b64
+    m = re.match(r"data:image/[\w.+-]+;base64,(.+)$", (uri or "").strip(), re.S)
+    if not m:
+        return None
+    try:
+        return _b64.b64decode(m.group(1))
+    except Exception:
+        return None
+
+
+async def _store_job_photos(current: User, log: dict, images: List[str]) -> list:
+    """Every photo is kept in mAIPAL (compressed), so the diary shows it even without a cloud;
+    with Drive/OneDrive connected a copy also goes to Clienti/<cliente>/<commessa>."""
+    import base64 as _b64
+    added = []
+    for uri in (images or [])[:10]:
+        raw = _data_uri_bytes(uri)
+        if not raw:
+            continue
+        try:
+            jpeg = _downscale_image_bytes(raw, max_dim=JOB_PHOTO_MAX_DIM, max_bytes=JOB_PHOTO_MAX_BYTES)
+        except Exception:
+            logger.exception("job photo compress failed")
+            continue
+        ph = {"id": f"jph_{uuid.uuid4().hex[:12]}", "log_id": log["id"], "commessa_id": log["commessa_id"],
+              "user_id": current.user_id, "org_id": current.org_id, "mime": "image/jpeg",
+              "data_b64": _b64.b64encode(jpeg).decode("ascii"), "drive_link": None,
+              "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.job_photos.insert_one(ph)
+        added.append({"id": ph["id"], "drive_link": None})
+    if added:
+        await db.job_logs.update_one({"id": log["id"]}, {"$set": {"photos": (log.get("photos") or []) + added}})
+        log["photos"] = (log.get("photos") or []) + added
+        asyncio.create_task(_job_photos_to_cloud(current.user_id, log, [a["id"] for a in added]))
+    return added
+
+
+async def _job_photos_to_cloud(user_id: str, log: dict, photo_ids: list) -> None:
+    import base64 as _b64
+    try:
+        if not await _storage_targets(user_id):
+            return
+        folder = _drive_safe(log.get("collection_name") or vx.CLIENTI_NAME)
+        subs = [x for x in (log.get("client_name"), log.get("commessa_title")) if x]
+        for n, pid in enumerate(photo_ids, 1):
+            ph = await db.job_photos.find_one({"id": pid}, {"_id": 0})
+            if not ph:
+                continue
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(_b64.b64decode(ph["data_b64"]))
+                tmp_path = tmp.name
+            try:
+                res = await asyncio.wait_for(_storage_save(user_id, folder, tmp_path, f"{log.get('date')} diario {n}.jpg",
+                                                           "image/jpeg", subfolders=subs), timeout=LIST_FOLDER_TIMEOUT)
+                link = res.get("web_view_link")
+                await db.job_photos.update_one({"id": pid}, {"$set": {"drive_link": link}})
+                cur = await db.job_logs.find_one({"id": log["id"]}, {"_id": 0, "photos": 1})
+                if cur:
+                    await db.job_logs.update_one({"id": log["id"]}, {"$set": {"photos": [
+                        {**p, "drive_link": link} if p.get("id") == pid else p for p in cur.get("photos") or []]}})
+            finally:
+                try: os.unlink(tmp_path)
+                except Exception: pass
+    except Exception:
+        logger.exception("job photos cloud copy failed")
+
+
+def _job_log_message(log: dict, created: dict) -> str:
+    when = _short_it_date(log.get("date"))
+    head = f"📒 Diario di «{log.get('commessa_title')}»" + (f" — {log['client_name']}" if log.get("client_name") else "") + f" · {when}"
+    lines = [head]
+    if created.get("client"):
+        lines.append(f"👤 Cliente nuovo aggiunto alla lista Clienti: {log.get('client_name')}")
+    if created.get("commessa"):
+        lines.append("🧱 Commessa nuova, stato «in corso»")
+    lines.append(f"⏱ Ore: {jl.hours_line(log['hours'])}" if log.get("hours") else "⏱ Ore: non indicate")
+    if log.get("materials"):
+        lines.append(f"🧰 Materiali: {jl.materials_line(log['materials'])}")
+    if log.get("problems"):
+        lines.append("⚠️ Problemi: " + "; ".join(log["problems"]))
+    if log.get("photos"):
+        n = len(log["photos"])
+        lines.append(f"📷 {n} foto" if n > 1 else "📷 1 foto")
+    return "\n".join(lines)
+
+
+def _public_log(log: dict) -> dict:
+    return {k: v for k, v in log.items() if k not in ("embedding", "_id")}
+
+
+async def _save_job_log(current: User, text: str, images: Optional[List[str]] = None, commessa_id: Optional[str] = None,
+                        hint_commessa_id: Optional[str] = None, new_client_name: Optional[str] = None,
+                        conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None) -> dict:
+    """Shared by the chat agent, the commessa page, @diario and Telegram.
+    -> {"status": "ok", "log", "message", ...} | {"status": "pick_commessa", "candidates", "message", "text"}"""
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Racconta cosa è stato fatto in cantiere")
+    clienti = await _ensure_clienti_list(current)
+    team = []
+    if current.org_id:
+        team = [_first_name(m.get("name")) for m in await db.users.find({"org_id": current.org_id}, {"_id": 0, "name": 1}).to_list(200)]
+    speaker = _first_name(current.name)
+
+    known, target, created = None, None, {}
+    if commessa_id:
+        _, sub, client = await _commessa_or_404(current, commessa_id)
+        target = _commessa_view(sub, client, clienti)
+        known = {"title": target["title"], "client": target["client_name"]}
+    try:
+        parsed = await jl.interpret(text, speaker, team, known=known, user_id=current.user_id, channel=channel)
+    except Exception:
+        logger.exception("job log interpretation failed, saving the text as is")
+        parsed = {"date": jl.today_local().isoformat(), "text": text, "hours": [], "materials": [], "problems": [],
+                  "client": "", "commessa": ""}
+
+    if not target and client_item_id:
+        client = await db.collection_items.find_one({"id": client_item_id, "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
+        if not client:
+            raise HTTPException(status_code=404, detail="Cliente non trovato")
+        commesse, _ = await _all_commesse(clienti)
+        theirs = [c for c in commesse if c["client_item_id"] == client_item_id and c["stato"] != "chiusa"]
+        if len(theirs) == 1:
+            target = theirs[0]
+        elif len(theirs) > 1:
+            return {"status": "pick_commessa", "message": "Di quale commessa si tratta?", "clients": [], "new_commessa_for": [], "new_client_name": "",
+                    "candidates": _pick_rows(theirs, await _last_activity([c["id"] for c in theirs])), "text": text}
+        else:
+            sub = await _new_commessa(clienti, client, parsed.get("commessa") or "Lavori")
+            target, created = _commessa_view(sub, client, clienti), {"commessa": True}
+    if not target and new_client_name:
+        client = await _new_client(current, clienti, new_client_name)
+        sub = await _new_commessa(clienti, client, parsed.get("commessa") or "Lavori")
+        target, created = _commessa_view(sub, client, clienti), {"client": True, "commessa": True}
+    if not target:
+        res = await _resolve_commessa(clienti, text, parsed.get("client") or "", parsed.get("commessa") or "", hint_commessa_id)
+        if res.get("commessa"):
+            target = res["commessa"]
+        elif res.get("create_for"):
+            sub = await _new_commessa(clienti, res["create_for"], res.get("title") or parsed.get("commessa") or "Lavori")
+            target, created = _commessa_view(sub, res["create_for"], clienti), {"commessa": True}
+        else:
+            reason = res.get("reason")
+            nc = res.get("new_commessa_for") or []
+            msg = ("Di quale commessa si tratta?" if reason == "several" else
+                   f"{nc[0]['name']} non ha commesse aperte: la voce va su una commessa chiusa o ne apro una nuova?"
+                   if reason == "closed" else
+                   f"Non trovo «{res.get('client_said')}» nella lista Clienti: è un cliente nuovo o una di queste commesse?"
+                   if reason == "unknown_client" else
+                   "Ho più clienti con questo nome: quale intendi?" if reason == "clients" else
+                   "A quale commessa va questa voce?" if res.get("pick") else
+                   "Non hai ancora commesse aperte: dimmi per quale cliente è (es. «dai Rossi…»).")
+            return {"status": "pick_commessa", "message": msg, "candidates": res.get("pick") or [],
+                    "clients": res.get("clients") or [], "new_commessa_for": nc,
+                    "new_client_name": res.get("client_said") or "", "text": text}
+
+    now = datetime.now(timezone.utc).isoformat()
+    log = {
+        "id": f"jlog_{uuid.uuid4().hex[:12]}",
+        "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+        "collection_id": clienti["id"], "collection_name": clienti.get("name"),
+        "client_item_id": target["client_item_id"], "client_name": target["client_name"],
+        "commessa_id": target["id"], "commessa_title": target["title"],
+        "date": parsed["date"], "raw_text": text, "text": parsed["text"],
+        "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"],
+        "photos": [], "channel": channel, "conv_id": conv_id, "created_at": now, "embedding": None,
+    }
+    await db.job_logs.insert_one(log)
+    log.pop("_id", None)
+    if images:
+        await _store_job_photos(current, log, images)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
+    return {"status": "ok", "log": _public_log(log), "commessa": target, "client_created": bool(created.get("client")),
+            "commessa_created": bool(created.get("commessa")), "message": _job_log_message(log, created)}
+
+
+@api_router.post("/jobs/logs")
+async def create_job_log(payload: JobLogPayload, current: User = Depends(get_current_user)):
+    return await _save_job_log(current, payload.text, payload.images, payload.commessa_id, payload.hint_commessa_id,
+                               payload.new_client_name, payload.conv_id, client_item_id=payload.client_item_id)
+
+
+@api_router.get("/jobs/commesse")
+async def list_job_commesse(current: User = Depends(get_current_user)):
+    clienti = await _clienti_list(current)
+    if not clienti:
+        return []
+    commesse, _ = await _all_commesse(clienti)
+    act = await _last_activity([c["id"] for c in commesse])
+    for c in commesse:
+        a = act.get(c["id"]) or {}
+        c.update({"last_day": a.get("last_day"), "entries": a.get("entries", 0), "hours_total": a.get("hours", 0)})
+    # in corso first, chiuse last; within a state the most recently worked on first
+    order = {s: i for i, s in enumerate(["in corso", "preventivo", "sospesa", "", "chiusa"])}
+    commesse.sort(key=lambda c: c["last_day"] or "", reverse=True)
+    commesse.sort(key=lambda c: order.get(c["stato"], 3))
+    return commesse
+
+
+@api_router.get("/jobs/commesse/{commessa_id}")
+async def get_job_commessa(commessa_id: str, current: User = Depends(get_current_user)):
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
+    return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(logs),
+            "stati": vx.COMMESSA_STATI}
+
+
+@api_router.patch("/jobs/commesse/{commessa_id}/stato")
+async def set_job_commessa_stato(commessa_id: str, payload: CommessaStatoPayload, current: User = Depends(get_current_user)):
+    if payload.stato not in vx.COMMESSA_STATI:
+        raise HTTPException(status_code=400, detail="Stato non valido")
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    smap = clienti.get("system_sub_map") or {}
+    data = {**(sub.get("data") or {}), smap.get("stato", "stato"): payload.stato}
+    if payload.stato == "chiusa" and not _sysval(data, smap, "data_fine"):
+        data[smap.get("data_fine", "data_fine")] = jl.today_local().isoformat()
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"data": data, "embedding": None}})
+    return _commessa_view({**sub, "data": data}, client, clienti)
+
+
+async def _job_log_or_404(current: User, log_id: str) -> dict:
+    log = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "embedding": 0})
+    if not log:
+        raise HTTPException(status_code=404, detail="Voce non trovata")
+    await _commessa_or_404(current, log["commessa_id"])   # the user can see that commessa
+    return log
+
+
+@api_router.patch("/jobs/logs/{log_id}")
+async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
+    log = await _job_log_or_404(current, log_id)
+    upd: dict = {}
+    if payload.text is not None and payload.text.strip():
+        upd["text"] = payload.text.strip()
+    if payload.date is not None:
+        upd["date"] = jl.valid_day(payload.date, jl.today_local())
+    if payload.hours is not None:
+        upd["hours"] = jl.clean_hours(payload.hours, log.get("author_name") or "Io")
+    if payload.materials is not None:
+        upd["materials"] = jl.clean_materials(payload.materials)
+    if payload.problems is not None:
+        upd["problems"] = jl.clean_problems(payload.problems)
+    if upd:
+        upd["embedding"] = None
+        await db.job_logs.update_one({"id": log_id}, {"$set": upd})
+    return _public_log({**log, **upd})
+
+
+@api_router.delete("/jobs/logs/{log_id}")
+async def delete_job_log(log_id: str, current: User = Depends(get_current_user)):
+    await _job_log_or_404(current, log_id)
+    await db.job_logs.delete_one({"id": log_id})
+    await db.job_photos.delete_many({"log_id": log_id})
+    return {"ok": True}
+
+
+@api_router.post("/jobs/logs/{log_id}/photos")
+async def add_job_photos(log_id: str, payload: JobPhotosPayload, current: User = Depends(get_current_user)):
+    log = await _job_log_or_404(current, log_id)
+    added = await _store_job_photos(current, log, payload.images)
+    if not added:
+        raise HTTPException(status_code=400, detail="Nessuna immagine valida")
+    return _public_log(log)
+
+
+@api_router.delete("/jobs/logs/{log_id}/photos/{photo_id}")
+async def delete_job_photo(log_id: str, photo_id: str, current: User = Depends(get_current_user)):
+    log = await _job_log_or_404(current, log_id)
+    photos = [p for p in log.get("photos") or [] if p.get("id") != photo_id]
+    await db.job_logs.update_one({"id": log_id}, {"$set": {"photos": photos}})
+    await db.job_photos.delete_one({"id": photo_id, "log_id": log_id})
+    return {**_public_log(log), "photos": photos}
+
+
+@api_router.get("/jobs/photos/{photo_id}")
+async def get_job_photo(photo_id: str, current: User = Depends(get_current_user)):
+    ph = await db.job_photos.find_one({"id": photo_id}, {"_id": 0})
+    if not ph:
+        raise HTTPException(status_code=404, detail="Foto non trovata")
+    await _commessa_or_404(current, ph["commessa_id"])
+    import base64 as _b64
+    return Response(content=_b64.b64decode(ph["data_b64"]), media_type=ph.get("mime") or "image/jpeg",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+
 # ============ JOURNAL ============
 class JournalCreate(BaseModel):
     content: str
@@ -6950,7 +7417,8 @@ def _source_label(source: Optional[dict]) -> str:
         return ""
     when = _short_it_date((source.get("created_at") or "")[:10])
     return {"note": f"Nota del {when}", "journal": f"Diario del {_short_it_date(source.get('date'))}",
-            "vet_report": f"Referto del {when}", "work_report": f"Report del {when}"}.get(source.get("type"), f"Chat del {when}")
+            "vet_report": f"Referto del {when}", "work_report": f"Report del {when}",
+            "job_log": f"Diario commessa del {_short_it_date(source.get('date')) or when}"}.get(source.get("type"), f"Chat del {when}")
 
 
 async def _agent_llm(user: User, action: str, text: str, feature: str, channel: str) -> tuple[str, Optional[dict]]:
@@ -7017,6 +7485,24 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
                     lines.append(f"   Note: {d['notes'][:200]}")
             return {**base, "status": "ok", "message": "\n".join(lines),
                     "task_id": created[0]["id"] if created[0]["id"].startswith("task_") else None}
+
+        if agent == "journal" and user.business_vertical == "artigiano":
+            # the artigiano's diary is the diario di commessa; the commessa of what was just
+            # done (a report, an entry) is the one meant when the piece names none
+            hint = None
+            if source and source.get("type") == "work_report" and source.get("id"):
+                rep_doc = await db.work_reports.find_one({"id": source["id"]}, {"_id": 0, "commessa_id": 1})
+                hint = (rep_doc or {}).get("commessa_id")
+            elif source and source.get("type") == "job_log":
+                hint = source.get("commessa_id")
+            res = await _save_job_log(user, piece, hint_commessa_id=hint, conv_id=conv_id, channel=channel)
+            if res["status"] == "ok":
+                return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"],
+                        "commessa_id": res["log"]["commessa_id"]}
+            opts = "; ".join(f"«{c['title']}» ({c['client_name']})" for c in res.get("candidates") or [])
+            return {**base, "label": "Diario commessa", "status": "error",
+                    "message": f"Non l'ho salvato: {res['message']}" + (f" Commesse aperte: {opts}." if opts else "")
+                               + " Riscrivilo nominando il cliente o la commessa."}
 
         if agent == "journal":
             visible, meta = await _agent_llm(user, "journal", piece, "diario", channel)

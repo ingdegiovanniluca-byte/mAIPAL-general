@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 import embeddings as emb
+import job_logs as jl
 import list_updates as lu
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,7 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
     stems = {t: _stem(t) for t in terms}
 
     candidates: List[dict] = []
+    job_logs_all: List[dict] = []
     forced: set = set()  # id() of candidates guaranteed into the result regardless of score
 
     # ---- KB notes/documents (always) ----
@@ -401,6 +403,20 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             candidates.append({"text": f"{who}{job} {txt}", "display": display, "source": "work_report",
                                "meta": {"id": wrp.get("id"), "client_item_id": wrp.get("client_item_id"), "date": rep_date},
                                "embedding": wrp.get("embedding"), "day": _local_day(rep_date)})
+
+        # diario di commessa (artigiano): the team's entries, with hours/materials/problems
+        job_q = {"$or": [{"user_id": user_id}, {"org_id": org_id}]} if org_id else {"user_id": user_id}
+        job_logs_all = await db.job_logs.find(job_q, {"_id": 0}).sort("date", -1).to_list(3000)
+        for lg in job_logs_all:
+            txt = jl.search_text(lg)
+            if not txt:
+                continue
+            where = " · ".join(x for x in (lg.get("client_name"), lg.get("commessa_title")) if x)
+            who = f" ({lg['author_name']})" if lg.get("author_name") else ""
+            display = f"[Diario commessa · {lg.get('date', '')}] {where}{who}: {txt[:900]}"
+            candidates.append({"text": f"{where} {txt}", "display": display, "source": "job_log",
+                               "meta": {"id": lg.get("id"), "commessa_id": lg.get("commessa_id"), "date": lg.get("date")},
+                               "embedding": lg.get("embedding"), "day": _local_day(lg.get("date"))})
 
     # ---- Liste ----
     extra_scan: List[dict] = []  # list sub-elements, searched by name only (no embedding cost)
@@ -543,7 +559,7 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                 coll_by_source = {
                     "task": db.tasks, "todo": db.todos, "journal": db.journal_entries,
                     "collection_item": db.collection_items, "collection_sub_item": db.collection_sub_items,
-                    "vet_report": db.vet_reports, "work_report": db.work_reports,
+                    "vet_report": db.vet_reports, "work_report": db.work_reports, "job_log": db.job_logs,
                 }
                 for c, e in zip(non_kb, await emb.embed_texts([c["text"] for c in non_kb])):
                     c["embedding"] = e
@@ -678,6 +694,29 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             listed.insert(0, {"text": "", "source": "summary", "meta": {},
                               "display": f"[Riepilogo] Task non completati: {len(open_tasks)}."})
         top = listed + top
+
+    # ---- a question naming a client / commessa with a diary: its totals (hours, materials...) ----
+    if job_logs_all:
+        by_comm: dict = {}
+        for lg in job_logs_all:
+            if lg.get("commessa_id"):
+                by_comm.setdefault(lg["commessa_id"], []).append(lg)
+        names = [(cid, f"{lgs[0].get('client_name') or ''} {lgs[0].get('commessa_title') or ''}") for cid, lgs in by_comm.items()]
+        score, matched = _match_scored(query, names)
+        if matched and _is_strong_match(score, len(matched)):
+            summaries = []
+            for cid in matched[:3]:
+                lgs = by_comm[cid]
+                tot = jl.totals(lgs)
+                per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in tot["by_person"].items())
+                bits = [f"{tot['entries']} voci dal {tot['first_day']} al {tot['last_day']}.",
+                        f"Ore totali: {jl._fmt_num(tot['hours_total'])} h" + (f" ({per})." if per else "."),
+                        ("Materiali: " + jl.materials_line(tot["materials"]) + ".") if tot["materials"] else "Materiali: nessuno registrato.",
+                        ("Problemi segnalati: " + "; ".join(f"{p['date']} {p['text']}" for p in tot["problems"]) + ".") if tot["problems"] else ""]
+                summaries.append({"text": "", "source": "summary", "meta": {"commessa_id": cid},
+                                  "display": f"[Riepilogo diario commessa «{lgs[0].get('commessa_title') or ''}» · "
+                                             f"{lgs[0].get('client_name') or ''}] " + " ".join(b for b in bits if b)})
+            top = summaries + top
 
     # ---- temporal questions about tasks ("oggi", "domani", "questa settimana", "scaduti") ----
     if scope == "all":

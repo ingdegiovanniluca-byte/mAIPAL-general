@@ -8,6 +8,7 @@ import DashboardLayout from "@/pages/DashboardLayout";
 import ChatPage from "@/pages/ChatPage";
 import TaskBoardPage from "@/pages/TaskBoardPage";
 import JournalPage from "@/pages/JournalPage";
+import JobDiaryPage from "@/pages/JobDiaryPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import TodoBoardPage from "@/pages/TodoBoardPage";
@@ -24,6 +25,12 @@ function Protected({ children, requireOnboard = true }) {
   return children;
 }
 
+// Diario: for an artigiano it is the diario di commessa
+function JournalRoute() {
+  const { user } = useAuth();
+  return user?.business_vertical === "artigiano" ? <JobDiaryPage /> : <JournalPage />;
+}
+
 function AppRouter() {
   return (
     <Routes>
@@ -34,7 +41,7 @@ function AppRouter() {
         <Route path="chat" element={<ChatPage />} />
         <Route path="tasks" element={<TaskBoardPage />} />
         <Route path="todos" element={<TodoBoardPage />} />
-        <Route path="journal" element={<JournalPage />} />
+        <Route path="journal" element={<JournalRoute />} />
         <Route path="news" element={<NewsPage />} />
         <Route path="liste" element={<CollectionsPage />} />
         <Route path="documents" element={<DocumentsPage />} />

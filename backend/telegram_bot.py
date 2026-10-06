@@ -72,7 +72,7 @@ async def _user_list_names(db, user_doc: dict) -> list[str]:
 
 # ============ INTENT CLASSIFIER ============
 async def _classify_intent(text: str, last_context: dict | None, list_names: list[str] | None = None,
-                            user_id: Optional[str] = None) -> dict:
+                            user_id: Optional[str] = None, vertical: Optional[str] = None) -> dict:
     """Return {action, continuation, confidence}. Fallback: heuristic.
 
     This call's own OUTPUT is what determines which catalog feature it belongs to, so it
@@ -98,6 +98,9 @@ async def _classify_intent(text: str, last_context: dict | None, list_names: lis
         "- task_todo: c'è un'intenzione di azione futura, un promemoria, una data (es. 'ricordami di chiamare Marco martedì', 'devo comprare il latte', 'presentazione lunedì alle 10').\n"
         "- journal: l'utente racconta la sua giornata, come si sente, riflessioni personali (es. 'oggi è stata una giornata dura', 'sono felice perché...').\n"
         "  Un fatto su ALTRE persone o eventi da ricordare (es. 'Martina ha fatto pilates il 19', 'oggi Giulia è venuta a lezione', 'Marco ha pagato') NON è journal: è info_upload.\n"
+        + ("  L'utente è un ARTIGIANO: è journal anche il resoconto del lavoro fatto in cantiere o da un cliente (cosa è "
+           "stato fatto, ore, materiali usati, problemi; es. 'oggi dai Rossi 4 ore, posato il corrugato', 'finito il massetto "
+           "in via Roma'): va nel diario di commessa.\n" if vertical == "artigiano" else "") +
         "- list_update: l'utente vuole aggiungere, modificare o rimuovere un elemento specifico in una delle sue liste esistenti "
         "(es. 'aggiungi Mario alla lista clienti', 'elimina Utente 2 dalla lezione di pilates del lunedì mattina', 'cambia il telefono di Luca'). "
         "Serve una richiesta esplicita di modifica (aggiungi, iscrivi, togli, elimina, modifica, cambia, sposta...): un fatto raccontato che riguarda persone o argomenti di una lista è info_upload.\n\n"
@@ -194,6 +197,9 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
     new_conv = conv_id is None
     if new_conv:
         conv_id = f"conv_{'tg' if channel == 'telegram' else channel}_{uuid.uuid4().hex[:12]}"
+
+    if action == "journal" and user_doc.get("business_vertical") == "artigiano":
+        return await _job_log_turn(db, user_doc, content, conv_id, new_conv, images, channel), conv_id
 
     # Load prior messages for continuity
     prior_messages = []
@@ -317,6 +323,33 @@ async def _process_action(db, user_doc: dict, action: str, content: str, conv_id
     return visible, conv_id
 
 
+async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv: bool, images, channel: str) -> str:
+    """The watch's (and any text-only channel's) diario di commessa turn: the conversation
+    remembers its commessa, so "aggiungi che mancano due scatole" goes to the same one."""
+    from server import _save_job_log
+    conv = None if new_conv else await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "job_commessa_id": 1})
+    res = await _save_job_log(_to_user_pydantic(user_doc), content, images=images,
+                              hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
+    if res["status"] == "ok":
+        answer = res["message"]
+    else:
+        opts = "\n".join(f"• {c['title']} — {c['client_name']}" for c in res.get("candidates") or [])
+        answer = (f"Non l'ho salvato: {res['message']}" + (f"\n{opts}" if opts else "")
+                  + ("\nRipetilo nominando la commessa, oppure aprine una nuova dall'app o da Telegram." if res.get("new_commessa_for")
+                     else "\nRipetilo nominando il cliente o la commessa."))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    turn = [{"role": "user", "content": content}, {"role": "assistant", "content": answer}]
+    fields = {"updated_at": now_iso}
+    if res["status"] == "ok":
+        fields["job_commessa_id"] = res["log"]["commessa_id"]
+    if new_conv:
+        await db.conversations.insert_one({"conv_id": conv_id, "user_id": user_doc["user_id"], "action": "journal", "channel": channel,
+                                           "created_at": now_iso, "messages": turn, "title": content[:60], "summary": answer[:140], **fields})
+    else:
+        await db.conversations.update_one({"conv_id": conv_id}, {"$push": {"messages": {"$each": turn}}, "$set": fields})
+    return answer
+
+
 # ============ KEYBOARDS ============
 def _reply_keyboard(active_action: str | None) -> InlineKeyboardMarkup:
     def kb(label, cb, active=False):
@@ -380,7 +413,8 @@ async def _cmd_help(update: Update, ctx):
         "  /ask <domanda>\n"
         "  /save <info>\n"
         "  /task <task>\n"
-        "  /journal <racconto>\n"
+        "  /journal <racconto> — per gli artigiani: diario di commessa (cosa avete fatto, ore, materiali, "
+        "problemi; le foto mandate subito dopo vanno nella stessa voce)\n"
         "  /report — genera un report (referto veterinario o, per gli artigiani, primo sopralluogo): "
         "scegli il tipo, poi detta\n"
         "  /lista <richiesta> — aggiungi/modifica/rimuovi un elemento da una lista, es. "
@@ -404,7 +438,72 @@ async def _cmd_end(update: Update, ctx):
     await update.message.reply_text("✅ Conversazione chiusa. Scrivi pure quando vuoi.", reply_markup=_reply_keyboard(None))
 
 
+PHOTO_ONLY = "[foto allegata, nessun testo]"
+
+
+async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None, commessa_id=None,
+                            client_item_id=None, new_client_name=None):
+    """Artigiano: a diary message goes to the diario di commessa. The commessa of the last
+    entry in this chat is the one meant when the message names none; if it can't be told,
+    buttons to choose it (the message waits in the state)."""
+    from server import _save_job_log, _store_job_photos
+    chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
+    state = await _get_state(db, user["user_id"], chat_id)
+    hint = state.get("job_commessa_id") if _state_is_fresh(state) else None
+    current = _to_user_pydantic(user)
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    # a photo with no caption, right after an entry: added to that entry
+    if content == PHOTO_ONLY and images and hint and not commessa_id:
+        last = await db.job_logs.find_one({"user_id": user["user_id"], "commessa_id": hint, "id": state.get("job_log_id")}, {"_id": 0, "embedding": 0})
+        if last:
+            await _store_job_photos(current, last, images)
+            await ctx.bot.send_message(chat_id=chat_id, text=f"📷 Foto aggiunta al diario di «{last.get('commessa_title')}».",
+                                       reply_markup=_reply_keyboard("journal"))
+            await _set_state(db, chat_id, user["user_id"], current_action="journal")
+            return
+    text = "Foto dal cantiere" if content == PHOTO_ONLY else content
+    try:
+        res = await _save_job_log(current, text, images=images, commessa_id=commessa_id, hint_commessa_id=hint,
+                                  new_client_name=new_client_name, client_item_id=client_item_id, channel="telegram")
+    except Exception as e:
+        logger.exception("tg job log failed")
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Non ho salvato la voce: {str(getattr(e, 'detail', e))[:200]}")
+        return
+    if res["status"] == "ok":
+        await _set_state(db, chat_id, user["user_id"], current_action="journal", current_conv_id=None,
+                         job_commessa_id=res["log"]["commessa_id"], job_log_id=res["log"]["id"],
+                         pending_job_context=None, last_user_message=content)
+        await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+        return
+    buttons = [[InlineKeyboardButton(f"{c['title']} · {c['client_name']}"[:60], callback_data=f"jobc:{c['commessa_id']}")]
+               for c in res.get("candidates") or []]
+    buttons += [[InlineKeyboardButton(f"👤 {c['name']}"[:60], callback_data=f"jobk:{c['item_id']}")] for c in res.get("clients") or []]
+    buttons += [[InlineKeyboardButton(f"➕ Nuova commessa per {c['name']}"[:60], callback_data=f"jobk:{c['item_id']}")]
+                for c in res.get("new_commessa_for") or []]
+    if res.get("new_client_name"):
+        buttons.append([InlineKeyboardButton(f"➕ Cliente nuovo: {res['new_client_name']}"[:60], callback_data="jobn:")])
+    await _set_state(db, chat_id, user["user_id"], current_action="journal",
+                     pending_job_context={"text": text, "images": images or [], "new_client_name": res.get("new_client_name") or ""})
+    await ctx.bot.send_message(chat_id=chat_id, text="📒 " + res["message"],
+                               reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
+
+
+async def _answer_pending_job(update, ctx, db, user, state, content) -> bool:
+    """"Quale commessa?" answered by writing ("dai Rossi", "il bagno") instead of a button: the
+    waiting entry is saved again with that answer. A longer message is something else."""
+    pctx = state.get("pending_job_context") if _state_is_fresh(state) else None
+    if not pctx or not pctx.get("text") or len((content or "").split()) > 6:
+        return False
+    await _set_state(db, update.effective_chat.id, user["user_id"], pending_job_context=None)
+    await _run_job_log_flow(update, ctx, db, user, f"{pctx['text']}\n(Cliente / commessa: {content.strip()})",
+                            images=pctx.get("images") or None)
+    return True
+
+
 async def _run_and_reply(update_or_query, ctx, db, user, action, content, force_new=False, images=None):
+    if action == "journal" and user.get("business_vertical") == "artigiano":
+        await _run_job_log_flow(update_or_query, ctx, db, user, content, images=images)
+        return
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     state = await _get_state(db, user["user_id"], chat_id)
     reuse = (not force_new) and _state_is_fresh(state) and state.get("current_conv_id") and state.get("current_action") == action
@@ -452,6 +551,8 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
     else:
         content = text
         state = await _get_state(db, user["user_id"], chat_id)
+        if await _answer_pending_job(update, ctx, db, user, state, content):
+            return
         if state.get("pending_report_type"):
             await _run_report_flow(update, ctx, db, user, content, state["pending_report_type"])
             return
@@ -496,7 +597,7 @@ async def _run_main_message(update, ctx, db, user, content, forced_action, force
         list_names = await _user_list_names(db, user)
         if await _try_list_create(update, ctx, user, content, list_names):
             return
-        intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"])
+        intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"], vertical=user.get("business_vertical"))
         action = intent["action"]
         if action == "list_update":
             import list_updates as lu
@@ -867,6 +968,18 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         visit_type = data.split(":", 1)[1]
         await _set_state(db, chat_id, user["user_id"], pending_report_type=visit_type)
         await ctx.bot.send_message(chat_id=chat_id, text="🩺 Ok. Ora scrivi o manda un vocale con il resoconto della visita.")
+    elif data.startswith(("jobc:", "jobk:", "jobn:")):
+        state = await _get_state(db, user["user_id"], chat_id)
+        pctx = state.get("pending_job_context") or {}
+        if not pctx.get("text"):
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso la voce di diario: rimandala.")
+            return
+        await _set_state(db, chat_id, user["user_id"], pending_job_context=None)
+        kind, val = data.split(":", 1)
+        await _run_job_log_flow(q, ctx, db, user, pctx["text"], images=pctx.get("images") or None,
+                                commessa_id=val if kind == "jobc" else None,
+                                client_item_id=val if kind == "jobk" else None,
+                                new_client_name=(pctx.get("new_client_name") or None) if kind == "jobn" else None)
     elif data.startswith("wrkrep:"):
         await _set_state(db, chat_id, user["user_id"], pending_report_type="work:" + data.split(":", 1)[1])
         await ctx.bot.send_message(chat_id=chat_id, text="👷 Ok. Ora scrivi o manda un vocale con il resoconto del sopralluogo.")
@@ -1032,6 +1145,9 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎙️ _{transcript}_", parse_mode="Markdown")
 
         state = await _get_state(db, user["user_id"], chat_id)
+        if await _answer_pending_job(update, ctx, db, user, state, transcript):
+            _track_stt("diario")
+            return
         if state.get("pending_report_type"):
             _track_stt("creazione_report")
             await _run_report_flow(update, ctx, db, user, transcript, state["pending_report_type"])
@@ -1129,7 +1245,7 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         await _run_and_reply(
             update, ctx, db, user, "journal",
-            caption or "[foto allegata, nessun testo]",
+            caption or PHOTO_ONLY,
             images=[data_uri],
         )
         return

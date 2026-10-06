@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen } from "lucide-react";
 import { toast } from "sonner";
 
 // Gerarchia a 3 livelli:
@@ -665,7 +666,10 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
 
 /* ============ LIVELLO 3 — ELEMENTI ============ */
 function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
+  const navigate = useNavigate();
   const [coll, setColl] = useState(collection);
+  // the artigiano's Clienti list: each commessa has its diary
+  const isCommesse = coll.system_key === "artigiano_clienti";
   const [subItems, setSubItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
@@ -737,6 +741,12 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                 </div>
               ) : null
             ))}
+            {isCommesse && (
+              <button data-testid="open-commessa-diary" onClick={() => navigate("/dashboard/journal", { state: { commessa: sub.id } })}
+                className="mt-2 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white">
+                <NotebookPen size={12} /> Diario della commessa
+              </button>
+            )}
             <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button onClick={() => setEditing(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-white/10"><Pencil size={13} /></button>
               <button onClick={() => delSub(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-red-500/10 hover:text-red-400"><Trash2 size={13} /></button>

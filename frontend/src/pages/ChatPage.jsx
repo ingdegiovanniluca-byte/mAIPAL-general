@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,7 +15,7 @@ import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleD
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
 
-const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", vet_report: "Referto", work_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
+const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
 const HISTORY_RETENTION_NOTE = "Le chat non preferite si cancellano da sole 10 giorni dopo l'ultimo messaggio: segna con la stella quelle da tenere. Note, task e diario salvati restano.";
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
@@ -55,6 +55,13 @@ const ALL_ACTIONS = [
     color: "#8E2E11",
   },
   {
+    id: "job_log", key: "jobdiary", short: "Diario", icon: <NotebookPen size={22} />,
+    title: "Diario di commessa",
+    subtitle: "Cosa avete fatto in cantiere: ore, materiali, problemi e foto vanno nella commessa giusta",
+    placeholder: 'Es. "Oggi io e Gino dai Rossi, 4 ore: posati 20 metri di corrugato, manca una scatola 503"',
+    color: "#8E2E11",
+  },
+  {
     id: "vet_report", key: "report", short: "Referto", icon: <Stethoscope size={22} />,
     title: "Report visita",
     subtitle: "Detta o scrivi il resoconto: genero il referto strutturato",
@@ -79,9 +86,11 @@ const ALL_ACTIONS = [
 
 // Agents that belong to a vertical: Referto for vets (and for whoever has no vertical, as
 // before), Report only for artigiani. Everything else is the shared engine, always there.
+// For artigiani the Diario is the diario di commessa.
 const actionsFor = (vertical) => ALL_ACTIONS.filter((a) =>
   a.id === "vet_report" ? (!vertical || vertical === "veterinario")
-  : a.id === "work_report" ? vertical === "artigiano"
+  : a.id === "work_report" || a.id === "job_log" ? vertical === "artigiano"
+  : a.id === "journal" ? vertical !== "artigiano"
   : true);
 
 // Mobile chat: what the ⓘ next to the agent's name explains - what it does, what the icons
@@ -112,6 +121,11 @@ const AGENT_INFO = {
     options: [[ClipboardList, "Scegli il tipo di visita o carica un tuo modello di referto"]],
     examples: ["Ho visitato Fester, controllo ecografico di routine, tutto nella norma"],
   },
+  job_log: {
+    what: "Racconta cosa è stato fatto in cantiere, anche a voce: lo metto nel diario della commessa giusta (la riconosco dal cliente o dai lavori che nomini, se no te lo chiedo), con ore per persona, materiali e problemi. Puoi allegare le foto.",
+    options: [],
+    examples: ["Oggi io e Gino dai Rossi, 4 ore a testa: posati 20 metri di corrugato, manca una scatola 503", "Ieri dalla Bianchi finito il massetto del bagno"],
+  },
   work_report: {
     what: "Detta o scrivi com'è andato il sopralluogo: genero il report (Word, con lo spazio per le firme), riconosco il cliente nella lista Clienti e la commessa — se non ci sono li aggiungo io — e lo salvo su Drive/OneDrive nella cartella del cliente.",
     options: [[ClipboardList, "Scegli il tipo di report o carica un tuo modello"]],
@@ -129,8 +143,8 @@ const SCHED_YES = /^[\s"'«(]*(s[iì]|ok|okay|confermo|conferma|procedi|vai|eseg
 const SCHED_NO = /^[\s"'«(]*(no|annulla|lascia stare|non farlo|stop)(?![a-zàèéìòù])/i;
 const readChatOpts = () => { try { return JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || "{}"); } catch { return {}; } };
 
-const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
-const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 
 // Images over 1 MB for the knowledge base / Drive (typical PC screenshots or camera photos)
 // are re-encoded client-side into a JPEG of at most 2560px before upload - whichever of the
@@ -613,6 +627,70 @@ export default function ChatPage() {
     }
   };
 
+  // Diario di commessa: the commessa of the thread's last entry is the one meant when the
+  // message names none; when the app can't tell, it asks with buttons.
+  const appendJobLogResult = (res, images) => {
+    if (res.status === "pick_commessa") {
+      setThread((th) => ({ ...th, messages: [...th.messages, {
+        role: "assistant", content: "📒 " + res.message,
+        jobPick: { candidates: res.candidates || [], clients: res.clients || [], newFor: res.new_commessa_for || [],
+                   newClient: res.new_client_name || "", text: res.text, images: images || [] },
+      }] }));
+      return;
+    }
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, jobCommessaId: res.log.commessa_id }] }));
+  };
+
+  const sendJobLog = async () => {
+    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    let content = text.trim();
+    if (pendingVoice) {
+      setTranscribing(true);
+      try { content = [content, await transcribeBlob(pendingVoice.blob)].filter(Boolean).join(" ").trim(); }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    const images = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
+    if (!content && images.length) content = "Foto dal cantiere";
+    if (!content) { toast.error("Racconta cosa avete fatto"); return; }
+    if (streaming || transcribing || uploadingFiles.length) return;
+    const hint = thread?.action === "job_log"
+      ? [...thread.messages].reverse().find((m) => m.jobCommessaId)?.jobCommessaId || null : null;
+    setStreaming(true);
+    const shown = images.length ? `${content}\n📷 ${images.length} foto` : content;
+    setThread((th) => (th && th.action === "job_log")
+      ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
+      : { conv_id: null, action: "job_log", messages: [{ role: "user", content: shown }], liveAnswer: "" });
+    setText("");
+    setAttachments([]);
+    try {
+      const { main: logText } = splitMentions(content);
+      const r = await api.post("/jobs/logs", { text: logText || content, images, hint_commessa_id: hint });
+      appendJobLogResult(r.data, images);
+      const lg = r.data?.status === "ok" ? r.data.log : null;
+      await dispatchTagged(content, lg ? { type: "job_log", id: lg.id, commessa_id: lg.commessa_id, date: lg.date, created_at: lg.created_at, preview: (lg.text || "").slice(0, 200) } : null);
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a salvare la voce");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  const resolveJobPick = async (pick, choice) => {
+    setStreaming(true);
+    try {
+      const r = await api.post("/jobs/logs", { text: pick.text, images: pick.images, ...choice });
+      setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.jobPick === pick ? { ...m, jobPick: { ...pick, done: true } } : m)) }));
+      appendJobLogResult(r.data, pick.images);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Non sono riuscito a salvare la voce");
+    } finally {
+      setStreaming(false);
+    }
+  };
+
   const sendVetReport = async () => {
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
     let content = text.trim();
@@ -899,6 +977,7 @@ export default function ChatPage() {
   const skipAgentGuardRef = useRef(false);
   const [resendTick, setResendTick] = useState(0);
   const resendTo = (agentId, content) => {
+    if (agentId === "journal" && !ACTIONS.some((a) => a.id === "journal")) agentId = "job_log";
     skipAgentGuardRef.current = true;
     setThread(null);
     setMobileReplyTo(null);
@@ -914,6 +993,7 @@ export default function ChatPage() {
   const send = async () => {
     if (isMobile && mobileReplyTo) { await sendMobileReply(); return; }
     if (active === "vet_report") { await sendVetReport(); return; }
+    if (active === "job_log") { await sendJobLog(); return; }
     if (active === "work_report") { await sendWorkReport(); return; }
     if (active === "scheduled_action") { await sendScheduledAction(); return; }
     if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
@@ -1113,10 +1193,11 @@ export default function ChatPage() {
     // KB/Drive - they're only sent to the backend once, embedded in the journal entry,
     // when the message is saved (see send()'s payload.images). Non-image files go to
     // Drive instead (payload.documents), same as a plain attachment elsewhere in the app.
-    if (active === "journal") {
+    if (active === "journal" || active === "job_log") {
       const existingImgCount = attachments.filter((a) => a.journalImage).length;
-      let remainingImgs = 5 - existingImgCount;
+      let remainingImgs = (active === "job_log" ? 10 : 5) - existingImgCount;
       for (const f of files) {
+        if (active === "job_log" && !f.type.startsWith("image/")) { toast.error(`${f.name}: nel diario di commessa vanno solo foto`); continue; }
         if (!f.type.startsWith("image/")) {
           setUploadingFiles((u) => [...u, f.name]);
           try {
@@ -1134,7 +1215,7 @@ export default function ChatPage() {
           }
           continue;
         }
-        if (remainingImgs <= 0) { toast.error("Massimo 5 foto per voce di diario"); continue; }
+        if (remainingImgs <= 0) { toast.error(`Massimo ${active === "job_log" ? 10 : 5} foto per voce di diario`); continue; }
         setUploadingFiles((u) => [...u, f.name]);
         try {
           const dataUri = await fileToJournalImageDataUri(f);
@@ -1952,7 +2033,7 @@ export default function ChatPage() {
           </div>
           </>
           )}
-          <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : undefined} data-testid="file-input" />
+          <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : active === "job_log" ? "image/*" : undefined} data-testid="file-input" />
         </aside>
 
         {/* RIGHT 2/3 — scrolls. On mobile (spec v2 §3) this area is either the conversation
@@ -2018,7 +2099,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
                   <div className="kicker">
-                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
+                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "job_log" ? "diario commessa" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -2080,6 +2161,43 @@ export default function ChatPage() {
                             {c.name}{c.owner ? ` · ${c.owner}` : ""}{c.species ? ` (${c.species})` : ""}
                           </button>
                         ))}
+                      </div>
+                    )}
+                    {m.jobCommessaId && (
+                      <button
+                        data-testid="open-job-diary"
+                        onClick={() => navigate("/dashboard/journal", { state: { commessa: m.jobCommessaId } })}
+                        className="ml-4 mt-1 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
+                      >
+                        <NotebookPen size={12} /> Apri il diario della commessa
+                      </button>
+                    )}
+                    {m.jobPick && !m.jobPick.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="job-pick-choices">
+                        {m.jobPick.candidates.map((c) => (
+                          <button key={c.commessa_id} onClick={() => resolveJobPick(m.jobPick, { commessa_id: c.commessa_id })} disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
+                            {c.title} · {c.client_name}{c.stato === "chiusa" ? " (chiusa)" : ""}
+                          </button>
+                        ))}
+                        {m.jobPick.clients.map((c) => (
+                          <button key={c.item_id} onClick={() => resolveJobPick(m.jobPick, { client_item_id: c.item_id })} disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
+                            {c.name}
+                          </button>
+                        ))}
+                        {m.jobPick.newFor.map((c) => (
+                          <button key={`n${c.item_id}`} onClick={() => resolveJobPick(m.jobPick, { client_item_id: c.item_id })} disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50 inline-flex items-center gap-1">
+                            <FolderPlus size={12} /> Nuova commessa per {c.name}
+                          </button>
+                        ))}
+                        {m.jobPick.newClient && (
+                          <button onClick={() => resolveJobPick(m.jobPick, { new_client_name: m.jobPick.newClient })} disabled={streaming} data-testid="job-new-client"
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50 inline-flex items-center gap-1">
+                            <UserPlus size={12} /> Cliente nuovo: {m.jobPick.newClient}
+                          </button>
+                        )}
                       </div>
                     )}
                     {m.clientAmbiguous && !m.clientAmbiguous.done && (
