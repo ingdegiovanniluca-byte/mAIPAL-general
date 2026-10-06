@@ -551,6 +551,9 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
     else:
         content = text
         state = await _get_state(db, user["user_id"], chat_id)
+        if state.get("pending_work_revise") and _state_is_fresh(state):
+            await _run_work_revise_flow(update, ctx, db, user, state["pending_work_revise"], content)
+            return
         if await _answer_pending_job(update, ctx, db, user, state, content):
             return
         if state.get("pending_report_type"):
@@ -710,8 +713,28 @@ async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_
     if rep.get("drive_link"):
         lines.append(f"📁 Salvato in \"{rep['drive_folder']}\" (cloud)")
     lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: resta salvato in app/Drive.")
-    await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    await ctx.bot.send_message(chat_id=chat_id, text="\n".join(lines), reply_markup=_work_report_buttons(rep["id"]))
     await _set_state(db, chat_id, user["user_id"], pending_report_type=None, pending_report_context=None)
+
+
+def _work_report_buttons(report_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✏️ Modifica il report", callback_data=f"wrkmod:{report_id}")]])
+
+
+async def _run_work_revise_flow(update, ctx, db, user, report_id, instruction):
+    """The change asked after "Modifica il report": the same report, only that changes."""
+    from server import _revise_work_report
+    chat_id = update.effective_chat.id
+    await _set_state(db, chat_id, user["user_id"], pending_work_revise=None)
+    await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+    try:
+        rep = await _revise_work_report(_to_user_pydantic(user), report_id, instruction, channel="telegram")
+    except Exception as e:
+        logger.exception("tg work report revise failed")
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+        return
+    tail = "\n📄 Il file aggiornato è qui sopra." if rep.get("changed") and rep.get("telegram_sent") else ""
+    await ctx.bot.send_message(chat_id=chat_id, text=rep["message"] + tail, reply_markup=_work_report_buttons(report_id))
 
 
 async def _run_vet_report_flow(update_or_query, ctx, db, user, content, visit_type, patient_item_id=None):
@@ -980,6 +1003,10 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                 commessa_id=val if kind == "jobc" else None,
                                 client_item_id=val if kind == "jobk" else None,
                                 new_client_name=(pctx.get("new_client_name") or None) if kind == "jobn" else None)
+    elif data.startswith("wrkmod:"):
+        await _set_state(db, chat_id, user["user_id"], pending_work_revise=data.split(":", 1)[1], pending_report_type=None)
+        await ctx.bot.send_message(chat_id=chat_id, text="✏️ Cosa cambio nel report? Scrivilo o mandami un vocale "
+                                   "(es. «togli la stima economica», «nei tempi metti 3 giorni»).")
     elif data.startswith("wrkrep:"):
         await _set_state(db, chat_id, user["user_id"], pending_report_type="work:" + data.split(":", 1)[1])
         await ctx.bot.send_message(chat_id=chat_id, text="👷 Ok. Ora scrivi o manda un vocale con il resoconto del sopralluogo.")
@@ -1145,6 +1172,10 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎙️ _{transcript}_", parse_mode="Markdown")
 
         state = await _get_state(db, user["user_id"], chat_id)
+        if state.get("pending_work_revise") and _state_is_fresh(state):
+            _track_stt("creazione_report")
+            await _run_work_revise_flow(update, ctx, db, user, state["pending_work_revise"], transcript)
+            return
         if await _answer_pending_job(update, ctx, db, user, state, transcript):
             _track_stt("diario")
             return

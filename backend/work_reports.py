@@ -121,6 +121,72 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
     }
 
 
+async def revise(sections: list, instruction: str, user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """A change asked on a report already made ("togli la stima", "il telefono è 333...", "aggiungi
+    che serve il permesso del condominio"): only what is asked changes, the rest stays word for
+    word. -> {"sections", "client": {name, phone, email, address} only for what the request
+    changes, "job_title": new one or ""}"""
+    current = json.dumps([{"title": s["title"], "fields": s["fields"]} for s in sections], ensure_ascii=False)
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Hai un report GIÀ COMPILATO (JSON qui sotto) e l'utente chiede "
+        "una MODIFICA. Applica SOLO quello che chiede:\n"
+        "- i campi che la richiesta non tocca restano IDENTICI, parola per parola;\n"
+        "- non aggiungere, completare o inventare nulla che la richiesta non dica (niente dati di esempio, niente "
+        "nomi, misure, prezzi o date nuove);\n"
+        "- 'aggiungi ...' aggiunge al campo giusto senza cancellare quello che c'è; 'togli/elimina ...' svuota o "
+        "toglie solo quella parte; 'cambia/correggi X in Y' sostituisce;\n"
+        "- stessi titoli di sezione e stessi nomi di campo, nello stesso ordine.\n"
+        "Se la richiesta cambia i dati del cliente (nome, telefono, email, indirizzo del cantiere), mettili anche in "
+        "\"client\" (solo quelli cambiati, gli altri stringa vuota). Se cambia l'oggetto dei lavori, dai un nuovo "
+        "\"job_title\" breve, altrimenti stringa vuota.\n\n"
+        f"REPORT ATTUALE:\n{current}\n\n"
+        "Rispondi SOLO con JSON: {\"sections\": [{\"title\": \"...\", \"fields\": {\"Nome campo\": \"valore\"}}], "
+        "\"client\": {\"name\": \"\", \"phone\": \"\", \"email\": \"\", \"address\": \"\"}, \"job_title\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL, max_completion_tokens=4096, response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": instruction}],
+        )
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    parsed = json.loads(m.group(0)) if m else {}
+    by_title = {s.get("title"): s for s in parsed.get("sections", []) if isinstance(s, dict)}
+    out = []
+    for sk in sections:   # the skeleton is the report's own: a field the model dropped keeps its value
+        got = (by_title.get(sk["title"]) or {}).get("fields")
+        got = got if isinstance(got, dict) else {}
+        out.append({"title": sk["title"], "fields": {f: (str(got[f]).strip() if f in got and got[f] is not None else v)
+                                                     for f, v in sk["fields"].items()}})
+    cl = parsed.get("client") if isinstance(parsed.get("client"), dict) else {}
+    return {"sections": out, "client": {k: str(cl.get(k) or "").strip() for k in ("name", "phone", "email", "address")},
+            "job_title": str(parsed.get("job_title") or "").strip()[:80]}
+
+
+def changed_fields(old: list, new: list) -> list:
+    """["Sezione › Campo", ...] whose value differs."""
+    old_map = {(s["title"], f): v for s in old for f, v in s["fields"].items()}
+    return [f"{s['title']} › {f}" for s in new for f, v in s["fields"].items() if (old_map.get((s["title"], f)) or "") != (v or "")]
+
+
+def said_in(name: str, text: str) -> bool:
+    """The client name the model read is really in the text (at least one of its words of 3+
+    letters): a name the model made up must never become a client."""
+    low = (text or "").lower()
+    words = [w for w in re.findall(r"[\wàèéìòù']+", (name or "").lower()) if len(w) >= 3]
+    return bool(words) and any(re.search(rf"\b{re.escape(w)}\b", low) for w in words)
+
+
+def clear_field(sections: list, label: str) -> None:
+    for s in sections:
+        if label in s["fields"]:
+            s["fields"][label] = ""
+
+
 def set_field(sections: list, label: str, value: str, overwrite: bool = True) -> None:
     for s in sections:
         if label in s["fields"] and value and (overwrite or not s["fields"][label]):

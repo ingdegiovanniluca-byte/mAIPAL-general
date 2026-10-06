@@ -578,8 +578,10 @@ export default function ChatPage() {
       rep.commessa_title ? `🧱 Commessa: ${rep.commessa_title}${rep.commessa_created ? " (nuova, stato «preventivo»)" : ""}` : null,
       rep.drive_link ? `📁 Salvato nella cartella "${rep.drive_folder}" (Drive/OneDrive)` : "⚠️ Non salvato nel cloud (collega Google Drive o OneDrive in Impostazioni)",
       rep.telegram_sent ? "📨 Inviato anche su Telegram" : null,
-    ].filter(Boolean).join("\n");
-    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id, reportKind: "work" }] }));
+      "",
+      "✏️ Per modificarlo scrivimi qui cosa cambiare. Per un nuovo report apri una nuova chat.",
+    ].filter((l) => l !== null).join("\n");
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id, reportKind: "work", reportVersion: rep.version || 1 }] }));
   };
 
   const sendWorkReport = async () => {
@@ -599,8 +601,19 @@ export default function ChatPage() {
       ? { ...th, messages: [...th.messages, { role: "user", content }] }
       : { conv_id: null, action: "work_report", messages: [{ role: "user", content }], liveAnswer: "" });
     setText("");
+    // a message in a report's chat changes THAT report (it used to make a new, invented one)
+    const lastReport = thread?.action === "work_report"
+      ? [...thread.messages].reverse().find((m) => m.reportKind === "work" && m.reportId) : null;
     try {
       const { main: workText } = splitMentions(content);
+      if (lastReport) {
+        const r = await api.post(`/work/reports/${lastReport.reportId}/revise`, { text: workText || content });
+        const changedNow = (r.data.changed || []).length > 0;
+        setThread((th) => ({ ...th, messages: [...th.messages, changedNow
+          ? { role: "assistant", content: r.data.message, reportId: r.data.id, reportKind: "work", reportVersion: r.data.version }
+          : { role: "assistant", content: r.data.message }] }));
+        return;
+      }
       const r = await api.post("/work/generate-report", { text: workText || content, report_type: workType });
       appendWorkReportResult(r.data);
       await dispatchTagged(content, r.data?.id ? { type: "work_report", id: r.data.id, preview: (workText || "").slice(0, 200) } : null);
@@ -2140,13 +2153,13 @@ export default function ChatPage() {
                     )}
                     {m.reportId && (
                       <a
-                        href={`${API}/${m.reportKind === "work" ? "work" : "vet"}/reports/${m.reportId}/download`}
+                        href={`${API}/${m.reportKind === "work" ? "work" : "vet"}/reports/${m.reportId}/download${m.reportVersion > 1 ? `?v=${m.reportVersion}` : ""}`}
                         target="_blank"
                         rel="noreferrer"
                         data-testid="download-report-btn"
                         className="ml-4 mt-1 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
                       >
-                        <Download size={12} /> {m.reportKind === "work" ? "Scarica il report (.docx)" : "Scarica il referto (.docx)"}
+                        <Download size={12} /> {m.reportKind === "work" ? `Scarica il report${m.reportVersion > 1 ? ` (versione ${m.reportVersion})` : ""} (.docx)` : "Scarica il referto (.docx)"}
                       </a>
                     )}
                     {m.ambiguous && (

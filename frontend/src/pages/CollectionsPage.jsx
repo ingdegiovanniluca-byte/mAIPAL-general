@@ -5,7 +5,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen, ChevronDown, MapPin, Phone, Mail } from "lucide-react";
 import { toast } from "sonner";
 
 // Gerarchia a 3 livelli:
@@ -504,6 +504,33 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasSubLevel = (coll.sub_item_fields || []).length > 0;
+  // the artigiano's Clienti list: name and address on the card, phone and e-mail behind the arrow
+  const isClienti = coll.system_key === "artigiano_clienti";
+  const sysKey = (k) => (coll.system_map || {})[k] || k;
+  const [expanded, setExpanded] = useState(() => new Set());
+  const toggleExpanded = (id) => setExpanded((cur) => {
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const delClient = (item) => {
+    const name = item.data?.[sysKey("nome")] || "questo cliente";
+    const n = item.sub_item_count || 0;
+    toast(`Eliminare ${name}${n ? ` con ${n === 1 ? "la sua commessa" : `le sue ${n} commesse`} e il loro diario` : ""}?`, {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          try {
+            await api.delete(`/collections/${coll.id}/items/${item.id}`);
+            await load();
+            toast.success("Cliente eliminato");
+          } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 8000,
+    });
+  };
 
   // Drag-to-reorder the Campi cards - same approach as the Liste page's card reorder.
   const reorderItems = (fromId, toId) => {
@@ -546,7 +573,8 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
       )}
       {/* the list at a glance: how many campi, who it's shared with, the actions working on it */}
       <div className="mt-3 mb-5 flex items-start gap-6" data-testid="collection-info">
-        <InfoCell label="Campi" icon={Rows3} value={loading ? "…" : `${items.length} ${items.length === 1 ? "campo" : "campi"}`} testid="info-items" />
+        <InfoCell label={isClienti ? "Clienti" : "Campi"} icon={Rows3} testid="info-items"
+          value={loading ? "…" : isClienti ? `${items.length} ${items.length === 1 ? "cliente" : "clienti"}` : `${items.length} ${items.length === 1 ? "campo" : "campi"}`} />
         <InfoCell label={shareInfo.label} value={shareInfo.value} icon={shareInfo.label === "Condivisa" ? Users : Lock} testid="collection-sharing" />
         {related.length > 0 && (
           <InfoCell label={related.length === 1 ? "Azione programmata" : `${related.length} azioni programmate`} icon={Repeat} grow testid="info-actions"
@@ -592,7 +620,42 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
             // tap: while ticking campi it ticks this one too; otherwise opens it (its elementi) or edits it
             onClick={() => (selected.size ? toggleSelected(item.id) : hasSubLevel ? onOpenItem(item) : setEditing(item))}
           >
-            {(coll.fields || []).slice(0, 5).map((f) => (
+            {isClienti ? (
+              <div data-testid="client-card">
+                <div className="font-semibold text-base leading-snug">{item.data?.[sysKey("nome")] || "Cliente senza nome"}</div>
+                <div className="flex items-start gap-1.5 text-xs text-white/70 mt-1">
+                  <MapPin size={12} className="shrink-0 mt-0.5" />
+                  <span>{item.data?.[sysKey("indirizzo")] || "indirizzo non indicato"}</span>
+                </div>
+                {expanded.has(item.id) && (
+                  <div className="mt-2.5 pt-2.5 border-t border-white/10 space-y-1.5 text-xs text-white/85" data-testid="client-details"
+                    onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1.5"><Phone size={12} className="text-white/60" />
+                      {item.data?.[sysKey("telefono")]
+                        ? <a href={`tel:${item.data[sysKey("telefono")]}`} className="underline-offset-2 hover:underline">{item.data[sysKey("telefono")]}</a>
+                        : <span className="text-white/45">telefono non indicato</span>}
+                    </div>
+                    <div className="flex items-center gap-1.5"><Mail size={12} className="text-white/60" />
+                      {item.data?.[sysKey("email")]
+                        ? <a href={`mailto:${item.data[sysKey("email")]}`} className="underline-offset-2 hover:underline break-all">{item.data[sysKey("email")]}</a>
+                        : <span className="text-white/45">email non indicata</span>}
+                    </div>
+                    <div className="flex items-center gap-2 pt-1.5">
+                      <button type="button" onClick={() => setEditing(item)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
+                        <Pencil size={11} /> Modifica
+                      </button>
+                      <button type="button" data-testid="delete-client" onClick={() => delClient(item)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-200">
+                        <Trash2 size={11} /> Elimina cliente
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-1 text-[11px] text-white/70 mt-2">
+                  <ChevronRight size={12} /> {item.sub_item_count || 0} {item.sub_item_count === 1 ? "commessa" : "commesse"}
+                </div>
+              </div>
+            ) : (coll.fields || []).slice(0, 5).map((f) => (
               item.data?.[f.key] ? (
                 <div key={f.key} className="mb-1.5">
                   <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
@@ -600,7 +663,7 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
                 </div>
               ) : null
             ))}
-            {hasSubLevel && (
+            {hasSubLevel && !isClienti && (
               <div className="flex items-center gap-1 text-[11px] text-white/70 mt-2">
                 <ChevronRight size={12} /> {item.sub_item_count || 0} elementi
               </div>
@@ -613,7 +676,13 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
                 className={`h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${selected.has(item.id) ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
                 {selected.has(item.id) && <Check size={12} strokeWidth={2.8} />}
               </button>
-              {hasSubLevel && (
+              {isClienti ? (
+                <button type="button" data-testid={`expand-client-${item.id}`} onClick={(e) => { e.stopPropagation(); toggleExpanded(item.id); }}
+                  aria-label={expanded.has(item.id) ? "Nascondi telefono ed email" : "Mostra telefono ed email"} aria-expanded={expanded.has(item.id)}
+                  className="p-1 rounded-full text-white/80 hover:bg-white/10">
+                  <ChevronDown size={15} className={`transition-transform ${expanded.has(item.id) ? "rotate-180" : ""}`} />
+                </button>
+              ) : hasSubLevel && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); setEditing(item); }} aria-label="Modifica"
                   className="p-1 rounded-full text-white/70 hover:bg-white/10"><Pencil size={13} /></button>
               )}
@@ -747,7 +816,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                 <NotebookPen size={12} /> Diario della commessa
               </button>
             )}
-            <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-3 right-3 flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
               <button onClick={() => setEditing(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-white/10"><Pencil size={13} /></button>
               <button onClick={() => delSub(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-red-500/10 hover:text-red-400"><Trash2 size={13} /></button>
             </div>

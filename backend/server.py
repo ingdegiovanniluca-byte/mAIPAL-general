@@ -3419,9 +3419,18 @@ async def delete_collection_item(collection_id: str, item_id: str, current: User
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    if coll.get("system_key") == vx.CLIENTI_KEY:   # the client's commesse take their diary with them
+        subs = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "id": 1}).to_list(5000)
+        await _delete_job_diaries([sb["id"] for sb in subs])
     await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
     await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item_id})
     return {"ok": True}
+
+
+async def _delete_job_diaries(commessa_ids: list) -> None:
+    if commessa_ids:
+        await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
 
 
 # ---- Elementi (livello 3): annidati dentro un campo/item specifico ----
@@ -3487,6 +3496,8 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current
     r = await db.collection_sub_items.delete_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
+    if coll.get("system_key") == vx.CLIENTI_KEY:
+        await _delete_job_diaries([sub_id])
     return {"ok": True}
 
 
@@ -4617,6 +4628,12 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         logger.exception("work report interpretation failed")
         raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
     sections, said = interpreted["sections"], interpreted["client"]
+    said = _really_said(said, text)
+    if not said.get("name") and not client:
+        work_reports.clear_field(sections, "Cliente")   # a name the model made up stays out of the report too
+    for label, key in (("Telefono", "phone"), ("Email", "email")):
+        if not said.get(key):
+            work_reports.clear_field(sections, label)
 
     client_created = False
     if not client and said.get("name"):
@@ -4677,38 +4694,12 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {client_name or 'senza cliente'} - {stamp}.docx".replace("/", "-")
 
-    drive_link, drive_folder = None, None
-    try:
-        if await _storage_targets(current.user_id):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
-                tmp.write(docx_bytes)
-                tmp_path = tmp.name
-            try:
-                if client:
-                    folder, subs = (clienti.get("name") or vx.CLIENTI_NAME), [client_name] + ([commessa_title] if commessa_title else [])
-                else:
-                    folder, subs = "Report", []
-                res = await _storage_save(current.user_id, _drive_safe(folder), tmp_path, fname,
-                                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document", subfolders=subs)
-                drive_link = res.get("web_view_link")
-                drive_folder = " / ".join([_drive_safe(folder)] + [_drive_safe(x) for x in subs])
-            finally:
-                try: os.unlink(tmp_path)
-                except Exception: pass
-    except Exception:
-        logger.exception("work report drive/onedrive save failed")
-
-    telegram_sent = False
-    if current.telegram_chat_id:
-        try:
-            from telegram import Bot
-            import io as _io
-            await Bot(token=tg.bot_token()).send_document(
-                chat_id=current.telegram_chat_id, document=_io.BytesIO(docx_bytes), filename=fname,
-                caption=f"📄 {template_name}" + (f" — {client_name}" if client_name else ""))
-            telegram_sent = True
-        except Exception:
-            logger.exception("work report telegram send failed")
+    if client:
+        folder, subs = (clienti.get("name") or vx.CLIENTI_NAME), [client_name] + ([commessa_title] if commessa_title else [])
+    else:
+        folder, subs = "Report", []
+    drive_link, drive_folder, telegram_sent = await _deliver_work_report(
+        current, docx_bytes, fname, folder, subs, f"📄 {template_name}" + (f" — {client_name}" if client_name else ""))
 
     import base64 as _b64
     report_doc = {
@@ -4727,6 +4718,9 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         "commessa_created": commessa_created,
         "transcript": text,
         "sections": sections,
+        "company": company,
+        "drive_path": [folder] + subs,
+        "version": 1,
         "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
         "docx_filename": fname,
         "drive_link": drive_link,
@@ -4739,6 +4733,132 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     report_doc.pop("_id", None)
     report_doc.pop("docx_b64", None)
     return report_doc
+
+
+def _really_said(said: dict, text: str) -> dict:
+    """Client data the model read, kept only if it is in the dictation: a name, phone or
+    e-mail it made up ("Mario Rossi", "333 1234567" as an example) never reaches the list."""
+    out = dict(said or {})
+    if out.get("name") and not work_reports.said_in(out["name"], text):
+        out["name"] = ""
+    digits = re.sub(r"\D", "", text or "")
+    if out.get("phone") and (len(re.sub(r"\D", "", out["phone"])) < 6 or re.sub(r"\D", "", out["phone"]) not in digits):
+        out["phone"] = ""
+    if out.get("email") and out["email"].lower() not in (text or "").lower():
+        out["email"] = ""
+    return out
+
+
+async def _deliver_work_report(current: User, docx_bytes: bytes, fname: str, folder: str, subs: list, caption: str) -> tuple:
+    """Drive/OneDrive (mAIPAL/<folder>/<subs...>) and Telegram. -> (link, folder shown, sent on telegram)"""
+    drive_link, drive_folder = None, None
+    try:
+        if await _storage_targets(current.user_id):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(docx_bytes)
+                tmp_path = tmp.name
+            try:
+                res = await _storage_save(current.user_id, _drive_safe(folder), tmp_path, fname,
+                                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document", subfolders=subs)
+                drive_link = res.get("web_view_link")
+                drive_folder = " / ".join([_drive_safe(folder)] + [_drive_safe(x) for x in subs])
+            finally:
+                try: os.unlink(tmp_path)
+                except Exception: pass
+    except Exception:
+        logger.exception("work report drive/onedrive save failed")
+    telegram_sent = False
+    if current.telegram_chat_id:
+        try:
+            from telegram import Bot
+            import io as _io
+            await Bot(token=tg.bot_token()).send_document(chat_id=current.telegram_chat_id, document=_io.BytesIO(docx_bytes),
+                                                          filename=fname, caption=caption)
+            telegram_sent = True
+        except Exception:
+            logger.exception("work report telegram send failed")
+    return drive_link, drive_folder, telegram_sent
+
+
+class ReviseWorkReportPayload(BaseModel):
+    text: str
+
+
+@api_router.post("/work/reports/{report_id}/revise")
+async def revise_work_report(report_id: str, payload: ReviseWorkReportPayload, current: User = Depends(get_current_user)):
+    return await _revise_work_report(current, report_id, payload.text)
+
+
+async def _revise_work_report(current: User, report_id: str, instruction: str, channel: str = "web") -> dict:
+    """A change to a report already made, asked in the same chat: the same report, only what was
+    asked changes (never a new report, never a new client). The new .docx is "versione N" in
+    the same folder; the client's card changes only for data the request states."""
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="Scrivi cosa cambiare nel report")
+    rep = await db.work_reports.find_one({"id": report_id, "user_id": current.user_id}, {"_id": 0})
+    if not rep:
+        raise HTTPException(status_code=404, detail="Report non trovato")
+    old = rep.get("sections") or []
+    if not old:
+        raise HTTPException(status_code=400, detail="Questo report è di una versione precedente dell'app: non posso modificarlo, generane uno nuovo")
+    try:
+        res = await work_reports.revise(old, instruction, user_id=current.user_id, channel=channel)
+    except Exception as e:
+        logger.exception("work report revision failed")
+        raise HTTPException(status_code=500, detail=f"Modifica fallita: {e}")
+    sections, said = res["sections"], _really_said(res["client"], instruction)
+    changed = work_reports.changed_fields(old, sections)
+    if not changed:
+        return {**{k: v for k, v in rep.items() if k != "docx_b64"}, "revised": True, "changed": [],
+                "message": "Non ho trovato cosa cambiare: dimmi il campo e il nuovo valore (es. «nei tempi indicativi metti 3 giorni»)."}
+
+    # the client's card: only data the request states; a new name only for a client this report created
+    client_name, note = rep.get("client_name") or "", ""
+    clienti = await _clienti_list(current)
+    client = None
+    if clienti and rep.get("client_item_id"):
+        client = await db.collection_items.find_one({"id": rep["client_item_id"], "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
+    if client:
+        fmap = clienti.get("system_map") or {}
+        data = dict(client.get("data") or {})
+        for base, key in (("telefono", "phone"), ("email", "email")):
+            if said.get(key):
+                data[fmap.get(base, base)] = said[key]
+        if said.get("name") and _norm_title(said["name"]) != _norm_title(client_name):
+            if rep.get("client_created"):
+                data[fmap.get("nome", "nome")] = said["name"]
+                client_name = said["name"]
+            else:
+                note = f"Nella lista Clienti «{client_name}» non l'ho rinominato: se il cliente era sbagliato, generane uno nuovo."
+                client_name = said["name"]
+        if data != (client.get("data") or {}):
+            await db.collection_items.update_one({"id": client["id"]}, {"$set": {"data": data, "embedding": None}})
+    elif said.get("name"):
+        client_name = said["name"]
+
+    version = int(rep.get("version") or 1) + 1
+    docx_bytes = work_reports.build_docx(rep["template_name"], client_name or None, rep.get("commessa_title") or None, sections,
+                                         company=rep.get("company") or "")
+    base_name = re.sub(r"( - v\d+)?\.docx$", "", rep.get("docx_filename") or rep["template_name"])
+    fname = f"{base_name} - v{version}.docx"
+    path = rep.get("drive_path") or ([vx.CLIENTI_NAME, rep["client_name"]] + ([rep["commessa_title"]] if rep.get("commessa_title") else [])
+                                     if rep.get("client_name") else ["Report"])
+    drive_link, drive_folder, telegram_sent = await _deliver_work_report(
+        current, docx_bytes, fname, path[0], path[1:], f"📄 {rep['template_name']} (versione {version})" + (f" — {client_name}" if client_name else ""))
+
+    import base64 as _b64
+    upd = {"sections": sections, "client_name": client_name or None, "version": version, "docx_filename": fname,
+           "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"), "drive_link": drive_link or rep.get("drive_link"),
+           "drive_folder": drive_folder or rep.get("drive_folder"), "telegram_sent": telegram_sent,
+           "updated_at": datetime.now(timezone.utc).isoformat(), "embedding": None,
+           "revisions": (rep.get("revisions") or []) + [{"text": instruction, "changed": changed, "at": datetime.now(timezone.utc).isoformat()}]}
+    await db.work_reports.update_one({"id": report_id}, {"$set": upd})
+    out = {**{k: v for k, v in rep.items() if k != "docx_b64"}, **{k: v for k, v in upd.items() if k not in ("docx_b64", "embedding")}}
+    shown = ", ".join(c.split(" › ")[1] for c in changed[:8]) + ("…" if len(changed) > 8 else "")
+    out.update({"revised": True, "changed": changed,
+                "message": f"✏️ Report aggiornato (versione {version}): modificato {shown}." + (f"\n{note}" if note else "")})
+    return out
 
 
 @api_router.get("/work/reports")

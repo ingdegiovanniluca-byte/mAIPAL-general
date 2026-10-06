@@ -145,7 +145,7 @@ async def main():
                           {"Oggetto dell'intervento": "Rifacimento impianto elettrico della cucina",
                            "Descrizione dello stato attuale": "Impianto non a norma, senza differenziale.",
                            "Lavori proposti": "- Nuovo quadro\n- 6 punti presa", "Cliente": "Mario Rossi"})
-    r = await server._generate_work_report(me, "sopralluogo dal signor Mario Rossi in via Roma 5 per l'impianto della cucina")
+    r = await server._generate_work_report(me, "sopralluogo dal signor Mario Rossi in via Roma 5, telefono 333 1234567, per l'impianto della cucina")
     print({k: r[k] for k in ("client_name", "client_created", "commessa_title", "commessa_created", "drive_folder")})
     assert r["status"] == "ok" and r["client_created"] and r["commessa_created"] and "docx_b64" not in r
     items = [i for i in db.collection_items.docs if i["collection_id"] == cl["id"]]
@@ -229,6 +229,77 @@ async def main():
     wr.interpret = interp({"name": "Anna Rossi"}, "Cancello automatico")
     await tb._run_work_report_flow(upd, Ctx(), db, user, st["pending_report_context"]["text"], "sopralluogo", client_item_id="item_r2")
     print(SENT[-1][0]); assert "Anna Rossi" in SENT[-1][0] and "Cancello automatico" in SENT[-1][0]
+    # 8) the reported bug: a change asked in the same chat made a NEW report, all invented, with a
+    #    new client. Now: the same report changes, only what was asked; nothing is created.
+    first = next(x for x in db.work_reports.docs if x["client_name"] == "Mario Rossi")
+    n_clients, n_reports = len(db.collection_items.docs), len(db.work_reports.docs)
+    async def fake_revise(sections, instruction, user_id=None, channel="web"):
+        out = [{"title": x["title"], "fields": dict(x["fields"])} for x in sections]
+        for x in out:
+            if "Tempi indicativi" in x["fields"]:
+                x["fields"]["Tempi indicativi"] = "3 giorni lavorativi"
+        return {"sections": out, "client": {"name": "Giuseppe Verdi", "phone": "", "email": "", "address": ""}, "job_title": ""}
+    wr.revise = fake_revise
+    SAVED.clear()
+    r = await server._revise_work_report(me, first["id"], "nei tempi indicativi metti 3 giorni lavorativi")
+    print(r["message"])
+    assert r["changed"] == ["Proposta › Tempi indicativi"] and r["version"] == 2 and r["client_name"] == "Mario Rossi"
+    assert len(db.collection_items.docs) == n_clients and len(db.work_reports.docs) == n_reports   # nothing new
+    assert SAVED[-1]["subs"] == ["Mario Rossi", "Rifacimento impianto elettrico cucina"] and SAVED[-1]["fname"].endswith(" - v2.docx")
+    txt = doc_text(SAVED[-1]["bytes"]); assert "3 giorni lavorativi" in txt and "Mario Rossi" in txt and "Nuovo quadro" in txt
+    async def four(sections, instruction, user_id=None, channel="web"):
+        out = [{"title": x["title"], "fields": dict(x["fields"])} for x in sections]
+        out[3]["fields"]["Tempi indicativi"] = "4 giorni"
+        return {"sections": out, "client": {}, "job_title": ""}
+    wr.revise = four
+    again = await server._revise_work_report(me, first["id"], "e poi metti 4 giorni")
+    assert again["version"] == 3 and SAVED[-1]["fname"].endswith(" - v3.docx") and " - v2 - v3" not in SAVED[-1]["fname"]
+    # nothing to change -> said so, no new version
+    async def same(sections, instruction, user_id=None, channel="web"):
+        return {"sections": sections, "client": {}, "job_title": ""}
+    wr.revise = same
+    r = await server._revise_work_report(me, first["id"], "boh")
+    assert r["changed"] == [] and "Non ho trovato cosa cambiare" in r["message"]
+    assert next(x for x in db.work_reports.docs if x["id"] == first["id"])["version"] == 3
+    # a phone stated in the change goes on the client's card; a name change on a client the report did not create: only the report
+    async def phone(sections, instruction, user_id=None, channel="web"):
+        out = [{"title": x["title"], "fields": dict(x["fields"])} for x in sections]
+        out[0]["fields"]["Telefono"] = "347 9876543"
+        return {"sections": out, "client": {"name": "", "phone": "347 9876543", "email": "", "address": ""}, "job_title": ""}
+    wr.revise = phone
+    await server._revise_work_report(me, first["id"], "il telefono giusto è 347 9876543")
+    rossi = next(i for i in db.collection_items.docs if i["id"] == first["client_item_id"])
+    assert rossi["data"]["telefono"] == "347 9876543"
+    # the model's own example data never becomes a client: a dictation with no client name
+    wr.interpret = interp({"name": "Giuseppe Verdi", "phone": "333 1234567"}, "", {"Cliente": "Giuseppe Verdi", "Telefono": "333 1234567"})
+    n_clients = len(db.collection_items.docs)
+    r = await server._generate_work_report(me, "modifica il campo tempi indicativi e togli la stima")
+    assert r["client_item_id"] is None and len(db.collection_items.docs) == n_clients
+    assert "Giuseppe Verdi" not in doc_text(SAVED[-1]["bytes"]) and "333 1234567" not in doc_text(SAVED[-1]["bytes"])
+    # Telegram: "Modifica il report" button, then the change
+    wr.revise = fake_revise
+    await db.users.update_one({"user_id": "u1"}, {"$set": {"business_vertical": "artigiano"}})
+    user = await db.users.find_one({"user_id": "u1"})
+    q = type("Q", (), {})(); q.message = Msg(77); q.data = f"wrkmod:{first['id']}"
+    async def ans(*a, **k): pass
+    q.answer = ans
+    cb = type("U", (), {})(); cb.callback_query = q; cb.effective_chat = q.message.chat
+    await tb._on_callback(cb, Ctx())
+    assert "Cosa cambio nel report" in SENT[-1][0]
+    st = await tb._get_state(db, "u1", 77); assert st["pending_work_revise"] == first["id"]
+    await tb._run_work_revise_flow(upd, Ctx(), db, user, st["pending_work_revise"], "nei tempi metti 3 giorni")
+    print(SENT[-1][0]); assert "Report aggiornato" in SENT[-1][0] and SENT[-1][1].inline_keyboard[0][0].callback_data == q.data
+    assert not (await tb._get_state(db, "u1", 77)).get("pending_work_revise")
+
+    # 9) deleting a client takes its commesse and their diary with it
+    cid = first["client_item_id"]
+    comm_ids = [x["id"] for x in db.collection_sub_items.docs if x["item_id"] == cid]
+    db.job_logs.docs.append({"id": "jl1", "commessa_id": comm_ids[0]}); db.job_logs.docs.append({"id": "jl2", "commessa_id": "other"})
+    db.job_photos.docs.append({"id": "jp1", "commessa_id": comm_ids[0]})
+    await server.delete_collection_item(first["collection_id"], cid, me)
+    assert not any(x["item_id"] == cid for x in db.collection_sub_items.docs)
+    assert [x["id"] for x in db.job_logs.docs] == ["jl2"] and not db.job_photos.docs
+
     # a vet (or no vertical) still gets the vet templates
     await db.users.update_one({"user_id": "u1"}, {"$set": {"business_vertical": "veterinario"}})
     await tb._cmd_report(upd, Ctx())
