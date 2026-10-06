@@ -13,8 +13,8 @@ import { usePref } from "@/lib/prefs";
 //   2. the commessa's card (client, site, dates, description, totals)
 //   3. its diary: name, state on one row (every change is written in the diary), totals,
 //      entries by day.
-// The commessa's chat (ask about it, or write in its diary) opens from the chat icon next to
-// the title and sits at the bottom, like the one in the Chat section.
+// The commessa's chat (ask about it, or write in its diary) opens from the round chat button
+// floating on the side and sits at the bottom, like the one in the Chat section.
 
 const STATO_COLOR = { "in corso": "#8ED973", preventivo: "#F2C14E", sospesa: "#E8A03F", chiusa: "rgba(255,255,255,0.35)" };
 const IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
@@ -206,6 +206,40 @@ function ClientCard({ client, commesse, onOpen }) {
         ))}
       </div>
     </div>
+  );
+}
+
+// The chat button: a glass circle (the bottom menu's "+" glass, a bit smaller) floating on
+// the right at 2/3 of the screen's height, over the page that scrolls under it. It slides
+// away while the page scrolls and comes back when it stops (one passive listener and a
+// timer; the state changes only twice per scroll).
+function ChatFab({ onClick }) {
+  const [hidden, setHidden] = useState(false);
+  const hiddenRef = useRef(false);
+  useEffect(() => {
+    let timer = null;
+    const onScroll = () => {
+      if (!hiddenRef.current) { hiddenRef.current = true; setHidden(true); }
+      clearTimeout(timer);
+      timer = setTimeout(() => { hiddenRef.current = false; setHidden(false); }, 450);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => { window.removeEventListener("scroll", onScroll); clearTimeout(timer); };
+  }, []);
+  return (
+    <button onClick={onClick} data-testid="commessa-chat-toggle" data-hidden={hidden ? "1" : "0"}
+      title="Chat della commessa: chiedi o scrivi nel diario" aria-label="Chat della commessa"
+      className="fixed z-40 right-3.5 md:right-8 h-[52px] w-[52px] rounded-full flex items-center justify-center text-white active:scale-95"
+      style={{
+        top: "calc(66.667vh - 26px)",
+        transform: hidden ? "translateX(calc(100% + 24px))" : "none",
+        opacity: hidden ? 0 : 1,
+        pointerEvents: hidden ? "none" : "auto",
+        transition: "transform 260ms ease, opacity 200ms ease",
+      }}>
+      <span aria-hidden="true" className="lg-goo absolute inset-0 rounded-full" style={{ boxShadow: "0 10px 22px rgba(60, 10, 40, 0.16)" }} />
+      <MessageCircle size={21} strokeWidth={1.9} className="relative" />
+    </button>
   );
 }
 
@@ -569,7 +603,7 @@ export default function JobDiaryPage() {
 
       {byDay.length === 0 ? (
         <div className="text-sm text-white/60 text-center py-6">
-          Ancora nessuna voce. Apri la chat <MessageCircle size={13} className="inline -mt-0.5" /> e scegli «Scrivi nel diario».
+          Ancora nessuna voce. Tocca il pulsante della chat <MessageCircle size={13} className="inline -mt-0.5" /> sul lato e scegli «Scrivi nel diario».
         </div>
       ) : byDay.map((g) => (
         <div key={g.day} className="flex flex-col gap-2">
@@ -586,17 +620,10 @@ export default function JobDiaryPage() {
       <div className="flex items-center gap-2 mb-4">
         <NotebookPen size={20} className="text-white/80" />
         <h1 className="text-2xl font-semibold text-white">Diario di commessa</h1>
-        {inCommessa && (
-          <button onClick={() => setChatOpen((v) => !v)} data-testid="commessa-chat-toggle"
-            title={chatOpen ? "Chiudi la chat della commessa" : "Chat della commessa: chiedi o scrivi nel diario"}
-            aria-label="Chat della commessa" aria-pressed={chatOpen}
-            className={`ml-1 h-9 w-9 rounded-full flex items-center justify-center transition-colors ${chatOpen ? "bg-white text-[#403A3C]" : "bg-white/15 text-white hover:bg-white/25"}`}>
-            <MessageCircle size={17} />
-          </button>
-        )}
       </div>
       {level === "clients" || !selectedId ? clientsView : level === "commessa" ? commessaView : diaryView}
 
+      {inCommessa && c && !chatOpen && <ChatFab onClick={() => setChatOpen(true)} />}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
       {editing && (
         <EditDialog log={editing} onClose={() => setEditing(null)}
