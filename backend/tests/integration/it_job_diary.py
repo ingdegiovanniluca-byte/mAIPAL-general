@@ -200,7 +200,7 @@ async def main():
     await asyncio.sleep(0)
 
     # 8) the commessa page: entries newest first, totals (materials summed by name+unit)
-    d = await server.get_job_commessa("s_bagno", me)
+    d = await server.get_job_commessa("s_bagno", current=me)
     t = d["totals"]; print(t["hours_total"], t["by_person"], t["materials"])
     assert t["hours_total"] == 10.5 and t["by_person"] == {"Luca": 6.0, "Gino": 4.5}
     assert [(m["name"].lower(), m["unit"], m["qty"]) for m in t["materials"]] == [("corrugato 25", "m", 25.0)] and t["problems"][0]["text"] == "manca una scatola 503"
@@ -234,7 +234,7 @@ async def main():
     await server.update_sub_item(cl["id"], "c_bianchi", "s_tetto", server.CollectionSubItemPayload(data={**sub["data"], "stato": "sospesa"}), me)
     ev = [l for l in db.job_logs.docs if l["commessa_id"] == "s_tetto" and l.get("kind") == "stato"]
     assert len(ev) == 2 and "«in corso» a «sospesa»" in ev[1]["text"]
-    d = await server.get_job_commessa("s_tetto", me)
+    d = await server.get_job_commessa("s_tetto", current=me)
     assert d["totals"]["entries"] == n_before and d["commessa"]["client_email"] == ""
     try:
         await server.update_job_log(ev[0]["id"], server.JobLogPatch(text="x"), me); assert False
@@ -268,10 +268,24 @@ async def main():
     assert "Tempi indicativi" not in sysmsg   # empty fields are left out
     assert [m["role"] for m in seen["messages"]] == ["system", "user", "assistant", "user"]
 
+    # the page: whole-job totals on top, the entries of the period asked, documents = photos + reports
+    for lg in db.job_logs.docs:
+        if lg["commessa_id"] == "s_cucina" and not lg.get("kind"):
+            lg["date"] = "2026-09-01"; break
+    full = await server.get_job_commessa("s_cucina", current=me)
+    part = await server.get_job_commessa("s_cucina", date_from="2026-10-01", date_to="2099-12-31", current=me)
+    assert len(part["logs"]) < len(full["logs"]) and all(l["date"] >= "2026-10-01" for l in part["logs"])
+    assert part["totals"]["entries"] == full["totals"]["entries"] and full["first_day"] == "2026-09-01"
+    assert part["period_totals"]["entries"] == sum(1 for l in part["logs"] if not l.get("kind"))
+    db.work_reports.docs.append({"id": "wr_c", "commessa_id": "s_cucina"})
+    d2 = await server.get_job_commessa("s_cucina", current=me)
+    nph = sum(len(l.get("photos") or []) for l in db.job_logs.docs if l["commessa_id"] == "s_cucina")
+    assert d2["docs"] == {"photos": nph, "reports": 1, "total": nph + 1}, d2["docs"]
+
     # 9) another user (no team) can't see the commessa
     other = server.User(user_id="zz", email="z@z", name="Zed")
     try:
-        await server.get_job_commessa("s_cucina", other); assert False
+        await server.get_job_commessa("s_cucina", current=other); assert False
     except HTTPException as he:
         assert he.status_code == 404
 

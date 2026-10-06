@@ -5270,11 +5270,29 @@ async def list_job_commesse(current: User = Depends(get_current_user)):
 
 
 @api_router.get("/jobs/commesse/{commessa_id}")
-async def get_job_commessa(commessa_id: str, current: User = Depends(get_current_user)):
+async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                           current: User = Depends(get_current_user)):
+    """The commessa, its whole-job totals (the four figures on top) and the entries of the
+    period asked (date_from/date_to, YYYY-MM-DD; none = the whole commessa), newest first.
+    The totals need only the figures, so the texts are loaded for the period alone."""
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
-    logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
+    light = await db.job_logs.find({"commessa_id": commessa_id},
+                                   {"_id": 0, "id": 1, "date": 1, "kind": 1, "hours": 1, "materials": 1, "problems": 1, "photos": 1}).to_list(20000)
+    q: dict = {"commessa_id": commessa_id}
+    rng = {}
+    if date_from:
+        rng["$gte"] = date_from[:10]
+    if date_to:
+        rng["$lte"] = date_to[:10]
+    if rng:
+        q["date"] = rng
+    logs = await db.job_logs.find(q, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
-    return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(logs),
+    reports = await db.work_reports.count_documents({"commessa_id": commessa_id})
+    photos = sum(len(lg.get("photos") or []) for lg in light)
+    return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
+            "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
+            "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
             "stati": vx.COMMESSA_STATI}
 
 
@@ -7848,6 +7866,15 @@ async def start_services():
         logger.info(f"admin whitelist seeded for {ADMIN_EMAIL}")
     except Exception:
         logger.exception("failed to seed admin whitelist")
+    try:   # the diario di commessa is read by commessa and day (page, chat, totals)
+        await db.job_logs.create_index([("commessa_id", 1), ("date", -1)])
+        await db.job_logs.create_index([("user_id", 1), ("date", -1)])
+        await db.job_logs.create_index([("org_id", 1), ("date", -1)])
+        await db.job_photos.create_index([("log_id", 1)])
+        await db.job_photos.create_index([("commessa_id", 1)])
+        await db.work_reports.create_index([("commessa_id", 1)])
+    except Exception:
+        logger.exception("job diary indexes failed")
     try:
         asyncio.create_task(tg.start_polling())
     except Exception:

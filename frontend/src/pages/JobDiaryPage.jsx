@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
-  NotebookPen, MessageCircle, Send, ChevronRight, RefreshCw, CalendarDays } from "lucide-react";
+  NotebookPen, MessageCircle, Send, ChevronRight, RefreshCw, CalendarDays, CircleDot, FileText, Check } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
@@ -65,43 +65,77 @@ function StatoPill({ stato }) {
 
 const STATO_ORDER = { "in corso": 0, preventivo: 1, sospesa: 2, "": 3, chiusa: 4 };
 
-function EntryCard({ log, onEdit, onDelete, onPhoto }) {
-  if (log.kind === "stato") {
-    return (
-      <div data-testid="job-stato-event" className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/[0.06] text-xs text-white/75">
-        <RefreshCw size={12} className="shrink-0 text-white/55" />
-        <span className="flex-1">{log.text}</span>
-        <button onClick={() => onDelete(log)} title="Elimina" className="p-1 text-white/45 hover:text-white"><Trash2 size={12} /></button>
-      </div>
-    );
-  }
+const IT_MON_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayIso = () => isoDay(new Date());
+const daysAgoIso = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
+const monthStartIso = () => { const d = new Date(); return isoDay(new Date(d.getFullYear(), d.getMonth(), 1)); };
+const rangeDay = (iso, withYear) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${String(d).padStart(2, "0")} ${IT_MON_SHORT[m - 1]}${withYear ? ` ${y}` : ""}`;
+};
+const capFirst = (x) => (x ? x.charAt(0).toUpperCase() + x.slice(1) : x);
+// the diary's sections, one word each (the carousel goes round)
+const SECTIONS = [
+  { key: "diario", label: "Diario" },
+  { key: "ore", label: "Ore" },
+  { key: "problemi", label: "Problemi" },
+  { key: "materiali", label: "Materiali" },
+];
+const PERIODS = [
+  { key: "30", label: "Ultimi 30 giorni" },
+  { key: "month", label: "Questo mese" },
+  { key: "all", label: "Tutta la commessa" },
+];
+const periodRange = (p) => (p.key === "30" ? { from: daysAgoIso(29), to: todayIso() }
+  : p.key === "month" ? { from: monthStartIso(), to: todayIso() }
+  : p.key === "custom" ? { from: p.from || null, to: p.to || null }
+  : { from: null, to: null });
+
+// one of the four figures on top: just the icon, a light number and its word
+function Glance({ icon: Icon, value, label, small, onClick, right, testid, ariaLabel }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div data-testid="job-entry" className="card-soft p-4">
-      <div className="flex items-center gap-2 text-[11px] text-white/55">
-        <span className="font-medium text-white/80">{log.author_name}</span>
-        {log.channel === "telegram" && <span>· Telegram</span>}
-        {log.channel === "watch" && <span>· orologio</span>}
-        <button onClick={() => onEdit(log)} title="Modifica" className="ml-auto p-1 hover:text-white"><Pencil size={13} /></button>
-        <button onClick={() => onDelete(log)} title="Elimina" className="p-1 hover:text-white" data-testid="job-entry-delete"><Trash2 size={13} /></button>
-      </div>
-      <div className="text-sm text-white/90 whitespace-pre-wrap mt-1.5">{log.text}</div>
-      {(log.hours?.length > 0 || log.materials?.length > 0 || log.problems?.length > 0) && (
-        <div className="flex flex-wrap gap-1.5 mt-2.5">
-          {(log.hours || []).map((h, i) => (
-            <span key={`h${i}`} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-white/10 text-white/85"><Clock size={11} />{h.who} {fmtNum(h.hours)} h</span>
-          ))}
-          {(log.materials || []).map((m, i) => (
-            <span key={`m${i}`} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-white/10 text-white/85"><Package size={11} />{matLabel(m)}</span>
-          ))}
-          {(log.problems || []).map((p, i) => (
-            <span key={`p${i}`} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-[#E8663F]/25 text-white"><AlertTriangle size={11} />{p}</span>
-          ))}
-        </div>
-      )}
-      {log.photos?.length > 0 && (
-        <div className="flex flex-wrap gap-2 mt-3">
+    <Tag type={onClick ? "button" : undefined} onClick={onClick} data-testid={testid} aria-label={ariaLabel}
+      className={`relative h-[70px] text-left text-white flex flex-col justify-center gap-1.5 ${right ? "pl-4" : "pl-0.5"} ${onClick ? "active:opacity-70" : ""}`}>
+      <Icon size={16} strokeWidth={1.9} className="text-white/80" />
+      <span className="flex items-baseline whitespace-nowrap">
+        <span className={`${small ? "text-[22px]" : "text-[30px]"} font-extralight leading-none`}>{value}</span>
+        {label && <span className="text-[11.5px] font-light ml-1.5 text-white/75">{label}</span>}
+      </span>
+    </Tag>
+  );
+}
+
+// a line of the diary: who (grey) with a small icon when it carries hours / problems /
+// materials, the text, the photos; tap to change or delete it
+function DiaryLine({ log, section, onOpen, onPhoto }) {
+  const isEvent = log.kind === "stato";
+  const full = section === "diario";
+  const detail = section === "ore" ? hoursLineOf(log) : section === "problemi" ? (log.problems || []).join("; ")
+    : section === "materiali" ? (log.materials || []).map(matLabel).join(" · ") : "";
+  return (
+    <div data-testid={isEvent ? "job-stato-event" : "job-entry"}>
+      <button type="button" onClick={() => onOpen(log)} className="w-full text-left">
+        <span className="flex items-center gap-[5px] text-white/50">
+          {isEvent && <RefreshCw size={11} strokeWidth={2} />}
+          {full && !isEvent && log.hours?.length > 0 && <Clock size={11} strokeWidth={2} />}
+          {full && !isEvent && log.problems?.length > 0 && <AlertTriangle size={11} strokeWidth={2} />}
+          {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
+          <span className="text-[11.5px] font-medium">{log.author_name}</span>
+          {log.channel === "telegram" && <span className="text-[10.5px] text-white/40">· Telegram</span>}
+        </span>
+        {detail && <span className="block mt-[3px] text-[14.5px] font-medium leading-snug text-white">{detail}</span>}
+        <span className={`block mt-[3px] leading-[1.45] whitespace-pre-wrap ${isEvent ? "text-[13px] text-white/70"
+          : full ? "text-[14px] text-white/90" : "text-[12.5px] text-white/55"}`}>
+          {isEvent && log.stato_to ? `Stato: ${log.stato_from || "—"} → ${log.stato_to}` : log.text}
+        </span>
+      </button>
+      {full && log.photos?.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
           {log.photos.map((p) => (
-            <button key={p.id} onClick={() => onPhoto(log, p)} className="h-20 w-20 rounded-xl overflow-hidden bg-white/10">
+            <button key={p.id} type="button" onClick={() => onPhoto(log, p)} className="h-11 w-11 rounded-[10px] overflow-hidden bg-white/15" aria-label="Apri la foto">
               <img src={photoUrl(p.id)} alt="" loading="lazy" className="h-full w-full object-cover" />
             </button>
           ))}
@@ -110,8 +144,9 @@ function EntryCard({ log, onEdit, onDelete, onPhoto }) {
     </div>
   );
 }
+const hoursLineOf = (log) => (log.hours || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ");
 
-function EditDialog({ log, onClose, onSaved }) {
+function EditDialog({ log, onClose, onSaved, onDelete }) {
   const [text, setText] = useState(log.text || "");
   const [date, setDate] = useState(log.date || "");
   const [hours, setHours] = useState((log.hours || []).map((h) => ({ ...h, hours: fmtNum(h.hours) })));
@@ -174,6 +209,11 @@ function EditDialog({ log, onClose, onSaved }) {
             <textarea value={problems} onChange={(e) => setProblems(e.target.value)} rows={3} className="w-full rounded-lg bg-white/10 p-2.5 text-sm text-white outline-none" />
           </div>
           <div className="flex justify-end gap-2">
+            {onDelete && (
+              <button onClick={() => onDelete(log)} data-testid="job-edit-delete" className="mr-auto px-3 py-2 rounded-full text-sm text-white/75 hover:bg-white/10 inline-flex items-center gap-1.5">
+                <Trash2 size={14} /> Elimina
+              </button>
+            )}
             <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-white/80 hover:bg-white/10">Annulla</button>
             <button onClick={save} disabled={saving} data-testid="job-edit-save" className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">
               {saving ? "Salvo…" : "Salva"}
@@ -438,15 +478,25 @@ export default function JobDiaryPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [viewer, setViewer] = useState(null);   // {log, photo}
+  const [section, setSection] = useState("diario");
+  const [period, setPeriod] = useState({ key: "30" });
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [menu, setMenu] = useState(null);       // "stato" | "periodo"
+  const swipeX = useRef(null);
 
   const loadList = async () => {
     try { setCommesse((await api.get("/jobs/commesse")).data || []); }
     catch { toast.error("Errore nel caricamento delle commesse"); }
     finally { setLoaded(true); }
   };
-  const loadDetail = async (id) => {
+  const loadDetail = async (id, p = period) => {
     if (!id) { setDetail(null); return; }
-    try { setDetail((await api.get(`/jobs/commesse/${id}`)).data); }
+    const { from, to } = periodRange(p);
+    const params = {};
+    if (from) params.date_from = from;
+    if (to) params.date_to = to;
+    try { setDetail((await api.get(`/jobs/commesse/${id}`, { params })).data); }
     catch (e) {
       setDetail(null);
       if (e.response?.status === 404) { setSelectedId(null); setLevel("clients"); toast.error("Commessa non trovata"); }
@@ -454,7 +504,8 @@ export default function JobDiaryPage() {
   };
   const reload = () => Promise.all([loadDetail(selectedId), loadList()]);
   useEffect(() => { loadList(); }, []);
-  useEffect(() => { loadDetail(selectedId); }, [selectedId]);
+  useEffect(() => { loadDetail(selectedId); }, [selectedId, period]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setSection("diario"); setMenu(null); setPeriod({ key: "30" }); }, [selectedId]);
   useEffect(() => { window.scrollTo({ top: 0 }); }, [level, selectedId]);
   useEffect(() => { if (level === "clients") setChatOpen(false); }, [level]);
 
@@ -476,15 +527,6 @@ export default function JobDiaryPage() {
       || b.last.localeCompare(a.last) || (a.name || "").localeCompare(b.name || ""));
     return out;
   }, [commesse, q]);
-
-  const byDay = useMemo(() => {
-    const out = [];
-    (detail?.logs || []).forEach((lg) => {
-      const g = out[out.length - 1];
-      if (g && g.day === lg.date) g.logs.push(lg); else out.push({ day: lg.date, logs: [lg] });
-    });
-    return out;
-  }, [detail]);
 
   const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("commessa"); };
   const setStato = async (stato) => {
@@ -564,69 +606,201 @@ export default function JobDiaryPage() {
     </div>
   );
 
+  // ===== the diary of one commessa =====
+  const secAt = (i) => SECTIONS[(i + SECTIONS.length) % SECTIONS.length];
+  const secIdx = Math.max(0, SECTIONS.findIndex((x) => x.key === section));
+  const pickSection = (key) => { setSection(key); setMenu(null); };
+  const onSwipeStart = (e) => { swipeX.current = e.touches?.[0]?.clientX ?? null; };
+  const onSwipeEnd = (e) => {
+    if (swipeX.current == null) return;
+    const dx = (e.changedTouches?.[0]?.clientX ?? swipeX.current) - swipeX.current;
+    swipeX.current = null;
+    if (Math.abs(dx) > 40) pickSection(secAt(secIdx + (dx < 0 ? 1 : -1)).key);
+  };
+  const shownLogs = [...(detail?.logs || [])]
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.created_at || "").localeCompare(a.created_at || ""))
+    .filter((lg) => section === "diario" ? true
+    : lg.kind ? false
+    : section === "ore" ? lg.hours?.length > 0
+    : section === "problemi" ? lg.problems?.length > 0
+    : lg.materials?.length > 0);
+  // days newest first; the month on its own line above its first day
+  const diaryDays = (() => {
+    const out = [];
+    shownLogs.forEach((lg) => {
+      const g = out[out.length - 1];
+      if (g && g.day === lg.date) g.logs.push(lg); else out.push({ day: lg.date, logs: [lg] });
+    });
+    let prevMon = null;
+    return out.map((g) => {
+      const mon = (g.day || "").slice(0, 7);
+      const showMonth = mon !== prevMon;
+      prevMon = mon;
+      const [y, m, d] = (g.day || "--").split("-").map(Number);
+      return { ...g, showMonth, monLabel: `${IT_MONTHS[(m || 1) - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ""}`, dayNum: String(d || "").padStart(2, "0") };
+    });
+  })();
+  const pt = detail?.period_totals;
+  const summary = !pt ? "" : section === "ore"
+    ? `${fmtNum(pt.hours_total)} h nel periodo${Object.keys(pt.by_person).length ? " · " + Object.entries(pt.by_person).map(([k, v]) => `${k} ${fmtNum(v)} h`).join(" · ") : ""}`
+    : section === "problemi" ? `${pt.problems.length} ${pt.problems.length === 1 ? "segnalazione" : "segnalazioni"} nel periodo`
+    : section === "materiali" ? (pt.materials.map(matLabel).join(" · ") || "Nessun materiale nel periodo") : "";
+  const range = periodRange(period);
+  const rangeFrom = range.from || detail?.first_day;
+  const rangeTo = range.to || todayIso();
+  const nEntries = shownLogs.filter((lg) => !lg.kind).length;
+  const docs = detail?.docs || { total: 0 };
+  const applyCustom = () => {
+    if (!customFrom || !customTo) { toast.error("Scegli le due date"); return; }
+    setPeriod({ key: "custom", from: customFrom <= customTo ? customFrom : customTo, to: customFrom <= customTo ? customTo : customFrom });
+    setMenu(null);
+  };
+  const delFromEdit = (log) => { setEditing(null); delLog(log); };
+
   const diaryView = !c ? loading : (
-    <div className="flex flex-col gap-4 max-w-3xl" data-testid="commessa-detail">
-      <div>
-        {back(c.title, "commessa")}
-        <div className="text-2xl font-semibold text-white leading-tight" data-testid="commessa-title">{c.title}</div>
-        <div className="text-sm text-white/65 mt-0.5">{c.client_name}{c.address ? ` · ${c.address}` : ""}</div>
-        {/* the state, on one row (scrolls sideways on a narrow phone); every change goes in the diary */}
-        <div className="flex gap-1.5 mt-3 overflow-x-auto no-scrollbar" data-testid="stato-selector">
-          {(detail.stati || []).map((s) => (
-            <button key={s} onClick={() => s !== c.stato && setStato(s)}
-              className={`shrink-0 whitespace-nowrap text-xs px-3 py-1.5 rounded-full inline-flex items-center gap-1.5 ${s === c.stato ? "bg-white text-[#403A3C] font-medium" : "bg-white/10 text-white/75 hover:bg-white/15"}`}>
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: STATO_COLOR[s] }} />{s}
+    <div className="relative max-w-xl" data-testid="commessa-detail">
+      {/* only the commessa's name; the arrow goes back to its card */}
+      <div className="flex items-center gap-2.5">
+        <button onClick={() => setLevel("commessa")} data-testid="job-back" aria-label="Torna alla scheda della commessa"
+          className="h-[30px] w-[30px] shrink-0 rounded-full flex items-center justify-center text-white lg-frost">
+          <ArrowLeft size={16} />
+        </button>
+        <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">{c.title}</h1>
+      </div>
+
+      {/* the job at a glance: four quarters split by dotted lines */}
+      <div className="relative mt-3.5 h-[140px]" data-testid="commessa-totals">
+        <span aria-hidden="true" className="absolute left-0 right-0 top-[70px] h-[1.5px]"
+          style={{ backgroundImage: "linear-gradient(90deg, rgba(255,255,255,0.55) 1.5px, transparent 1.5px)", backgroundSize: "9px 1.5px" }} />
+        <span aria-hidden="true" className="absolute left-1/2 top-1.5 bottom-1.5 w-[1.5px]"
+          style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.55) 1.5px, transparent 1.5px)", backgroundSize: "1.5px 9px" }} />
+        <div className="absolute inset-0 grid grid-cols-2 grid-rows-2">
+          <Glance icon={CircleDot} value={capFirst(c.stato || "senza stato")} small testid="glance-stato" ariaLabel="Cambia lo stato della commessa"
+            onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
+          <Glance icon={Clock} value={fmtNum(t.hours_total)} label="ore" right testid="glance-ore" onClick={() => pickSection("ore")} ariaLabel="Mostra le ore" />
+          <Glance icon={AlertTriangle} value={String(t.problems.length)} label={t.problems.length === 1 ? "segnalazione" : "segnalazioni"}
+            testid="glance-problemi" onClick={() => pickSection("problemi")} ariaLabel="Mostra i problemi" />
+          <Glance icon={FileText} value={String(docs.total)} label={docs.total === 1 ? "documento" : "documenti"} right testid="glance-documenti"
+            ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
+        </div>
+      </div>
+
+      {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
+          tone, brighter than the two at its sides); swipe or tap a side one to change */}
+      <div className="mt-10 -mx-4 h-[46px] flex items-center justify-center gap-[22px] overflow-hidden select-none" data-testid="section-carousel"
+        onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd}
+        style={{ WebkitMaskImage: "linear-gradient(to right, transparent 0, #000 18%, #000 82%, transparent 100%)", maskImage: "linear-gradient(to right, transparent 0, #000 18%, #000 82%, transparent 100%)" }}>
+        <button type="button" onClick={() => pickSection(secAt(secIdx - 1).key)} className="flex-1 basis-0 text-right text-[15px] font-medium text-white/30">{secAt(secIdx - 1).label}</button>
+        <h2 className="shrink-0 m-0 text-[30px] font-semibold tracking-tight text-white/[0.68]" data-testid="section-current"
+          style={{ textShadow: "0 2px 16px rgba(60,10,60,0.18)" }}>{secAt(secIdx).label}</h2>
+        <button type="button" onClick={() => pickSection(secAt(secIdx + 1).key)} className="flex-1 basis-0 text-left text-[15px] font-medium text-white/30">{secAt(secIdx + 1).label}</button>
+      </div>
+
+      {/* the period */}
+      <div className="mt-1.5 flex items-center justify-center gap-2.5">
+        <button type="button" onClick={() => setMenu((m) => (m === "periodo" ? null : "periodo"))} data-testid="period-btn" aria-label="Scegli il periodo"
+          className="h-[34px] w-[34px] rounded-full flex items-center justify-center text-white lg-frost">
+          <CalendarDays size={16} />
+        </button>
+        <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85" data-testid="period-label">
+          {rangeFrom ? `${rangeDay(rangeFrom)} — ${rangeDay(rangeTo, true)}` : "nessuna voce"}
+        </span>
+        <span className="text-[12px] tracking-[0.16em] uppercase text-white/55">· {nEntries === 1 ? "1 voce" : `${nEntries} voci`}</span>
+      </div>
+      {summary && <div className="mt-2.5 text-[12.5px] text-white/80 text-center" data-testid="section-summary">{summary}</div>}
+
+      {/* the days */}
+      <div className="mt-1.5" data-testid="diary-days">
+        {diaryDays.map((g) => (
+          <React.Fragment key={g.day}>
+            {g.showMonth && (
+              <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 pt-4 pb-1.5">
+                <div className="text-[11px] font-medium tracking-[0.18em] uppercase text-white/60 whitespace-nowrap">{g.monLabel}</div>
+                <div />
+              </div>
+            )}
+            <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]">
+              <div className="text-[14px] font-medium leading-[1.45] text-white/90 tabular-nums">{g.dayNum}</div>
+              <div className="flex flex-col gap-3 min-w-0">
+                {g.logs.map((lg) => <DiaryLine key={lg.id} log={lg} section={section} onOpen={(lg) => (lg.kind ? delLog(lg) : setEditing(lg))} onPhoto={(log, photo) => setViewer({ log, photo })} />)}
+              </div>
+            </div>
+          </React.Fragment>
+        ))}
+        {diaryDays.length === 0 && (
+          <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="diary-empty">
+            {section === "diario" ? "Nessuna voce in questo periodo." : "Nessuna voce di questo tipo nel periodo."}
+            {period.key !== "all" && (
+              <button onClick={() => setPeriod({ key: "all" })} className="block mt-2 text-xs px-3 py-1.5 rounded-full bg-white/15">Mostra tutta la commessa</button>
+            )}
+            {section === "diario" && (
+              <div className="mt-2 text-white/55">Per scrivere tocca il pulsante della chat <MessageCircle size={12} className="inline -mt-0.5" /> sul lato e scegli «Scrivi nel diario».</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* state menu and period popup, like the profile menu */}
+      {menu && <button type="button" aria-label="Chiudi" className="fixed inset-0 z-30 cursor-default" onClick={() => setMenu(null)} />}
+      {menu === "stato" && (
+        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" className="glass-panel absolute z-40 left-0 top-[118px] w-[236px] py-1">
+          {(detail.stati || []).map((s) => {
+            const on = s === c.stato;
+            return (
+              <button key={s} type="button" role="menuitemradio" aria-checked={on} onClick={() => { setMenu(null); if (!on) setStato(s); }}
+                className="glass-row w-full flex items-center gap-3.5 px-5 py-3.5 text-left text-[15px] text-white">
+                <span className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${on ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+                  {on && <Check size={12} strokeWidth={2.8} />}
+                </span>
+                <span>{capFirst(s)}</span>
+              </button>
+            );
+          })}
+          <div className="px-5 pt-2.5 pb-3 text-[11px] text-white/55 border-t border-white/[0.13]">Il cambio resta scritto nel diario</div>
+        </div>
+      )}
+      {menu === "periodo" && (
+        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[300px] w-[300px] pt-1 pb-3.5">
+          {PERIODS.map((p) => (
+            <button key={p.key} type="button" onClick={() => { setPeriod({ key: p.key }); setMenu(null); }}
+              className="glass-row w-full flex items-center gap-3.5 px-5 py-3.5 text-left text-[15px] text-white">
+              <span className="flex-1">{p.label}</span>
+              {period.key === p.key && <Check size={16} strokeWidth={2.2} />}
             </button>
           ))}
+          <div className="grid grid-cols-2 gap-2.5 px-5 pt-3 border-t border-white/[0.13]">
+            <label className="flex flex-col gap-1 text-[10px] tracking-[0.18em] uppercase text-white/60">Dal
+              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} data-testid="period-from"
+                className="h-9 rounded-xl px-2.5 bg-white/[0.12] text-white text-sm tracking-normal outline-none" />
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] tracking-[0.18em] uppercase text-white/60">Al
+              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} data-testid="period-to"
+                className="h-9 rounded-xl px-2.5 bg-white/[0.12] text-white text-sm tracking-normal outline-none" />
+            </label>
+          </div>
+          <div className="px-5 pt-3 flex justify-end">
+            <button type="button" onClick={applyCustom} data-testid="period-apply" className="h-9 px-[18px] rounded-full bg-white text-[#403A3C] text-[13px] font-semibold">Applica</button>
+          </div>
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="commessa-totals">
-        <div className="card-soft p-4">
-          <div className="kicker">ore</div>
-          <div className="text-2xl font-semibold text-white mt-1">{fmtNum(t.hours_total)} h</div>
-          <div className="text-[11px] text-white/60 mt-1">{Object.entries(t.by_person).map(([k, v]) => `${k} ${fmtNum(v)} h`).join(" · ") || "non ancora indicate"}</div>
-        </div>
-        <div className="card-soft p-4">
-          <div className="kicker">materiali</div>
-          {t.materials.length ? (
-            <ul className="mt-1.5 space-y-0.5 text-xs text-white/85 max-h-28 overflow-y-auto">{t.materials.map((m, i) => <li key={i}>{matLabel(m)}</li>)}</ul>
-          ) : <div className="text-xs text-white/55 mt-1.5">nessuno registrato</div>}
-        </div>
-        <div className="card-soft p-4">
-          <div className="kicker">problemi</div>
-          {t.problems.length ? (
-            <ul className="mt-1.5 space-y-0.5 text-xs text-white/85 max-h-28 overflow-y-auto">{t.problems.map((p, i) => <li key={i}><span className="text-white/50">{shortDay(p.date)}</span> {p.text}</li>)}</ul>
-          ) : <div className="text-xs text-white/55 mt-1.5">nessuno segnalato</div>}
-        </div>
-      </div>
-
-      {byDay.length === 0 ? (
-        <div className="text-sm text-white/60 text-center py-6">
-          Ancora nessuna voce. Tocca il pulsante della chat <MessageCircle size={13} className="inline -mt-0.5" /> sul lato e scegli «Scrivi nel diario».
-        </div>
-      ) : byDay.map((g) => (
-        <div key={g.day} className="flex flex-col gap-2">
-          <div className="kicker px-1">{dayLabel(g.day)}</div>
-          {g.logs.map((lg) => <EntryCard key={lg.id} log={lg} onEdit={setEditing} onDelete={delLog} onPhoto={(log, photo) => setViewer({ log, photo })} />)}
-        </div>
-      ))}
+      )}
     </div>
   );
 
   const inCommessa = level !== "clients" && !!selectedId;
   return (
     <div className="w-full" data-testid="job-diary-page" style={chatOpen ? { paddingBottom: "min(62vh, 520px)" } : undefined}>
-      <div className="flex items-center gap-2 mb-4">
-        <NotebookPen size={20} className="text-white/80" />
-        <h1 className="text-2xl font-semibold text-white">Diario di commessa</h1>
-      </div>
+      {(level !== "diary" || !selectedId) && (
+        <div className="flex items-center gap-2 mb-4">
+          <NotebookPen size={20} className="text-white/80" />
+          <h1 className="text-2xl font-semibold text-white">Diario di commessa</h1>
+        </div>
+      )}
       {level === "clients" || !selectedId ? clientsView : level === "commessa" ? commessaView : diaryView}
 
       {inCommessa && c && !chatOpen && <ChatFab onClick={() => setChatOpen(true)} />}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
       {editing && (
-        <EditDialog log={editing} onClose={() => setEditing(null)}
+        <EditDialog log={editing} onClose={() => setEditing(null)} onDelete={delFromEdit}
           onSaved={async () => { setEditing(null); await reload(); toast.success("Voce aggiornata"); }} />
       )}
       {viewer && (
