@@ -167,7 +167,8 @@ def totals(logs: list) -> dict:
             problems.append({"date": lg.get("date"), "text": p, "log_id": lg.get("id")})
     return {"hours_total": round(sum(by_person.values()), 2), "by_person": by_person,
             "materials": sorted(mats.values(), key=lambda x: x["name"].lower()), "problems": problems,
-            "entries": len(logs), "first_day": min((lg.get("date") for lg in logs if lg.get("date")), default=None),
+            "entries": sum(1 for lg in logs if not lg.get("kind")),   # state changes are not entries
+            "first_day": min((lg.get("date") for lg in logs if lg.get("date")), default=None),
             "last_day": max((lg.get("date") for lg in logs if lg.get("date")), default=None)}
 
 
@@ -182,6 +183,66 @@ def hours_line(hours: list) -> str:
 def materials_line(materials: list) -> str:
     return ", ".join(" ".join(x for x in (_fmt_num(m.get("qty")), m.get("unit") or "", m["name"]) if x).strip()
                      for m in materials)
+
+
+def _ctx_line(lg: dict) -> str:
+    who = lg.get("author_name") or ""
+    if lg.get("kind") == "stato":
+        return f"- {lg.get('date')} · {lg.get('text')}"
+    return f"- {lg.get('date')} · {who}: {search_text(lg)}" + (f" ({len(lg['photos'])} foto)" if lg.get("photos") else "")
+
+
+async def answer(commessa: dict, logs: list, reports: list, question: str, history: list,
+                 user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """The commessa's chat: an answer from its card, diary and reports only. -> {"answer",
+    "is_entry": true when the message is not a question but something done to write down}"""
+    tot = totals(logs)
+    per = ", ".join(f"{k} {_fmt_num(v)} h" for k, v in tot["by_person"].items())
+    card = "\n".join(x for x in [
+        f"Commessa: {commessa.get('title')}", f"Cliente: {commessa.get('client_name')}",
+        f"Telefono cliente: {commessa.get('client_phone')}" if commessa.get("client_phone") else "",
+        f"Email cliente: {commessa.get('client_email')}" if commessa.get("client_email") else "",
+        f"Indirizzo cantiere: {commessa.get('address')}" if commessa.get("address") else "",
+        f"Stato: {commessa.get('stato')}", f"Inizio: {commessa.get('data_inizio')}" if commessa.get("data_inizio") else "",
+        f"Fine: {commessa.get('data_fine')}" if commessa.get("data_fine") else "",
+        f"Descrizione: {commessa.get('descrizione')}" if commessa.get("descrizione") else "",
+    ] if x)
+    totals_s = (f"Voci di diario: {tot['entries']}. Ore totali: {_fmt_num(tot['hours_total'])} h" + (f" ({per})" if per else "")
+                + ". Materiali: " + (materials_line(tot["materials"]) or "nessuno") + ".")
+    diary = "\n".join(_ctx_line(lg) for lg in logs) or "(nessuna voce)"
+    reps = []
+    for r in reports:
+        filled = "; ".join(f"{f}: {v}" for sec in r.get("sections") or [] for f, v in sec["fields"].items() if v)
+        reps.append(f"- {r.get('template_name')} del {(r.get('created_at') or '')[:10]}: {filled[:2500]}")
+    today = today_local()
+    system = (
+        "Sei l'assistente di un'impresa artigiana e rispondi su UNA commessa, usando SOLO i dati qui sotto (scheda, "
+        "diario, report). Se un dato non c'è, dillo chiaramente: non inventare ore, materiali, date o importi. Fai i conti "
+        "quando servono (ore per persona, per periodo, materiali sommati). Risposte brevi e concrete, in italiano. "
+        f"Oggi è {IT_WEEKDAYS[today.weekday()]} {today.isoformat()}.\n\n"
+        f"SCHEDA\n{card}\n\nTOTALI\n{totals_s}\n\nDIARIO (dal più vecchio)\n{diary}\n\n"
+        f"REPORT\n{chr(10).join(reps) or '(nessuno)'}\n\n"
+        "Se il messaggio dell'utente NON è una domanda ma il racconto di lavoro fatto da registrare (es. 'oggi posati 10 "
+        "metri di tubo'), rispondi brevemente che puoi salvarlo nel diario e metti is_entry a true.\n"
+        "Rispondi SOLO con JSON: {\"answer\": \"...\", \"is_entry\": false}"
+    )
+    msgs = [{"role": "system", "content": system}]
+    for h in history or []:
+        if h.get("role") in ("user", "assistant") and h.get("content"):
+            msgs.append({"role": h["role"], "content": str(h["content"])[:2000]})
+    msgs.append({"role": "user", "content": question})
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=1200,
+                                                    response_format={"type": "json_object"}, messages=msgs)
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    parsed = json.loads(m.group(0)) if m else {}
+    return {"answer": str(parsed.get("answer") or "Non ho trovato la risposta nel diario di questa commessa.").strip(),
+            "is_entry": bool(parsed.get("is_entry"))}
 
 
 def search_text(log: dict) -> str:

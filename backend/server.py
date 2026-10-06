@@ -3480,12 +3480,20 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    before = await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"_id": 0})
     r = await db.collection_sub_items.update_one(
         {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": payload.data, "embedding": None}}
     )
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
-    return await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id}, {"_id": 0})
+    after = await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id}, {"_id": 0})
+    if coll.get("system_key") == vx.CLIENTI_KEY and before:   # a commessa's state change goes in its diary
+        smap = coll.get("system_sub_map") or {}
+        old, new = _sysval(before.get("data"), smap, "stato"), _sysval(after.get("data"), smap, "stato")
+        if old != new:
+            client = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0, "embedding": 0})
+            await _log_stato_change(current, coll, after, client, old, new)
+    return after
 
 
 @api_router.delete("/collections/{collection_id}/items/{item_id}/sub-items/{sub_id}")
@@ -4936,6 +4944,7 @@ def _commessa_view(sub: dict, client: Optional[dict], clienti: dict) -> dict:
         "data_inizio": _sysval(d, smap, "data_inizio"), "data_fine": _sysval(d, smap, "data_fine"),
         "descrizione": _sysval(d, smap, "descrizione"),
         "client_name": _sysval(cd, fmap, "nome"), "client_phone": _sysval(cd, fmap, "telefono"),
+        "client_email": _sysval(cd, fmap, "email"),
     }
 
 
@@ -4958,9 +4967,9 @@ async def _commessa_or_404(current: User, commessa_id: str) -> tuple[dict, dict,
 
 async def _last_activity(commessa_ids: list) -> dict:
     out = {}
-    for lg in await db.job_logs.find({"commessa_id": {"$in": commessa_ids}}, {"_id": 0, "commessa_id": 1, "date": 1, "hours": 1}).to_list(20000):
+    for lg in await db.job_logs.find({"commessa_id": {"$in": commessa_ids}}, {"_id": 0, "commessa_id": 1, "date": 1, "hours": 1, "kind": 1}).to_list(20000):
         cur = out.setdefault(lg["commessa_id"], {"last_day": None, "entries": 0, "hours": 0.0})
-        cur["entries"] += 1
+        cur["entries"] += 0 if lg.get("kind") else 1
         cur["hours"] = round(cur["hours"] + sum(float(h.get("hours") or 0) for h in lg.get("hours") or []), 2)
         if lg.get("date") and (not cur["last_day"] or lg["date"] > cur["last_day"]):
             cur["last_day"] = lg["date"]
@@ -5279,7 +5288,50 @@ async def set_job_commessa_stato(commessa_id: str, payload: CommessaStatoPayload
     if payload.stato == "chiusa" and not _sysval(data, smap, "data_fine"):
         data[smap.get("data_fine", "data_fine")] = jl.today_local().isoformat()
     await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"data": data, "embedding": None}})
+    old = _sysval(sub.get("data"), smap, "stato")
+    if old != payload.stato:
+        await _log_stato_change(current, clienti, {**sub, "data": data}, client, old, payload.stato)
     return _commessa_view({**sub, "data": data}, client, clienti)
+
+
+async def _log_stato_change(current: User, clienti: dict, sub: dict, client: Optional[dict], old: str, new: str) -> dict:
+    """A state change, as a line of the commessa's diary: who, when, from what to what."""
+    view = _commessa_view(sub, client, clienti)
+    text = (f"Stato cambiato da «{old}» a «{new}»" if old else f"Stato impostato a «{new}»") + f" da {_first_name(current.name)}."
+    log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "kind": "stato", "stato_from": old or None, "stato_to": new,
+           "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+           "collection_id": clienti["id"], "collection_name": clienti.get("name"),
+           "client_item_id": view["client_item_id"], "client_name": view["client_name"],
+           "commessa_id": view["id"], "commessa_title": view["title"], "date": jl.today_local().isoformat(),
+           "raw_text": text, "text": text, "hours": [], "materials": [], "problems": [], "photos": [],
+           "channel": "web", "created_at": datetime.now(timezone.utc).isoformat(), "embedding": None}
+    await db.job_logs.insert_one(log)
+    log.pop("_id", None)
+    return log
+
+
+class CommessaAskPayload(BaseModel):
+    question: str
+    history: List[dict] = []   # [{"role": "user"|"assistant", "content": ...}] of this chat
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/ask")
+async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, current: User = Depends(get_current_user)):
+    """The chat of a commessa: questions answered from its card, its diary and its reports."""
+    question = (payload.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Scrivi una domanda")
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    view = _commessa_view(sub, client, clienti)
+    logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
+    reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
+    try:
+        out = await jl.answer(view, logs, reports, question, payload.history[-8:], user_id=current.user_id)
+    except Exception as e:
+        logger.exception("commessa chat failed")
+        raise HTTPException(status_code=500, detail=f"Non sono riuscito a rispondere: {e}")
+    return out
 
 
 async def _job_log_or_404(current: User, log_id: str) -> dict:
@@ -5293,6 +5345,8 @@ async def _job_log_or_404(current: User, log_id: str) -> dict:
 @api_router.patch("/jobs/logs/{log_id}")
 async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
     log = await _job_log_or_404(current, log_id)
+    if log.get("kind"):
+        raise HTTPException(status_code=400, detail="Un cambio di stato non si modifica: puoi solo eliminarlo")
     upd: dict = {}
     if payload.text is not None and payload.text.strip():
         upd["text"] = payload.text.strip()

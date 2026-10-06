@@ -1,16 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, NotebookPen } from "lucide-react";
+import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
+  NotebookPen, MessageCircle, Send, ChevronRight, RefreshCw, CalendarDays } from "lucide-react";
 import { api, API } from "@/lib/api";
-import { useIsMobile } from "@/hooks/use-is-mobile";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
+import { usePref } from "@/lib/prefs";
 
-// Diario di commessa (verticale artigiano): what was done on each job, day by day.
-// Left the commesse (from the Clienti list), right the chosen one: totals, a box to dictate
-// or write today's entry (with photos), and the entries by day.
+// Diario di commessa (verticale artigiano), three levels:
+//   1. one card per client with its commesse and their state
+//   2. the commessa's card (client, site, dates, description, totals)
+//   3. its diary: name, state on one row (every change is written in the diary), totals,
+//      entries by day.
+// The commessa's chat (ask about it, or write in its diary) opens from the chat icon next to
+// the title and sits at the bottom, like the one in the Chat section.
 
-const ACCENT = "#8E2E11";   // the Diario color
 const STATO_COLOR = { "in corso": "#8ED973", preventivo: "#F2C14E", sospesa: "#E8A03F", chiusa: "rgba(255,255,255,0.35)" };
 const IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
 const IT_WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
@@ -58,23 +63,18 @@ function StatoPill({ stato }) {
   );
 }
 
-function CommessaRow({ c, selected, onClick }) {
-  return (
-    <button data-testid="commessa-row" onClick={onClick}
-      className={`w-full text-left px-4 py-3 rounded-2xl transition-colors ${selected ? "bg-white/20" : "bg-white/[0.06] hover:bg-white/10"}`}>
-      <div className="flex items-center gap-2">
-        <span className="font-medium text-white truncate flex-1">{c.title}</span>
-        <StatoPill stato={c.stato} />
-      </div>
-      <div className="text-xs text-white/65 truncate mt-0.5">{c.client_name}{c.address ? ` · ${c.address}` : ""}</div>
-      <div className="text-[11px] text-white/45 mt-1">
-        {c.entries ? `${c.entries} voc${c.entries === 1 ? "e" : "i"} · ${fmtNum(c.hours_total)} h · ultima ${shortDay(c.last_day)}` : "nessuna voce"}
-      </div>
-    </button>
-  );
-}
+const STATO_ORDER = { "in corso": 0, preventivo: 1, sospesa: 2, "": 3, chiusa: 4 };
 
 function EntryCard({ log, onEdit, onDelete, onPhoto }) {
+  if (log.kind === "stato") {
+    return (
+      <div data-testid="job-stato-event" className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/[0.06] text-xs text-white/75">
+        <RefreshCw size={12} className="shrink-0 text-white/55" />
+        <span className="flex-1">{log.text}</span>
+        <button onClick={() => onDelete(log)} title="Elimina" className="p-1 text-white/45 hover:text-white"><Trash2 size={12} /></button>
+      </div>
+    );
+  }
   return (
     <div data-testid="job-entry" className="card-soft p-4">
       <div className="flex items-center gap-2 text-[11px] text-white/55">
@@ -185,58 +185,69 @@ function EditDialog({ log, onClose, onSaved }) {
   );
 }
 
-export default function JobDiaryPage() {
-  const isMobile = useIsMobile();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [commesse, setCommesse] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const [showClosed, setShowClosed] = useState(false);
-  const [q, setQ] = useState("");
-  const [selectedId, setSelectedId] = useState(() => location.state?.commessa || new URLSearchParams(location.search).get("commessa") || null);
-  const [detail, setDetail] = useState(null);
+function ClientCard({ client, commesse, onOpen }) {
+  return (
+    <div data-testid="client-group" className="card-soft p-4">
+      <div className="font-semibold text-white text-base leading-snug">{client.name || "Cliente senza nome"}</div>
+      {client.address && <div className="flex items-center gap-1 text-xs text-white/60 mt-0.5"><MapPin size={11} />{client.address}</div>}
+      <div className="mt-3 flex flex-col gap-1.5">
+        {commesse.map((c) => (
+          <button key={c.id} data-testid="commessa-row" onClick={() => onOpen(c)}
+            className="w-full flex items-center gap-2 text-left px-3 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] transition-colors">
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm text-white truncate">{c.title}</span>
+              <span className="block text-[11px] text-white/50">
+                {c.entries ? `${c.entries} voc${c.entries === 1 ? "e" : "i"} · ${fmtNum(c.hours_total)} h · ultima ${shortDay(c.last_day)}` : "nessuna voce"}
+              </span>
+            </span>
+            <StatoPill stato={c.stato} />
+            <ChevronRight size={14} className="text-white/45 shrink-0" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Fact({ icon: Icon, label, children }) {
+  return (
+    <div className="flex items-start gap-2 text-sm">
+      <Icon size={14} className="text-white/55 mt-0.5 shrink-0" />
+      <div className="min-w-0">
+        <div className="text-[10px] uppercase tracking-widest text-white/50">{label}</div>
+        <div className="text-white/90 break-words">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// The commessa's chat, at the bottom like the Chat section's composer (same liquid glass,
+// voice button on the side chosen in Impostazioni). "Chiedi" answers from the commessa's card,
+// diary and reports; "Scrivi nel diario" saves what was done (with photos).
+function CommessaChat({ commessa, onClose, onSaved }) {
+  const [mode, setMode] = useState("ask");
+  const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
-  const [photos, setPhotos] = useState([]);   // data URIs waiting to be saved with the entry
-  const [saving, setSaving] = useState(false);
+  const [photos, setPhotos] = useState([]);
+  const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [viewer, setViewer] = useState(null);   // {log, photo}
+  const [composerRef, size] = useMeasure();
+  const [micSide] = usePref("micSide");
+  const micRight = micSide !== "left";
   const recRef = useRef(null);
   const fileRef = useRef(null);
+  const taRef = useRef(null);
+  const listRef = useRef(null);
 
-  const loadList = async () => {
-    try { setCommesse((await api.get("/jobs/commesse")).data || []); }
-    catch { toast.error("Errore nel caricamento delle commesse"); }
-    finally { setLoaded(true); }
-  };
-  const loadDetail = async (id) => {
-    if (!id) { setDetail(null); return; }
-    try { setDetail((await api.get(`/jobs/commesse/${id}`)).data); }
-    catch (e) { setDetail(null); if (e.response?.status === 404) { setSelectedId(null); toast.error("Commessa non trovata"); } }
-  };
-  useEffect(() => { loadList(); }, []);
-  useEffect(() => { loadDetail(selectedId); setText(""); setPhotos([]); }, [selectedId]);
-  // desktop: with nothing chosen, the most recent open commessa
+  useEffect(() => { setMessages([]); setText(""); setPhotos([]); }, [commessa.id]);
+  useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
   useEffect(() => {
-    if (!isMobile && !selectedId && commesse.length) setSelectedId(commesse[0].id);
-  }, [isMobile, commesse, selectedId]);
-
-  const visible = useMemo(() => {
-    const ql = q.trim().toLowerCase();
-    return commesse.filter((c) => (showClosed || c.stato !== "chiusa")
-      && (!ql || `${c.title} ${c.client_name} ${c.address}`.toLowerCase().includes(ql)));
-  }, [commesse, q, showClosed]);
-  const closedCount = commesse.filter((c) => c.stato === "chiusa").length;
-
-  const byDay = useMemo(() => {
-    const groups = [];
-    (detail?.logs || []).forEach((lg) => {
-      const g = groups[groups.length - 1];
-      if (g && g.day === lg.date) g.logs.push(lg); else groups.push({ day: lg.date, logs: [lg] });
-    });
-    return groups;
-  }, [detail]);
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  }, [text]);
 
   const startRec = async () => {
     try {
@@ -247,17 +258,15 @@ export default function JobDiaryPage() {
       mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
         setTranscribing(true);
         try {
           const fd = new FormData();
-          fd.append("file", blob, "voice.webm");
-          fd.append("action", "journal");
+          fd.append("file", new Blob(chunks, { type: mr.mimeType || "audio/webm" }), "voice.webm");
+          fd.append("action", mode === "ask" ? "info_request" : "journal");
           const res = await fetch(`${API}/voice/transcribe`, { method: "POST", body: fd, credentials: "include" });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const t = ((await res.json()).text || "").trim();
-          if (t) setText((x) => (x ? `${x} ${t}` : t));
-          else toast.error("Non ho capito l'audio");
+          if (t) setText((x) => (x ? `${x} ${t}` : t)); else toast.error("Non ho capito l'audio");
         } catch (e) { toast.error("Trascrizione fallita: " + e.message); }
         finally { setTranscribing(false); }
       };
@@ -276,130 +285,268 @@ export default function JobDiaryPage() {
     }
   };
 
-  const save = async () => {
-    const body = text.trim() || (photos.length ? "Foto dal cantiere" : "");
-    if (!body || !selectedId) return;
-    setSaving(true);
-    try {
-      const r = await api.post("/jobs/logs", { text: body, images: photos, commessa_id: selectedId });
-      setText(""); setPhotos([]);
-      toast.success(r.data.message?.split("\n").slice(1).join(" · ") || "Salvato nel diario");
-      await Promise.all([loadDetail(selectedId), loadList()]);
-    } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
-    finally { setSaving(false); }
+  const saveEntry = async (body, images, fromIdx = null) => {
+    const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id });
+    setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false } : m)), { role: "assistant", content: r.data.message, saved: true }]);
+    onSaved();
   };
 
+  const send = async () => {
+    const body = text.trim() || (mode === "diary" && photos.length ? "Foto dal cantiere" : "");
+    if (!body || busy) return;
+    const images = mode === "diary" ? photos : [];
+    setMessages((ms) => [...ms, { role: "user", content: images.length ? `${body}\n📷 ${images.length} foto` : body, mode }]);
+    setText(""); setPhotos([]);
+    setBusy(true);
+    try {
+      if (mode === "diary") {
+        await saveEntry(body, images);
+      } else {
+        const history = messages.filter((m) => m.mode !== "diary" && !m.saved).slice(-8).map((m) => ({ role: m.role, content: m.content }));
+        const r = await api.post(`/jobs/commesse/${commessa.id}/ask`, { question: body, history });
+        setMessages((ms) => [...ms, { role: "assistant", content: r.data.answer, offerSave: r.data.is_entry ? body : null }]);
+      }
+    } catch (e) {
+      setMessages((ms) => [...ms, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]);
+    } finally { setBusy(false); }
+  };
+
+  const modeBtn = (key, Icon, label) => (
+    <button onClick={() => setMode(key)} data-testid={`chat-mode-${key}`}
+      className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full transition-colors ${mode === key ? "bg-white text-[#403A3C] font-medium" : "bg-white/15 text-white/85 hover:bg-white/20"}`}>
+      <Icon size={13} /> {label}
+    </button>
+  );
+
+  return (
+    <div data-testid="commessa-chat"
+      className="fixed z-40 left-0 right-0 px-4 md:px-0 md:right-auto md:left-1/2 md:-translate-x-1/2 md:w-[min(720px,calc(100vw-7rem))] bottom-[calc(env(safe-area-inset-bottom,0px)+92px)] md:bottom-6">
+      {messages.length > 0 && (
+        <div ref={listRef} data-testid="commessa-chat-messages" className="rounded-[22px] p-4 mb-3 max-h-[40vh] overflow-y-auto flex flex-col gap-3 border border-white/15 shadow-xl"
+          style={{ background: "color-mix(in srgb, var(--app-bg, #5b2a4c) 88%, transparent)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}>
+          {messages.map((m, i) => (
+            <div key={i} className={m.role === "user" ? "self-end max-w-[85%]" : "self-start max-w-[92%]"}>
+              <div className={`text-sm whitespace-pre-wrap ${m.role === "user" ? "px-3.5 py-2 rounded-2xl bg-white/20 text-white" : "text-white/95"}`}>{m.content}</div>
+              {m.offerSave && (
+                <button onClick={() => { setBusy(true); saveEntry(m.offerSave, [], i).catch((e) => toast.error(e.response?.data?.detail || "Errore")).finally(() => setBusy(false)); }}
+                  disabled={busy} data-testid="chat-save-entry"
+                  className="mt-1.5 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">
+                  <NotebookPen size={12} /> Salva nel diario
+                </button>
+              )}
+            </div>
+          ))}
+          {busy && <Loader2 size={16} className="animate-spin text-white/70" />}
+        </div>
+      )}
+      <div className="flex items-center gap-2 mb-2">
+        {modeBtn("ask", MessageCircle, "Chiedi")}
+        {modeBtn("diary", NotebookPen, "Scrivi nel diario")}
+        <button onClick={onClose} title="Chiudi la chat" aria-label="Chiudi la chat" data-testid="commessa-chat-close"
+          className="ml-auto h-8 w-8 rounded-full flex items-center justify-center bg-white/15 text-white hover:bg-white/25"><X size={15} /></button>
+      </div>
+      <div ref={composerRef} className={`relative flex items-start ${micRight ? "flex-row-reverse" : ""}`} style={{ gap: LIQUID_GAP }}>
+        <LiquidGlass d={size.w ? liquidPath(size.w, size.h, !micRight, true) : null} width={size.w} height={size.h} />
+        <button onClick={recording ? stopRec : startRec} disabled={transcribing} data-testid="commessa-chat-mic"
+          title={recording ? "Ferma" : "Detta"} aria-label={recording ? "Ferma" : "Detta"}
+          className="relative h-16 w-16 shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
+          {recording && <span aria-hidden="true" className="mic-ring absolute inset-1 rounded-full" />}
+          {recording && <span aria-hidden="true" className="mic-rec absolute inset-1 rounded-full" />}
+          {transcribing ? <Loader2 size={20} className="animate-spin relative" /> : recording ? <Square size={16} fill="currentColor" className="relative" /> : <Mic size={22} strokeWidth={1.8} />}
+        </button>
+        <div className="relative flex-1 min-w-0 min-h-[128px] flex flex-col pl-5 pr-3 pt-3 pb-3">
+          <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} rows={1} data-testid="commessa-chat-text"
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia("(min-width: 768px)").matches) { e.preventDefault(); send(); } }}
+            placeholder={mode === "ask" ? `Chiedi su «${commessa.title}»: ore, materiali, cosa manca…` : "Cosa avete fatto? Ore, materiali, problemi…"}
+            className="w-full bg-transparent border-0 outline-none resize-none text-[15px] leading-relaxed py-1 text-white placeholder:text-white/70 no-scrollbar" />
+          {photos.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {photos.map((p, i) => (
+                <div key={i} className="relative h-12 w-12 rounded-lg overflow-hidden">
+                  <img src={p} alt="" className="h-full w-full object-cover" />
+                  <button onClick={() => setPhotos((xs) => xs.filter((_, j) => j !== i))} className="absolute top-0.5 right-0.5 h-4 w-4 rounded-full bg-black/60 flex items-center justify-center"><X size={10} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-auto pt-1 flex items-center gap-1">
+            <span className="flex-1" />
+            {mode === "diary" && (
+              <button onClick={() => fileRef.current?.click()} title="Foto" aria-label="Foto" className="p-2 rounded-full text-white/90 hover:bg-white/15">
+                <Camera size={19} />
+              </button>
+            )}
+            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pickPhotos(e.target.files); e.target.value = ""; }} />
+            <button onClick={send} disabled={busy || recording || transcribing || (!text.trim() && !(mode === "diary" && photos.length))}
+              data-testid="commessa-chat-send" title="Invia" aria-label="Invia"
+              style={{ background: "rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)" }}
+              className="h-10 w-10 rounded-[10px] flex items-center justify-center text-white disabled:opacity-60">
+              {busy ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function JobDiaryPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [commesse, setCommesse] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [q, setQ] = useState("");
+  // level: "clients" -> "commessa" (its card) -> "diary"; a link (chat, Liste) opens the diary
+  const linked = location.state?.commessa || new URLSearchParams(location.search).get("commessa") || null;
+  const [level, setLevel] = useState(linked ? "diary" : "clients");
+  const [selectedId, setSelectedId] = useState(linked);
+  const [detail, setDetail] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [viewer, setViewer] = useState(null);   // {log, photo}
+
+  const loadList = async () => {
+    try { setCommesse((await api.get("/jobs/commesse")).data || []); }
+    catch { toast.error("Errore nel caricamento delle commesse"); }
+    finally { setLoaded(true); }
+  };
+  const loadDetail = async (id) => {
+    if (!id) { setDetail(null); return; }
+    try { setDetail((await api.get(`/jobs/commesse/${id}`)).data); }
+    catch (e) {
+      setDetail(null);
+      if (e.response?.status === 404) { setSelectedId(null); setLevel("clients"); toast.error("Commessa non trovata"); }
+    }
+  };
+  const reload = () => Promise.all([loadDetail(selectedId), loadList()]);
+  useEffect(() => { loadList(); }, []);
+  useEffect(() => { loadDetail(selectedId); }, [selectedId]);
+  useEffect(() => { window.scrollTo({ top: 0 }); }, [level, selectedId]);
+  useEffect(() => { if (level === "clients") setChatOpen(false); }, [level]);
+
+  // one card per client, its commesse in state order (in corso first, chiuse last)
+  const groups = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    const by = new Map();
+    commesse.forEach((c) => {
+      if (ql && !`${c.title} ${c.client_name} ${c.address}`.toLowerCase().includes(ql)) return;
+      const g = by.get(c.client_item_id) || { id: c.client_item_id, name: c.client_name, address: "", commesse: [], last: "" };
+      g.commesse.push(c);
+      g.last = [g.last, c.last_day || ""].sort().pop();
+      if (!g.address && c.address) g.address = c.address;
+      by.set(c.client_item_id, g);
+    });
+    const out = [...by.values()];
+    out.forEach((g) => g.commesse.sort((a, b) => (STATO_ORDER[a.stato] ?? 3) - (STATO_ORDER[b.stato] ?? 3) || (b.last_day || "").localeCompare(a.last_day || "")));
+    out.sort((a, b) => (Math.min(...a.commesse.map((c) => STATO_ORDER[c.stato] ?? 3)) - Math.min(...b.commesse.map((c) => STATO_ORDER[c.stato] ?? 3)))
+      || b.last.localeCompare(a.last) || (a.name || "").localeCompare(b.name || ""));
+    return out;
+  }, [commesse, q]);
+
+  const byDay = useMemo(() => {
+    const out = [];
+    (detail?.logs || []).forEach((lg) => {
+      const g = out[out.length - 1];
+      if (g && g.day === lg.date) g.logs.push(lg); else out.push({ day: lg.date, logs: [lg] });
+    });
+    return out;
+  }, [detail]);
+
+  const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("commessa"); };
   const setStato = async (stato) => {
-    try {
-      await api.patch(`/jobs/commesse/${selectedId}/stato`, { stato });
-      await Promise.all([loadDetail(selectedId), loadList()]);
-    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    try { await api.patch(`/jobs/commesse/${selectedId}/stato`, { stato }); await reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
-
   const delLog = (log) => {
-    toast("Eliminare questa voce del diario?", {
+    toast(log.kind === "stato" ? "Togliere questo cambio di stato dal diario?" : "Eliminare questa voce del diario?", {
       action: { label: "Elimina", onClick: async () => {
-        try { await api.delete(`/jobs/logs/${log.id}`); await Promise.all([loadDetail(selectedId), loadList()]); }
+        try { await api.delete(`/jobs/logs/${log.id}`); await reload(); }
         catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
       } },
     });
   };
   const delPhoto = async () => {
-    try {
-      await api.delete(`/jobs/logs/${viewer.log.id}/photos/${viewer.photo.id}`);
-      setViewer(null);
-      await loadDetail(selectedId);
-    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    try { await api.delete(`/jobs/logs/${viewer.log.id}/photos/${viewer.photo.id}`); setViewer(null); await loadDetail(selectedId); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
-  const t = detail?.totals;
-  const c = detail?.commessa;
+  const c = detail?.commessa?.id === selectedId ? detail.commessa : null;
+  const t = c ? detail.totals : null;
+  const row = commesse.find((x) => x.id === selectedId);
+  const loading = <div className="kicker text-center py-10">caricamento…</div>;
 
-  const list = (
-    <div className="flex flex-col gap-3 min-h-0" data-testid="commesse-list">
+  const back = (label, to) => (
+    <button onClick={() => setLevel(to)} data-testid="job-back" className="flex items-center gap-1.5 text-sm text-white/65 hover:text-white mb-3">
+      <ArrowLeft size={14} /> {label}
+    </button>
+  );
+
+  const clientsView = (
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 px-3 h-10 rounded-full bg-white/10">
         <Search size={15} className="text-white/60" />
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cerca cliente o commessa" className="flex-1 bg-transparent text-sm text-white placeholder:text-white/45 outline-none" />
       </div>
-      {!loaded ? <div className="kicker text-center py-8">caricamento…</div>
-        : commesse.length === 0 ? (
-          <div className="card-soft p-5 text-sm text-white/75" data-testid="no-commesse">
-            Nessuna commessa ancora. Le commesse stanno sotto ogni cliente nella lista <b>Clienti</b>: aggiungile da Liste,
-            oppure detta un sopralluogo all'agente Report, o una voce di diario nominando il cliente («oggi dai Rossi…»).
-            <button onClick={() => navigate("/dashboard/liste")} className="block mt-3 text-xs px-3 py-1.5 rounded-full bg-white/15">Apri le Liste</button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2 overflow-y-auto">
-            {visible.map((x) => <CommessaRow key={x.id} c={x} selected={x.id === selectedId} onClick={() => setSelectedId(x.id)} />)}
-            {visible.length === 0 && <div className="text-xs text-white/55 px-2">Nessuna commessa trovata.</div>}
-            {closedCount > 0 && (
-              <button onClick={() => setShowClosed((v) => !v)} className="text-xs text-white/60 hover:text-white mt-1 self-start px-2">
-                {showClosed ? "Nascondi le chiuse" : `Mostra le chiuse (${closedCount})`}
-              </button>
-            )}
-          </div>
-        )}
-    </div>
-  );
-
-  const composer = (
-    <div className="chat-input-card p-4 rounded-2xl" data-testid="job-composer">
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} data-testid="job-composer-text"
-        placeholder="Cosa avete fatto? Chi ha lavorato e quante ore, materiali usati, problemi…"
-        className="w-full bg-transparent text-sm text-white placeholder:text-white/45 outline-none resize-none" />
-      {photos.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2">
-          {photos.map((p, i) => (
-            <div key={i} className="relative h-16 w-16 rounded-lg overflow-hidden">
-              <img src={p} alt="" className="h-full w-full object-cover" />
-              <button onClick={() => setPhotos((xs) => xs.filter((_, j) => j !== i))} className="absolute top-0.5 right-0.5 h-5 w-5 rounded-full bg-black/60 flex items-center justify-center"><X size={11} /></button>
-            </div>
-          ))}
+      {!loaded ? loading : commesse.length === 0 ? (
+        <div className="card-soft p-5 text-sm text-white/75" data-testid="no-commesse">
+          Nessuna commessa ancora. Le commesse stanno sotto ogni cliente nella lista <b>Clienti</b>: aggiungile da Liste,
+          oppure detta un sopralluogo all'agente Report, o una voce di diario nominando il cliente («oggi dai Rossi…»).
+          <button onClick={() => navigate("/dashboard/liste")} className="block mt-3 text-xs px-3 py-1.5 rounded-full bg-white/15">Apri le Liste</button>
+        </div>
+      ) : groups.length === 0 ? <div className="text-xs text-white/55 px-2">Nessun cliente o commessa trovato.</div> : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start" data-testid="client-groups">
+          {groups.map((g) => <ClientCard key={g.id} client={g} commesse={g.commesse} onOpen={openCommessa} />)}
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <button onClick={recording ? stopRec : startRec} disabled={transcribing} title={recording ? "Ferma" : "Detta"} data-testid="job-mic"
-          className={`h-9 w-9 rounded-full flex items-center justify-center ${recording ? "bg-[#E8663F] text-white" : "bg-white/10 text-white/85 hover:bg-white/15"}`}>
-          {transcribing ? <Loader2 size={15} className="animate-spin" /> : recording ? <Square size={14} /> : <Mic size={15} />}
-        </button>
-        <button onClick={() => fileRef.current?.click()} title="Foto" className="h-9 w-9 rounded-full flex items-center justify-center bg-white/10 text-white/85 hover:bg-white/15">
-          <Camera size={15} />
-        </button>
-        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pickPhotos(e.target.files); e.target.value = ""; }} />
-        <span className="text-[11px] text-white/45 flex-1 truncate">{recording ? "Sto ascoltando…" : transcribing ? "Trascrivo…" : "Ore, materiali e problemi li riconosco io"}</span>
-        <button onClick={save} disabled={saving || recording || transcribing || (!text.trim() && !photos.length)} data-testid="job-save"
-          className="px-4 h-9 rounded-full text-sm font-medium text-white disabled:opacity-40" style={{ background: ACCENT }}>
-          {saving ? "Salvo…" : "Salva"}
-        </button>
-      </div>
     </div>
   );
 
-  const detailView = c && (
-    <div className="flex flex-col gap-4" data-testid="commessa-detail">
-      <div className="card-soft p-5">
+  const commessaView = !c ? loading : (
+    <div className="max-w-2xl">
+      {back("Clienti", "clients")}
+      <button onClick={() => setLevel("diary")} data-testid="commessa-card"
+        className="w-full text-left card-soft card-hover p-5 flex flex-col gap-4">
         <div className="flex items-start gap-3">
-          {isMobile && <button onClick={() => setSelectedId(null)} className="p-1 -ml-1 text-white/80"><ArrowLeft size={18} /></button>}
-          <div className="min-w-0 flex-1">
-            <div className="text-xl font-semibold text-white leading-tight" data-testid="commessa-title">{c.title}</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xl font-semibold text-white leading-tight">{c.title}</div>
             <div className="text-sm text-white/75 mt-1">{c.client_name}</div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-white/60">
-              {c.address && <span className="inline-flex items-center gap-1"><MapPin size={12} />{c.address}</span>}
-              {c.client_phone && <a href={`tel:${c.client_phone}`} className="inline-flex items-center gap-1"><Phone size={12} />{c.client_phone}</a>}
-            </div>
           </div>
+          <StatoPill stato={c.stato} />
         </div>
-        <div className="flex flex-wrap gap-1.5 mt-3" data-testid="stato-selector">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Fact icon={MapPin} label="Cantiere">{c.address || "non indicato"}</Fact>
+          <Fact icon={CalendarDays} label="Date">{c.data_inizio ? `dal ${shortDay(c.data_inizio)}` : "inizio non indicato"}{c.data_fine ? ` al ${shortDay(c.data_fine)}` : ""}</Fact>
+          {c.client_phone && <Fact icon={Phone} label="Telefono"><a href={`tel:${c.client_phone}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{c.client_phone}</a></Fact>}
+          {c.client_email && <Fact icon={Mail} label="Email"><a href={`mailto:${c.client_email}`} onClick={(e) => e.stopPropagation()} className="hover:underline break-all">{c.client_email}</a></Fact>}
+        </div>
+        {c.descrizione && <div className="text-sm text-white/80 whitespace-pre-wrap">{c.descrizione}</div>}
+        <div className="flex items-center gap-4 text-xs text-white/65 pt-3 border-t border-white/10">
+          <span><b className="text-white text-base">{fmtNum(t.hours_total)}</b> h</span>
+          <span><b className="text-white text-base">{t.entries}</b> voc{t.entries === 1 ? "e" : "i"}</span>
+          {row?.last_day && <span>ultima {shortDay(row.last_day)}</span>}
+          <span className="ml-auto inline-flex items-center gap-1 text-white font-medium">Apri il diario <ChevronRight size={14} /></span>
+        </div>
+      </button>
+    </div>
+  );
+
+  const diaryView = !c ? loading : (
+    <div className="flex flex-col gap-4 max-w-3xl" data-testid="commessa-detail">
+      <div>
+        {back(c.title, "commessa")}
+        <div className="text-2xl font-semibold text-white leading-tight" data-testid="commessa-title">{c.title}</div>
+        <div className="text-sm text-white/65 mt-0.5">{c.client_name}{c.address ? ` · ${c.address}` : ""}</div>
+        {/* the state, on one row (scrolls sideways on a narrow phone); every change goes in the diary */}
+        <div className="flex gap-1.5 mt-3 overflow-x-auto no-scrollbar" data-testid="stato-selector">
           {(detail.stati || []).map((s) => (
             <button key={s} onClick={() => s !== c.stato && setStato(s)}
-              className={`text-[11px] px-2.5 py-1 rounded-full inline-flex items-center gap-1 ${s === c.stato ? "bg-white text-[#403A3C] font-medium" : "bg-white/10 text-white/75 hover:bg-white/15"}`}>
+              className={`shrink-0 whitespace-nowrap text-xs px-3 py-1.5 rounded-full inline-flex items-center gap-1.5 ${s === c.stato ? "bg-white text-[#403A3C] font-medium" : "bg-white/10 text-white/75 hover:bg-white/15"}`}>
               <span className="h-1.5 w-1.5 rounded-full" style={{ background: STATO_COLOR[s] }} />{s}
             </button>
           ))}
         </div>
       </div>
 
-      {isMobile && composer}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="commessa-totals">
         <div className="card-soft p-4">
           <div className="kicker">ore</div>
@@ -420,10 +567,10 @@ export default function JobDiaryPage() {
         </div>
       </div>
 
-      {!isMobile && composer}
-
       {byDay.length === 0 ? (
-        <div className="text-sm text-white/60 text-center py-6">Ancora nessuna voce: racconta cosa è stato fatto oggi.</div>
+        <div className="text-sm text-white/60 text-center py-6">
+          Ancora nessuna voce. Apri la chat <MessageCircle size={13} className="inline -mt-0.5" /> e scegli «Scrivi nel diario».
+        </div>
       ) : byDay.map((g) => (
         <div key={g.day} className="flex flex-col gap-2">
           <div className="kicker px-1">{dayLabel(g.day)}</div>
@@ -433,22 +580,27 @@ export default function JobDiaryPage() {
     </div>
   );
 
+  const inCommessa = level !== "clients" && !!selectedId;
   return (
-    <div className="w-full" data-testid="job-diary-page">
+    <div className="w-full" data-testid="job-diary-page" style={chatOpen ? { paddingBottom: "min(62vh, 520px)" } : undefined}>
       <div className="flex items-center gap-2 mb-4">
         <NotebookPen size={20} className="text-white/80" />
         <h1 className="text-2xl font-semibold text-white">Diario di commessa</h1>
+        {inCommessa && (
+          <button onClick={() => setChatOpen((v) => !v)} data-testid="commessa-chat-toggle"
+            title={chatOpen ? "Chiudi la chat della commessa" : "Chat della commessa: chiedi o scrivi nel diario"}
+            aria-label="Chat della commessa" aria-pressed={chatOpen}
+            className={`ml-1 h-9 w-9 rounded-full flex items-center justify-center transition-colors ${chatOpen ? "bg-white text-[#403A3C]" : "bg-white/15 text-white hover:bg-white/25"}`}>
+            <MessageCircle size={17} />
+          </button>
+        )}
       </div>
-      {isMobile ? (selectedId && c ? detailView : selectedId ? <div className="kicker text-center py-8">caricamento…</div> : list) : (
-        <div className="grid grid-cols-3 gap-6">
-          <aside className="col-span-1 lg:max-h-[calc(100vh-14rem)] flex flex-col">{list}</aside>
-          <section className="col-span-2">{detailView || (loaded && commesse.length > 0 && <div className="kicker py-8">scegli una commessa</div>)}</section>
-        </div>
-      )}
+      {level === "clients" || !selectedId ? clientsView : level === "commessa" ? commessaView : diaryView}
 
+      {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
       {editing && (
         <EditDialog log={editing} onClose={() => setEditing(null)}
-          onSaved={async () => { setEditing(null); await Promise.all([loadDetail(selectedId), loadList()]); toast.success("Voce aggiornata"); }} />
+          onSaved={async () => { setEditing(null); await reload(); toast.success("Voce aggiornata"); }} />
       )}
       {viewer && (
         <Dialog open onOpenChange={() => setViewer(null)}>

@@ -224,6 +224,50 @@ async def main():
     except HTTPException as he:
         assert he.status_code == 400
 
+    # state changes go in the diary (from the page and from the Liste edit form), not counted as entries
+    n_before = len([l for l in db.job_logs.docs if l["commessa_id"] == "s_tetto"])
+    await server.set_job_commessa_stato("s_tetto", server.CommessaStatoPayload(stato="in corso"), me)
+    await server.set_job_commessa_stato("s_tetto", server.CommessaStatoPayload(stato="in corso"), me)   # same: nothing
+    ev = [l for l in db.job_logs.docs if l["commessa_id"] == "s_tetto" and l.get("kind") == "stato"]
+    assert len(ev) == 1 and ev[0]["text"] == "Stato cambiato da «preventivo» a «in corso» da Luca." and ev[0]["stato_to"] == "in corso"
+    sub = next(x for x in db.collection_sub_items.docs if x["id"] == "s_tetto")
+    await server.update_sub_item(cl["id"], "c_bianchi", "s_tetto", server.CollectionSubItemPayload(data={**sub["data"], "stato": "sospesa"}), me)
+    ev = [l for l in db.job_logs.docs if l["commessa_id"] == "s_tetto" and l.get("kind") == "stato"]
+    assert len(ev) == 2 and "«in corso» a «sospesa»" in ev[1]["text"]
+    d = await server.get_job_commessa("s_tetto", me)
+    assert d["totals"]["entries"] == n_before and d["commessa"]["client_email"] == ""
+    try:
+        await server.update_job_log(ev[0]["id"], server.JobLogPatch(text="x"), me); assert False
+    except HTTPException as he:
+        assert he.status_code == 400
+    rows = {c["id"]: c for c in await server.list_job_commesse(me)}
+    assert rows["s_tetto"]["entries"] == n_before
+
+    # the commessa's chat: answered from its card, diary (state changes included) and reports
+    seen = {}
+    class FakeResp:
+        def __init__(s, content): s.choices = [type("C", (), {"message": type("M", (), {"content": content})()})()]; s.usage = None; s.model = "x"; s.id = "r"
+    class FakeCompletions:
+        async def create(s, **k):
+            seen["messages"] = k["messages"]
+            return FakeResp('{"answer": "Sul Tetto risultano 0 ore.", "is_entry": false}')
+    class FakeClient:
+        def __init__(s, **k): s.chat = type("Ch", (), {"completions": FakeCompletions()})()
+    import openai as _oa
+    real = _oa.AsyncOpenAI
+    _oa.AsyncOpenAI = FakeClient
+    db.work_reports.docs.append({"id": "wr_t", "commessa_id": "s_tetto", "template_name": "Primo sopralluogo", "created_at": "2026-10-01T10:00:00Z",
+                                 "sections": [{"title": "Proposta", "fields": {"Lavori proposti": "rifacimento guaina", "Tempi indicativi": ""}}]})
+    out = await server.ask_job_commessa("s_tetto", server.CommessaAskPayload(question="quante ore ci abbiamo messo?",
+                                        history=[{"role": "user", "content": "ciao"}, {"role": "assistant", "content": "ciao!"}]), me)
+    _oa.AsyncOpenAI = real
+    sysmsg = seen["messages"][0]["content"]
+    assert out == {"answer": "Sul Tetto risultano 0 ore.", "is_entry": False}
+    assert "Commessa: Tetto" in sysmsg and "Cliente: Anna Bianchi" in sysmsg and "Stato: sospesa" in sysmsg
+    assert "Stato cambiato da «preventivo» a «in corso»" in sysmsg and "Lavori proposti: rifacimento guaina" in sysmsg
+    assert "Tempi indicativi" not in sysmsg   # empty fields are left out
+    assert [m["role"] for m in seen["messages"]] == ["system", "user", "assistant", "user"]
+
     # 9) another user (no team) can't see the commessa
     other = server.User(user_id="zz", email="z@z", name="Zed")
     try:
