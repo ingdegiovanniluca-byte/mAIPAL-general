@@ -8,6 +8,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen, ChevronDown, MapPin, Phone, Mail } from "lucide-react";
 import { toast } from "sonner";
 
+// a value as shown on a card: dates as dd/mm/yyyy, lists joined
+const fmtVal = (f, v) => {
+  if (Array.isArray(v)) return v.join(", ");
+  const s = String(v);
+  const m = f?.type === "date" && s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+};
+const filled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+const STATO_COLOR = { "in corso": "#8ED973", preventivo: "#F2C14E", sospesa: "#E8A03F", chiusa: "rgba(255,255,255,0.35)" };
+
 // Gerarchia a 3 livelli:
 //   Livello 1 - Lista       (es. "Clienti", "Lezioni Pilates")
 //   Livello 2 - Campo       (un elemento della lista, es. "Cliente 1", "Lezione lunedì mattina")
@@ -640,6 +650,13 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
                         ? <a href={`mailto:${item.data[sysKey("email")]}`} className="underline-offset-2 hover:underline break-all">{item.data[sysKey("email")]}</a>
                         : <span className="text-white/45">email non indicata</span>}
                     </div>
+                    {(coll.fields || []).filter((f) => ![sysKey("nome"), sysKey("indirizzo"), sysKey("telefono"), sysKey("email")].includes(f.key)
+                      && filled(item.data?.[f.key])).map((f) => (
+                      <div key={f.key} className="pt-0.5">
+                        <div className="text-[10px] uppercase tracking-widest text-white/50">{f.label}</div>
+                        <div className="text-xs text-white/85 break-words whitespace-pre-wrap">{fmtVal(f, item.data[f.key])}</div>
+                      </div>
+                    ))}
                     <div className="flex items-center gap-2 pt-1.5">
                       <button type="button" onClick={() => setEditing(item)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
                         <Pencil size={11} /> Modifica
@@ -655,11 +672,11 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
                   <ChevronRight size={12} /> {item.sub_item_count || 0} {item.sub_item_count === 1 ? "commessa" : "commesse"}
                 </div>
               </div>
-            ) : (coll.fields || []).slice(0, 5).map((f) => (
-              item.data?.[f.key] ? (
+            ) : (coll.fields || []).map((f) => (
+              filled(item.data?.[f.key]) ? (
                 <div key={f.key} className="mb-1.5">
                   <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
-                  <div className="text-sm">{String(item.data[f.key])}</div>
+                  <div className="text-sm break-words">{fmtVal(f, item.data[f.key])}</div>
                 </div>
               ) : null
             ))}
@@ -739,6 +756,16 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
   const [coll, setColl] = useState(collection);
   // the artigiano's Clienti list: each commessa has its diary
   const isCommesse = coll.system_key === "artigiano_clienti";
+  // a commessa's card: Commessa, Via and Stato; everything else behind the arrow
+  const subKey = (k) => (coll.system_sub_map || {})[k] || k;
+  const mainSubKeys = [subKey("titolo"), subKey("indirizzo_cantiere"), subKey("stato")];
+  const [openSubs, setOpenSubs] = useState(() => new Set());
+  const toggleSub = (id) => setOpenSubs((cur) => {
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const openDiary = (sub) => navigate("/dashboard/journal", { state: { commessa: sub.id } });
   const [subItems, setSubItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
@@ -762,7 +789,8 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const delSub = (sub) => {
-    toast("Eliminare questo elemento?", {
+    const name = isCommesse ? (sub.data?.[subKey("titolo")] || "questa commessa") : "";
+    toast(isCommesse ? `Eliminare la commessa «${name}» e il suo diario?` : "Eliminare questo elemento?", {
       action: {
         label: "Elimina",
         onClick: async () => {
@@ -786,11 +814,11 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
 
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
-          <div className="kicker">· elementi di</div>
+          <div className="kicker">· {isCommesse ? "commesse di" : "elementi di"}</div>
           <div className="font-semibold text-xl">{itemLabel}</div>
         </div>
         <button data-testid="new-sub-item" onClick={() => setEditing({})} className="pill-btn text-sm">
-          <Plus size={14} /> Nuovo elemento
+          <Plus size={14} /> {isCommesse ? "Nuova commessa" : "Nuovo elemento"}
         </button>
       </div>
 
@@ -801,32 +829,70 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
 
       <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${subItems.length > 12 ? "lg-many" : ""}`}>
         {subItems.map((sub) => (
+          isCommesse ? (
+            <div key={sub.id} data-testid="commessa-card" onClick={() => openDiary(sub)}
+              className="lg-card p-4 pr-11 rounded-[22px] relative cursor-pointer">
+              <div className="text-[10px] uppercase tracking-widest text-white/60">Commessa</div>
+              <div className="text-[15px] font-semibold leading-snug break-words">{filled(sub.data?.[subKey("titolo")]) ? sub.data[subKey("titolo")] : "Senza titolo"}</div>
+              <div className="mt-2 text-[10px] uppercase tracking-widest text-white/60">Via</div>
+              <div className="text-sm break-words">{filled(sub.data?.[subKey("indirizzo_cantiere")]) ? sub.data[subKey("indirizzo_cantiere")] : <span className="text-white/45">non indicata</span>}</div>
+              <div className="mt-2 text-[10px] uppercase tracking-widest text-white/60">Stato</div>
+              <div className="text-sm flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full shrink-0" style={{ background: STATO_COLOR[sub.data?.[subKey("stato")]] || "rgba(255,255,255,0.35)" }} />
+                {filled(sub.data?.[subKey("stato")]) ? String(sub.data[subKey("stato")]).charAt(0).toUpperCase() + String(sub.data[subKey("stato")]).slice(1) : "senza stato"}
+              </div>
+              {openSubs.has(sub.id) && (
+                <div className="mt-2.5 pt-2.5 border-t border-white/10 space-y-1.5" data-testid="commessa-details" onClick={(e) => e.stopPropagation()}>
+                  {(coll.sub_item_fields || []).filter((f) => !mainSubKeys.includes(f.key) && filled(sub.data?.[f.key])).map((f) => (
+                    <div key={f.key}>
+                      <div className="text-[10px] uppercase tracking-widest text-white/50">{f.label}</div>
+                      <div className="text-xs text-white/85 break-words whitespace-pre-wrap">{fmtVal(f, sub.data[f.key])}</div>
+                    </div>
+                  ))}
+                  {!(coll.sub_item_fields || []).some((f) => !mainSubKeys.includes(f.key) && filled(sub.data?.[f.key])) && (
+                    <div className="text-xs text-white/45">Nessun altro dato: aggiungili con Modifica.</div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 pt-1.5 text-xs">
+                    <button type="button" data-testid="open-commessa-diary" onClick={() => openDiary(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
+                      <NotebookPen size={11} /> Diario
+                    </button>
+                    <button type="button" onClick={() => setEditing(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
+                      <Pencil size={11} /> Modifica
+                    </button>
+                    <button type="button" data-testid="delete-commessa" onClick={() => delSub(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-200">
+                      <Trash2 size={11} /> Elimina
+                    </button>
+                  </div>
+                </div>
+              )}
+              <button type="button" data-testid={`expand-commessa-${sub.id}`} onClick={(e) => { e.stopPropagation(); toggleSub(sub.id); }}
+                aria-label={openSubs.has(sub.id) ? "Nascondi gli altri dati" : "Mostra gli altri dati"} aria-expanded={openSubs.has(sub.id)}
+                className="absolute top-3 right-3 p-1 rounded-full text-white/80 hover:bg-white/10">
+                <ChevronDown size={15} className={`transition-transform ${openSubs.has(sub.id) ? "rotate-180" : ""}`} />
+              </button>
+            </div>
+          ) : (
           <div key={sub.id} className="lg-card p-4 rounded-[22px] relative group">
-            {(coll.sub_item_fields || []).slice(0, 5).map((f) => (
-              sub.data?.[f.key] ? (
+            {(coll.sub_item_fields || []).map((f) => (
+              filled(sub.data?.[f.key]) ? (
                 <div key={f.key} className="mb-1.5">
                   <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
-                  <div className="text-sm">{String(sub.data[f.key])}</div>
+                  <div className="text-sm break-words">{fmtVal(f, sub.data[f.key])}</div>
                 </div>
               ) : null
             ))}
-            {isCommesse && (
-              <button data-testid="open-commessa-diary" onClick={() => navigate("/dashboard/journal", { state: { commessa: sub.id } })}
-                className="mt-2 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white">
-                <NotebookPen size={12} /> Diario della commessa
-              </button>
-            )}
             <div className="absolute top-3 right-3 flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
               <button onClick={() => setEditing(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-white/10"><Pencil size={13} /></button>
               <button onClick={() => delSub(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-red-500/10 hover:text-red-400"><Trash2 size={13} /></button>
             </div>
           </div>
+          )
         ))}
       </div>
 
       {editing && (
         <ItemFormDialog
-          title={editing.id ? "Modifica elemento" : "Nuovo elemento"}
+          title={editing.id ? (isCommesse ? "Modifica commessa" : "Modifica elemento") : (isCommesse ? "Nuova commessa" : "Nuovo elemento")}
           fields={coll.sub_item_fields || []}
           initialData={editing.data || {}}
           onClose={() => setEditing(null)}
