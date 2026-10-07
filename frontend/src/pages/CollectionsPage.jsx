@@ -145,8 +145,9 @@ export default function CollectionsPage() {
             className={`lg-card p-5 rounded-[24px] cursor-grab active:cursor-grabbing relative group transition-transform duration-150 ${dragOverId === c.id && draggedId !== c.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === c.id ? "opacity-50" : ""}`}
             onClick={() => setView({ level: 2, collection: c })}
           >
-            {/* name, then on the right the lock/people icon and the bin side by side (never on top of each other) */}
-            <div className="flex items-start gap-2 mb-2">
+            {/* only the essentials: the name and, when shared, who with - the attributes are inside the list.
+                On the right the lock/people icon and the bin side by side (never on top of each other) */}
+            <div className="flex items-start gap-2">
               <div className="font-semibold text-lg flex-1 min-w-0">{c.name}</div>
               <span className="shrink-0 h-7 flex items-center" title={isShared(c) ? "Condivisa" : "Privata"}>
                 {isShared(c) ? <Users size={14} className="text-white/70" /> : <Lock size={14} className="text-white/50" />}
@@ -163,9 +164,7 @@ export default function CollectionsPage() {
                 </button>
               )}
             </div>
-            <div className="text-sm text-white/70">{c.item_count || 0} campi</div>
             {sharingLabel(c) && <div className="text-[11px] text-white/85 mt-1 flex items-center gap-1" data-testid={`collection-sharing-${c.id}`}><Users size={11} className="shrink-0" />{sharingLabel(c)}</div>}
-            <div className="text-[11px] text-white/60 mt-2">{(c.fields || []).map((f) => f.label).join(" · ")}</div>
           </div>
         ))}
       </div>
