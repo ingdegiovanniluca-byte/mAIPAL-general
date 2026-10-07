@@ -5,7 +5,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen, ChevronDown, MapPin, Phone, Mail } from "lucide-react";
+import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen, ChevronDown, MapPin, Phone, Mail, Briefcase, Activity } from "lucide-react";
 import { toast } from "sonner";
 
 // a value as shown on a card: dates as dd/mm/yyyy, lists joined
@@ -201,6 +201,9 @@ function InfoCell({ label, value, icon: Icon, testid, grow = false }) {
     </div>
   );
 }
+
+// the first link of a folder made on Drive and/or OneDrive
+const folderLink = (f) => Object.values(f?.links || {}).find(Boolean);
 
 const isShared = (c) => c.visibility === "org" || (c.shared_with || []).length > 0;
 
@@ -424,7 +427,6 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   const [shown, setShown] = useState(PAGE_ITEMS);              // a long list is drawn a page at a time
   const [folderBusy, setFolderBusy] = useState(false);
   // the list's folder on Drive / OneDrive: made on the first tap, opened afterwards
-  const folderLink = (f) => Object.values(f?.links || {}).find(Boolean);
   const openOrCreateFolder = async () => {
     if (coll.drive_folder && folderLink(coll.drive_folder)) {
       window.open(folderLink(coll.drive_folder), "_blank", "noopener");
@@ -767,6 +769,26 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
   });
   const openDiary = (sub) => navigate("/dashboard/journal", { state: { commessa: sub.id } });
   const [subItems, setSubItems] = useState([]);
+  // the commessa's folder on Drive/OneDrive, inside its client's: mAIPAL/Clienti/<cliente>/<commessa>
+  const [folderBusy, setFolderBusy] = useState(null);
+  const commessaFolder = async (sub) => {
+    if (sub.drive_folder && folderLink(sub.drive_folder)) {
+      window.open(folderLink(sub.drive_folder), "_blank", "noopener");
+      return;
+    }
+    setFolderBusy(sub.id);
+    try {
+      const r = await api.post(`/jobs/commesse/${sub.id}/folder`);
+      setSubItems((cur) => cur.map((x) => (x.id === sub.id ? { ...x, drive_folder: r.data.drive_folder } : x)));
+      const link = folderLink(r.data.drive_folder);
+      toast.success(r.data.message || "Cartella creata", link ? { action: { label: "Apri", onClick: () => window.open(link, "_blank", "noopener") } } : undefined);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Non sono riuscito a creare la cartella");
+    } finally {
+      setFolderBusy(null);
+    }
+  };
+  const activeCount = subItems.filter((sb) => String(sb.data?.[subKey("stato")] || "").toLowerCase() !== "chiusa").length;
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
 
@@ -812,15 +834,31 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
         <ArrowLeft size={14} /> {coll.name}
       </button>
 
+      {isCommesse ? (
+        // like the Clienti level: the client's name, its numbers on one row, then the "+"
+        <>
+          <div className="font-semibold text-2xl break-words" data-testid="commesse-client-name">{itemLabel}</div>
+          <div className="mt-3 mb-5 flex items-start gap-6" data-testid="commesse-info">
+            <InfoCell label="Commesse totali" icon={Briefcase} testid="info-commesse-total"
+              value={loading ? "…" : `${subItems.length} ${subItems.length === 1 ? "commessa" : "commesse"}`} />
+            <InfoCell label="Commesse attive (tutte tranne le chiuse)" icon={Activity} testid="info-commesse-active"
+              value={loading ? "…" : `${activeCount} ${activeCount === 1 ? "attiva" : "attive"}`} />
+          </div>
+          <div className="flex items-center gap-2.5 mb-5">
+            <RoundBtn icon={Plus} label="Nuova commessa" testid="new-sub-item" onClick={() => setEditing({})} />
+          </div>
+        </>
+      ) : (
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
-          <div className="kicker">· {isCommesse ? "commesse di" : "elementi di"}</div>
+          <div className="kicker">· elementi di</div>
           <div className="font-semibold text-xl">{itemLabel}</div>
         </div>
         <button data-testid="new-sub-item" onClick={() => setEditing({})} className="pill-btn text-sm">
-          <Plus size={14} /> {isCommesse ? "Nuova commessa" : "Nuovo elemento"}
+          <Plus size={14} /> Nuovo elemento
         </button>
       </div>
+      )}
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
       {!loading && subItems.length === 0 && (
@@ -869,6 +907,13 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                 aria-label={openSubs.has(sub.id) ? "Nascondi gli altri dati" : "Mostra gli altri dati"} aria-expanded={openSubs.has(sub.id)}
                 className="absolute top-3 right-3 p-1 rounded-full text-white/80 hover:bg-white/10">
                 <ChevronDown size={15} className={`transition-transform ${openSubs.has(sub.id) ? "rotate-180" : ""}`} />
+              </button>
+              <button type="button" data-testid={`commessa-folder-${sub.id}`} disabled={folderBusy === sub.id}
+                onClick={(e) => { e.stopPropagation(); commessaFolder(sub); }}
+                title={sub.drive_folder ? `Apri la cartella «${sub.drive_folder.name}»` : "Crea la cartella della commessa su Drive, dentro quella del cliente"}
+                aria-label={sub.drive_folder ? "Apri la cartella della commessa" : "Crea la cartella della commessa"}
+                className={`absolute top-11 right-3 p-1 rounded-full hover:bg-white/10 disabled:opacity-50 ${sub.drive_folder ? "text-white" : "text-white/80"}`}>
+                {sub.drive_folder ? <FolderOpen size={15} /> : <FolderPlus size={15} />}
               </button>
             </div>
           ) : (

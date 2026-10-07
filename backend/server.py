@@ -3440,7 +3440,10 @@ async def list_sub_items(collection_id: str, item_id: str, current: User = Depen
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     cursor = db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "embedding": 0}).sort("created_at", -1)
-    return await cursor.to_list(1000)
+    subs = await cursor.to_list(1000)
+    for sb in subs:   # each person's folder is on their own Drive
+        sb["drive_folder"] = (sb.pop("drive_folders", None) or {}).get(current.user_id)
+    return subs
 
 
 @api_router.post("/collections/{collection_id}/items/{item_id}/sub-items")
@@ -3634,6 +3637,59 @@ async def _ensure_list_folder(current: User, coll: dict) -> dict:
 
 def _folder_where(info: dict) -> str:
     return " e ".join(STORAGE_LABELS[t] for t in (info.get("ids") or {}))
+
+
+async def _ensure_storage_path(current: User, folder: str, subs: List[str]) -> dict:
+    """mAIPAL/<folder>/<subs...> on every chosen storage, each level found or made (blocking
+    Drive calls in a thread, each bounded by LIST_FOLDER_TIMEOUT). -> {"name", "ids", "links"}"""
+    targets = await _storage_targets(current.user_id)
+    if not targets:
+        raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
+    path = [_drive_safe(folder)] + [_drive_safe(x) for x in subs if x]
+    ids, links, errors = {}, {}, {}
+    for t in targets:
+        try:
+            if t == "google":
+                creds = await gi.get_credentials(db, current.user_id)
+                if not creds:
+                    raise RuntimeError("Google Drive non collegato")
+                fid = await asyncio.wait_for(gi.ensure_maipal_folder(db, current.user_id, creds), LIST_FOLDER_TIMEOUT)
+                for name in path:
+                    fid = await asyncio.wait_for(asyncio.to_thread(gi.find_or_create_subfolder_sync, creds, fid, name), LIST_FOLDER_TIMEOUT)
+                ids[t], links[t] = fid, f"https://drive.google.com/drive/folders/{fid}"
+            else:
+                token = await ms.get_token(db, current.user_id)
+                fid = await asyncio.wait_for(ms.find_or_create_folder(db, current.user_id, token, path[0]), LIST_FOLDER_TIMEOUT)
+                for name in path[1:]:
+                    fid = await asyncio.wait_for(ms.find_or_create_child_folder(token, fid, name), LIST_FOLDER_TIMEOUT)
+                ids[t] = fid
+                try:
+                    links[t] = await ms.item_web_url(token, fid)
+                except Exception:
+                    links[t] = None
+        except asyncio.TimeoutError:
+            logger.error(f"folder {path} on {t}: no answer in {LIST_FOLDER_TIMEOUT}s")
+            errors[t] = "non ha risposto in tempo, riprova tra poco"
+        except Exception as e:
+            logger.exception(f"folder {path} on {t} failed")
+            errors[t] = str(e)[:200]
+    if not ids:
+        raise HTTPException(status_code=500, detail="Cartella non creata: " + "; ".join(f"{STORAGE_LABELS[k]}: {v}" for k, v in errors.items()))
+    return {"name": " / ".join(path), "ids": ids, "links": links, "created_at": datetime.now(timezone.utc).isoformat()}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/folder")
+async def create_commessa_folder(commessa_id: str, current: User = Depends(get_current_user)):
+    """The commessa's folder, under its client's: mAIPAL/Clienti/<cliente>/<commessa> - the same
+    place where its reports and diary photos are saved. Made once per person, then reused."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    existing = (sub.get("drive_folders") or {}).get(current.user_id)
+    if existing and existing.get("ids"):
+        return {"drive_folder": existing, "message": f"Cartella «{existing['name']}» già pronta."}
+    view = _commessa_view(sub, client, clienti)
+    info = await _ensure_storage_path(current, clienti.get("name") or vx.CLIENTI_NAME, [view["client_name"], view["title"]])
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"drive_folders": {**(sub.get("drive_folders") or {}), current.user_id: info}}})
+    return {"drive_folder": info, "message": f"Cartella «{info['name']}» pronta su {_folder_where(info)}."}
 
 
 @api_router.post("/collections/{collection_id}/folder")

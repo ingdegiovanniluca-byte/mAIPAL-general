@@ -370,5 +370,29 @@ async def main():
     print(res); assert res["status"] == "ok" and "«Tetto»" in res["message"]
     res = await server._run_sub_agent(me, "journal", "pulito tutto", "...", None, "conv_w2")
     assert res["status"] == "error" and "Non l'ho salvato" in res["message"]
+    # 14) the commessa's folder, inside its client's: mAIPAL/Clienti/Mario Rossi/Bagno - made once
+    made = []
+    async def g_creds(db_, uid): return "creds"
+    async def g_root(db_, uid, creds): return "root"
+    def g_sub(creds, parent, name):
+        made.append((parent, name)); return f"{parent}/{name}"
+    server.gi.get_credentials, server.gi.ensure_maipal_folder, server.gi.find_or_create_subfolder_sync = g_creds, g_root, g_sub
+    async def only_google(uid): return ["google"]
+    server._storage_targets = only_google
+    await asyncio.sleep(0.3); made.clear()   # earlier diary photos still going to the cloud in the background
+    clienti_name = next(c for c in db.collections.docs if c.get("system_key") == server.vx.CLIENTI_KEY)["name"]
+    f = await server.create_commessa_folder("s_bagno", me)
+    print(f["message"])
+    assert made == [("root", clienti_name), (f"root/{clienti_name}", "Mario Rossi"), (f"root/{clienti_name}/Mario Rossi", "Bagno")], made
+    assert f["drive_folder"]["links"]["google"] == f"https://drive.google.com/drive/folders/root/{clienti_name}/Mario Rossi/Bagno"
+    await server.create_commessa_folder("s_bagno", me)
+    assert len(made) == 3
+    subs_ = await server.list_sub_items(next(c for c in db.collections.docs if c.get("system_key") == server.vx.CLIENTI_KEY)["id"], "c_rossi", me)
+    sb = next(x for x in subs_ if x["id"] == "s_bagno")
+    assert sb["drive_folder"]["name"] == f"{clienti_name} / Mario Rossi / Bagno" and "drive_folders" not in sb
+    try:
+        await server.create_commessa_folder("nope", me); assert False
+    except server.HTTPException as e:
+        assert e.status_code == 404
     print("ALL OK")
 asyncio.run(main())
