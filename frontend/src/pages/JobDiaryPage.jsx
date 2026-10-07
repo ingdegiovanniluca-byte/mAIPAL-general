@@ -8,11 +8,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
 
-// Diario di commessa (verticale artigiano), three levels:
+// Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
-//   2. the commessa's card (client, site, dates, description, totals)
-//   3. its diary: name, state on one row (every change is written in the diary), totals,
-//      entries by day.
+//   2. a commessa opens its diary: its name, a row of cards that scrolls sideways (state,
+//      hours, reports, documents, site, dates, phone, e-mail), the sections in a carousel,
+//      the period, the entries by day. Every state change is written in the diary.
 // The commessa's chat (ask about it, or write in its diary) opens from the round chat button
 // floating on the side and sits at the bottom, like the one in the Chat section.
 
@@ -93,19 +93,26 @@ const periodRange = (p) => (p.key === "30" ? { from: daysAgoIso(29), to: todayIs
   : p.key === "custom" ? { from: p.from || null, to: p.to || null }
   : { from: null, to: null });
 
-// one of the four figures on top: just the icon, a light number and its word
-function Glance({ icon: Icon, value, label, small, onClick, right, testid, ariaLabel }) {
-  const Tag = onClick ? "button" : "div";
-  return (
-    <Tag type={onClick ? "button" : undefined} onClick={onClick} data-testid={testid} aria-label={ariaLabel}
-      className={`relative h-[70px] text-left text-white flex flex-col justify-center gap-1.5 ${right ? "pl-4" : "pl-0.5"} ${onClick ? "active:opacity-70" : ""}`}>
-      <Icon size={16} strokeWidth={1.9} className="text-white/80" />
-      <span className="flex items-baseline whitespace-nowrap">
-        <span className={`${small ? "text-[22px]" : "text-[30px]"} font-extralight leading-none`}>{value}</span>
-        {label && <span className="text-[11.5px] font-light ml-1.5 text-white/75">{label}</span>}
+// a card of the row on top of the diary: the commessa's card style (glass, the icon with a small
+// caps label, the value under it, an optional grey line); a row that scrolls sideways
+function InfoCard({ icon: Icon, label, value, sub, onClick, href, testid, ariaLabel, external }) {
+  const cls = "snap-start shrink-0 w-[152px] h-[86px] card-soft px-3.5 py-3 flex flex-col justify-between text-left text-white"
+    + (onClick || href ? " active:opacity-70" : "");
+  const body = (
+    <>
+      <span className="flex items-center gap-1.5 min-w-0">
+        <Icon size={14} className="text-white/55 shrink-0" />
+        <span className="text-[10px] uppercase tracking-widest text-white/50 truncate">{label}</span>
       </span>
-    </Tag>
+      <span className="min-w-0">
+        <span className="block text-[15px] font-medium text-white/90 truncate">{value}</span>
+        {sub && <span className="block text-[11px] text-white/55 truncate mt-0.5">{sub}</span>}
+      </span>
+    </>
   );
+  if (href) return <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</a>;
+  if (onClick) return <button type="button" onClick={onClick} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</button>;
+  return <div data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</div>;
 }
 
 // a line of the diary: who (grey) with a small icon when it carries hours / problems /
@@ -280,18 +287,6 @@ function ChatFab({ onClick }) {
       <span aria-hidden="true" className="lg-goo absolute inset-0 rounded-full" style={{ boxShadow: "0 10px 22px rgba(60, 10, 40, 0.16)" }} />
       <MessageCircle size={21} strokeWidth={1.9} className="relative" />
     </button>
-  );
-}
-
-function Fact({ icon: Icon, label, children }) {
-  return (
-    <div className="flex items-start gap-2 text-sm">
-      <Icon size={14} className="text-white/55 mt-0.5 shrink-0" />
-      <div className="min-w-0">
-        <div className="text-[10px] uppercase tracking-widest text-white/50">{label}</div>
-        <div className="text-white/90 break-words">{children}</div>
-      </div>
-    </div>
   );
 }
 
@@ -528,7 +523,7 @@ export default function JobDiaryPage() {
     return out;
   }, [commesse, q]);
 
-  const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("commessa"); };
+  const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("diary"); };
   const setStato = async (stato) => {
     try { await api.patch(`/jobs/commesse/${selectedId}/stato`, { stato }); await reload(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -548,7 +543,6 @@ export default function JobDiaryPage() {
 
   const c = detail?.commessa?.id === selectedId ? detail.commessa : null;
   const t = c ? detail.totals : null;
-  const row = commesse.find((x) => x.id === selectedId);
   const loading = <div className="kicker text-center py-10">caricamento…</div>;
 
   const back = (label, to) => (
@@ -574,35 +568,6 @@ export default function JobDiaryPage() {
           {groups.map((g) => <ClientCard key={g.id} client={g} commesse={g.commesse} onOpen={openCommessa} />)}
         </div>
       )}
-    </div>
-  );
-
-  const commessaView = !c ? loading : (
-    <div className="max-w-2xl">
-      {back("Clienti", "clients")}
-      <button onClick={() => setLevel("diary")} data-testid="commessa-card"
-        className="w-full text-left card-soft card-hover p-5 flex flex-col gap-4">
-        <div className="flex items-start gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="text-xl font-semibold text-white leading-tight">{c.title}</div>
-            <div className="text-sm text-white/75 mt-1">{c.client_name}</div>
-          </div>
-          <StatoPill stato={c.stato} />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Fact icon={MapPin} label="Cantiere">{c.address || "non indicato"}</Fact>
-          <Fact icon={CalendarDays} label="Date">{c.data_inizio ? `dal ${shortDay(c.data_inizio)}` : "inizio non indicato"}{c.data_fine ? ` al ${shortDay(c.data_fine)}` : ""}</Fact>
-          {c.client_phone && <Fact icon={Phone} label="Telefono"><a href={`tel:${c.client_phone}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{c.client_phone}</a></Fact>}
-          {c.client_email && <Fact icon={Mail} label="Email"><a href={`mailto:${c.client_email}`} onClick={(e) => e.stopPropagation()} className="hover:underline break-all">{c.client_email}</a></Fact>}
-        </div>
-        {c.descrizione && <div className="text-sm text-white/80 whitespace-pre-wrap">{c.descrizione}</div>}
-        <div className="flex items-center gap-4 text-xs text-white/65 pt-3 border-t border-white/10">
-          <span><b className="text-white text-base">{fmtNum(t.hours_total)}</b> h</span>
-          <span><b className="text-white text-base">{t.entries}</b> voc{t.entries === 1 ? "e" : "i"}</span>
-          {row?.last_day && <span>ultima {shortDay(row.last_day)}</span>}
-          <span className="ml-auto inline-flex items-center gap-1 text-white font-medium">Apri il diario <ChevronRight size={14} /></span>
-        </div>
-      </button>
     </div>
   );
 
@@ -661,33 +626,35 @@ export default function JobDiaryPage() {
     <div className="relative max-w-xl" data-testid="commessa-detail">
       {/* only the commessa's name; the arrow goes back to its card */}
       <div className="flex items-center gap-2.5">
-        <button onClick={() => setLevel("commessa")} data-testid="job-back" aria-label="Torna alla scheda della commessa"
+        <button onClick={() => setLevel("clients")} data-testid="job-back" aria-label="Torna ai clienti"
           className="h-[30px] w-[30px] shrink-0 rounded-full flex items-center justify-center text-white lg-frost">
           <ArrowLeft size={16} />
         </button>
         <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">{c.title}</h1>
       </div>
 
-      {/* the job at a glance: four quarters split by dotted lines */}
-      <div className="relative mt-3.5 h-[140px]" data-testid="commessa-totals">
-        <span aria-hidden="true" className="absolute left-0 right-0 top-[70px] h-[1.5px]"
-          style={{ backgroundImage: "linear-gradient(90deg, rgba(255,255,255,0.55) 1.5px, transparent 1.5px)", backgroundSize: "9px 1.5px" }} />
-        <span aria-hidden="true" className="absolute left-1/2 top-1.5 bottom-1.5 w-[1.5px]"
-          style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.55) 1.5px, transparent 1.5px)", backgroundSize: "1.5px 9px" }} />
-        <div className="absolute inset-0 grid grid-cols-2 grid-rows-2">
-          <Glance icon={CircleDot} value={capFirst(c.stato || "senza stato")} small testid="glance-stato" ariaLabel="Cambia lo stato della commessa"
-            onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
-          <Glance icon={Clock} value={fmtNum(t.hours_total)} label="ore" right testid="glance-ore" onClick={() => pickSection("ore")} ariaLabel="Mostra le ore" />
-          <Glance icon={AlertTriangle} value={String(t.problems.length)} label={t.problems.length === 1 ? "segnalazione" : "segnalazioni"}
-            testid="glance-problemi" onClick={() => pickSection("problemi")} ariaLabel="Mostra i problemi" />
-          <Glance icon={FileText} value={String(docs.total)} label={docs.total === 1 ? "documento" : "documenti"} right testid="glance-documenti"
-            ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
-        </div>
+      {/* the commessa in one row that scrolls sideways: state, hours, reports, documents, then
+          the card's details (site, dates, phone, e-mail) */}
+      <div className="mt-3.5 -mx-4 px-4 flex gap-2.5 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
+        <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} sub="tocca per cambiarlo" testid="glance-stato"
+          ariaLabel="Cambia lo stato della commessa" onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
+        <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")}
+          sub={Object.entries(t.by_person).map(([k, v]) => `${k} ${fmtNum(v)}`).join(" · ") || "non ancora indicate"} />
+        <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
+          onClick={() => pickSection("problemi")} sub={t.problems.length ? `ultima ${shortDay(t.problems[t.problems.length - 1].date)}` : "nessuna"} />
+        <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti"
+          sub={`${docs.photos || 0} foto · ${docs.reports || 0} report`} />
+        <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} sub={c.client_name} testid="info-cantiere"
+          href={c.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}` : undefined} external ariaLabel="Apri il cantiere sulla mappa" />
+        <InfoCard icon={CalendarDays} label="Date" value={c.data_inizio ? `dal ${shortDay(c.data_inizio)}` : "inizio non indicato"}
+          sub={c.data_fine ? `al ${shortDay(c.data_fine)}` : "fine non indicata"} testid="info-date" />
+        {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} sub={c.client_name} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
+        {c.client_email && <InfoCard icon={Mail} label="Email" value={c.client_email} sub={c.client_name} href={`mailto:${c.client_email}`} testid="info-email" ariaLabel={`Scrivi a ${c.client_name}`} />}
       </div>
 
       {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
           tone, brighter than the two at its sides); swipe or tap a side one to change */}
-      <div className="mt-10 -mx-4 h-[46px] flex items-center justify-center gap-[22px] overflow-hidden select-none" data-testid="section-carousel"
+      <div className="mt-7 -mx-4 h-[46px] flex items-center justify-center gap-[22px] overflow-hidden select-none" data-testid="section-carousel"
         onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd}
         style={{ WebkitMaskImage: "linear-gradient(to right, transparent 0, #000 18%, #000 82%, transparent 100%)", maskImage: "linear-gradient(to right, transparent 0, #000 18%, #000 82%, transparent 100%)" }}>
         <button type="button" onClick={() => pickSection(secAt(secIdx - 1).key)} className="flex-1 basis-0 text-right text-[15px] font-medium text-white/30">{secAt(secIdx - 1).label}</button>
@@ -743,7 +710,7 @@ export default function JobDiaryPage() {
       {/* state menu and period popup, like the profile menu */}
       {menu && <button type="button" aria-label="Chiudi" className="fixed inset-0 z-30 cursor-default" onClick={() => setMenu(null)} />}
       {menu === "stato" && (
-        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" className="glass-panel absolute z-40 left-0 top-[118px] w-[236px] py-1">
+        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" className="glass-panel absolute z-40 left-0 top-[138px] w-[236px] py-1">
           {(detail.stati || []).map((s) => {
             const on = s === c.stato;
             return (
@@ -760,7 +727,7 @@ export default function JobDiaryPage() {
         </div>
       )}
       {menu === "periodo" && (
-        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[300px] w-[300px] pt-1 pb-3.5">
+        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[262px] w-[300px] pt-1 pb-3.5">
           {PERIODS.map((p) => (
             <button key={p.key} type="button" onClick={() => { setPeriod({ key: p.key }); setMenu(null); }}
               className="glass-row w-full flex items-center gap-3.5 px-5 py-3.5 text-left text-[15px] text-white">
@@ -795,7 +762,7 @@ export default function JobDiaryPage() {
           <h1 className="text-2xl font-semibold text-white">Diario di commessa</h1>
         </div>
       )}
-      {level === "clients" || !selectedId ? clientsView : level === "commessa" ? commessaView : diaryView}
+      {level === "clients" || !selectedId ? clientsView : diaryView}
 
       {inCommessa && c && !chatOpen && <ChatFab onClick={() => setChatOpen(true)} />}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
