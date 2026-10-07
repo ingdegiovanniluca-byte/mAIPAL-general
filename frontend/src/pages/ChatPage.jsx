@@ -1642,7 +1642,7 @@ export default function ChatPage() {
   const mobileComposer = (<>
       {/* Liquid-glass composer: the round voice button joined by a glass neck to a text block
           twice its height; the button sits level with the block's first row, on the right or
-          on the left (Impostazioni -> Profilo, "Microfono"). The text sits on top, attach and
+          on the left (the avatar menu, under the light/dark row). The text sits on top, attach and
           send at the bottom; chips and @ open up in between and the glass follows the size.
           The textarea is never remounted, so the keyboard stays open as the block grows. */}
       <div ref={composerRef} data-testid="chat-composer" data-mic-side={micRight ? "right" : "left"}

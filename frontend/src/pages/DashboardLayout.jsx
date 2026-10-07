@@ -4,7 +4,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic,
 } from "lucide-react";
 import { toast } from "sonner";
 import { usePref } from "@/lib/prefs";
@@ -96,7 +96,7 @@ export default function DashboardLayout() {
   const togglePinned = (to) => {
     if (pinned.includes(to)) { setPinnedPref(pinned.filter((x) => x !== to)); return; }
     if (pinned.length >= MAX_PINNED) {
-      toast.error(`Nel menu in basso ci stanno ${MAX_PINNED} sezioni oltre a Chat: togline una col suo pallino.`);
+      toast.error(`Puoi tenere in primo piano al massimo ${MAX_PINNED} agenti: togline uno col suo pallino.`);
       return;
     }
     setPinnedPref([...pinned, to]);
@@ -161,6 +161,7 @@ export default function DashboardLayout() {
                   )}
                   <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn" onClick={() => { setMenuOpen(false); logout(); }} />
                   <ThemeRow />
+                  <MicRow />
                 </GlassMenu>
               )}
             </div>
@@ -210,6 +211,7 @@ export default function DashboardLayout() {
                 )}
                 <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn-mobile" onClick={() => { setMenuOpen(false); logout(); }} />
                 <ThemeRow />
+                <MicRow />
               </GlassMenu>
             )}
           </div>
@@ -322,7 +324,7 @@ export default function DashboardLayout() {
                 );
               })}
               <div className="px-5 pt-2.5 pb-3 text-[11px] leading-snug text-white/55 border-t border-white/[0.13]">
-                Col pallino scegli le sezioni del menu in basso: {pinned.length} di {MAX_PINNED}, oltre a Chat che c'è sempre.
+                Seleziona con il pallino i {MAX_PINNED} agenti da tenere in primo piano nel menu.
               </div>
             </div>
           </div>
@@ -345,6 +347,24 @@ function TabLink({ to, label, testid }) {
     >
       {label}
     </NavLink>
+  );
+}
+
+// Under the theme row: which side of the chat's writing bar the voice button sits on (this
+// device only, applied at once). Each icon is the mic next to a writing line, on its side.
+function MicRow() {
+  const [side, setSide] = usePref("micSide");
+  const cls = (on) => `flex-1 flex items-center justify-center gap-1 py-2 rounded-full transition-colors ${on ? "text-white bg-white/15" : "text-white/40 hover:text-white/70"}`;
+  const line = <span aria-hidden="true" className="h-[3px] w-4 rounded-full bg-current opacity-70" />;
+  return (
+    <div className="glass-row flex items-center gap-1 px-3 py-2" data-testid="mic-side">
+      <button type="button" data-testid="mic-side-left" onClick={() => setSide("left")} title="Microfono a sinistra nella chat" aria-label="Microfono a sinistra nella chat" aria-pressed={side === "left"} className={cls(side === "left")}>
+        <Mic size={16} />{line}
+      </button>
+      <button type="button" data-testid="mic-side-right" onClick={() => setSide("right")} title="Microfono a destra nella chat" aria-label="Microfono a destra nella chat" aria-pressed={side !== "left"} className={cls(side !== "left")}>
+        {line}<Mic size={16} />
+      </button>
+    </div>
   );
 }
 
