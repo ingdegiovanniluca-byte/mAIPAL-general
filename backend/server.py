@@ -3466,6 +3466,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
     if commessa_ids:
         await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
 
 
 # ---- Elementi (livello 3): annidati dentro un campo/item specifico ----
@@ -5000,6 +5001,19 @@ class JobLogPayload(BaseModel):
     conv_id: Optional[str] = None
 
 
+class JobTodoPayload(BaseModel):
+    text: str
+    who: Optional[str] = ""                   # who takes care of it
+    due_date: Optional[str] = None            # by when (YYYY-MM-DD), optional
+
+
+class JobTodoPatch(BaseModel):
+    text: Optional[str] = None
+    who: Optional[str] = None
+    due_date: Optional[str] = None            # "" clears it
+    done: Optional[bool] = None
+
+
 class JobLogPatch(BaseModel):
     text: Optional[str] = None
     date: Optional[str] = None
@@ -5251,11 +5265,17 @@ def _public_log(log: dict) -> dict:
     return {k: v for k, v in log.items() if k not in ("embedding", "_id")}
 
 
+JOB_LOG_QUESTION_MSG = ("Il Diario serve solo a scrivere note sulle commesse, quindi non ho salvato niente. "
+                        "Per cercare informazioni usa l'agente Cerca, oppure apri la commessa nella sezione Diario "
+                        "e chiedi con il tasto della chat.")
+
+
 async def _save_job_log(current: User, text: str, images: Optional[List[str]] = None, commessa_id: Optional[str] = None,
                         hint_commessa_id: Optional[str] = None, new_client_name: Optional[str] = None,
                         conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None) -> dict:
     """Shared by the chat agent, the commessa page, @diario and Telegram.
-    -> {"status": "ok", "log", "message", ...} | {"status": "pick_commessa", "candidates", "message", "text"}"""
+    -> {"status": "ok", "log", "message", ...} | {"status": "pick_commessa", "candidates", "message", "text"}
+       | {"status": "question" | "unclear", "message"} - nothing saved"""
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Racconta cosa è stato fatto in cantiere")
@@ -5274,8 +5294,18 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         parsed = await jl.interpret(text, speaker, team, known=known, user_id=current.user_id, channel=channel)
     except Exception:
         logger.exception("job log interpretation failed, saving the text as is")
-        parsed = {"date": jl.today_local().isoformat(), "text": text, "hours": [], "materials": [], "problems": [],
+        parsed = {"kind": "nota", "date": jl.today_local().isoformat(), "text": text, "hours": [], "materials": [], "problems": [],
                   "client": "", "commessa": ""}
+
+    # the agent Diario only writes entries, with only what the user said: a question or an entry
+    # it can't understand saves nothing (and creates no client or commessa)
+    photo_only = bool(images) and text == "Foto dal cantiere"
+    if not photo_only and (parsed.get("kind") == "domanda" or jl.is_plain_question(text)):
+        return {"status": "question", "message": JOB_LOG_QUESTION_MSG}
+    if not photo_only and parsed.get("kind") == "non_chiara":
+        return {"status": "unclear", "message": "Non ho salvato niente: la nota non è chiara. "
+                + (parsed.get("doubt") or "Mi dici cosa avete fatto e per quale cliente o commessa?")}
+    parsed = jl.ground(parsed, text)
 
     if not target and client_item_id:
         client = await db.collection_items.find_one({"id": client_item_id, "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
@@ -5381,10 +5411,93 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
     reports = await db.work_reports.count_documents({"commessa_id": commessa_id})
     photos = sum(len(lg.get("photos") or []) for lg in light)
+    todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
+            "todos": todos, "team": await _team_first_names(current),
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
             "stati": vx.COMMESSA_STATI}
+
+
+# ---- the commessa's To Do: the next activities, who takes care of them and by when ----
+# Kept inside the commessa (job_todos): the To-Do section is personal (one owner, no
+# assignee, no date), while these belong to the job and to whoever sees it in the team.
+
+def _sort_job_todos(todos: list) -> list:
+    """Open ones first - with a date, soonest first, then without - the done ones last."""
+    return sorted(todos, key=lambda x: (bool(x.get("done")), x.get("due_date") is None, x.get("due_date") or "",
+                                        x.get("created_at") or ""))
+
+
+async def _team_first_names(current: User) -> list:
+    me = _first_name(current.name)
+    if not current.org_id:
+        return [me]
+    names = [_first_name(m.get("name")) for m in await db.users.find({"org_id": current.org_id}, {"_id": 0, "name": 1}).to_list(200)]
+    return [me] + sorted({n for n in names if n and n != me})
+
+
+def _valid_due(d: Optional[str]) -> Optional[str]:
+    if not d:
+        return None
+    try:
+        return datetime.strptime(str(d)[:10], "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data non valida")
+
+
+async def _job_todo_or_404(current: User, todo_id: str) -> dict:
+    todo = await db.job_todos.find_one({"id": todo_id}, {"_id": 0})
+    if not todo:
+        raise HTTPException(status_code=404, detail="Attività non trovata")
+    await _commessa_or_404(current, todo["commessa_id"])   # only who sees the commessa
+    return todo
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/todos")
+async def create_job_todo(commessa_id: str, payload: JobTodoPayload, current: User = Depends(get_current_user)):
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    text = " ".join((payload.text or "").split())
+    if not text:
+        raise HTTPException(status_code=400, detail="Scrivi l'attività da fare")
+    doc = {
+        "id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
+        "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+        "text": text[:500], "who": (payload.who or "").strip()[:60] or _first_name(current.name),
+        "due_date": _valid_due(payload.due_date), "done": False, "done_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.job_todos.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/jobs/todos/{todo_id}")
+async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = Depends(get_current_user)):
+    todo = await _job_todo_or_404(current, todo_id)
+    upd: dict = {}
+    if payload.text is not None:
+        text = " ".join(payload.text.split())
+        if not text:
+            raise HTTPException(status_code=400, detail="Scrivi l'attività da fare")
+        upd["text"] = text[:500]
+    if payload.who is not None:
+        upd["who"] = payload.who.strip()[:60] or todo.get("who") or _first_name(current.name)
+    if payload.due_date is not None:
+        upd["due_date"] = _valid_due(payload.due_date)
+    if payload.done is not None:
+        upd["done"] = payload.done
+        upd["done_at"] = datetime.now(timezone.utc).isoformat() if payload.done else None
+    if upd:
+        await db.job_todos.update_one({"id": todo_id}, {"$set": upd})
+    return {**todo, **upd}
+
+
+@api_router.delete("/jobs/todos/{todo_id}")
+async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user)):
+    await _job_todo_or_404(current, todo_id)
+    await db.job_todos.delete_one({"id": todo_id})
+    return {"ok": True}
 
 
 @api_router.patch("/jobs/commesse/{commessa_id}/stato")
@@ -7782,6 +7895,8 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             if res["status"] == "ok":
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"],
                         "commessa_id": res["log"]["commessa_id"]}
+            if res["status"] in ("question", "unclear"):
+                return {**base, "label": "Diario commessa", "status": "error", "message": res["message"]}
             opts = "; ".join(f"«{c['title']}» ({c['client_name']})" for c in res.get("candidates") or [])
             return {**base, "label": "Diario commessa", "status": "error",
                     "message": f"Non l'ho salvato: {res['message']}" + (f" Commesse aperte: {opts}." if opts else "")
@@ -7963,6 +8078,7 @@ async def start_services():
         await db.job_logs.create_index([("org_id", 1), ("date", -1)])
         await db.job_photos.create_index([("log_id", 1)])
         await db.job_photos.create_index([("commessa_id", 1)])
+        await db.job_todos.create_index([("commessa_id", 1)])
         await db.work_reports.create_index([("commessa_id", 1)])
     except Exception:
         logger.exception("job diary indexes failed")

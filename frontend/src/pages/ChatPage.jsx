@@ -681,6 +681,10 @@ export default function ChatPage() {
       }] }));
       return;
     }
+    if (res.status !== "ok") {   // a question, or an entry not clear enough: nothing saved
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "📒 " + res.message }] }));
+      return;
+    }
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, jobCommessaId: res.log.commessa_id }] }));
   };
 

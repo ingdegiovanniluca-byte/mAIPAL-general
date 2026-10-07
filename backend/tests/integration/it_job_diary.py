@@ -139,7 +139,7 @@ async def main():
     # 1) the client has one open commessa -> that one; hours per person, "io" = the speaker
     jl.interpret = said(client="Rossi", hours=[{"who": "io", "hours": 4}, {"who": "Gino", "hours": "4,5"}],
                         materials=[{"name": "corrugato 25", "qty": 20, "unit": "m"}], problems=["manca una scatola 503"])
-    r = await server._save_job_log(me, "oggi io e Gino dai Rossi, 20 metri di corrugato, manca una scatola 503")
+    r = await server._save_job_log(me, "oggi io 4 ore e Gino 4 ore e mezza dai Rossi, 20 metri di corrugato 25, manca una scatola 503")
     print(r["message"])
     assert r["status"] == "ok" and r["log"]["commessa_id"] == "s_bagno" and r["log"]["client_name"] == "Mario Rossi"
     assert r["log"]["hours"] == [{"who": "Luca", "hours": 4.0}, {"who": "Gino", "hours": 4.5}]
@@ -191,7 +191,7 @@ async def main():
 
     # 7) photos: kept in mAIPAL compressed, served back
     jl.interpret = said(client="Rossi", hours=[{"who": "io", "hours": 2}], materials=[{"name": "Corrugato 25", "qty": 5, "unit": "m"}])
-    r = await server._save_job_log(me, "dai Rossi altri 5 metri di corrugato", images=[jpeg_uri(), "data:text/plain;base64,eHh4"])
+    r = await server._save_job_log(me, "dai Rossi 2 ore, altri 5 metri di corrugato 25", images=[jpeg_uri(), "data:text/plain;base64,eHh4"])
     assert len(r["log"]["photos"]) == 1 and "1 foto" in r["message"]
     ph = db.job_photos.docs[0]
     raw = base64.b64decode(ph["data_b64"]); assert len(raw) <= server.JOB_PHOTO_MAX_BYTES
@@ -394,5 +394,73 @@ async def main():
         await server.create_commessa_folder("nope", me); assert False
     except server.HTTPException as e:
         assert e.status_code == 404
+    # 15) MOD-002: the agent Diario only writes entries, with only what the user said
+    def kind_said(kind, text=None, doubt="", materials=None, hours=None):
+        async def f(t, speaker, team, known=None, user_id=None, channel="web"):
+            return {"kind": kind, "doubt": doubt, "date": jl.today_local().isoformat(), "text": text if text is not None else t,
+                    "hours": jl.clean_hours(hours or [], speaker), "materials": jl.clean_materials(materials or []),
+                    "problems": [], "client": "Rossi", "commessa": ""}
+        return f
+    n_logs, n_subs, n_items = len(db.job_logs.docs), len(db.collection_sub_items.docs), len(db.collection_items.docs)
+    jl.interpret = kind_said("domanda")
+    r = await server._save_job_log(me, "cosa abbiamo fatto dai Rossi la settimana scorsa", hint_commessa_id="s_bagno")
+    assert r["status"] == "question" and "Cerca" in r["message"] and "Diario" in r["message"]
+    # a plain question is never saved, even if the model calls it a note
+    jl.interpret = kind_said("nota", text="Controllato lo stato della commessa dei Rossi: tutto in ordine.")
+    r = await server._save_job_log(me, "com'è messa la commessa dei Rossi?")
+    assert r["status"] == "question"
+    jl.interpret = kind_said("non_chiara", doubt="Cosa avete fatto e da quale cliente?")
+    r = await server._save_job_log(me, "ok fatto")
+    assert r["status"] == "unclear" and "Cosa avete fatto e da quale cliente?" in r["message"] and "Non ho salvato" in r["message"]
+    assert (len(db.job_logs.docs), len(db.collection_sub_items.docs), len(db.collection_items.docs)) == (n_logs, n_subs, n_items)
+    # a note: the cleaned-up text must hold to the user's words, materials and hours must be said
+    jl.interpret = kind_said("nota", text="Posati 40 metri di cavo e installato il nuovo quadro elettrico con differenziale.",
+                             materials=[{"name": "cavo", "qty": 40, "unit": "m"}, {"name": "scatola 503", "qty": 2, "unit": "pz"}],
+                             hours=[{"who": "io", "hours": 8}])
+    r = await server._save_job_log(me, "oggi dai rossi posato il cavo nel bagno", hint_commessa_id="s_bagno")
+    assert r["status"] == "ok" and r["log"]["text"] == "oggi dai rossi posato il cavo nel bagno", r["log"]["text"]
+    assert [m["name"] for m in r["log"]["materials"]] == ["cavo"] and r["log"]["hours"] == []
+    jl.interpret = kind_said("nota", text="Oggi dai Rossi posato il corrugato nel bagno.")
+    r = await server._save_job_log(me, "oggi dai rossi posato il corugato nel bagno", hint_commessa_id="s_bagno")
+    assert r["log"]["text"] == "Oggi dai Rossi posato il corrugato nel bagno."   # a spelling fix is fine
+    # a photo alone is always kept
+    jl.interpret = kind_said("non_chiara")
+    r = await server._save_job_log(me, "Foto dal cantiere", images=[jpeg_uri()], commessa_id="s_cucina")
+    assert r["status"] == "ok", r
+    # @diario and the watch say the same, without saving
+    jl.interpret = kind_said("domanda")
+    res = await server._run_sub_agent(me, "journal", "quante ore abbiamo fatto dai Rossi?", "...", None, "conv_q")
+    assert res["status"] == "error" and "Cerca" in res["message"]
+    reply, _ = await tb._process_action(db, user, "journal", "quante ore abbiamo fatto dai Rossi?", None, channel="watch")
+    assert "Cerca" in reply and "Non l'ho salvato" not in reply
+    for q_, want in [("com'è messa la commessa X?", True), ("cosa abbiamo fatto da Rossi?", True),
+                     ("oggi posato il cavo. domani chi va?", False), ("posato il cavo", False)]:
+        assert jl.is_plain_question(q_) == want, q_
+    assert jl._hours_said(4, "dalle 8 alle 12") and jl._hours_said(4.5, "quattro ore e mezza") and not jl._hours_said(3, "posato il cavo")
+
+    # 16) MOD-006: the commessa's To Do - who and by when, kept inside the commessa
+    a = await server.create_job_todo("s_bagno", server.JobTodoPayload(text="  Montare i  sanitari ", who="Gino", due_date="2026-10-20"), me)
+    b = await server.create_job_todo("s_bagno", server.JobTodoPayload(text="Ordinare le piastrelle"), me)
+    c3 = await server.create_job_todo("s_bagno", server.JobTodoPayload(text="Chiamare il cliente", due_date="2026-10-10"), me)
+    assert a["text"] == "Montare i sanitari" and a["who"] == "Gino" and b["who"] == "Luca" and b["due_date"] is None
+    for bad in (server.JobTodoPayload(text="  "), server.JobTodoPayload(text="x", due_date="domani")):
+        try:
+            await server.create_job_todo("s_bagno", bad, me); assert False
+        except server.HTTPException as e:
+            assert e.status_code == 400
+    await server.update_job_todo(c3["id"], server.JobTodoPatch(done=True), me)
+    d = await server.get_job_commessa("s_bagno", current=me)
+    assert [x["text"] for x in d["todos"]] == ["Montare i sanitari", "Ordinare le piastrelle", "Chiamare il cliente"]
+    assert d["todos"][-1]["done"] and d["todos"][-1]["done_at"] and d["team"] == ["Luca", "Gino"]
+    u2 = await server.update_job_todo(a["id"], server.JobTodoPatch(due_date="", who="Luca"), me)
+    assert u2["due_date"] is None and u2["who"] == "Luca"
+    await server.delete_job_todo(b["id"], me)
+    assert {x["id"] for x in db.job_todos.docs} == {a["id"], c3["id"]}
+    try:
+        await server.update_job_todo("nope", server.JobTodoPatch(done=True), me); assert False
+    except server.HTTPException as e:
+        assert e.status_code == 404
+    await server._delete_job_diaries(["s_bagno"])
+    assert not db.job_todos.docs
     print("ALL OK")
 asyncio.run(main())

@@ -133,14 +133,16 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 **Scrivere nel diario**
 - Dalla chat con l'agente **Diario**, anche a voce: "Oggi io e Gino dai Rossi, 4 ore a testa: posati 20 metri di corrugato, manca una scatola 503".
 - mAIPAL riconosce la commessa dal cliente o dai lavori che nomini; se non è sicuro te lo chiede con dei pulsanti (o ti propone di aprire una nuova commessa).
+- L'agente Diario **scrive soltanto**: salva solo quello che hai detto tu, senza aggiungere nulla. Se la nota non è chiara non salva niente e ti chiede di precisare. Se invece fai una domanda ("com'è messa la commessa dei Rossi?") non salva niente: per cercare usa l'agente **Cerca** oppure la chat della commessa qui nel Diario.
 - Puoi allegare le foto: vanno nella voce e nella cartella della commessa su Drive/OneDrive.
 - Da Telegram: comando `/journal` o scrivi liberamente; le foto mandate subito dopo vanno nella stessa voce.
 
 **La sezione**
-- In alto i clienti, ognuno con le sue commesse e il loro stato; tocca una commessa per aprirne il diario.
+- In alto i clienti: ogni riquadro mostra nome, indirizzo e quante commesse ha (**totali** e **attive**, cioè tutte tranne le chiuse). Con la **freccia** lo apri e vedi le sue commesse con il loro stato; tocca una commessa per aprirne il diario. Cercando un cliente o una commessa, i riquadri trovati si aprono da soli.
 - Nel diario della commessa:
   - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), Ore, Segnalazioni, Documenti, Cantiere (apre la mappa), Date, Telefono, Email;
-  - le sezioni **Diario / Ore / Problemi / Materiali**: scorri per passare dall'una all'altra;
+  - le sezioni **Diario / Ore / Problemi / Materiali / To Do**: scorri per passare dall'una all'altra;
+  - **To Do**: le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
   - il **periodo** (ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.

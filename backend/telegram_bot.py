@@ -330,7 +330,7 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     conv = None if new_conv else await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "job_commessa_id": 1})
     res = await _save_job_log(_to_user_pydantic(user_doc), content, images=images,
                               hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
-    if res["status"] == "ok":
+    if res["status"] in ("ok", "question", "unclear"):
         answer = res["message"]
     else:
         opts = "\n".join(f"• {c['title']} — {c['client_name']}" for c in res.get("candidates") or [])
@@ -474,6 +474,10 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
                          job_commessa_id=res["log"]["commessa_id"], job_log_id=res["log"]["id"],
                          pending_job_context=None, last_user_message=content)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+        return
+    if res["status"] in ("question", "unclear"):   # nothing saved, nothing waiting
+        await _set_state(db, chat_id, user["user_id"], current_action="journal", pending_job_context=None)
+        await ctx.bot.send_message(chat_id=chat_id, text="📒 " + res["message"], reply_markup=_reply_keyboard("journal"))
         return
     buttons = [[InlineKeyboardButton(f"{c['title']} · {c['client_name']}"[:60], callback_data=f"jobc:{c['commessa_id']}")]
                for c in res.get("candidates") or []]

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -85,6 +86,79 @@ def clean_problems(rows) -> list:
     return [str(p).strip()[:300] for p in (rows if isinstance(rows, list) else []) if str(p or "").strip()]
 
 
+# ---- an entry holds only what the user said ----
+# The agent Diario only WRITES entries: a question ("com'è messa la commessa dei Rossi?") is
+# not saved, an entry it can't understand is not saved either (it asks instead), and what is
+# saved is checked against the user's own words, so nothing invented ever lands in the diary.
+
+KINDS = ("nota", "domanda", "non_chiara")
+_STOP = set("""il lo la i gli le un uno una di a da in con su per tra fra e o ma se che chi cosa come dove quando
+del dello della dei degli delle al allo alla ai agli alle dal dalla dai nel nella nei nelle sul sulla sui sulle
+è e' sono ho hai ha abbiamo hanno siamo era stato stata stati fatto fatta fatti non mi ti si ci vi ne anche poi
+oggi ieri domani questo questa quello quella io noi tu lui lei loro più già molto tutto tutti ogni""".split())
+_QUESTION_START = re.compile(
+    r"^(che\s+cosa|cosa|cos'|quando|dove|chi|come|quale|quali|qual|quanto|quanti|quante|perch[eé]|"
+    r"mi\s+dici|dimmi|sai|c'è|ci\s+sono|abbiamo|hai|com'è|com'e)\b", re.I)
+_NUM_WORDS = {"una": 1, "un": 1, "uno": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7,
+              "otto": 8, "nove": 9, "dieci": 10, "undici": 11, "dodici": 12, "mezza": 0.5, "mezzo": 0.5}
+
+
+def _norm(s: str) -> str:
+    s = unicodedata.normalize("NFKD", (s or "").lower())
+    return "".join(c for c in s if not unicodedata.combining(c))
+
+
+def _words(s: str) -> list:
+    return [w for w in re.findall(r"[a-z0-9]+", _norm(s)) if len(w) >= 3 and w not in _STOP]
+
+
+def _said(word: str, said: set) -> bool:
+    """A word of the saved entry is in what the user said - the same word, the same root
+    (posati/posato) or the same word misspelled (corugato/corrugato)."""
+    if word in said or word.isdigit():
+        return word in said
+    from difflib import SequenceMatcher
+    return any(w[:5] == word[:5] or SequenceMatcher(None, w, word).ratio() >= 0.8 for w in said)
+
+
+def grounded(text: str, raw: str, min_share: float = 0.7) -> bool:
+    words = _words(text)
+    said = set(_words(raw))
+    if not words:
+        return True
+    return sum(1 for w in words if _said(w, said)) / len(words) >= min_share
+
+
+def is_plain_question(raw: str) -> bool:
+    """One sentence that asks something, with nothing reported ("cosa abbiamo fatto dai Rossi?")."""
+    t = " ".join((raw or "").split())
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]
+    return len(parts) == 1 and (t.endswith("?") or bool(_QUESTION_START.match(t)))
+
+
+def _hours_said(h: float, raw: str) -> bool:
+    """The hours were said: the number itself, in words, or a time range ("dalle 8 alle 12")."""
+    n = _norm(raw)
+    nums = {float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", n)}
+    nums |= {float(v) for k, v in _NUM_WORDS.items() if re.search(rf"\b{k}\b", n)}
+    if h in nums or (h % 1 == 0.5 and (h - 0.5) in nums and re.search(r"\be\s+mezz", n)):
+        return True
+    return bool(re.search(r"\bdall[ae']\s*\d|\bmezza\s+giornata|\bgiornata\s+intera|\btutto\s+il\s+giorno", n))
+
+
+def ground(parsed: dict, raw: str) -> dict:
+    """Keeps only what the user said: the cleaned-up text if it holds to their words (else
+    their own words), hours that were said, materials and problems named in the message."""
+    out = dict(parsed)
+    if not grounded(out.get("text") or "", raw):
+        out["text"] = " ".join((raw or "").split())
+    said = set(_words(raw))
+    out["hours"] = [h for h in out.get("hours") or [] if _hours_said(float(h["hours"]), raw)]
+    out["materials"] = [m for m in out.get("materials") or [] if any(_said(w, said) for w in _words(m["name"]))]
+    out["problems"] = [p for p in out.get("problems") or [] if grounded(p, raw, 0.5)]
+    return out
+
+
 def valid_day(s, fallback: date) -> str:
     """The entry's day: what the model computed if it's a real, not-future date, else today."""
     try:
@@ -98,8 +172,8 @@ def valid_day(s, fallback: date) -> str:
 
 async def interpret(text: str, speaker: str, team: list, known: Optional[dict] = None,
                     user_id: Optional[str] = None, channel: str = "web") -> dict:
-    """-> {"date", "text", "hours": [{who, hours}], "materials": [{name, qty, unit}], "problems": [...],
-    "client": str, "commessa": str}"""
+    """-> {"kind": nota|domanda|non_chiara, "doubt": str, "date", "text", "hours": [{who, hours}],
+    "materials": [{name, qty, unit}], "problems": [...], "client": str, "commessa": str}"""
     today = today_local()
     team_s = ", ".join(t for t in team if t and t != speaker) or "nessuno registrato"
     job_s = (f"La voce riguarda la commessa «{known.get('title')}» del cliente {known.get('client')}.\n"
@@ -110,6 +184,14 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         f"{IT_WEEKDAYS[today.weekday()]} {today.isoformat()}. Chi scrive è {speaker} (\"io\" = {speaker}); "
         f"colleghi del team: {team_s}.\n{job_s}\n"
         "Compiti:\n"
+        "0. \"kind\": cosa ha scritto l'utente.\n"
+        "   - \"nota\": racconta lavori fatti o da fare, ore, materiali, problemi, cose successe in cantiere.\n"
+        "   - \"domanda\": CHIEDE informazioni invece di raccontare (\"com'è messa la commessa dei Rossi?\", "
+        "\"cosa abbiamo fatto ieri?\", \"quante ore abbiamo fatto?\", \"mancano materiali?\").\n"
+        "   - \"non_chiara\": non si capisce cosa annotare (troppo vaga, frasi senza senso, saluti, \"ok\", "
+        "\"sì\") oppure manca un'informazione indispensabile per capirla.\n"
+        "   Con \"domanda\" o \"non_chiara\" lascia vuoti tutti gli altri campi. Con \"non_chiara\" scrivi in "
+        "\"doubt\" una domanda breve per chiarire (es. \"Cosa avete fatto e da quale cliente?\").\n"
         "1. \"text\": il testo sistemato (grammatica, punteggiatura, termini tecnici corretti), stessa persona "
         "e stessi fatti. NON aggiungere nulla che non sia detto.\n"
         "2. \"date\": il giorno a cui si riferisce (\"ieri\", \"lunedì\", \"il 3\") in formato YYYY-MM-DD; se non "
@@ -122,8 +204,9 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "5. \"problems\": problemi, imprevisti, cose mancanti o da rifare, frasi brevi. Nessuno: [].\n"
         "6. \"client\" e \"commessa\": il cliente e i lavori/cantiere come li nomina il testo (\"dai Rossi\" -> "
         "\"Rossi\"), stringa vuota se non li nomina.\n"
-        "Rispondi SOLO con JSON: {\"date\": \"\", \"text\": \"\", \"hours\": [], \"materials\": [], \"problems\": [], "
-        "\"client\": \"\", \"commessa\": \"\"}"
+        "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
+        "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
+        "\"hours\": [], \"materials\": [], \"problems\": [], \"client\": \"\", \"commessa\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -137,7 +220,10 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
     _track(resp, user_id, channel)
     m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
     parsed = json.loads(m.group(0)) if m else {}
+    kind = str(parsed.get("kind") or "nota").strip().lower().replace(" ", "_")
     return {
+        "kind": kind if kind in KINDS else "nota",
+        "doubt": str(parsed.get("doubt") or "").strip()[:200],
         "date": valid_day(parsed.get("date"), today),
         "text": str(parsed.get("text") or "").strip() or text.strip(),
         "hours": clean_hours(parsed.get("hours"), speaker),

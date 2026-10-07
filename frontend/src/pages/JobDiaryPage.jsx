@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
-  NotebookPen, MessageCircle, Send, ChevronRight, RefreshCw, CalendarDays, CircleDot, FileText, Check } from "lucide-react";
+  NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
+  UserRound } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
@@ -83,6 +84,7 @@ const SECTIONS = [
   { key: "ore", label: "Ore" },
   { key: "problemi", label: "Problemi" },
   { key: "materiali", label: "Materiali" },
+  { key: "todo", label: "To Do" },
 ];
 const PERIODS = [
   { key: "30", label: "Ultimi 30 giorni" },
@@ -94,20 +96,21 @@ const periodRange = (p) => (p.key === "30" ? { from: daysAgoIso(29), to: todayIs
   : p.key === "custom" ? { from: p.from || null, to: p.to || null }
   : { from: null, to: null });
 
-// an item of the row on top of the diary: two lines only - the icon with a small caps label,
-// the value under it (with a short grey note beside it when useful); no box behind
+// an item of the row on top of the diary: the icon on the left, at the height of the small
+// caps label; the label and the value under it start on the same vertical (with a short grey
+// note beside the value when useful); no box behind
 function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaLabel, external }) {
-  const cls = "snap-start shrink-0 min-w-[92px] max-w-[190px] py-1 flex flex-col gap-1.5 text-left text-white"
+  const cls = "snap-start shrink-0 min-w-[92px] max-w-[190px] py-1 flex items-start gap-1.5 text-left text-white"
     + (onClick || href ? " active:opacity-70" : "");
   const body = (
     <>
-      <span className="flex items-center gap-1.5 min-w-0">
-        <Icon size={14} className="text-white/55 shrink-0" />
-        <span className="text-[10px] uppercase tracking-widest text-white/50 truncate">{label}</span>
-      </span>
-      <span className="flex items-baseline gap-1.5 min-w-0">
-        <span className="text-[15px] font-medium text-white/90 truncate">{value}</span>
-        {note && <span className="text-[11px] text-white/55 whitespace-nowrap">{note}</span>}
+      <Icon size={14} className="text-white/55 shrink-0" />
+      <span className="flex flex-col gap-1.5 min-w-0">
+        <span className="text-[10px] leading-[14px] uppercase tracking-widest text-white/50 truncate" data-testid="info-label">{label}</span>
+        <span className="flex items-baseline gap-1.5 min-w-0" data-testid="info-value">
+          <span className="text-[15px] font-medium text-white/90 truncate">{value}</span>
+          {note && <span className="text-[11px] text-white/55 whitespace-nowrap">{note}</span>}
+        </span>
       </span>
     </>
   );
@@ -233,12 +236,113 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
   );
 }
 
-function ClientCard({ client, commesse, onOpen }) {
+// A client: closed it shows only name, address and how many commesse it has (all / active =
+// all but the closed ones); the arrow opens it on its commesse.
+// To Do: an activity planned for the commessa - who takes care of it and by when (if said)
+// stand out on top, like the author of a diary line; the dot ticks it done.
+function TodoRow({ todo, onToggle, onOpen }) {
+  const overdue = !todo.done && todo.due_date && todo.due_date < todayIso();
   return (
-    <div data-testid="client-group" className="card-soft p-4">
-      <div className="font-semibold text-white text-base leading-snug">{client.name || "Cliente senza nome"}</div>
-      {client.address && <div className="flex items-center gap-1 text-xs text-white/60 mt-0.5"><MapPin size={11} />{client.address}</div>}
-      <div className="mt-3 flex flex-col gap-1.5">
+    <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]" data-testid="job-todo" data-done={todo.done ? "1" : "0"}>
+      <button type="button" onClick={() => onToggle(todo)} aria-pressed={!!todo.done} data-testid="job-todo-done"
+        aria-label={todo.done ? "Segna come da fare" : "Segna come fatta"}
+        className={`mt-[1px] h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md ${todo.done ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+        {todo.done && <Check size={12} strokeWidth={2.8} />}
+      </button>
+      <button type="button" onClick={() => onOpen(todo)} className="min-w-0 text-left">
+        <span className={`flex items-center gap-x-3.5 gap-y-0.5 flex-wrap text-[12.5px] font-medium ${todo.done ? "text-white/50" : "text-white"}`}>
+          <span className="inline-flex items-center gap-1" data-testid="job-todo-who"><UserRound size={12} strokeWidth={2} /> {todo.who}</span>
+          {todo.due_date && (
+            <span className="inline-flex items-center gap-1" data-testid="job-todo-due">
+              <CalendarDays size={12} strokeWidth={2} /> entro {shortDay(todo.due_date)}{overdue && <span className="text-white/55 font-normal">· scaduta</span>}
+            </span>
+          )}
+        </span>
+        <span className={`block mt-[3px] text-[14px] leading-[1.45] whitespace-pre-wrap ${todo.done ? "text-white/45 line-through" : "text-white/90"}`}>{todo.text}</span>
+      </button>
+    </div>
+  );
+}
+
+function TodoDialog({ todo, commessaId, team, onClose, onSaved }) {
+  const isNew = !todo.id;
+  const [text, setText] = useState(todo.text || "");
+  const [who, setWho] = useState(todo.who || team[0] || "");
+  const [due, setDue] = useState(todo.due_date || "");
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!text.trim()) { toast.error("Scrivi l'attività da fare"); return; }
+    setSaving(true);
+    try {
+      if (isNew) await api.post(`/jobs/commesse/${commessaId}/todos`, { text, who, due_date: due || null });
+      else await api.patch(`/jobs/todos/${todo.id}`, { text, who, due_date: due || "" });
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
+    finally { setSaving(false); }
+  };
+  const del = async () => {
+    try { await api.delete(`/jobs/todos/${todo.id}`); onSaved(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const field = "h-9 rounded-lg bg-white/10 px-2.5 text-sm text-white placeholder:text-white/40 outline-none";
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-lg bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="job-todo-dialog">
+        <DialogHeader><DialogTitle>{isNew ? "Nuova attività" : "Modifica l'attività"}</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div>
+            <div className="kicker mb-1">cosa c'è da fare</div>
+            <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus data-testid="job-todo-text"
+              placeholder="Es. Montare i sanitari" className="w-full rounded-lg bg-white/10 p-2.5 text-sm text-white placeholder:text-white/40 outline-none" />
+          </div>
+          <div>
+            <div className="kicker mb-1">chi se ne occupa</div>
+            <input value={who} onChange={(e) => setWho(e.target.value)} list="job-todo-team" data-testid="job-todo-who-input" placeholder="Nome" className={`${field} w-full`} />
+            <datalist id="job-todo-team">{team.map((n) => <option key={n} value={n} />)}</datalist>
+          </div>
+          <div>
+            <div className="kicker mb-1">entro quando (facoltativo)</div>
+            <div className="flex items-center gap-2">
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="job-todo-due-input" className={`${field} flex-1`} />
+              {due && <button type="button" onClick={() => setDue("")} className="p-2 text-white/60 hover:text-white" aria-label="Togli la data"><X size={14} /></button>}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            {!isNew && (
+              <button onClick={del} data-testid="job-todo-delete" className="mr-auto px-3 py-2 rounded-full text-sm text-white/75 hover:bg-white/10 inline-flex items-center gap-1.5">
+                <Trash2 size={14} /> Elimina
+              </button>
+            )}
+            <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-white/80 hover:bg-white/10">Annulla</button>
+            <button onClick={save} disabled={saving} data-testid="job-todo-save" className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">
+              {saving ? "Salvo…" : "Salva"}
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ClientCard({ client, commesse, total, active, open, onToggle, onOpen }) {
+  return (
+    <div data-testid="client-group" data-open={open ? "1" : "0"} className="card-soft p-4 relative">
+      <button type="button" onClick={onToggle} className="block w-full text-left pr-8" aria-expanded={open}>
+        <span className="flex items-baseline gap-x-3 gap-y-0.5 flex-wrap">
+          <span className="font-semibold text-white text-base leading-snug">{client.name || "Cliente senza nome"}</span>
+          <span className="inline-flex items-center gap-2.5 text-[12px] text-white/70 whitespace-nowrap" data-testid="client-counts">
+            <span className="inline-flex items-center gap-1" title="Commesse totali" data-testid="client-count-total"><Briefcase size={12} /> {total} {total === 1 ? "totale" : "totali"}</span>
+            <span className="inline-flex items-center gap-1" title="Commesse attive (tutte tranne le chiuse)" data-testid="client-count-active"><Activity size={12} /> {active} {active === 1 ? "attiva" : "attive"}</span>
+          </span>
+        </span>
+        {client.address && <span className="flex items-center gap-1 text-xs text-white/60 mt-0.5"><MapPin size={11} />{client.address}</span>}
+      </button>
+      <button type="button" onClick={onToggle} data-testid="expand-client-group" aria-expanded={open}
+        aria-label={open ? "Nascondi le commesse" : "Mostra le commesse"}
+        className="absolute top-3 right-3 p-1 rounded-full text-white/80 hover:bg-white/10">
+        <ChevronDown size={15} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && <div className="mt-3 flex flex-col gap-1.5">
         {commesse.map((c) => (
           <button key={c.id} data-testid="commessa-row" onClick={() => onOpen(c)}
             className="w-full flex items-center gap-2 text-left px-3 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] transition-colors">
@@ -252,7 +356,7 @@ function ClientCard({ client, commesse, onOpen }) {
             <ChevronRight size={14} className="text-white/45 shrink-0" />
           </button>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -323,8 +427,9 @@ function CommessaChat({ commessa, onClose, onSaved }) {
 
   const saveEntry = async (body, images, fromIdx = null) => {
     const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id });
-    setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false } : m)), { role: "assistant", content: r.data.message, saved: true }]);
-    onSaved();
+    const ok = r.data.status === "ok";   // a question or an unclear entry is not saved
+    setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false } : m)), { role: "assistant", content: r.data.message, saved: ok }]);
+    if (ok) onSaved();
   };
 
   const send = async () => {
@@ -439,12 +544,19 @@ export default function JobDiaryPage() {
   const [detail, setDetail] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
   const [period, setPeriod] = useState({ key: "30" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [menu, setMenu] = useState(null);       // "stato" | "periodo"
+  const [openClients, setOpenClients] = useState(() => new Set());   // client cards opened with the arrow
+  const toggleClient = (id) => setOpenClients((cur) => {
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const swipeX = useRef(null);
 
   const loadList = async () => {
@@ -489,6 +601,16 @@ export default function JobDiaryPage() {
       || b.last.localeCompare(a.last) || (a.name || "").localeCompare(b.name || ""));
     return out;
   }, [commesse, q]);
+  // every client's commesse, all and active (all but the closed ones) - whatever the search shows
+  const counts = useMemo(() => {
+    const m = {};
+    commesse.forEach((c) => {
+      const x = m[c.client_item_id] || (m[c.client_item_id] = { total: 0, active: 0 });
+      x.total += 1;
+      if (c.stato !== "chiusa") x.active += 1;
+    });
+    return m;
+  }, [commesse]);
 
   const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("diary"); };
   const setStato = async (stato) => {
@@ -532,7 +654,11 @@ export default function JobDiaryPage() {
         </div>
       ) : groups.length === 0 ? <div className="text-xs text-white/55 px-2">Nessun cliente o commessa trovato.</div> : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start" data-testid="client-groups">
-          {groups.map((g) => <ClientCard key={g.id} client={g} commesse={g.commesse} onOpen={openCommessa} />)}
+          {groups.map((g) => (
+            // while searching, the cards open on the commesse found
+            <ClientCard key={g.id} client={g} commesse={g.commesse} total={counts[g.id]?.total || 0} active={counts[g.id]?.active || 0}
+              open={!!q.trim() || openClients.has(g.id)} onToggle={() => toggleClient(g.id)} onOpen={openCommessa} />
+          ))}
         </div>
       )}
     </div>
@@ -588,6 +714,12 @@ export default function JobDiaryPage() {
     setMenu(null);
   };
   const delFromEdit = (log) => { setEditing(null); delLog(log); };
+  const todos = detail?.todos || [];
+  const openTodos = todos.filter((x) => !x.done).length;
+  const toggleTodo = async (todo) => {
+    try { await api.patch(`/jobs/todos/${todo.id}`, { done: !todo.done }); await loadDetail(selectedId); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
 
   const diaryView = !c ? loading : (
     <div className="relative max-w-xl" data-testid="commessa-detail">
@@ -628,6 +760,27 @@ export default function JobDiaryPage() {
         <button type="button" onClick={() => pickSection(secAt(secIdx + 1).key)} className="flex-1 basis-0 text-left text-[15px] font-medium text-white/30">{secAt(secIdx + 1).label}</button>
       </div>
 
+      {/* To Do: the next activities instead of the period and the days */}
+      {section === "todo" ? (
+        <>
+          <div className="mt-1.5 flex items-center justify-center gap-2.5">
+            <button type="button" onClick={() => setTodoEditing({})} data-testid="job-todo-add" aria-label="Nuova attività"
+              className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70">
+              <Plus size={17} />
+              <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova attività</span>
+            </button>
+            <span className="text-[12px] tracking-[0.16em] uppercase text-white/55" data-testid="job-todo-count">· {openTodos} da fare</span>
+          </div>
+          <div className="mt-3" data-testid="job-todos">
+            {todos.map((x) => <TodoRow key={x.id} todo={x} onToggle={toggleTodo} onOpen={setTodoEditing} />)}
+            {todos.length === 0 && (
+              <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="job-todos-empty">
+                Nessuna attività in programma. Tocca «Nuova attività» per segnare cosa c'è da fare, chi se ne occupa ed entro quando.
+              </div>
+            )}
+          </div>
+        </>
+      ) : (<>
       {/* the period */}
       <div className="mt-1.5 flex items-center justify-center gap-2.5">
         <button type="button" onClick={() => setMenu((m) => (m === "periodo" ? null : "periodo"))} data-testid="period-btn" aria-label="Scegli il periodo"
@@ -671,6 +824,7 @@ export default function JobDiaryPage() {
           </div>
         )}
       </div>
+      </>)}
 
       {/* state menu and period popup, like the profile menu */}
       {menu && <button type="button" aria-label="Chiudi" className="fixed inset-0 z-30 cursor-default" onClick={() => setMenu(null)} />}
@@ -734,6 +888,10 @@ export default function JobDiaryPage() {
           onClick={() => setChatOpen(true)} />
       )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
+      {todoEditing && c && (
+        <TodoDialog todo={todoEditing} commessaId={c.id} team={detail?.team || []} onClose={() => setTodoEditing(null)}
+          onSaved={async () => { setTodoEditing(null); await loadDetail(selectedId); }} />
+      )}
       {editing && (
         <EditDialog log={editing} onClose={() => setEditing(null)} onDelete={delFromEdit}
           onSaved={async () => { setEditing(null); await reload(); toast.success("Voce aggiornata"); }} />
