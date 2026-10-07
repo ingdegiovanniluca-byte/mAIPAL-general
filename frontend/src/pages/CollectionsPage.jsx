@@ -46,6 +46,7 @@ export default function CollectionsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+  const { name: teamName } = useOrg();   // "condivisa con il team <nome>" on the cards
 
   const load = async () => {
     try {
@@ -145,7 +146,7 @@ export default function CollectionsPage() {
             className={`lg-card p-5 rounded-[24px] cursor-grab active:cursor-grabbing relative group transition-transform duration-150 ${dragOverId === c.id && draggedId !== c.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === c.id ? "opacity-50" : ""}`}
             onClick={() => setView({ level: 2, collection: c })}
           >
-            {/* only the essentials: the name and, when shared, who with - the attributes are inside the list.
+            {/* only the essentials: the name, who it's shared with and how many elementi - the attributes are inside the list.
                 On the right the lock/people icon and the bin side by side (never on top of each other) */}
             <div className="flex items-start gap-2">
               <div className="font-semibold text-lg flex-1 min-w-0">{c.name}</div>
@@ -164,7 +165,14 @@ export default function CollectionsPage() {
                 </button>
               )}
             </div>
-            {sharingLabel(c) && <div className="text-[11px] text-white/85 mt-1 flex items-center gap-1" data-testid={`collection-sharing-${c.id}`}><Users size={11} className="shrink-0" />{sharingLabel(c)}</div>}
+            {/* every card the same: who it's shared with (or "Lista privata"), then how many elementi */}
+            <div className="text-[11px] text-white/85 mt-1 flex items-center gap-1" data-testid={`collection-sharing-${c.id}`}>
+              {isShared(c) ? <Users size={11} className="shrink-0" /> : <Lock size={11} className="shrink-0" />}
+              {isShared(c) ? sharingLabel(c, teamName) : "Lista privata"}
+            </div>
+            <div className="text-[11px] text-white/85 mt-1 flex items-center gap-1" data-testid={`collection-count-${c.id}`}>
+              <Rows3 size={11} className="shrink-0" />{c.item_count || 0} {(c.item_count || 0) === 1 ? "elemento" : "elementi"}
+            </div>
           </div>
         ))}
       </div>
@@ -209,9 +217,9 @@ const isShared = (c) => c.visibility === "org" || (c.shared_with || []).length >
 const joinNames = (names) => (names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}`);
 
 // "di Mario Rossi" on a list a team-mate shared with me; "condivisa con …" on my own shared lists.
-function sharingLabel(c) {
+function sharingLabel(c, teamName = "") {
   if (c.is_owner === false) return `di ${c.owner?.name || "un collega"} · condivisa con te`;
-  if (c.visibility === "org") return "condivisa con tutto il team";
+  if (c.visibility === "org") return teamName ? `condivisa con il team ${teamName}` : "condivisa con tutto il team";
   const names = (c.shared_with_users || []).map((u) => u.name.split(" ")[0]);
   return names.length ? `condivisa con ${joinNames(names)}` : "";
 }
@@ -900,12 +908,13 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                     <button type="button" data-testid="delete-commessa" onClick={() => delSub(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-200">
                       <Trash2 size={11} /> Elimina
                     </button>
-                    {/* open card: the folder joins the commands, at the end of their row (bottom corner) */}
+                    {/* open card: the same folder icon, moved to the end of the commands' row (bottom corner) */}
                     <button type="button" data-testid={`commessa-folder-${sub.id}`} disabled={folderBusy === sub.id}
                       onClick={(e) => { e.stopPropagation(); commessaFolder(sub); }}
                       title={sub.drive_folder ? `Apri la cartella «${sub.drive_folder.name}»` : "Crea la cartella della commessa su Drive, dentro quella del cliente"}
-                      className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15 disabled:opacity-50">
-                      {sub.drive_folder ? <FolderOpen size={11} /> : <FolderPlus size={11} />} Cartella
+                      aria-label={sub.drive_folder ? "Apri la cartella della commessa" : "Crea la cartella della commessa"}
+                      className={`ml-auto p-1 rounded-full hover:bg-white/10 disabled:opacity-50 ${sub.drive_folder ? "text-white" : "text-white/80"}`}>
+                      {sub.drive_folder ? <FolderOpen size={15} /> : <FolderPlus size={15} />}
                     </button>
                   </div>
                 </div>
