@@ -3,7 +3,11 @@ import { useEffect, useState } from "react";
 /* Per-device preferences kept in localStorage. Changing one fires "maipal:prefs" so every
    open page picks it up at once (Impostazioni -> Chat without a reload). */
 const KEY = "maipal.prefs";
-const DEFAULTS = { micSide: "right" };   // chat composer: voice button on the right or left
+const DEFAULTS = {
+  micSide: "right",   // chat composer: voice button on the right or left
+  // mobile bottom bar: the sections next to Chat (at most 3), chosen in the "+" menu
+  pinnedSections: ["/dashboard/tasks", "/dashboard/todos", "/dashboard/liste"],
+};
 
 function readAll() {
   try { return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(KEY) || "{}") || {}) }; }

@@ -4,8 +4,10 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, History, Sun, Moon,
+  Newspaper, List, FileText, Dumbbell, Repeat, History, Sun, Moon, Check,
 } from "lucide-react";
+import { toast } from "sonner";
+import { usePref } from "@/lib/prefs";
 import logo3 from "@/assets/logo3.png";
 import { MobileTitleContext } from "@/lib/mobile-title";
 import { applyTheme, getStoredTheme } from "@/lib/theme";
@@ -27,9 +29,10 @@ const NAV_ITEMS = [
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings", icon: Settings },
 ];
 
-// On the mobile bottom bar these 4 sections get their own button (Liste in place of Diario); everything else (except
-// Impostazioni, reached from the avatar) lives inside "Altro".
-const MOBILE_PRIMARY = ["/dashboard/chat", "/dashboard/tasks", "/dashboard/todos", "/dashboard/liste"];
+// On the mobile bottom bar: Chat, always, plus up to 3 sections the user pins with the dot in
+// the "+" menu (kept on the device, like the microphone side); the "+" menu lists the others.
+const CHAT_PATH = "/dashboard/chat";
+const MAX_PINNED = 3;
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -81,12 +84,23 @@ export default function DashboardLayout() {
   const initial = (user?.name || user?.email || "?").trim().charAt(0).toUpperCase();
 
   const visibleItems = NAV_ITEMS.filter((item) => (!item.adminOnly || user?.role === "admin") && (!item.vertical || user?.business_vertical === item.vertical));
-  const primaryItems = visibleItems.filter((item) => MOBILE_PRIMARY.includes(item.to));
-  // Everything not in the bottom pill lives behind its "+" button - Impostazioni included,
-  // so it is reachable from there as well as from the avatar menu.
-  const moreItems = visibleItems.filter((item) => !MOBILE_PRIMARY.includes(item.to));
+  const [pinnedPref, setPinnedPref] = usePref("pinnedSections");
+  const pinned = (Array.isArray(pinnedPref) ? pinnedPref : [])
+    .filter((to) => to !== CHAT_PATH && visibleItems.some((i) => i.to === to)).slice(0, MAX_PINNED);
+  const primaryItems = visibleItems.filter((item) => item.to === CHAT_PATH || pinned.includes(item.to));
+  // The "+" menu: every section but Chat, each with a dot to pin it to the bar (Impostazioni
+  // included, so it is reachable from there as well as from the avatar menu).
+  const moreItems = visibleItems.filter((item) => item.to !== CHAT_PATH);
   const currentItem = visibleItems.find((item) => location.pathname.startsWith(item.to));
-  const isMoreActive = !!currentItem && moreItems.some((item) => item.to === currentItem.to);
+  const isMoreActive = !!currentItem && !primaryItems.some((item) => item.to === currentItem.to);
+  const togglePinned = (to) => {
+    if (pinned.includes(to)) { setPinnedPref(pinned.filter((x) => x !== to)); return; }
+    if (pinned.length >= MAX_PINNED) {
+      toast.error(`Nel menu in basso ci stanno ${MAX_PINNED} sezioni oltre a Chat: togline una col suo pallino.`);
+      return;
+    }
+    setPinnedPref([...pinned, to]);
+  };
 
   const goTo = (to) => { setMoreOpen(false); setMenuOpen(false); nav(to); };
 
@@ -285,33 +299,42 @@ export default function DashboardLayout() {
           </div>
         )}
 
-        {/* ===== "Altro" panel (remaining sections), from the bottom ===== */}
+        {/* ===== "+" menu: the same glass panel as the profile menu, above the "+" button.
+            A tap on a row opens the section; its dot pins it to the bar (at most 3, Chat
+            is always there). ===== */}
         {moreOpen && (
-          <div className="md:hidden fixed inset-0 z-50 flex items-end" onClick={() => setMoreOpen(false)}>
-            <div className="absolute inset-0 bg-black/60" aria-hidden="true" />
+          <div className="md:hidden fixed inset-0 z-50" onClick={() => setMoreOpen(false)}>
             <div
               data-testid="more-sheet"
-              className="relative w-full rounded-t-3xl bg-[#3A3638] border-t border-white/10 p-4"
-              style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 20px)" }}
+              role="menu"
+              aria-label="Altre sezioni"
+              className="glass-panel absolute right-3 w-[264px] py-1 max-h-[70vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150 origin-bottom-right"
+              style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 92px)" }}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
-              <div className="grid grid-cols-3 gap-3">
-                {moreItems.map((item) => {
-                  const active = currentItem?.to === item.to;
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.to}
-                      data-testid={item.testid}
-                      onClick={() => goTo(item.to)}
-                      className={`flex flex-col items-center gap-1.5 py-3 rounded-xl transition-colors ${active ? "bg-white/10 text-white" : "text-white/70 hover:bg-white/5"}`}
-                    >
-                      <Icon size={20} />
-                      <span className="text-xs">{item.label}</span>
+              {moreItems.map((item) => {
+                const active = currentItem?.to === item.to;
+                const on = pinned.includes(item.to);
+                const Icon = item.icon;
+                return (
+                  <div key={item.to} className={`glass-row flex items-center ${active ? "bg-white/10" : ""}`}>
+                    <button type="button" role="menuitem" data-testid={item.testid} onClick={() => goTo(item.to)}
+                      className="flex-1 min-w-0 flex items-center gap-3.5 pl-5 py-3.5 text-left text-[15px] text-white">
+                      <Icon size={19} strokeWidth={1.7} className="shrink-0" />
+                      <span className="truncate">{item.label}</span>
                     </button>
-                  );
-                })}
+                    <button type="button" onClick={() => togglePinned(item.to)} data-testid={`pin-${item.testid}`}
+                      aria-pressed={on} aria-label={on ? `Togli ${item.label} dal menu in basso` : `Metti ${item.label} nel menu in basso`}
+                      className="h-12 w-12 shrink-0 flex items-center justify-center">
+                      <span className={`h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${on ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+                        {on && <Check size={12} strokeWidth={2.8} />}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+              <div className="px-5 pt-2.5 pb-3 text-[11px] leading-snug text-white/55 border-t border-white/[0.13]">
+                Col pallino scegli le sezioni del menu in basso: {pinned.length} di {MAX_PINNED}, oltre a Chat che c'è sempre.
               </div>
             </div>
           </div>
