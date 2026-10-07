@@ -93,10 +93,10 @@ const periodRange = (p) => (p.key === "30" ? { from: daysAgoIso(29), to: todayIs
   : p.key === "custom" ? { from: p.from || null, to: p.to || null }
   : { from: null, to: null });
 
-// a card of the row on top of the diary: the commessa's card style (glass, the icon with a small
-// caps label, the value under it, an optional grey line); a row that scrolls sideways
-function InfoCard({ icon: Icon, label, value, sub, onClick, href, testid, ariaLabel, external }) {
-  const cls = "snap-start shrink-0 w-[152px] h-[86px] card-soft px-3.5 py-3 flex flex-col justify-between text-left text-white"
+// an item of the row on top of the diary: two lines only - the icon with a small caps label,
+// the value under it (with a short grey note beside it when useful); no box behind
+function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaLabel, external }) {
+  const cls = "snap-start shrink-0 min-w-[92px] max-w-[190px] py-1 flex flex-col gap-1.5 text-left text-white"
     + (onClick || href ? " active:opacity-70" : "");
   const body = (
     <>
@@ -104,9 +104,9 @@ function InfoCard({ icon: Icon, label, value, sub, onClick, href, testid, ariaLa
         <Icon size={14} className="text-white/55 shrink-0" />
         <span className="text-[10px] uppercase tracking-widest text-white/50 truncate">{label}</span>
       </span>
-      <span className="min-w-0">
-        <span className="block text-[15px] font-medium text-white/90 truncate">{value}</span>
-        {sub && <span className="block text-[11px] text-white/55 truncate mt-0.5">{sub}</span>}
+      <span className="flex items-baseline gap-1.5 min-w-0">
+        <span className="text-[15px] font-medium text-white/90 truncate">{value}</span>
+        {note && <span className="text-[11px] text-white/55 whitespace-nowrap">{note}</span>}
       </span>
     </>
   );
@@ -635,21 +635,19 @@ export default function JobDiaryPage() {
 
       {/* the commessa in one row that scrolls sideways: state, hours, reports, documents, then
           the card's details (site, dates, phone, e-mail) */}
-      <div className="mt-3.5 -mx-4 px-4 flex gap-2.5 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
-        <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} sub="tocca per cambiarlo" testid="glance-stato"
+      <div className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
+        <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
           ariaLabel="Cambia lo stato della commessa" onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
-        <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")}
-          sub={Object.entries(t.by_person).map(([k, v]) => `${k} ${fmtNum(v)}`).join(" · ") || "non ancora indicate"} />
+        <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")} />
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
-          onClick={() => pickSection("problemi")} sub={t.problems.length ? `ultima ${shortDay(t.problems[t.problems.length - 1].date)}` : "nessuna"} />
-        <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti"
-          sub={`${docs.photos || 0} foto · ${docs.reports || 0} report`} />
-        <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} sub={c.client_name} testid="info-cantiere"
+          onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
+        <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti" ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
+        <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} testid="info-cantiere"
           href={c.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}` : undefined} external ariaLabel="Apri il cantiere sulla mappa" />
-        <InfoCard icon={CalendarDays} label="Date" value={c.data_inizio ? `dal ${shortDay(c.data_inizio)}` : "inizio non indicato"}
-          sub={c.data_fine ? `al ${shortDay(c.data_fine)}` : "fine non indicata"} testid="info-date" />
-        {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} sub={c.client_name} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
-        {c.client_email && <InfoCard icon={Mail} label="Email" value={c.client_email} sub={c.client_name} href={`mailto:${c.client_email}`} testid="info-email" ariaLabel={`Scrivi a ${c.client_name}`} />}
+        <InfoCard icon={CalendarDays} label="Date" testid="info-date"
+          value={c.data_inizio ? `${shortDay(c.data_inizio)} → ${c.data_fine ? shortDay(c.data_fine) : "in corso"}` : "non indicate"} />
+        {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
+        {c.client_email && <InfoCard icon={Mail} label="Email" value={c.client_email} href={`mailto:${c.client_email}`} testid="info-email" ariaLabel={`Scrivi a ${c.client_name}`} />}
       </div>
 
       {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
@@ -666,8 +664,8 @@ export default function JobDiaryPage() {
       {/* the period */}
       <div className="mt-1.5 flex items-center justify-center gap-2.5">
         <button type="button" onClick={() => setMenu((m) => (m === "periodo" ? null : "periodo"))} data-testid="period-btn" aria-label="Scegli il periodo"
-          className="h-[34px] w-[34px] rounded-full flex items-center justify-center text-white lg-frost">
-          <CalendarDays size={16} />
+          className="h-[34px] w-[30px] flex items-center justify-center text-white/90 active:opacity-70">
+          <CalendarDays size={17} />
         </button>
         <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85" data-testid="period-label">
           {rangeFrom ? `${rangeDay(rangeFrom)} — ${rangeDay(rangeTo, true)}` : "nessuna voce"}
@@ -710,7 +708,7 @@ export default function JobDiaryPage() {
       {/* state menu and period popup, like the profile menu */}
       {menu && <button type="button" aria-label="Chiudi" className="fixed inset-0 z-30 cursor-default" onClick={() => setMenu(null)} />}
       {menu === "stato" && (
-        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" className="glass-panel absolute z-40 left-0 top-[138px] w-[236px] py-1">
+        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" className="glass-panel absolute z-40 left-0 top-[112px] w-[236px] py-1">
           {(detail.stati || []).map((s) => {
             const on = s === c.stato;
             return (
@@ -727,7 +725,7 @@ export default function JobDiaryPage() {
         </div>
       )}
       {menu === "periodo" && (
-        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[262px] w-[300px] pt-1 pb-3.5">
+        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[236px] w-[300px] pt-1 pb-3.5">
           {PERIODS.map((p) => (
             <button key={p.key} type="button" onClick={() => { setPeriod({ key: p.key }); setMenu(null); }}
               className="glass-row w-full flex items-center gap-3.5 px-5 py-3.5 text-left text-[15px] text-white">
