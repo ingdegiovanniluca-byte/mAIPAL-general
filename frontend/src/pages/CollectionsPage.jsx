@@ -889,7 +889,8 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                   {!(coll.sub_item_fields || []).some((f) => !mainSubKeys.includes(f.key) && filled(sub.data?.[f.key])) && (
                     <div className="text-xs text-white/45">Nessun altro dato: aggiungili con Modifica.</div>
                   )}
-                  <div className="flex flex-wrap items-center gap-2 pt-1.5 text-xs">
+                  {/* the commands' row also takes the space kept on the right for the arrow, which is at the top */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1.5 text-xs -mr-8">
                     <button type="button" data-testid="open-commessa-diary" onClick={() => openDiary(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
                       <NotebookPen size={11} /> Diario
                     </button>
@@ -899,6 +900,13 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                     <button type="button" data-testid="delete-commessa" onClick={() => delSub(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-200">
                       <Trash2 size={11} /> Elimina
                     </button>
+                    {/* open card: the folder joins the commands, at the end of their row (bottom corner) */}
+                    <button type="button" data-testid={`commessa-folder-${sub.id}`} disabled={folderBusy === sub.id}
+                      onClick={(e) => { e.stopPropagation(); commessaFolder(sub); }}
+                      title={sub.drive_folder ? `Apri la cartella «${sub.drive_folder.name}»` : "Crea la cartella della commessa su Drive, dentro quella del cliente"}
+                      className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15 disabled:opacity-50">
+                      {sub.drive_folder ? <FolderOpen size={11} /> : <FolderPlus size={11} />} Cartella
+                    </button>
                   </div>
                 </div>
               )}
@@ -907,13 +915,16 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                 className="absolute top-3 right-3 p-1 rounded-full text-white/80 hover:bg-white/10">
                 <ChevronDown size={15} className={`transition-transform ${openSubs.has(sub.id) ? "rotate-180" : ""}`} />
               </button>
-              <button type="button" data-testid={`commessa-folder-${sub.id}`} disabled={folderBusy === sub.id}
-                onClick={(e) => { e.stopPropagation(); commessaFolder(sub); }}
-                title={sub.drive_folder ? `Apri la cartella «${sub.drive_folder.name}»` : "Crea la cartella della commessa su Drive, dentro quella del cliente"}
-                aria-label={sub.drive_folder ? "Apri la cartella della commessa" : "Crea la cartella della commessa"}
-                className={`absolute top-11 right-3 p-1 rounded-full hover:bg-white/10 disabled:opacity-50 ${sub.drive_folder ? "text-white" : "text-white/80"}`}>
-                {sub.drive_folder ? <FolderOpen size={15} /> : <FolderPlus size={15} />}
-              </button>
+              {/* closed card: the folder in the bottom corner, on the same side as the arrow but far from it */}
+              {!openSubs.has(sub.id) && (
+                <button type="button" data-testid={`commessa-folder-${sub.id}`} disabled={folderBusy === sub.id}
+                  onClick={(e) => { e.stopPropagation(); commessaFolder(sub); }}
+                  title={sub.drive_folder ? `Apri la cartella «${sub.drive_folder.name}»` : "Crea la cartella della commessa su Drive, dentro quella del cliente"}
+                  aria-label={sub.drive_folder ? "Apri la cartella della commessa" : "Crea la cartella della commessa"}
+                  className={`absolute bottom-3 right-3 p-1 rounded-full hover:bg-white/10 disabled:opacity-50 ${sub.drive_folder ? "text-white" : "text-white/80"}`}>
+                  {sub.drive_folder ? <FolderOpen size={15} /> : <FolderPlus size={15} />}
+                </button>
+              )}
             </div>
           ) : (
           <div key={sub.id} className="lg-card p-4 rounded-[22px] relative group">
