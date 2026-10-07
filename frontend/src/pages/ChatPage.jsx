@@ -11,6 +11,7 @@ import { takeSharedPayload } from "@/lib/pwa";
 import SuggestionsTicker from "@/components/SuggestionsTicker";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
+import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -268,7 +269,8 @@ export default function ChatPage() {
   // Mobile only (spec v2 §3.1/3.3): the chat opens on the composer alone; the history of old
   // conversations is a separate view reached from the clock button, not shown by default.
   const [mobileView, setMobileView] = useState("chat"); // "chat" | "history"
-  // The header's clock button (DashboardLayout) opens/closes the history.
+  // The round glass history button on the side opens/closes it (the event is kept for any
+  // other caller).
   useEffect(() => {
     const onHist = () => setMobileView((v) => (v === "history" ? "chat" : "history"));
     window.addEventListener("maipal:chat-history", onHist);
@@ -1897,15 +1899,6 @@ export default function ChatPage() {
                       <MessageSquarePlus size={15} />
                     </button>
                   )}
-                  <button
-                    data-testid="mobile-history-toggle"
-                    onClick={() => setMobileView("history")}
-                    title="Messaggi precedenti"
-                    aria-label="Messaggi precedenti"
-                    className="liquid-glass-btn liquid-still h-8 w-8 rounded-full flex items-center justify-center text-white/85"
-                  >
-                    <History size={15} />
-                  </button>
                 </div>
               )}
           </div>
@@ -2407,6 +2400,14 @@ export default function ChatPage() {
         </section>
       </div>
 
+      {/* mobile: the history of the chats, a round glass button on the side (like the commessa's
+          chat button); away while scrolling, while writing and while a sheet is open */}
+      {isMobile && (
+        <FloatingGlassButton icon={History} label={mobileHistoryView ? "Torna alla chat" : "Cronologia delle chat"} testid="mobile-history-toggle"
+          active={mobileHistoryView} hideWhileTyping
+          hidden={!!text.trim() || recording || transcribing || !!pendingVoice || allAgentsOpen || infoOpen}
+          onClick={() => setMobileView((v) => (v === "history" ? "chat" : "history"))} />
+      )}
       {showTemplateUpload && (
         <VetTemplateUploadDialog
           endpoint={isWork ? "/work/templates" : "/vet/templates"}

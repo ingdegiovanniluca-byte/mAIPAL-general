@@ -4,7 +4,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, History, Sun, Moon, Check,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { usePref } from "@/lib/prefs";
@@ -182,21 +182,9 @@ export default function DashboardLayout() {
               aria-label="mAIPAL"
             />
           </div>
-          {/* section name; in Chat the history button sits right next to it */}
+          {/* section name (Chat's history is the round glass button on the side, see ChatPage) */}
           <div className="min-w-0 flex items-center gap-2">
             <div className="text-sm font-semibold text-white truncate" data-testid="mobile-section-title">{currentItem?.label || ""}{titleSuffix ? ` ${titleSuffix}` : ""}</div>
-            {/* Chat only: the history of old conversations (ChatPage listens for the event). */}
-            {currentItem?.to === "/dashboard/chat" && (
-              <button
-                data-testid="mobile-history-toggle"
-                onClick={() => window.dispatchEvent(new CustomEvent("maipal:chat-history"))}
-                title="Cronologia delle chat"
-                aria-label="Cronologia delle chat"
-                className="lg-glass h-8 w-8 shrink-0 rounded-full flex items-center justify-center text-white"
-              >
-                <History size={15} />
-              </button>
-            )}
           </div>
           <div className="relative shrink-0 flex items-center gap-2" ref={menuRefMobile}>
             <button

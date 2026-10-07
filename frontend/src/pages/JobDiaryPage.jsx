@@ -7,6 +7,7 @@ import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
+import FloatingGlassButton from "@/components/FloatingGlassButton";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -253,40 +254,6 @@ function ClientCard({ client, commesse, onOpen }) {
         ))}
       </div>
     </div>
-  );
-}
-
-// The chat button: a glass circle (the bottom menu's "+" glass, a bit smaller) floating on
-// the right at 3/4 of the screen's height, over the page that scrolls under it. It slides
-// away while the page scrolls and comes back when it stops (one passive listener and a
-// timer; the state changes only twice per scroll).
-function ChatFab({ onClick }) {
-  const [hidden, setHidden] = useState(false);
-  const hiddenRef = useRef(false);
-  useEffect(() => {
-    let timer = null;
-    const onScroll = () => {
-      if (!hiddenRef.current) { hiddenRef.current = true; setHidden(true); }
-      clearTimeout(timer);
-      timer = setTimeout(() => { hiddenRef.current = false; setHidden(false); }, 450);
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => { window.removeEventListener("scroll", onScroll); clearTimeout(timer); };
-  }, []);
-  return (
-    <button onClick={onClick} data-testid="commessa-chat-toggle" data-hidden={hidden ? "1" : "0"}
-      title="Chat della commessa: chiedi o scrivi nel diario" aria-label="Chat della commessa"
-      className="fixed z-40 right-3.5 md:right-8 h-[52px] w-[52px] rounded-full flex items-center justify-center text-white active:scale-95"
-      style={{
-        top: "calc(75vh - 26px)",
-        transform: hidden ? "translateX(calc(100% + 24px))" : "none",
-        opacity: hidden ? 0 : 1,
-        pointerEvents: hidden ? "none" : "auto",
-        transition: "transform 260ms ease, opacity 200ms ease",
-      }}>
-      <span aria-hidden="true" className="lg-goo absolute inset-0 rounded-full" style={{ boxShadow: "0 10px 22px rgba(60, 10, 40, 0.16)" }} />
-      <MessageCircle size={21} strokeWidth={1.9} className="relative" />
-    </button>
   );
 }
 
@@ -762,7 +729,10 @@ export default function JobDiaryPage() {
       )}
       {level === "clients" || !selectedId ? clientsView : diaryView}
 
-      {inCommessa && c && !chatOpen && <ChatFab onClick={() => setChatOpen(true)} />}
+      {inCommessa && c && !chatOpen && (
+        <FloatingGlassButton icon={MessageCircle} label="Chat della commessa: chiedi o scrivi nel diario" testid="commessa-chat-toggle"
+          onClick={() => setChatOpen(true)} />
+      )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
       {editing && (
         <EditDialog log={editing} onClose={() => setEditing(null)} onDelete={delFromEdit}
