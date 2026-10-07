@@ -4,7 +4,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, LifeBuoy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { usePref } from "@/lib/prefs";
@@ -15,6 +15,7 @@ import { useInstallApp, InstallBanner, InstallIcon } from "@/components/InstallA
 import LiquidDock from "@/components/LiquidDock";
 import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import HelpSheet from "@/components/HelpSheet";
 
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
@@ -103,6 +104,9 @@ export default function DashboardLayout() {
   };
 
   const goTo = (to) => { setMoreOpen(false); setMenuOpen(false); nav(to); };
+  // Help: the "i" next to the section's title explains it; the avatar menu opens the chat in Help mode
+  const [helpOpen, setHelpOpen] = useState(false);
+  const openHelpChat = () => { setMenuOpen(false); nav(CHAT_PATH, { state: { action: "help", nonce: Date.now() } }); };
 
   return (
     <div className="min-h-screen relative">
@@ -129,6 +133,7 @@ export default function DashboardLayout() {
                 <React.Fragment key={item.to}>
                   {i > 0 && <span className="text-white/25 text-xs select-none">•</span>}
                   <TabLink to={item.to} label={item.label} testid={item.testid} />
+                  {currentItem?.to === item.to && <HelpDot label={item.label} onClick={() => setHelpOpen(true)} testid="section-help-btn" />}
                 </React.Fragment>
               ))}
             </nav>
@@ -159,6 +164,7 @@ export default function DashboardLayout() {
                     <GlassMenuItem icon={InstallIcon} label="Installa l'app" testid="install-app-btn"
                       onClick={() => { setMenuOpen(false); installApp.install(); }} />
                   )}
+                  <GlassMenuItem icon={LifeBuoy} label="Help" testid="help-btn" onClick={openHelpChat} />
                   <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn" onClick={() => { setMenuOpen(false); logout(); }} />
                   <ThemeRow />
                   <MicRow />
@@ -186,6 +192,7 @@ export default function DashboardLayout() {
           {/* section name (Chat's history is the round glass button on the side, see ChatPage) */}
           <div className="min-w-0 flex items-center gap-2">
             <div className="text-sm font-semibold text-white truncate" data-testid="mobile-section-title">{currentItem?.label || ""}{titleSuffix ? ` ${titleSuffix}` : ""}</div>
+            {currentItem && <HelpDot label={currentItem.label} onClick={() => setHelpOpen(true)} testid="section-help-btn-mobile" />}
           </div>
           <div className="relative shrink-0 flex items-center gap-2" ref={menuRefMobile}>
             <button
@@ -209,6 +216,7 @@ export default function DashboardLayout() {
                   <GlassMenuItem icon={InstallIcon} label="Installa l'app" testid="install-app-btn-mobile"
                     onClick={() => { setMenuOpen(false); installApp.install(); }} />
                 )}
+                <GlassMenuItem icon={LifeBuoy} label="Help" testid="help-btn-mobile" onClick={openHelpChat} />
                 <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn-mobile" onClick={() => { setMenuOpen(false); logout(); }} />
                 <ThemeRow />
                 <MicRow />
@@ -330,7 +338,18 @@ export default function DashboardLayout() {
           </div>
         )}
       </div>
+      {helpOpen && currentItem && <HelpSheet path={currentItem.to} title={currentItem.label} onClose={() => setHelpOpen(false)} />}
     </div>
+  );
+}
+
+// The small "i" next to the section's title: opens what that section is and how it works.
+function HelpDot({ label, onClick, testid }) {
+  return (
+    <button type="button" data-testid={testid} onClick={onClick} title={`Cos'è ${label} e come si usa`} aria-label={`Spiegazione di ${label}`}
+      className="h-[17px] w-[17px] shrink-0 rounded-full bg-white/25 hover:bg-white/35 flex items-center justify-center text-[10px] leading-none italic font-semibold font-serif text-white">
+      i
+    </button>
   );
 }
 

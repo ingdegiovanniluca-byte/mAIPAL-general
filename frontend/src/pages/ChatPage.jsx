@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, LifeBuoy } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,7 +16,7 @@ import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleD
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
 
-const ACTION_LABELS_IT = { info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
+const ACTION_LABELS_IT = { help: "Help", info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
 const HISTORY_RETENTION_NOTE = "Le chat non preferite si cancellano da sole 10 giorni dopo l'ultimo messaggio: segna con la stella quelle da tenere. Note, task e diario salvati restano.";
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
@@ -85,6 +85,16 @@ const ALL_ACTIONS = [
   },
 ];
 
+// Help: not among the agents in the row - opened from the avatar menu (Help) or from a
+// section's "i" (Chiedi a Help). It answers on how mAIPAL works, from the app's guide.
+const HELP_ACTION = {
+  id: "help", key: "help", short: "Help", icon: <LifeBuoy size={22} />,
+  title: "Help",
+  subtitle: "Chiedimi come si usa mAIPAL: cosa può fare, dove trovi le funzioni, come si usano",
+  placeholder: "Es. Come creo una lista? Dove cambio il tema scuro?",
+  color: "#5B6FA8",
+};
+
 // Agents that belong to a vertical: Referto for vets (and for whoever has no vertical, as
 // before), Report only for artigiani. Everything else is the shared engine, always there.
 // For artigiani the Diario is the diario di commessa.
@@ -97,6 +107,11 @@ const actionsFor = (vertical) => ALL_ACTIONS.filter((a) =>
 // Mobile chat: what the ⓘ next to the agent's name explains - what it does, what the icons
 // under the name mean, and examples (tapping one fills the box).
 const AGENT_INFO = {
+  help: {
+    what: "Risponde alle domande su mAIPAL: cosa può fare, dove trovi una funzione e come si usa. Per tornare agli altri agenti tocca la ✕ accanto a Help o scegli un agente.",
+    options: [],
+    examples: ["Cosa sai fare?", "Come creo una lista?", "Come collego Telegram?", "Dove cambio il tema scuro?"],
+  },
   info_request: {
     what: "Risponde alle tue domande usando quello che hai salvato: note, documenti, task, diario e liste.",
     options: [[Layers, "Cerca ovunque: note, documenti, task, diario e liste"], [Database, "Cerca solo nella base di conoscenza (note e documenti)"]],
@@ -144,7 +159,7 @@ const SCHED_YES = /^[\s"'«(]*(s[iì]|ok|okay|confermo|conferma|procedi|vai|eseg
 const SCHED_NO = /^[\s"'«(]*(no|annulla|lascia stare|non farlo|stop)(?![a-zàèéìòù])/i;
 const readChatOpts = () => { try { return JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || "{}"); } catch { return {}; } };
 
-const ACTION_COLOR = { info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const ACTION_COLOR = { help: "#5B6FA8", info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 
 // Images over 1 MB for the knowledge base / Drive (typical PC screenshots or camera photos)
@@ -232,10 +247,12 @@ export default function ChatPage() {
   // ...and the installed app's shortcuts (long-press on the icon) open it via ?action=
   const [active, setActive] = useState(() => {
     const wanted = location.state?.action || new URLSearchParams(location.search).get("action");
-    return ACTIONS.some((a) => a.id === wanted) ? wanted : "info_request";
+    return wanted === "help" || ACTIONS.some((a) => a.id === wanted) ? wanted : "info_request";
   });
+  // Help mode: the page it was opened from ("Chiedi a Help" under that section's "i")
+  const [helpPage, setHelpPage] = useState(() => location.state?.page || null);
   // the vertical changed (Impostazioni) and this agent isn't in it anymore
-  useEffect(() => { if (!ACTIONS.some((a) => a.id === active)) setActive("info_request"); }, [ACTIONS, active]);
+  useEffect(() => { if (active !== "help" && !ACTIONS.some((a) => a.id === active)) setActive("info_request"); }, [ACTIONS, active]);
   const [scope, setScope] = useState("all"); // 'kb' | 'all' — solo per info_request
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -349,7 +366,18 @@ export default function ChatPage() {
   const tplSel = isWork ? workType : visitType;
   const setTplSel = isWork ? setWorkType : setVisitType;
 
-  const activeAction = useMemo(() => ACTIONS.find((a) => a.id === active) || ACTIONS[0], [ACTIONS, active]);
+  const activeAction = useMemo(() => (active === "help" ? HELP_ACTION : ACTIONS.find((a) => a.id === active) || ACTIONS[0]), [ACTIONS, active]);
+  // Help asked again while already in the chat (avatar menu -> Help): a fresh Help chat
+  useEffect(() => {
+    if (location.state?.action !== "help" || !location.state?.nonce) return;
+    setActive("help");
+    setHelpPage(location.state.page || null);
+    setThread(null);
+    setMobileReplyTo(null);
+    setMobileView("chat");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state?.nonce]);
+  const exitHelp = () => { setActive("info_request"); setHelpPage(null); if (thread?.action === "help") setThread(null); setMobileReplyTo(null); };
   activeRef.current = active;
 
   // ===== @agenti =====
@@ -967,7 +995,7 @@ export default function ChatPage() {
       }
     }
     setThread((th) => (th && th.conv_id === replyTarget.conv_id)
-      ? { ...th, messages: [...th.messages, { role: "user", content }], liveAnswer: "" }
+      ? { ...th, messages: [...th.messages, { role: "user", content }], liveAnswer: "", liveHelp: false }
       : th);
     const replyAgentResults = [];
     await streamChat(
@@ -978,12 +1006,15 @@ export default function ChatPage() {
         setThread((th) => {
           if (!th || th.conv_id !== replyTarget.conv_id) return th;
           const finalized = th.liveAnswer || "";
-          return { ...th, messages: [...th.messages, ...(finalized ? [{ role: "assistant", content: finalized }] : []), ...replyAgentResults.map(agentResultMessage)], liveAnswer: "" };
+          return { ...th, messages: [...th.messages, ...(finalized ? [{ role: "assistant", content: finalized, help: th.liveHelp }] : []), ...replyAgentResults.map(agentResultMessage)], liveAnswer: "", liveHelp: false };
         });
         await load();
       },
       (err) => { setStreaming(false); toast.error("Errore: " + err.message); },
-      (evt) => { if (evt.type === "agent") replyAgentResults.push(evt); }
+      (evt) => {
+        if (evt.type === "agent") replyAgentResults.push(evt);
+        if (evt.type === "help") setThread((th) => (th && th.conv_id === replyTarget.conv_id) ? { ...th, liveHelp: true } : th);
+      }
     );
   };
 
@@ -1168,6 +1199,7 @@ export default function ChatPage() {
     if (displayQuestion !== currentQuestion) payload.display_content = displayQuestion;
     if (kbDocIds.length) payload.attachment_doc_ids = kbDocIds;
     if (active === "info_request") payload.filters = { scope };
+    if (active === "help" && helpPage) payload.page = helpPage;
     if (active === "task_todo" && isMobile) payload.filters = { calendar: !!chatOpts.taskCal && (googleOn || msOn), reminder: !!chatOpts.taskBell };
     if (active === "journal" && journalImgs.length > 0) payload.images = journalImgs;
     if (active === "journal" && journalDocs.length > 0) payload.documents = journalDocs;
@@ -1183,12 +1215,16 @@ export default function ChatPage() {
         setThread((th) => {
           if (!th) return th;
           const finalized = th.liveAnswer || "";
-          return { ...th, conv_id: convId, messages: [...th.messages, ...(finalized ? [{ role: "assistant", content: finalized }] : []), ...agentResults.map(agentResultMessage)], liveAnswer: "" };
+          return { ...th, conv_id: convId, messages: [...th.messages, ...(finalized ? [{ role: "assistant", content: finalized, help: th.liveHelp }] : []), ...agentResults.map(agentResultMessage)], liveAnswer: "", liveHelp: false };
         });
         await load();
       },
       (err) => { setStreaming(false); toast.error("Errore: " + err.message); },
-      (evt) => { if (evt.type === "agent") agentResults.push(evt); }
+      (evt) => {
+        if (evt.type === "agent") agentResults.push(evt);
+        // a question to Cerca about mAIPAL itself: Help answered it
+        if (evt.type === "help") setThread((th) => (th ? { ...th, liveHelp: true } : th));
+      }
     );
   };
 
@@ -1610,6 +1646,12 @@ export default function ChatPage() {
           >
             i
           </button>
+          {active === "help" && (
+            <button type="button" data-testid="exit-help" onClick={exitHelp} title="Esci da Help" aria-label="Esci da Help"
+              className="h-[22px] w-[22px] rounded-full bg-white/15 flex items-center justify-center text-white/85">
+              <X size={13} />
+            </button>
+          )}
         </div>
         {/* always as tall as one row of icons, so name, bar and agents never move between agents */}
         <div className="h-8 flex items-center justify-center gap-3" data-testid="agent-options">{agentOptions}</div>
@@ -1906,7 +1948,14 @@ export default function ChatPage() {
               chat (kicker "· ...") subito sotto, ripeterla qui sopra è ridondante. */}
           <div className="hidden md:flex items-center justify-between px-2 mt-4 shrink-0">
             <div className="text-xs font-bold uppercase tracking-wider text-white">nuovo messaggio</div>
-            <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
+            {active === "help" ? (
+              <button type="button" data-testid="exit-help-desktop" onClick={exitHelp} title="Esci da Help"
+                className="text-xs font-bold uppercase tracking-wider text-white inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/15 hover:bg-white/20">
+                <LifeBuoy size={12} /> help <X size={12} />
+              </button>
+            ) : (
+              <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
+            )}
           </div>
           {isMobile && mobileReplyTo && (
             <div data-testid="mobile-reply-pill" className="flex items-center gap-2 mt-2 px-3 py-2 rounded-xl bg-white/10 text-white/85 text-xs">
@@ -2105,7 +2154,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
                   <div className="kicker">
-                    {thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "job_log" ? "diario commessa" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
+                    {thread.action === "help" ? "help" : thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "job_log" ? "diario commessa" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -2127,6 +2176,7 @@ export default function ChatPage() {
                 {thread.messages.map((m, i) => (
                   <div key={i}>
                     <div className="kicker mb-1">{m.role === "user" ? "· tu" : ""}</div>
+                    {m.role === "assistant" && m.help && <HelpTag />}
                     {m.agent && agentByKey(m.agent) && (
                       <span className="ml-4 inline-block rounded-md px-1.5 text-[11px] font-medium text-white" style={{ background: agentByKey(m.agent).color }} data-testid="agent-result-tag">
                         @{agentByKey(m.agent).tag}
@@ -2316,6 +2366,7 @@ export default function ChatPage() {
                 {streaming && thread.liveAnswer !== undefined && (
                   <div>
                     <div className="kicker mb-1"></div>
+                    {thread.liveHelp && <HelpTag />}
                     <div className="prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white">
                       {thread.liveAnswer}<span className="animate-pulse">▊</span>
                     </div>
@@ -2405,7 +2456,8 @@ export default function ChatPage() {
       {isMobile && (
         <FloatingGlassButton icon={History} label={mobileHistoryView ? "Torna alla chat" : "Cronologia delle chat"} testid="mobile-history-toggle"
           active={mobileHistoryView} hideWhileTyping
-          hidden={!!text.trim() || recording || transcribing || !!pendingVoice || allAgentsOpen || infoOpen}
+          // with a conversation open the composer sits at the bottom, where the button would cover its mic
+          hidden={!!text.trim() || recording || transcribing || !!pendingVoice || allAgentsOpen || infoOpen || (!!thread && !mobileHistoryView)}
           onClick={() => setMobileView((v) => (v === "history" ? "chat" : "history"))} />
       )}
       {showTemplateUpload && (
@@ -2608,6 +2660,15 @@ function HistoryCard({ conv, index = 0, isReplying = false, onOpen, onToggleFav,
 
 // Mobile panel sliding up from the bottom (agent info, all agents). Portaled to <body>: the
 // page's frosted (backdrop-filter) ancestors would otherwise trap a fixed element inside them.
+// Over an answer that comes from the app's guide.
+function HelpTag() {
+  return (
+    <span data-testid="help-answer-tag" className="ml-4 inline-flex items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-white" style={{ background: HELP_ACTION.color }}>
+      <LifeBuoy size={11} /> Help
+    </span>
+  );
+}
+
 function BottomSheet({ onClose, testid, children }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };

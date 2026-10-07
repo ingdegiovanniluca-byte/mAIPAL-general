@@ -51,6 +51,7 @@ import conversation_retention as cr
 import mentions as mn
 import usage_tracking as ut
 import agent_guard
+import help_guide
 import verticals as vx
 
 ROOT_DIR = Path(__file__).parent
@@ -142,9 +143,11 @@ class ProfilePatch(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    action: Literal["info_upload", "info_request", "task_todo", "journal"]
+    action: Literal["info_upload", "info_request", "task_todo", "journal", "help"]
     content: str
     filters: Optional[dict] = None
+    # Help mode: the page the user opened it from ("Chiedi a Help" under a section's "i")
+    page: Optional[str] = None
     conv_id: Optional[str] = None
     # Photos attached while writing a diary entry (action == "journal" only) - each a
     # "data:image/...;base64,..." URI, already size-checked client-side. Stored on the
@@ -1241,6 +1244,7 @@ _ACTION_TO_FEATURE = {
     "info_upload": "caricamento_informazioni",
     "task_todo": "creazione_task",
     "journal": "diario",
+    "help": "help",
 }
 
 
@@ -1254,6 +1258,26 @@ async def agents_check(payload: AgentCheckPayload, current: User = Depends(get_c
     """Before a NEW chat goes to the chosen agent: is it surely the wrong one? Then the chat
     suggests the right agent instead of answering (see agent_guard.py)."""
     return {"suggestion": await agent_guard.check(payload.text, payload.action, user_id=current.user_id)}
+
+
+@api_router.get("/help/sections")
+async def help_sections(path: Optional[str] = None, current: User = Depends(get_current_user)):
+    """What the "i" next to a section's title shows: that page's part of the guide (for the
+    user's vertical), plus the titles of all the others."""
+    v = current.business_vertical
+    page = help_guide.for_path(path, v) if path else []
+    return {
+        "sections": [{"id": s.id, "title": s.title, "body": s.body} for s in page],
+        "index": [{"id": s.id, "title": s.title} for s in help_guide.sections_for(v)],
+    }
+
+
+@api_router.get("/help/sections/{section_id}")
+async def help_section(section_id: str, current: User = Depends(get_current_user)):
+    sec = next((s for s in help_guide.sections_for(current.business_vertical) if s.id == section_id), None)
+    if not sec:
+        raise HTTPException(status_code=404, detail="Sezione della guida non trovata")
+    return {"id": sec.id, "title": sec.title, "body": sec.body}
 
 
 @api_router.post("/chat/stream")
@@ -1319,8 +1343,14 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     # earlier (or just now, in this same turn - see the attachment handling above) without
     # having to paste its content into the chat - scope is forced to "kb" (personal
     # documents only, not other tasks/todos/journal entries, which would just be noise here).
+    # Help: the chat in Help mode, or a question to Cerca that is clearly about mAIPAL itself
+    # ("come creo una lista?") - answered from the guide, not from the user's data
+    help_turn = action == "help"
+    if not help_turn and action == "info_request" and run_primary and not payload.attachment_doc_ids:
+        help_turn = await help_guide.is_about_app(main_text, user_id=current.user_id)
+
     kb_context = []
-    if action == "info_request":
+    if action == "info_request" and not help_turn:
         if payload.conv_id:
             scope = (conv.get("filters", {}) or {}).get("scope", "all")
         else:
@@ -1333,13 +1363,16 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
 
     system = build_system_prompt(current, action)
     user_text = payload.content
+    if help_turn:
+        system = help_guide.system_prompt(current.name, current.business_vertical, _today_it_string())
+        user_text = help_guide.user_message(payload.content, current.business_vertical, payload.page)
     attached_ids = [d for d in (payload.attachment_doc_ids or []) if isinstance(d, str)][:10]
     conv_doc_ids = await _conv_attachment_ids(current.user_id, conv, prior_messages) if payload.conv_id else []
     if attached_ids:
         await db.conversations.update_one({"conv_id": conv_id}, {"$addToSet": {"attachment_doc_ids": {"$each": attached_ids}}})
     # a follow-up about a file sent earlier in this chat ("le canzoni del file", "crea i task
     # di quello che c'è da fare") - the model only kept what the user typed, not the file's text
-    if not attached_ids and conv_doc_ids and action in ("task_todo", "info_request") and run_primary:
+    if not attached_ids and conv_doc_ids and action in ("task_todo", "info_request") and run_primary and not help_turn:
         att_text = await _attachments_text_for_model(current.user_id, conv_doc_ids, limit=8000)
         if att_text:
             user_text = (f"{user_text}\n\nDOCUMENTI ALLEGATI IN QUESTA CONVERSAZIONE (testo completo - usalo quando "
@@ -1371,7 +1404,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         session_id=conv_id,
         system_message=system,
         initial_messages=initial,
-        user_id=current.user_id, feature=_ACTION_TO_FEATURE.get(action, "altro"),
+        user_id=current.user_id, feature="help" if help_turn else _ACTION_TO_FEATURE.get(action, "altro"),
         channel="web", trigger="utente", org_id=current.org_id,
     ).with_model("openai", "gpt-4o")
 
@@ -1388,6 +1421,8 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         full = []
         pending = ""     # buffer with tail that could still be a partial marker prefix
         stopped = False  # true once MARKER encountered
+        if help_turn:   # the chat marks this answer as Help's
+            yield _json.dumps({"type": "help"}) + "\n"
         try:
             async for ev in chat.stream_message(UserMessage(text=user_text)):
                 if isinstance(ev, TextDelta):
@@ -1437,7 +1472,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         await db.conversations.update_one(
             {"conv_id": conv_id},
             {
-                "$push": {"messages": {"role": "assistant", "content": visible_answer, "ts": completed_at}},
+                "$push": {"messages": {"role": "assistant", "content": visible_answer, "ts": completed_at, **({"help": True} if help_turn else {})}},
                 "$set": conv_set,
             },
         )
@@ -1445,7 +1480,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
         # One feature_events row per chat turn, regardless of how many (if any) LLM calls
         # it triggered - lets the usage dashboard count feature USES, not just LLM calls.
         ut.fire_and_forget_feature_event(
-            user_id=current.user_id, feature=_ACTION_TO_FEATURE.get(action, "altro"),
+            user_id=current.user_id, feature="help" if help_turn else _ACTION_TO_FEATURE.get(action, "altro"),
             channel="web", trigger="utente", org_id=current.org_id,
         )
 

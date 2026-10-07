@@ -17,6 +17,7 @@ from typing import Optional
 
 import openai
 
+import help_guide
 import usage_tracking as ut
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,8 @@ def looks_misplaced(text: str, chosen: str) -> bool:
         return False
     q, save, task, lst = _is_question(t), bool(_SAVE.search(t)), bool(_TASK.search(t)), bool(_LIST.search(t))
     if chosen == "info_request":
-        return save or task or lst
+        # "come aggiungo un elemento alla lista?" is a question for Help, which Cerca hands it to
+        return (save or task or lst) and not help_guide.looks_about_app(t)
     if chosen == "info_upload":
         return (q and not save) or task
     if chosen == "task_todo":
