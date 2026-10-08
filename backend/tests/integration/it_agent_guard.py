@@ -24,6 +24,12 @@ cases = [
     ("mi sento stanco ma contento", "journal", False),
     ("cosa ho scritto nel diario ieri?", "journal", True),
     ("ok", "info_request", False),
+    # a spending told to Cerca, which only reads: for Salva
+    ("oggi ho speso 50 euro di benzina", "info_request", True),
+    ("registra una spesa di oggi sulla benzina", "info_request", True),
+    ("pagato il meccanico 120 €", "info_request", True),
+    ("quanto ho speso a ottobre?", "info_request", False),
+    ("dammi il totale delle spese di ottobre", "info_request", False),
 ]
 bad = [(t, c, e) for t, c, e in cases if ag.looks_misplaced(t, c) != e]
 for b in bad: print("GATE WRONG:", b)
@@ -59,5 +65,7 @@ async def main():
     assert await ag.check("salva che il codice del wifi è 1234", "info_request") is None
     ag.openai.AsyncOpenAI = fake_client("non so")
     assert await ag.check("salva che il codice del wifi è 1234", "info_request") is None
+    import list_updates as lu
+    assert lu.looks_like_note("registra questa spesa di 30 euro al supermercato") and not lu.looks_like_note("registra il latte nella lista della spesa")
     print("ALL OK")
 asyncio.run(main())

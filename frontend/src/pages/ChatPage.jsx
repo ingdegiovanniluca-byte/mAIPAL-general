@@ -1026,10 +1026,10 @@ export default function ChatPage() {
   // suggested agent (or to the chosen one anyway). send() runs once the state is in place.
   const skipAgentGuardRef = useRef(false);
   const [resendTick, setResendTick] = useState(0);
-  const resendTo = (agentId, content) => {
+  const resendTo = (agentId, content, keepThread = false) => {
     if (agentId === "journal" && !ACTIONS.some((a) => a.id === "journal")) agentId = "job_log";
     skipAgentGuardRef.current = true;
-    setThread(null);
+    if (!keepThread) setThread(null);   // "invia comunque" inside an open chat carries on in it
     setMobileReplyTo(null);
     setActive(agentId);
     setText(content);
@@ -1084,24 +1084,25 @@ export default function ChatPage() {
     // speaks up only when it is sure - then the chat suggests the right agent instead.
     const skipGuard = skipAgentGuardRef.current;
     skipAgentGuardRef.current = false;
-    if (!skipGuard && !thread && attachments.length === 0 && !taggedParts.length && mainQuestion
+    // In Cerca also on a follow-up: "oggi ho speso 50 euro" written in an open Cerca chat used to
+    // be answered as if saved, and nothing was saved.
+    if (!skipGuard && (!thread || active === "info_request") && attachments.length === 0 && !taggedParts.length && mainQuestion
         && ["info_request", "info_upload", "task_todo", "journal"].includes(active)) {
       let suggestion = null;
       try { suggestion = (await api.post("/agents/check", { action: active, text: mainQuestion })).data?.suggestion; }
       catch { /* no check: the chosen agent answers */ }
       if (suggestion) {
         setText("");
-        setThread({
-          conv_id: null, action: active, liveAnswer: "",
-          messages: [
-            { role: "user", content: currentQuestion },
-            {
-              role: "assistant",
-              content: `${suggestion.reason ? suggestion.reason + " " : ""}Per questa richiesta è meglio l'agente ${suggestion.label}: vuoi mandarla a lui?`,
-              wrongAgent: { text: currentQuestion, agent: suggestion.agent, label: suggestion.label, from: active },
-            },
-          ],
-        });
+        const asked = [
+          { role: "user", content: currentQuestion },
+          {
+            role: "assistant",
+            content: `${suggestion.reason ? suggestion.reason + " " : ""}Per questa richiesta è meglio l'agente ${suggestion.label}: vuoi mandarla a lui?`,
+            wrongAgent: { text: currentQuestion, agent: suggestion.agent, label: suggestion.label, from: active },
+          },
+        ];
+        // inside an open chat the suggestion goes below what's already there
+        setThread((th) => (th ? { ...th, messages: [...th.messages, ...asked] } : { conv_id: null, action: active, liveAnswer: "", messages: asked }));
         setStreaming(false);
         return;
       }
@@ -2343,7 +2344,7 @@ export default function ChatPage() {
                         </button>
                         <button
                           data-testid="wrong-agent-keep"
-                          onClick={() => resendTo(m.wrongAgent.from, m.wrongAgent.text)}
+                          onClick={() => resendTo(m.wrongAgent.from, m.wrongAgent.text, !!thread?.conv_id)}
                           disabled={streaming}
                           className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-white/10 hover:bg-white/20 text-white"
                         >

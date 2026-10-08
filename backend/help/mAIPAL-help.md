@@ -77,6 +77,8 @@ Cerca risponde alle tue domande usando quello che hai salvato.
 - Icone sotto il nome: **cerca ovunque** (note, documenti, task, diario e liste) oppure **solo nella base di conoscenza** (note e documenti).
 - Capisce i periodi ("a settembre", "la settimana scorsa") e può rispondere anche sui file allegati in quella chat.
 - Se la domanda è su come si usa mAIPAL, risponde Help.
+- Cerca **legge** soltanto, non salva: le spese ("oggi ho speso 50 euro di benzina") e ogni altra informazione da ricordare si registrano con l'agente **Salva**. Se le scrivi a Cerca, ti propone di mandarle a Salva con un tocco.
+- Per il totale di un periodo chiedi pure come ti viene: "spese di ottobre", "totale del mese", "quanto ho pagato questo mese": vengono considerate tutte le spese salvate in quel periodo.
 
 ## Salva
 <!-- id: agente-salva · verticale: tutti -->

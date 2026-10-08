@@ -174,3 +174,26 @@ def test_non_note_sources_are_kept_in_the_results():
 
 def test_query_terms_drop_question_words():
     assert retrieval.query_terms("Quando ha fatto lezione Martina?") == ["lezione", "martina"]
+
+
+def _expenses_db():
+    notes = [
+        _note(1, "Oggi ho speso 50 euro di benzina", "2026-10-07T17:00:00+00:00"),
+        _note(2, "oggi ho speso 32,40 € al supermercato", "2026-10-03T09:00:00+00:00"),
+        _note(3, "Pagato il meccanico 120 euro per il tagliando", "2026-10-05T10:00:00+00:00"),
+        _note(4, "Oggi ho fatto il pieno: 60 euro", "2026-10-06T10:00:00+00:00"),
+        _note(5, "Cena con Marco al ristorante, 45 euro", "2026-10-02T21:00:00+00:00"),
+        _note(6, "oggi ho speso 40 euro di benzina", "2026-09-20T10:00:00+00:00"),
+        _note(7, "Il codice del wifi è XYZ-123", "2026-10-01T10:00:00+00:00"),
+    ]
+    coll = {"id": "c1", "user_id": U, "name": "Spesa", "fields": [{"key": "p", "label": "Prodotto"}]}
+    items = [{"id": "i1", "collection_id": "c1", "data": {"p": "latte"}, "created_at": "2026-10-02T10:00:00+00:00"}]
+    return _DB(kb_chunks=notes, collections=[coll], collection_items=items)
+
+
+@pytest.mark.parametrize("q", ["quali sono le spese di ottobre?", "fammi il totale del mese di ottobre", "totale di ottobre",
+                               "elenco delle uscite di ottobre", "quanto ho pagato questo mese?", "quanto ho speso a ottobre?"])
+def test_every_expense_of_the_month_is_found(q):
+    res = asyncio.run(retrieval.retrieve(_expenses_db(), U, q, limit=8, scope="all", today=date(2026, 10, 8)))
+    got = {(c.get("meta") or {}).get("chunk_id") for c in res}
+    assert {"kb_1", "kb_2", "kb_3", "kb_4", "kb_5"} <= got, (q, got)

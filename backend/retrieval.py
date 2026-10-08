@@ -75,8 +75,12 @@ _TIME_WORDS = set(_IT_MONTHS) | {
 
 # A few everyday topics written in many ways: "spese" should also find "ho speso", "pagato",
 # "20 euro" (stems, matched as word prefixes).
+_MONEY_STEMS = ["spes", "spend", "pagat", "pagament", "pago", "euro", "cost", "acquist", "comprat", "scontrin", "fattur",
+                "bollett", "pien", "rifornim"]
 _TOPIC_SYNONYMS = {
-    "spes": ["spes", "spend", "pagat", "pagament", "pago", "euro", "cost", "acquist", "comprat", "scontrin", "fattur", "bollett"],
+    "spes": _MONEY_STEMS,
+    "spend": _MONEY_STEMS, "pagat": _MONEY_STEMS, "uscit": _MONEY_STEMS, "cost": _MONEY_STEMS,
+    "total": _MONEY_STEMS, "sold": _MONEY_STEMS, "acquist": _MONEY_STEMS, "compr": _MONEY_STEMS, "euro": _MONEY_STEMS,
     "pagament": ["pagat", "pagament", "pago", "spes", "spend", "euro", "bonific"],
     "entrat": ["entrat", "incass", "guadagn", "stipend", "ricevut", "euro"],
 }

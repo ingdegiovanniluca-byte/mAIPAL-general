@@ -36,7 +36,12 @@ _QUESTION_START = re.compile(
     r"^(che\s+cosa|cosa|cos'|quando|dove|chi|come|quale|quali|qual|quanto|quanti|quante|perch[eé]|"
     r"mi\s+dici|dimmi|sai|cerca|trova|c'è|ci\s+sono|ho\s+mai|esiste|elenca|mostrami|fammi\s+vedere)\b", re.I)
 _SAVE = re.compile(r"\b(salva|salvami|salvalo|salvala|memorizza|annota|annotati|prendi\s+nota|tieni\s+a\s+mente|"
-                   r"segnati\s+che|ricordati\s+che|ricorda\s+che)\b", re.I)
+                   r"segnati\s+che|ricordati\s+che|ricorda\s+che|registra|registrami|registrala|registralo|"
+                   r"segna(?!\s+come)|segnami|segnala|segnalo)\b", re.I)   # "segna come fatto il task" is the Task agent's
+# money that went out or came in, told as a fact: "oggi ho speso 50 euro di benzina", "pagato il
+# meccanico 120 €" - something to SAVE (Cerca only reads), the most common one sent to Cerca
+_MONEY_FACT = re.compile(r"\b(ho\s+speso|speso|spesi|ho\s+pagato|pagat[oaie]|spesa\s+(di|da|del|per)|incassat[oaie]|"
+                         r"ho\s+comprato|comprat[oaie]|acquistat[oaie]|fatto\s+il\s+pieno)\b|\d\s*(€|euro\b)|€\s*\d", re.I)
 _TASK = re.compile(r"\b(ricordami\s+di|ricordami\s+che\s+devo|promemoria|(crea|creami|aggiungi|metti|fissa)\s+(un|il|una)?\s*"
                    r"(task|to-?do|promemoria|appuntamento))\b", re.I)
 _LIST = re.compile(r"\b(aggiungi|inserisci|togli|rimuovi|elimina|metti|crea|creami)\b.{0,60}\blist[ae]\b", re.I | re.S)
@@ -54,7 +59,8 @@ def looks_misplaced(text: str, chosen: str) -> bool:
     q, save, task, lst = _is_question(t), bool(_SAVE.search(t)), bool(_TASK.search(t)), bool(_LIST.search(t))
     if chosen == "info_request":
         # "come aggiungo un elemento alla lista?" is a question for Help, which Cerca hands it to
-        return (save or task or lst) and not help_guide.looks_about_app(t)
+        money = not q and bool(_MONEY_FACT.search(t))
+        return (save or task or lst or money) and not help_guide.looks_about_app(t)
     if chosen == "info_upload":
         return (q and not save) or task
     if chosen == "task_todo":
@@ -69,8 +75,9 @@ def _system(chosen: str) -> str:
         "In un'app ci sono quattro agenti e l'utente ne sceglie uno prima di scrivere:\n"
         "- info_request (Cerca): risponde a DOMANDE, cercando nelle informazioni salvate dall'utente, nei suoi task e "
         "liste, o sul web. Es: 'quando scade la patente?', 'cosa devo fare domani?', 'cosa c'è nella lista della spesa?'.\n"
-        "- info_upload (Salva): SALVA informazioni da ricordare (note, fatti, documenti) e modifica o crea le LISTE. "
-        "Es: 'il codice del wifi è 1234', 'salva che Marco è allergico alle noci', 'aggiungi il latte alla lista della spesa'.\n"
+        "- info_upload (Salva): SALVA informazioni da ricordare (note, fatti, documenti, SPESE e pagamenti) e modifica "
+        "o crea le LISTE. Es: 'il codice del wifi è 1234', 'salva che Marco è allergico alle noci', 'oggi ho speso 50 "
+        "euro di benzina', 'registra una spesa di 30 euro al supermercato', 'aggiungi il latte alla lista della spesa'.\n"
         "- task_todo (Task): crea task, promemoria e cose da fare, oppure completa/elimina quelli esistenti. "
         "Es: 'ricordami di chiamare Marco domani alle 10', 'devo comprare il regalo per Anna', 'segna come fatto il task palestra'.\n"
         "- journal (Diario): scrive il diario personale dell'utente (la sua giornata, come si sente). "
@@ -79,6 +86,8 @@ def _system(chosen: str) -> str:
         "chiaramente una richiesta per un altro agente e l'agente scelto non può farla bene.\n"
         "Sii molto prudente: rispondi certain=true SOLO se sei sicuro. Se il messaggio può avere senso anche per "
         "l'agente scelto, se è ambiguo o se è una domanda sui dati dell'utente (che Cerca sa leggere), certain=false.\n"
+        "Cerca NON salva nulla: una spesa o un pagamento RACCONTATO ('oggi ho speso 50 euro di benzina', 'pagato il "
+        "meccanico 120 euro') o una richiesta di registrarlo, mandati a Cerca, sono sicuramente per Salva (certain=true).\n"
         "Rispondi SOLO con un JSON: {\"agent\": \"info_request|info_upload|task_todo|journal\", \"certain\": true|false, "
         "\"reason\": \"al massimo 12 parole, in italiano, rivolte all'utente\"}"
     )

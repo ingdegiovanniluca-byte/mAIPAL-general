@@ -184,7 +184,8 @@ def item_display(item: dict) -> str:
     return " · ".join(parts) if parts else "(vuoto)"
 
 
-_SAVE_VERB = re.compile(r"^\W*(salva|salvami|ricorda|ricordati|memorizza|annota|annotati|prendi nota|tieni a mente|segnati)\b", re.I)
+_SAVE_VERB = re.compile(r"^\W*(salva|salvami|ricorda|ricordati|memorizza|annota|annotati|prendi nota|tieni a mente|segnati|"
+                        r"registra|registrami|segna(?!\s+come)|segnami)\b", re.I)
 _LIST_WORD = re.compile(r"\blist[ae]\b", re.I)
 
 
