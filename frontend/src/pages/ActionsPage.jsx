@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Repeat, Plus, Play, Trash2, List, BarChart3, Bell, CheckSquare, Send, Smartphone, Loader2, ChevronDown, Newspaper } from "lucide-react";
+import { Repeat, Plus, Play, Trash2, List, BarChart3, Bell, CheckSquare, Send, Smartphone, Loader2, ChevronDown, ChevronRight, Newspaper, ArrowLeft, Check } from "lucide-react";
 import { api } from "@/lib/api";
-import { Switch } from "@/components/ui/switch";
 
 const ACCENT = "#3E7C8C"; // same color as the "Azioni programmate" button in the chat
 
@@ -28,6 +27,38 @@ const renderTelegramText = (text) => String(text || "").split(/(\*[^*\n]+\*)/g).
   /^\*[^*\n]+\*$/.test(part) ? <strong key={i} className="font-semibold">{part.slice(1, -1)}</strong> : part
 );
 
+// The lists' selection dot (Liste, Spesa...): here it turns the action on and off.
+function ActiveDot({ on, busy, onToggle, testid }) {
+  return (
+    <button type="button" data-testid={testid} disabled={busy} aria-pressed={!!on}
+      onClick={(e) => { e.stopPropagation(); onToggle(!on); }}
+      title={on ? "Attiva: tocca per metterla in pausa" : "In pausa: tocca per riattivarla"}
+      aria-label={on ? "Metti in pausa l'azione" : "Riattiva l'azione"}
+      className="h-8 w-8 -m-1.5 shrink-0 flex items-center justify-center disabled:opacity-60">
+      <span className={`h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${on ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+        {on && <Check size={12} strokeWidth={2.8} />}
+      </span>
+    </button>
+  );
+}
+
+// One action in the list: like a tile of Impostazioni, one per row - the dot (on / paused),
+// the title on one line and, in grey, when it repeats; tapping it opens its card.
+function ActionTile({ action, busy, onToggle, onOpen }) {
+  const on = !!action.enabled;
+  return (
+    <div role="button" tabIndex={0} data-testid="action-tile" onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
+      className={`w-full text-left rounded-[20px] px-3 h-[64px] flex items-center gap-2.5 backdrop-blur-xl transition-colors cursor-pointer ${on ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
+      <ActiveDot on={on} busy={busy} onToggle={onToggle} testid="action-toggle" />
+      <span className="flex-1 min-w-0">
+        <span className="block text-[13px] font-semibold text-white leading-tight whitespace-nowrap overflow-hidden text-ellipsis" data-testid="action-title">{action.title}</span>
+        <span className="block text-[11px] text-white/60 leading-tight mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis" data-testid="action-schedule">{action.schedule_label}</span>
+      </span>
+      <ChevronRight size={14} className="shrink-0 text-white/45" />
+    </div>
+  );
+}
+
 function ActionCard({ action, busy, onToggle, onRun, onDelete }) {
   const [open, setOpen] = useState(false);
   const meta = KIND_META[action.kind] || KIND_META.message;
@@ -35,23 +66,18 @@ function ActionCard({ action, busy, onToggle, onRun, onDelete }) {
   const ok = action.last_status === "ok";
   const pastRuns = (action.runs || []).slice(0, -1).reverse();
   return (
-    <div data-testid="action-card" className={`card-soft p-5 flex flex-col gap-3 transition-opacity ${action.enabled ? "" : "opacity-60"}`}>
+    <div data-testid="action-card" className="card-soft p-5 flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="font-semibold leading-snug text-white" data-testid="action-title">{action.title}</div>
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-white/75">
+          <div className="flex items-center gap-1.5 text-xs text-white/75">
             <Repeat size={12} className="shrink-0 text-white/60" />
-            <span data-testid="action-schedule">{action.schedule_label}</span>
+            <span data-testid="action-card-schedule">{action.schedule_label}</span>
           </div>
         </div>
-        <Switch
-          data-testid="action-toggle"
-          checked={!!action.enabled}
-          disabled={busy}
-          onCheckedChange={onToggle}
-          title={action.enabled ? "Disattiva" : "Riattiva"}
-          className="data-[state=checked]:bg-[#3E7C8C] data-[state=unchecked]:bg-white/20 [&>span]:bg-white"
-        />
+        <span className="flex items-center gap-2 text-[11px] text-white/70 shrink-0">
+          {action.enabled ? "Attiva" : "In pausa"}
+          <ActiveDot on={!!action.enabled} busy={busy} onToggle={onToggle} testid="action-card-toggle" />
+        </span>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -113,6 +139,10 @@ function ActionCard({ action, busy, onToggle, onRun, onDelete }) {
 
 export default function ActionsPage() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const openId = params.get("a");   // the action whose card is open (?a=id: the phone's back goes to the list)
+  const openAction = (a) => setParams({ a: a.id });
+  const closeAction = () => setParams({}, { replace: false });
   const [actions, setActions] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
@@ -150,6 +180,7 @@ export default function ActionsPage() {
         onClick: async () => {
           const prev = actions;
           setActions((xs) => xs.filter((x) => x.id !== a.id));
+          if (openId === a.id) closeAction();
           try { await api.delete(`/scheduled-actions/${a.id}`); toast.success("Azione eliminata"); }
           catch { toast.error("Errore"); setActions(prev); }
         },
@@ -162,34 +193,48 @@ export default function ActionsPage() {
   const activeCount = actions.filter((a) => a.enabled).length;
   const newAction = () => navigate("/dashboard/chat", { state: { action: "scheduled_action" } });
 
-  return (
-    <div className="w-full">
-      <div className="flex items-center justify-between gap-3 mb-6">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center shrink-0"><Repeat size={18} /></div>
-          <div className="min-w-0">
-            <div className="kicker">· azioni</div>
-            <h2 className="text-xl md:text-2xl font-bold tracking-tight">Azioni programmate</h2>
-          </div>
-        </div>
-        <button
-          data-testid="new-action-btn"
-          onClick={newAction}
-          className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3.5 py-2 rounded-full text-white"
-          style={{ background: ACCENT }}
-        >
-          <Plus size={14} /> Nuova
+  const current = openId ? actions.find((a) => a.id === openId) : null;
+
+  // ===== an action's card =====
+  if (openId) {
+    return (
+      <div className="w-full max-w-2xl settings-page" data-testid="action-detail">
+        <button onClick={closeAction} data-testid="action-back" className="flex items-center gap-1.5 text-sm text-white/70 mb-4">
+          <ArrowLeft size={16} /> Azioni
         </button>
+        {!loaded ? <div className="kicker">caricamento…</div> : !current ? (
+          <div className="text-sm text-white/70">Questa azione non c'è più.</div>
+        ) : (
+          <>
+            <div className="flex items-center gap-3 mb-5">
+              <span className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0"><Repeat size={19} /></span>
+              <h2 className="text-2xl font-bold tracking-tight min-w-0 break-words" data-testid="action-detail-title">{current.title}</h2>
+            </div>
+            <ActionCard action={current} busy={busyId === current.id}
+              onToggle={(v) => toggle(current, v)} onRun={() => run(current)} onDelete={() => del(current)} />
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // ===== the list: one tile per row, like Impostazioni =====
+  return (
+    <div className="w-full max-w-2xl settings-page" data-testid="actions-page">
+      <div className="flex items-center gap-3 mb-5">
+        <button data-testid="new-action-btn" onClick={newAction} title="Nuova azione" aria-label="Nuova azione"
+          className="lg-glass h-9 w-9 shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
+          <Plus size={17} strokeWidth={1.7} />
+        </button>
+        {actions.length > 0 && (
+          <span className="kicker" data-testid="actions-count">
+            {activeCount} attiv{activeCount === 1 ? "a" : "e"}{actions.length - activeCount > 0 ? ` · ${actions.length - activeCount} in pausa` : ""}
+          </span>
+        )}
       </div>
 
-      {actions.length > 0 && (
-        <div className="kicker mb-3 px-1" data-testid="actions-count">
-          {activeCount} attiv{activeCount === 1 ? "a" : "e"}{actions.length - activeCount > 0 ? ` · ${actions.length - activeCount} in pausa` : ""}
-        </div>
-      )}
-
       {loaded && actions.length === 0 ? (
-        <div className="card-soft p-6 md:p-8 max-w-xl" data-testid="actions-empty">
+        <div className="card-soft p-6 md:p-8" data-testid="actions-empty">
           <div className="font-semibold text-white">Nessuna azione programmata</div>
           <p className="mt-2 text-sm text-white/75 leading-relaxed">
             Scrivi in chat, con il pulsante <span className="inline-flex items-center gap-1 font-medium"><Repeat size={12} /> Azioni</span>, cosa devo fare e con che cadenza. Lo eseguo da solo finché non lo disattivi. Per esempio:
@@ -204,16 +249,9 @@ export default function ActionsPage() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="flex flex-col gap-3" data-testid="actions-list">
           {actions.map((a) => (
-            <ActionCard
-              key={a.id}
-              action={a}
-              busy={busyId === a.id}
-              onToggle={(v) => toggle(a, v)}
-              onRun={() => run(a)}
-              onDelete={() => del(a)}
-            />
+            <ActionTile key={a.id} action={a} busy={busyId === a.id} onToggle={(v) => toggle(a, v)} onOpen={() => openAction(a)} />
           ))}
         </div>
       )}

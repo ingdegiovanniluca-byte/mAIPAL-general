@@ -209,7 +209,7 @@ Documenti è la tua **base di conoscenza**: tutto quello che hai caricato con Sa
 <!-- id: azioni · path: /dashboard/azioni · verticale: tutti -->
 Le azioni programmate sono comandi che mAIPAL esegue da solo, con la cadenza che scegli, finché non le fermi.
 - **Crearle**: dalla chat con l'agente **Azioni** ("Ogni lunedì alle 8 mandami su Telegram i task della settimana", "Ogni venerdì all'una di notte svuota gli iscritti della lista Lezioni Pilates"). Prima di attivarla, mAIPAL ti mostra cosa farà.
-- **Nella sezione**: l'elenco delle azioni con la prossima esecuzione; puoi **eseguirne una subito** (senza cambiare la programmazione) o eliminarla.
+- **Nella sezione**: una casella per azione, con il titolo e sotto quando si ripete. Il **pallino** a sinistra la attiva o la mette in pausa. Toccando la casella si apre la sua scheda: cosa fa, la prossima esecuzione, l'ultimo risultato, **Esegui ora** (senza cambiare la programmazione) ed elimina.
 - Da Telegram: `/azione <comando>` per crearne una, `/azioni` per l'elenco.
 
 ## Fitness
