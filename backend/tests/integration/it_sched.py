@@ -99,11 +99,16 @@ async def fake_interpret(text, catalog, now_local, linked, user_id=None, channel
     if "pilates" in text:
         return {"supported": True, "title": "Svuota iscritti", "kind": "list_update", "schedule": {"freq": "weekly", "weekdays": [4], "time": "01:00"}, "list_request": "elimina tutti gli elementi di tutti i campi della lista Lezioni Pilates"}
     if "spesa" in text:
-        return {"supported": True, "title": "Spesa settimana", "kind": "report", "schedule": {"freq": "weekly", "weekdays": [0], "time": "00:00"}, "report_instruction": "Calcola la spesa totale", "period": "last_week", "delivery": "telegram"}
+        return {"supported": True, "title": "Spesa settimana", "description": "Ogni lunedì a mezzanotte calcola il totale delle spese della settimana appena conclusa e te lo invia su Telegram.", "kind": "report", "schedule": {"freq": "weekly", "weekdays": [0], "time": "00:00"}, "report_instruction": "Calcola la spesa totale", "period": "last_week", "delivery": "telegram"}
     if "affitto" in text:
         return {"supported": True, "title": "Affitto", "kind": "create_task", "schedule": {"freq": "monthly", "day_of_month": 1, "time": "09:00"}, "task": {"title": "Pagare affitto", "priority": "alta"}}
     return {"supported": False, "reason": "Non posso inviare email."}
 sa.interpret_command = fake_interpret
+DESCRIBED = []
+async def fake_describe(text, schedule_text, user_id=None):
+    DESCRIBED.append(text)
+    return {"title": "Etichetta breve", "description": f"Descrizione scritta bene ({schedule_text})."}
+sa.describe_action = fake_describe
 async def fake_lu(text, catalog, kb_context="", user_id=None, channel="web"):
     return {"op": "clear_all_sub_items", "collection_id": "c1", "item_query": "", "sub_item_query": "", "fields": {}, "sub_items": [], "items": []}
 lu.interpret_list_request = fake_lu
@@ -156,6 +161,14 @@ async def main():
     print("RESUMED:", r["enabled"], r["next_run_label"])
     lst = await server.list_scheduled_actions(user)
     print("LIST:", [(x["title"], x["enabled"]) for x in lst])
+    # a new action keeps its well-written description; the older ones without get label + description once
+    spesa = next(x for x in lst if "spese della settimana" in (x.get("description") or ""))
+    assert spesa["title"] == "Spesa settimana"
+    assert all(x.get("description") for x in lst)
+    n_described = len(DESCRIBED)
+    assert n_described == sum(1 for x in lst if x["title"] == "Etichetta breve")
+    await server.list_scheduled_actions(user)
+    assert len(DESCRIBED) == n_described, "described only once"
     await server.delete_scheduled_action(a3["id"], user)
     print("AFTER DELETE:", len(db.scheduled_actions.docs))
     # chat list update with new op, confirm flow

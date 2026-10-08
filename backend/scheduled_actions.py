@@ -346,8 +346,14 @@ async def interpret_command(text: str, catalog: list[dict], now_local: datetime,
         "richieste che non sono azioni ripetibili, azioni che richiederebbero dati che l'app non ha (i dati salvati "
         "nell'app - knowledge base, note, liste, task, diario - li ha sempre). Se il comando è "
         "troppo vago per capire cosa fare o quando, supported=false e in 'reason' chiedi cosa manca.\n\n"
-        "Rispondi SOLO con JSON: {\"supported\": true|false, \"reason\": \"\", \"title\": \"titolo breve (max 60 "
-        "caratteri) di cosa fa l'azione\", \"kind\": \"...\", \"schedule\": {...}, \"list_request\": \"\", "
+        "'title': un'ETICHETTA di 2-4 parole che stia su una riga (max 30 caratteri), con l'iniziale maiuscola, senza "
+        "articoli, preposizioni superflue né la cadenza (es. 'Calcola spese settimana', 'Svuota iscritti Pilates', "
+        "'Promemoria pillola', 'Elimina news vecchie').\n"
+        "'description': cosa fa l'azione, scritta bene in italiano corretto e chiaro, in 1-2 frasi complete che dicono "
+        "anche quando e dove arriva il risultato (es. 'Ogni lunedì a mezzanotte calcola il totale delle spese della "
+        "settimana appena conclusa e te lo invia su Telegram.'). Non copiare il messaggio dell'utente: riscrivilo.\n\n"
+        "Rispondi SOLO con JSON: {\"supported\": true|false, \"reason\": \"\", \"title\": \"etichetta di 2-4 parole\", "
+        "\"description\": \"descrizione chiara in 1-2 frasi\", \"kind\": \"...\", \"schedule\": {...}, \"list_request\": \"\", "
         "\"report_instruction\": \"\", \"period\": \"none\", \"report_list\": \"\", \"list_name\": \"\", \"news\": null, "
         "\"message_text\": \"\", \"task\": null, "
         "\"delivery\": \"telegram|app\", \"notify\": false}"
@@ -366,6 +372,31 @@ async def interpret_command(text: str, catalog: list[dict], now_local: datetime,
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     parsed = json.loads(m.group(0)) if m else {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+# ======================= LLM: label + description of an older action =======================
+async def describe_action(text: str, schedule_text: str, user_id: Optional[str] = None) -> dict:
+    """Actions saved before titles were short labels and descriptions existed: from the command
+    the user typed -> {"title": 2-4 words, "description": 1-2 well-written sentences}. Once per
+    action (the result is stored), with the small model."""
+    system = (
+        "Ricevi il comando con cui l'utente ha programmato un'azione ricorrente in un'app di assistenza personale, "
+        "e la sua cadenza. Scrivi:\n"
+        "- title: un'ETICHETTA di 2-4 parole che stia su una riga (max 30 caratteri), iniziale maiuscola, senza "
+        "articoli, preposizioni superflue né cadenza (es. 'Calcola spese settimana', 'Svuota iscritti Pilates');\n"
+        "- description: cosa fa l'azione e quando, in 1-2 frasi complete, in italiano corretto e chiaro (non copiare "
+        "il comando: riscrivilo bene, senza inventare nulla che non ci sia).\n"
+        "Rispondi SOLO con JSON: {\"title\": \"\", \"description\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini", max_completion_tokens=200, response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": f"Comando: {text}\nCadenza: {schedule_text}"}],
+    )
+    _track(resp, user_id, "sistema", trigger="automatico")
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "{}", re.DOTALL)
+    parsed = json.loads(m.group(0)) if m else {}
+    return {"title": str(parsed.get("title") or "").strip()[:40], "description": str(parsed.get("description") or "").strip()[:600]}
 
 
 # ======================= LLM: write a report =======================

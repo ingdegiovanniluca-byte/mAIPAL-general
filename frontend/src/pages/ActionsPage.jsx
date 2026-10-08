@@ -87,12 +87,14 @@ function ActionCard({ action, busy, onToggle, onRun, onDelete }) {
             {action.delivery === "telegram" || action.notify ? <><Send size={11} />Telegram</> : <><Smartphone size={11} />In app</>}
           </span>
         )}
-        <span className="text-white/60 ml-auto" data-testid="action-next">
-          {action.enabled ? (action.next_run_label ? `Prossima: ${action.next_run_label}` : "") : "In pausa"}
-        </span>
+      </div>
+      {/* the next run on its own line, aligned left like the rest */}
+      <div className="text-[11px] text-white/60" data-testid="action-next">
+        {action.enabled ? (action.next_run_label ? `Prossima: ${action.next_run_label}` : "") : "In pausa"}
       </div>
 
-      <div className="text-xs italic text-white/55 line-clamp-2">«{action.text}»</div>
+      {/* what the action does, written well (not the message as typed), all of it */}
+      <div className="text-xs italic text-white/55 whitespace-pre-wrap break-words" data-testid="action-description">{action.description || action.text}</div>
 
       {action.last_run_at && (
         <div className="rounded-xl bg-white/5 px-3 py-2.5">

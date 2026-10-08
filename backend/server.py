@@ -7179,6 +7179,7 @@ async def _build_scheduled_draft(current: User, text: str, channel: str = "web")
     draft = {
         "text": text,
         "title": (str(parsed.get("title") or "").strip() or text)[:80],
+        "description": str(parsed.get("description") or "").strip()[:600],
         "kind": kind,
         "schedule": schedule,
         "delivery": "telegram" if parsed.get("delivery") == "telegram" else "app",
@@ -7308,6 +7309,7 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
         "org_id": current.org_id,
         "text": str(draft.get("text") or "")[:2000],
         "title": str(draft.get("title") or "Azione programmata")[:80],
+        "description": str(draft.get("description") or "")[:600],
         "kind": kind,
         "schedule": schedule,
         "schedule_label": sa.schedule_label(schedule),
@@ -7365,6 +7367,19 @@ async def create_scheduled_action(payload: ScheduledCreatePayload, current: User
 @api_router.get("/scheduled-actions")
 async def list_scheduled_actions(current: User = Depends(get_current_user)):
     docs = await db.scheduled_actions.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # actions saved before short labels and descriptions existed get them once (then stored)
+    for d in docs:
+        if d.get("description"):
+            continue
+        try:
+            got = await sa.describe_action(d.get("text") or d.get("title") or "", sa.schedule_label(d.get("schedule") or {}), user_id=current.user_id)
+        except Exception:
+            logger.exception(f"describing action {d.get('id')} failed")
+            continue
+        upd = {k: v for k, v in got.items() if v}
+        if upd:
+            await db.scheduled_actions.update_one({"id": d["id"]}, {"$set": upd})
+            d.update(upd)
     return [_public_action(d) for d in docs]
 
 
