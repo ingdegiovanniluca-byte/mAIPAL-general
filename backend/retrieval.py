@@ -63,6 +63,7 @@ EXTRA_SUB_ITEM_SCAN = 5000  # list sub-elements (e.g. people enrolled in a lesso
 
 
 PERIOD_RECALL_CAP = 60     # max records pulled in because they fall in the period asked about
+MONEY_OTHERS_CAP = 15      # ...of which, for a question about money, records without an amount
 
 # Words that only say WHEN ("ottobre", "questo mese", "settimana scorsa"): once the period is
 # turned into dates they must not be searched as words - "mese" used to match the one note
@@ -93,6 +94,10 @@ _RECURRING = re.compile(
     r"giovedì|venerdì|sabato|domenica|bimestre|trimestre)\b|\bal\s+(mese|giorno|anno)\b|\ba\s+settimana\b|"
     r"\b(mensil|settimanal|annual|bimestral|trimestral|semestral|ricorrent|abbonament|rat[ae]\b|canone|affitto|domiciliazion)",
     re.I)
+
+
+# an amount of money in a record: "50 euro", "32,40 €", "€ 18"
+_AMOUNT = re.compile(r"\d[\d.,]*\s*(€|euro\b|eur\b)|€\s*\d", re.I)
 
 
 def is_recurring(text: str) -> bool:
@@ -617,7 +622,8 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
     if window:
         lo, hi = window[0], window[1]
         syn = [s_ for t in terms for k, v in _TOPIC_SYNONYMS.items() if stems[t].startswith(k) or k.startswith(stems[t]) for s_ in v]
-        in_period = []
+        money_q = "euro" in syn
+        in_period = []   # (strength, similarity, record)
         for (_tot, sem, hits, c) in scored:
             d = c.get("day")
             if not d or d > hi:
@@ -625,17 +631,27 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             recurring = d < lo and c.get("source") == "kb" and is_recurring(c["text"])
             if d < lo and not recurring:
                 continue
+            strength = 0
             if terms:
                 toks = token_cache.get(id(c)) or _tokens(c["text"])
-                topical = hits >= 1 or sem >= 0.30 or any(w.startswith(p) for p in syn for w in toks) \
-                    or ("€" in c["text"] and any(p in ("euro", "spes") for p in syn))
-                if not topical:
+                worded = hits >= 1 or any(w.startswith(p) for p in syn for w in toks) or ("€" in c["text"] and money_q)
+                # similarity alone is a weak sign: when the topic's own words are known (spese ->
+                # speso, pagato, euro...) it must be high, or a whole list of clients got in
+                if not worded and sem < (0.45 if syn else 0.30):
                     continue
+                amount = money_q and bool(_AMOUNT.search(c["text"]))
+                strength = (2 if amount else 0) + (1 if worded else 0)
             if recurring and not c["display"].startswith("[Ricorrente"):
                 c["display"] = "[Ricorrente] " + c["display"]
-            in_period.append(c)
-        in_period.sort(key=lambda c: c["day"])
-        for c in in_period[:PERIOD_RECALL_CAP]:
+            in_period.append((strength, sem, c))
+        # the most pertinent ones first (with an amount, with the topic's words, then the most
+        # similar): over the cap the least pertinent are left out - before, the oldest days
+        # filled it and the latest expenses (yesterday's petrol) were the ones dropped
+        in_period.sort(key=lambda x: (-x[0], -x[1]))
+        if money_q:   # a question about money: every record with an amount, only a few without
+            with_amount = [x for x in in_period if x[0] >= 2]
+            in_period = with_amount + [x for x in in_period if x[0] < 2][:MONEY_OTHERS_CAP]
+        for _st, _sem, c in in_period[:PERIOD_RECALL_CAP]:
             forced.add(id(c))
         period_hits = len(in_period)
 

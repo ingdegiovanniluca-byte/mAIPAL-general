@@ -197,3 +197,24 @@ def test_every_expense_of_the_month_is_found(q):
     res = asyncio.run(retrieval.retrieve(_expenses_db(), U, q, limit=8, scope="all", today=date(2026, 10, 8)))
     got = {(c.get("meta") or {}).get("chunk_id") for c in res}
     assert {"kb_1", "kb_2", "kb_3", "kb_4", "kb_5"} <= got, (q, got)
+
+
+def test_latest_expenses_survive_a_crowded_month():
+    """A month full of other records (clients added, tasks due) and of last month's expenses:
+    the most recent expenses (yesterday's petrol) used to be the ones left out."""
+    exp = [_note(1, "Oggi ho speso 50 euro di benzina", "2026-10-07T17:00:00+00:00"),
+           _note(2, "oggi ho speso 32,40 € al supermercato", "2026-10-03T09:00:00+00:00"),
+           _note(3, "Oggi ho speso 120 euro dal meccanico per il tagliando", "2026-10-05T10:00:00+00:00"),
+           _note(4, "oggi ho speso 18 euro in farmacia", "2026-10-06T10:00:00+00:00")]
+    sept = [_note(200 + i, f"oggi ho speso {10 + i} euro di {t}", f"2026-09-{10 + i}T10:00:00+00:00")
+            for i, t in enumerate(["benzina", "spesa", "farmacia", "bar", "benzina", "ristorante", "spesa", "benzina", "regali", "spesa"])]
+    clients = {"id": "cl", "user_id": U, "name": "Clienti", "fields": [{"key": "nome", "label": "Nome"}, {"key": "note", "label": "Note"}]}
+    items = [{"id": f"c{i}", "collection_id": "cl", "data": {"nome": f"Cliente {i}", "note": "preventivo impianto, costo da definire"},
+              "created_at": f"2026-10-0{1 + i % 7}T10:00:00+00:00"} for i in range(150)]
+    tasks = [{"id": f"t{i}", "user_id": U, "title": f"Pagare fattura fornitore {i}", "due_date": f"2026-10-{10 + i % 20}", "priority": "media"} for i in range(25)]
+    db = _DB(kb_chunks=exp + sept, collections=[clients], collection_items=items, tasks=tasks)
+    for q in ["quali sono le spese di ottobre?", "dammi il totale delle spese del mese"]:
+        res = asyncio.run(retrieval.retrieve(db, U, q, limit=8, scope="all", today=date(2026, 10, 8)))
+        got = {(c.get("meta") or {}).get("chunk_id") for c in res}
+        assert {"kb_1", "kb_2", "kb_3", "kb_4"} <= got, (q, got)
+        assert len(res) <= 40, len(res)   # the clients without an amount don't flood the answer
