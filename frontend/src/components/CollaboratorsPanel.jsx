@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Send, Copy, Check, Pause, Play, RefreshCw, MessageCircle } from "lucide-react";
+import { Plus, Pencil, Trash2, Send, Copy, Check, Pause, Play, RefreshCw, MessageCircle, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 /* Impostazioni > Collaboratori (Admin): people outside the app who only use Telegram - they
    write in the diario of the commesse enabled for them and ask about those commesse. Here the
@@ -25,6 +25,28 @@ function Dot({ on }) {
   );
 }
 
+// The same frosted glass as the "+" menu and the profile menu, as a sheet from the bottom:
+// as wide as the screen (never wider - no sideways scrolling), long content scrolls up and down.
+function GlassSheet({ title, onClose, testid, children }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return createPortal(
+    <div className="fixed inset-0 z-[70]" data-testid={testid}>
+      <div className="absolute inset-0 bg-[#1A0820]/25 animate-in fade-in duration-200" onClick={onClose} />
+      <div className="glass-panel glass-sheet absolute left-3 right-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8 max-h-[88vh] overflow-y-auto overflow-x-hidden no-scrollbar px-5 pt-3 pb-6 animate-in slide-in-from-bottom duration-300">
+        <div className="w-10 h-1 rounded-full bg-white/35 mx-auto mb-4" />
+        <button onClick={onClose} aria-label="Chiudi" data-testid="collab-sheet-close" className="absolute top-4 right-4 p-1.5 rounded-full text-white/70 hover:bg-white/10"><X size={18} /></button>
+        <div className="text-lg font-semibold text-white pr-8 mb-4">{title}</div>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function InviteBox({ invite }) {
   const copy = async () => {
     try { await navigator.clipboard.writeText(invite.message); toast.success("Messaggio copiato"); }
@@ -36,7 +58,7 @@ function InviteBox({ invite }) {
         <div className="kicker mb-1">codice · vale 7 giorni</div>
         <div className="font-mono-tight text-xl tracking-[0.25em] text-white" data-testid="collab-code">{invite.code}</div>
       </div>
-      <div className="text-xs text-white/70 whitespace-pre-wrap rounded-xl bg-white/[0.07] p-3 max-h-48 overflow-y-auto" data-testid="collab-message">{invite.message}</div>
+      <div className="text-xs text-white/70 whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-xl bg-white/[0.07] p-3" data-testid="collab-message">{invite.message}</div>
       <div className="flex flex-wrap gap-2">
         <a href={invite.whatsapp_url} target="_blank" rel="noreferrer" data-testid="collab-whatsapp"
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium">
@@ -86,11 +108,9 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
     finally { setSaving(false); }
   };
-  const field = "h-10 w-full rounded-xl bg-white/10 px-3 text-sm text-white placeholder:text-white/40 outline-none";
+  const field = "h-10 w-full min-w-0 rounded-xl bg-white/10 px-3 text-sm text-white placeholder:text-white/40 outline-none";
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="collab-dialog">
-        <DialogHeader><DialogTitle>{invite ? "Invito pronto" : isNew ? "Nuovo collaboratore" : "Modifica collaboratore"}</DialogTitle></DialogHeader>
+    <GlassSheet title={invite ? "Invito pronto" : isNew ? "Nuovo collaboratore" : "Modifica collaboratore"} onClose={onClose} testid="collab-dialog">
         {invite ? (
           <div className="space-y-4">
             <p className="text-sm text-white/75">Manda a {f.first_name} il link con il codice: aprendolo su Telegram si collega da solo.</p>
@@ -114,7 +134,7 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
               {groups.length === 0 ? (
                 <div className="text-xs text-white/60">Nessuna commessa: le commesse stanno sotto ogni cliente nella lista Clienti.</div>
               ) : (
-                <div className="space-y-3 max-h-64 overflow-y-auto pr-1" data-testid="collab-commesse">
+                <div className="space-y-3" data-testid="collab-commesse">
                   {groups.map(([client, list]) => (
                     <div key={client}>
                       <div className="text-[11px] uppercase tracking-widest text-white/50 mb-1">{client || "Senza cliente"}</div>
@@ -144,8 +164,7 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
             </div>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+    </GlassSheet>
   );
 }
 
@@ -179,10 +198,6 @@ export default function CollaboratorsPanel() {
 
   return (
     <div data-testid="collaborators-panel">
-      <p className="text-sm text-white/65 mb-4">
-        Persone esterne (operai, subappaltatori) che usano solo Telegram: scrivono nel diario delle commesse che abiliti e
-        chiedono informazioni su quelle. Non hanno accesso all'app.
-      </p>
       <button type="button" onClick={() => setEditing({})} data-testid="collab-new"
         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm bg-white/15 text-white mb-4">
         <Plus size={14} /> Nuovo collaboratore
@@ -230,13 +245,10 @@ export default function CollaboratorsPanel() {
       {editing && <CollaboratorDialog initial={editing} commesse={commesse} onClose={() => { setEditing(null); load(); }}
         onSaved={(close) => { if (close) { setEditing(null); toast.success("Collaboratore aggiornato"); } load(); }} />}
       {invite && (
-        <Dialog open onOpenChange={() => setInvite(null)}>
-          <DialogContent className="max-w-lg bg-[color:var(--app-bg)]" data-testid="collab-reinvite-dialog">
-            <DialogHeader><DialogTitle>Nuovo codice per {invite.name}</DialogTitle></DialogHeader>
-            <p className="text-sm text-white/70">Il codice precedente non vale più.</p>
-            <InviteBox invite={invite.invite} />
-          </DialogContent>
-        </Dialog>
+        <GlassSheet title={`Nuovo codice per ${invite.name}`} onClose={() => setInvite(null)} testid="collab-reinvite-dialog">
+          <p className="text-sm text-white/70 mb-3">Il codice precedente non vale più.</p>
+          <InviteBox invite={invite.invite} />
+        </GlassSheet>
       )}
     </div>
   );
