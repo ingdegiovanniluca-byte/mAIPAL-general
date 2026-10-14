@@ -3470,6 +3470,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.collaborators.update_many({"commesse": {"$in": commessa_ids}}, {"$pull": {"commesse": {"$in": commessa_ids}}})
 
 
 # ---- Elementi (livello 3): annidati dentro un campo/item specifico ----
@@ -5275,8 +5276,11 @@ JOB_LOG_QUESTION_MSG = ("Il Diario serve solo a scrivere note sulle commesse, qu
 
 async def _save_job_log(current: User, text: str, images: Optional[List[str]] = None, commessa_id: Optional[str] = None,
                         hint_commessa_id: Optional[str] = None, new_client_name: Optional[str] = None,
-                        conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None) -> dict:
-    """Shared by the chat agent, the commessa page, @diario and Telegram.
+                        conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None,
+                        author: Optional[dict] = None) -> dict:
+    """Shared by the chat agent, the commessa page, @diario and Telegram. `author`: a
+    collaborator writing on Telegram ({"id", "first_name", "name", "company"}) - the entry is
+    theirs, in the account (`current`) that enabled them on that commessa.
     -> {"status": "ok", "log", "message", ...} | {"status": "pick_commessa", "candidates", "message", "text"}
        | {"status": "question" | "unclear", "message"} - nothing saved"""
     text = (text or "").strip()
@@ -5287,6 +5291,9 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if current.org_id:
         team = [_first_name(m.get("name")) for m in await db.users.find({"org_id": current.org_id}, {"_id": 0, "name": 1}).to_list(200)]
     speaker = _first_name(current.name)
+    if author:
+        speaker = author.get("first_name") or speaker
+        team = [*team, _first_name(current.name)]
 
     known, target, created = None, None, {}
     if commessa_id:
@@ -5353,7 +5360,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     now = datetime.now(timezone.utc).isoformat()
     log = {
         "id": f"jlog_{uuid.uuid4().hex[:12]}",
-        "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+        "user_id": current.user_id, "org_id": current.org_id, "author_name": speaker,
+        **({"collaborator_id": author.get("id"), "author_company": author.get("company") or ""} if author else {}),
         "collection_id": clienti["id"], "collection_name": clienti.get("name"),
         "client_item_id": target["client_item_id"], "client_name": target["client_name"],
         "commessa_id": target["id"], "commessa_title": target["title"],
@@ -5501,6 +5509,297 @@ async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user
     await _job_todo_or_404(current, todo_id)
     await db.job_todos.delete_one({"id": todo_id})
     return {"ok": True}
+
+
+# ============ COLLABORATORI: solo Telegram, solo le commesse abilitate ============
+# People outside the app (subcontractors, workers) who write in the diario di commessa and ask
+# about a commessa from Telegram, nothing else: no account, no access to the app. For now the
+# platform Admin manages them (later: the subscription's holder). See collab_telegram.py.
+
+COLLAB_CODE_DAYS = 7
+COLLAB_DAILY_LIMIT = 80          # messages per collaborator per day (the AI cost is the account's)
+COLLAB_UNDO_MINUTES = 10         # "Annulla" under a saved entry
+COLLAB_REMIND_AT = "18:00"       # end-of-day reminder, Monday-Friday, if nothing was written today
+
+
+class CollaboratorPayload(BaseModel):
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str] = ""
+    role: Optional[str] = ""
+    company: Optional[str] = ""
+    commesse: List[str] = []
+    show_client_contacts: bool = False
+
+
+class CollaboratorPatch(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    company: Optional[str] = None
+    commesse: Optional[List[str]] = None
+    show_client_contacts: Optional[bool] = None
+    status: Optional[Literal["active", "suspended"]] = None
+
+
+def _require_admin(current: User) -> None:
+    if current.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo l'amministratore gestisce i collaboratori")
+
+
+def _collab_code() -> str:
+    return "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
+
+
+def _phone_digits(phone: Optional[str]) -> str:
+    """'+39 333 123 4567' / '0039…' / '333 1234567' -> '393331234567' (WhatsApp and the check
+    of the Telegram contact compare these)."""
+    d = re.sub(r"\D", "", phone or "")
+    if d.startswith("00"):
+        d = d[2:]
+    if len(d) == 10 and d.startswith("3"):
+        d = "39" + d
+    return d
+
+
+def _collab_name(c: dict) -> str:
+    return f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+
+
+async def _collab_views(current: User) -> dict:
+    """{commessa id: view} of the admin's commesse (the ones a collaborator can be enabled on)."""
+    clienti = await _clienti_list(current)
+    if not clienti:
+        return {}
+    commesse, _ = await _all_commesse(clienti)
+    return {c["id"]: c for c in commesse}
+
+
+def _collab_public(c: dict, views: dict) -> dict:
+    out = {k: c.get(k) for k in ("id", "first_name", "last_name", "email", "phone", "role", "company", "status",
+                                  "show_client_contacts", "linked_at", "last_message_at", "created_at", "code_expires_at")}
+    out["name"] = _collab_name(c)
+    out["linked"] = bool(c.get("telegram_chat_id"))
+    out["commesse"] = [{"id": cid, "title": views[cid]["title"], "client_name": views[cid]["client_name"], "stato": views[cid]["stato"]}
+                       for cid in c.get("commesse") or [] if cid in views]
+    expired = not c.get("code_expires_at") or c["code_expires_at"] < datetime.now(timezone.utc).isoformat()
+    out["code"] = c.get("code") if c.get("code") and not expired else None
+    return out
+
+
+async def _collab_invite(current: User, c: dict, views: dict) -> dict:
+    """The message to send the collaborator (on WhatsApp, or copied): link + code."""
+    username = await tg.bot_username()
+    link = f"https://t.me/{username}?start={c['code']}" if username else None
+    jobs = ", ".join(f"{views[cid]['title']} ({views[cid]['client_name']})" for cid in c.get("commesse") or [] if cid in views)
+    msg = (f"Ciao {c['first_name']}, {current.name or 'il tuo referente'} ti ha invitato a collaborare con mAIPAL"
+           + (f" sulle commesse: {jobs}" if jobs else "") + ".\n"
+           "Da Telegram potrai scrivere (anche a voce o con le foto) cosa fate in cantiere e chiedere informazioni sulle commesse.\n\n"
+           + (f"1. Apri questo link: {link}\n2. Premi «Avvia».\n" if link else "1. Apri Telegram e cerca il bot di mAIPAL.\n")
+           + f"Se ti chiede un codice, scrivi: /start {c['code']}\n"
+           f"Il codice vale {COLLAB_CODE_DAYS} giorni.")
+    from urllib.parse import quote
+    phone = _phone_digits(c.get("phone"))
+    return {"code": c["code"], "link": link, "message": msg, "expires_at": c.get("code_expires_at"),
+            "whatsapp_url": f"https://wa.me/{phone}?text={quote(msg)}" if phone else f"https://wa.me/?text={quote(msg)}"}
+
+
+async def _collab_or_404(current: User, collab_id: str) -> dict:
+    c = await db.collaborators.find_one({"id": collab_id, "owner_user_id": current.user_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Collaboratore non trovato")
+    return c
+
+
+def _clean_collab_fields(d: dict) -> dict:
+    out = {}
+    for k in ("first_name", "last_name", "email", "phone", "role", "company"):
+        if d.get(k) is not None:
+            out[k] = " ".join(str(d[k]).split())[:120]
+    if "email" in out:
+        out["email"] = out["email"].lower()
+    return out
+
+
+@api_router.get("/collaborators")
+async def list_collaborators(current: User = Depends(get_current_user)):
+    _require_admin(current)
+    views = await _collab_views(current)
+    docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [_collab_public(c, views) for c in docs]
+
+
+@api_router.post("/collaborators")
+async def create_collaborator(payload: CollaboratorPayload, current: User = Depends(get_current_user)):
+    _require_admin(current)
+    fields = _clean_collab_fields(payload.model_dump())
+    if not fields.get("first_name") or not fields.get("last_name"):
+        raise HTTPException(status_code=400, detail="Nome e cognome sono obbligatori")
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", fields.get("email") or ""):
+        raise HTTPException(status_code=400, detail="Email non valida")
+    views = await _collab_views(current)
+    now = datetime.now(timezone.utc)
+    c = {
+        "id": f"collab_{uuid.uuid4().hex[:12]}", "owner_user_id": current.user_id, "org_id": current.org_id,
+        **fields, "commesse": [x for x in dict.fromkeys(payload.commesse) if x in views],
+        "show_client_contacts": payload.show_client_contacts, "status": "invited",
+        "code": _collab_code(), "code_expires_at": (now + timedelta(days=COLLAB_CODE_DAYS)).isoformat(),
+        "telegram_chat_id": None, "linked_at": None, "last_message_at": None, "created_at": now.isoformat(),
+    }
+    await db.collaborators.insert_one(c)
+    c.pop("_id", None)
+    return {"collaborator": _collab_public(c, views), "invite": await _collab_invite(current, c, views)}
+
+
+@api_router.patch("/collaborators/{collab_id}")
+async def update_collaborator(collab_id: str, payload: CollaboratorPatch, current: User = Depends(get_current_user)):
+    _require_admin(current)
+    c = await _collab_or_404(current, collab_id)
+    views = await _collab_views(current)
+    upd = _clean_collab_fields(payload.model_dump(exclude_none=True))
+    if payload.commesse is not None:
+        upd["commesse"] = [x for x in dict.fromkeys(payload.commesse) if x in views]
+    if payload.show_client_contacts is not None:
+        upd["show_client_contacts"] = payload.show_client_contacts
+    if payload.status is not None:
+        if c.get("status") == "invited" and payload.status == "active":
+            raise HTTPException(status_code=400, detail="Il collaboratore non si è ancora collegato a Telegram")
+        upd["status"] = payload.status
+    if upd:
+        await db.collaborators.update_one({"id": collab_id}, {"$set": upd})
+        c.update(upd)
+    return _collab_public(c, views)
+
+
+@api_router.post("/collaborators/{collab_id}/invite")
+async def reinvite_collaborator(collab_id: str, current: User = Depends(get_current_user)):
+    """A new code (the old one stops working): to send again, or to link a new phone."""
+    _require_admin(current)
+    c = await _collab_or_404(current, collab_id)
+    views = await _collab_views(current)
+    upd = {"code": _collab_code(), "code_expires_at": (datetime.now(timezone.utc) + timedelta(days=COLLAB_CODE_DAYS)).isoformat()}
+    await db.collaborators.update_one({"id": collab_id}, {"$set": upd})
+    c.update(upd)
+    return {"collaborator": _collab_public(c, views), "invite": await _collab_invite(current, c, views)}
+
+
+@api_router.delete("/collaborators/{collab_id}")
+async def delete_collaborator(collab_id: str, current: User = Depends(get_current_user)):
+    """Removed: they can't write any more; what they already wrote stays in the diary."""
+    _require_admin(current)
+    await _collab_or_404(current, collab_id)
+    await db.collaborators.delete_one({"id": collab_id})
+    return {"ok": True}
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/collaborators")
+async def commessa_collaborators(commessa_id: str, current: User = Depends(get_current_user)):
+    """From the commessa's diary: every collaborator, and whether they are enabled on it."""
+    _require_admin(current)
+    await _commessa_or_404(current, commessa_id)
+    docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("first_name", 1).to_list(500)
+    return [{"id": c["id"], "name": _collab_name(c), "company": c.get("company") or "", "role": c.get("role") or "",
+             "status": c.get("status"), "enabled": commessa_id in (c.get("commesse") or [])} for c in docs]
+
+
+class CollabEnablePayload(BaseModel):
+    enabled: bool
+
+
+@api_router.put("/jobs/commesse/{commessa_id}/collaborators/{collab_id}")
+async def set_commessa_collaborator(commessa_id: str, collab_id: str, payload: CollabEnablePayload, current: User = Depends(get_current_user)):
+    """From the commessa's diary: enable or disable one collaborator on it."""
+    _require_admin(current)
+    await _commessa_or_404(current, commessa_id)
+    await _collab_or_404(current, collab_id)
+    op = {"$addToSet": {"commesse": commessa_id}} if payload.enabled else {"$pull": {"commesse": commessa_id}}
+    await db.collaborators.update_one({"id": collab_id}, op)
+    return {"ok": True, "enabled": payload.enabled}
+
+
+async def _collab_targets(collab: dict) -> list:
+    """What a collaborator can work on right now: [(owner User, clienti list, commessa view)] for
+    the commesse enabled and not closed (a closed commessa closes their access by itself)."""
+    if collab.get("status") != "active":
+        return []
+    owner_doc = await db.users.find_one({"user_id": collab["owner_user_id"]}, {"_id": 0})
+    if not owner_doc:
+        return []
+    owner = User(**owner_doc)
+    clienti = await _clienti_list(owner)
+    if not clienti:
+        return []
+    commesse, _ = await _all_commesse(clienti)
+    enabled = set(collab.get("commesse") or [])
+    return [(owner, clienti, v) for v in commesse if v["id"] in enabled and v["stato"] != "chiusa"]
+
+
+async def _collab_answer(collab: dict, owner: User, view: dict, question: str, history: list) -> str:
+    """A collaborator's question on ONE of their commesse: only that commessa's data, the client's
+    phone and e-mail left out unless the admin allowed them."""
+    if not collab.get("show_client_contacts"):
+        view = {k: v for k, v in view.items() if k not in ("client_phone", "client_email")}
+    logs = await db.job_logs.find({"commessa_id": view["id"]}, {"_id": 0, "embedding": 0}).to_list(5000)
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
+    reports = await db.work_reports.find({"commessa_id": view["id"]}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
+    if not collab.get("show_client_contacts"):
+        contact = re.compile(r"telefon|cellulare|email|e-mail|mail|contatt", re.I)
+        for r in reports:
+            for sec in r.get("sections") or []:
+                sec["fields"] = {f: v for f, v in (sec.get("fields") or {}).items() if not contact.search(f)}
+    out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
+    return out["answer"]
+
+
+async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
+    """End of the working day (Mon-Fri, from COLLAB_REMIND_AT): every linked collaborator who
+    wrote nothing today gets "Cosa hai fatto oggi?" with a button per commessa. Once a day.
+    -> how many were reminded."""
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_local.weekday() >= 5 or now_local.strftime("%H:%M") < COLLAB_REMIND_AT:
+        return 0
+    today = now_local.date().isoformat()
+    sent = 0
+    for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}, "reminded_on": {"$ne": today}}, {"_id": 0}).to_list(2000):
+        await db.collaborators.update_one({"id": c["id"]}, {"$set": {"reminded_on": today}})
+        if await db.job_logs.find_one({"collaborator_id": c["id"], "date": today}, {"_id": 1}):
+            continue
+        targets = await _collab_targets(c)
+        if not targets:
+            continue
+        try:
+            from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"{v['title']} · {v['client_name']}"[:60], callback_data=f"clc:{v['id']}")]
+                                       for _o, _cl, v in targets[:8]])
+            await Bot(token=tg.bot_token()).send_message(
+                chat_id=c["telegram_chat_id"], reply_markup=kb,
+                text=f"Ciao {c.get('first_name', '')}, cosa avete fatto oggi? Scegli la commessa e raccontamelo, anche a voce.")
+            sent += 1
+        except Exception:
+            logger.exception(f"collaborator reminder to {c['id']} failed")
+    return sent
+
+
+async def _collab_reminder_loop():
+    while True:
+        try:
+            if tg.bot_token():
+                await _collab_remind_due()
+        except Exception:
+            logger.exception("collaborator reminder loop iteration failed")
+        await asyncio.sleep(300)
+
+
+async def _notify_owner(owner: User, text: str) -> None:
+    """A note to the admin on Telegram (if linked): a collaborator linked, a problem reported."""
+    if owner.telegram_chat_id:
+        try:
+            await _send_telegram_text(owner.telegram_chat_id, text)
+        except Exception:
+            logger.exception("collaborator notice to owner failed")
 
 
 @api_router.patch("/jobs/commesse/{commessa_id}/stato")
@@ -8097,6 +8396,9 @@ async def start_services():
         await db.job_photos.create_index([("log_id", 1)])
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])
+        await db.collaborators.create_index([("telegram_chat_id", 1)])
+        await db.collaborators.create_index([("code", 1)])
+        await db.collaborators.create_index([("owner_user_id", 1)])
         await db.work_reports.create_index([("commessa_id", 1)])
     except Exception:
         logger.exception("job diary indexes failed")
@@ -8116,6 +8418,10 @@ async def start_services():
         asyncio.create_task(_daily_summary_loop())
     except Exception:
         logger.exception("failed to start daily summary loop")
+    try:
+        asyncio.create_task(_collab_reminder_loop())
+    except Exception:
+        logger.exception("failed to start collaborator reminder loop")
     try:
         asyncio.create_task(_daily_news_loop())
     except Exception:

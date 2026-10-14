@@ -1345,7 +1345,11 @@ async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def build_application() -> Application:
+    import collab_telegram as ct
     app = Application.builder().token(bot_token()).build()
+    # collaborators (Telegram only, their commesse only): handled first, the update stops there
+    app.add_handler(MessageHandler(filters.ALL, ct.gate), group=-1)
+    app.add_handler(CallbackQueryHandler(ct.gate_callback), group=-1)
     app.add_handler(CommandHandler("start", _cmd_start))
     app.add_handler(CommandHandler("help", _cmd_help))
     app.add_handler(CommandHandler("end", _cmd_end))

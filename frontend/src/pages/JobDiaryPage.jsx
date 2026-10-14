@@ -3,12 +3,13 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound } from "lucide-react";
+  UserRound, HardHat } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
+import { useAuth } from "@/auth/AuthContext";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -135,6 +136,7 @@ function DiaryLine({ log, section, onOpen, onPhoto }) {
           {full && !isEvent && log.problems?.length > 0 && <AlertTriangle size={11} strokeWidth={2} />}
           {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
           <span className="text-[11.5px] font-medium">{log.author_name}</span>
+          {log.author_company && <span className="text-[10.5px] text-white/40">· {log.author_company}</span>}
           {log.channel === "telegram" && <span className="text-[10.5px] text-white/40">· Telegram</span>}
         </span>
         {detail && <span className="block mt-[3px] text-[14.5px] font-medium leading-snug text-white">{detail}</span>}
@@ -550,7 +552,18 @@ export default function JobDiaryPage() {
   const [period, setPeriod] = useState({ key: "30" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [menu, setMenu] = useState(null);       // "stato" | "periodo"
+  const [menu, setMenu] = useState(null);       // "stato" | "periodo" | "collab"
+  // Admin: the collaborators (Telegram only) enabled on this commessa
+  const { user: me } = useAuth();
+  const isAdmin = me?.role === "admin";
+  const [collabs, setCollabs] = useState(null);
+  const loadCollabs = (id) => api.get(`/jobs/commesse/${id}/collaborators`).then((r) => setCollabs(r.data || [])).catch(() => setCollabs([]));
+  useEffect(() => { if (isAdmin && selectedId) loadCollabs(selectedId); else setCollabs(null); }, [isAdmin, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleCollab = async (x) => {
+    setCollabs((cs) => cs.map((c) => (c.id === x.id ? { ...c, enabled: !x.enabled } : c)));
+    try { await api.put(`/jobs/commesse/${selectedId}/collaborators/${x.id}`, { enabled: !x.enabled }); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); loadCollabs(selectedId); }
+  };
   const [openClients, setOpenClients] = useState(() => new Set());   // client cards opened with the arrow
   const toggleClient = (id) => setOpenClients((cur) => {
     const next = new Set(cur);
@@ -747,6 +760,10 @@ export default function JobDiaryPage() {
           value={c.data_inizio ? `${shortDay(c.data_inizio)} → ${c.data_fine ? shortDay(c.data_fine) : "in corso"}` : "non indicate"} />
         {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
         {c.client_email && <InfoCard icon={Mail} label="Email" value={c.client_email} href={`mailto:${c.client_email}`} testid="info-email" ariaLabel={`Scrivi a ${c.client_name}`} />}
+        {isAdmin && collabs && (
+          <InfoCard icon={HardHat} label="Collaboratori" value={String(collabs.filter((x) => x.enabled).length)} testid="info-collaboratori"
+            ariaLabel="Scegli i collaboratori abilitati su questa commessa" onClick={() => setMenu((m) => (m === "collab" ? null : "collab"))} />
+        )}
       </div>
 
       {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
@@ -843,6 +860,26 @@ export default function JobDiaryPage() {
             );
           })}
           <div className="px-5 pt-2.5 pb-3 text-[11px] text-white/55 border-t border-white/[0.13]">Il cambio resta scritto nel diario</div>
+        </div>
+      )}
+      {menu === "collab" && collabs && (
+        <div role="menu" aria-label="Collaboratori abilitati" data-testid="collab-menu" className="glass-panel absolute z-40 right-0 top-[112px] w-[280px] py-1">
+          {collabs.length === 0 && <div className="px-5 py-3.5 text-[13px] text-white/75">Nessun collaboratore: aggiungili in Impostazioni → Collaboratori.</div>}
+          {collabs.map((x) => (
+            <button key={x.id} type="button" role="menuitemcheckbox" aria-checked={x.enabled} onClick={() => toggleCollab(x)} data-testid={`collab-toggle-${x.id}`}
+              className="glass-row w-full flex items-center gap-3.5 px-5 py-3 text-left text-[15px] text-white">
+              <span className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${x.enabled ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+                {x.enabled && <Check size={12} strokeWidth={2.8} />}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate">{x.name}</span>
+                {(x.company || x.status !== "active") && (
+                  <span className="block text-[11px] text-white/55 truncate">{[x.company, x.status === "invited" ? "non ancora collegato" : x.status === "suspended" ? "sospeso" : ""].filter(Boolean).join(" · ")}</span>
+                )}
+              </span>
+            </button>
+          ))}
+          <div className="px-5 pt-2.5 pb-3 text-[11px] text-white/55 border-t border-white/[0.13]">Con il pallino possono scrivere e chiedere su questa commessa da Telegram</div>
         </div>
       )}
       {menu === "periodo" && (

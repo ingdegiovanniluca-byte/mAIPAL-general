@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, Trash2 } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import OrganizationPage from "@/pages/OrganizationPage";
 import AdminPage from "@/pages/AdminPage";
+import CollaboratorsPanel from "@/components/CollaboratorsPanel";
 
 const VERTICALS = ["Lavoro", "Gestione tempo libero", "Vita privata"];
 const TONES = ["formale", "informale", "sintetico", "dettagliato"];
@@ -487,6 +488,13 @@ export default function SettingsPage() {
       <OrganizationPage />
     </Section>
   );
+  // collaborators on Telegram only: for now the Admin manages them (later the subscription's holder)
+  const secCollaborators = (mode) => (user?.role === "admin") ? (
+    <Section mode={mode} id="collaborators" testid="collaborators-card-settings" icon={HardHat} title="Collaboratori"
+      subtitle="Collaboratori esterni che scrivono nel diario delle commesse da Telegram, senza accesso all'app.">
+      <CollaboratorsPanel />
+    </Section>
+  ) : null;
   const secAdmin = (mode) => (user?.role === "admin") ? (
     <Section mode={mode} id="admin" testid="admin-card-settings" icon={Shield} title="Amministrazione"
       subtitle="Whitelist accessi, utenti e team.">
@@ -509,6 +517,7 @@ export default function SettingsPage() {
     { id: "vertical", icon: Compass, title: "Verticale", sub: BUSINESS_VERTICALS.find((v) => v.key === businessVertical)?.label || "Nessuno", on: !!businessVertical },
     { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },
+    ...(user?.role === "admin" ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori", sub: "Solo Telegram", on: false }] : []),
     ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Admin", full: "Amministrazione", sub: "Accessi e utenti", on: false }] : []),
   ];
   const panelTile = tiles.find((t) => t.id === panel);
@@ -529,6 +538,7 @@ export default function SettingsPage() {
             {panel === "vertical" && secVertical("bare")}
             {panel === "links" && <>{secGoogle("static")}{secMicrosoft("static")}{secTargets("static")}{secTelegram("static")}{secWatch("static")}</>}
             {panel === "team" && secTeam("bare")}
+            {panel === "collaborators" && secCollaborators("bare")}
             {panel === "admin" && secAdmin("bare")}
           </div>
         </div>
@@ -583,6 +593,7 @@ export default function SettingsPage() {
         {secTelegram()}
         {secWatch()}
         {secTeam()}
+        {secCollaborators()}
         {secAdmin()}
       </div>
     </div>

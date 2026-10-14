@@ -263,3 +263,16 @@ Con l'app mAIPAL per **Galaxy Watch** parli con gli agenti e guardi task, to-do 
 - **Condividere verso mAIPAL**: da un'altra app (foto, file, link) scegli mAIPAL in "Condividi": si apre la chat con il contenuto pronto da salvare.
 - **Tema**: chiaro o scuro dal popup del profilo (sole / luna).
 - **Microfono**: nel popup del profilo, sotto il tema, scegli se il tasto dei vocali sta a sinistra o a destra della barra di scrittura. Vale su quel dispositivo.
+
+## Collaboratori su Telegram
+<!-- id: collaboratori · verticale: artigiano -->
+I collaboratori sono persone esterne (operai, subappaltatori) che usano **solo Telegram**: scrivono nel diario delle commesse che abiliti e chiedono informazioni su quelle commesse. Non hanno accesso all'app.
+- **Dove**: Impostazioni → **Collaboratori** (per ora solo per l'amministratore).
+- **Nuovo collaboratore**: nome, cognome, email, telefono (facoltativo), ruolo, azienda e le commesse da abilitare (una o più). Con **Invita** ottieni il codice e il messaggio di invito: **Invia su WhatsApp** apre WhatsApp con il messaggio già scritto (link e codice), oppure **Copia messaggio**. Il codice vale 7 giorni e si usa una volta sola.
+- **Collegamento**: il collaboratore apre il link su Telegram e preme Avvia (oppure scrive `/start codice`). Se hai indicato il telefono, gli viene chiesto di condividere il suo numero, che deve corrispondere. Quando si collega ricevi un avviso su Telegram.
+- **Cosa può fare**: scrivere cosa hanno fatto (anche a voce o con le foto) e fare domande, solo sulle sue commesse abilitate e non chiuse. Se ne ha più di una, nomina il cliente o i lavori oppure sceglie la commessa dai pulsanti. Sotto ogni voce salvata c'è **Annulla**, valido 10 minuti.
+- **Dati del cliente**: telefono ed email del cliente non compaiono nelle risposte, a meno che tu non lo permetta nella scheda del collaboratore.
+- **Nel diario** le sue voci hanno il suo nome e l'azienda. Se segnala un problema ti arriva un avviso su Telegram.
+- **Promemoria**: dal lunedì al venerdì alle 18:00, se non ha scritto nulla, il bot gli chiede cosa hanno fatto oggi.
+- **Dalla commessa**: nel diario della commessa la voce **Collaboratori** in alto mostra quanti sono abilitati; toccandola li abiliti o disabiliti con il pallino.
+- **Gestione**: dalla scheda del collaboratore puoi modificarlo, mandare un nuovo codice (anche per collegare un altro telefono), sospenderlo o eliminarlo. Quello che ha già scritto resta nel diario. Quando una commessa viene chiusa, l'accesso dei collaboratori a quella commessa si chiude da solo.
