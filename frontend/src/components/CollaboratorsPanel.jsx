@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Send, Copy, Check, Pause, Play, RefreshCw, MessageCircle, X } from "lucide-react";
+import { Plus, Pencil, Trash2, Send, Copy, Check, Pause, Play, RefreshCw, MessageCircle, Minus, ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
+import GlassBottomSheet from "@/components/GlassBottomSheet";
 
 /* Impostazioni > Collaboratori (Admin): people outside the app who only use Telegram - they
    write in the diario of the commesse enabled for them and ask about those commesse. Here the
@@ -16,34 +16,63 @@ const STATUS = {
 };
 const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "short" }) : "");
 
-// The lists' selection dot.
-function Dot({ on }) {
+// The lists' selection dot; "some" (a client with part of its commesse) shows a dash.
+function Dot({ on, some = false }) {
   return (
-    <span className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${on ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
-      {on && <Check size={12} strokeWidth={2.8} />}
+    <span className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${on || some ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+      {on ? <Check size={12} strokeWidth={2.8} /> : some ? <Minus size={12} strokeWidth={2.8} /> : null}
     </span>
+  );
+}
+
+// A client in "commesse abilitate": its dot picks (or drops) all its commesse at once, the
+// arrow opens it on its commesse to pick them one by one.
+function ClientGroup({ client, list, selected, onSet }) {
+  const [open, setOpen] = useState(false);
+  const n = list.filter((c) => selected.includes(c.id)).length;
+  const all = n === list.length;
+  return (
+    <div className="border-t border-white/[0.16] first:border-t-0" data-testid="collab-client" data-open={open ? "1" : "0"}>
+      <div className="flex items-center gap-3 py-2">
+        <button type="button" onClick={() => onSet(list.map((c) => c.id), !all)} aria-pressed={all} data-testid="collab-client-toggle"
+          className="flex-1 min-w-0 flex items-center gap-3 text-left">
+          <Dot on={all} some={n > 0 && !all} />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-white truncate">{client || "Senza cliente"}</span>
+            <span className="block text-[11px] text-white/55" data-testid="collab-client-count">
+              {n ? `${n} di ${list.length} ${list.length === 1 ? "commessa" : "commesse"}` : `${list.length} ${list.length === 1 ? "commessa" : "commesse"}`}
+            </span>
+          </span>
+        </button>
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} data-testid="collab-client-expand"
+          aria-label={open ? "Nascondi le commesse" : "Mostra le commesse"} className="p-1.5 -mr-1.5 rounded-full text-white/70 hover:bg-white/10">
+          <ChevronDown size={17} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+      {open && (
+        <div className="pl-8 pb-1.5">
+          {list.map((c) => (
+            <button key={c.id} type="button" onClick={() => onSet([c.id], !selected.includes(c.id))} data-testid={`collab-commessa-${c.id}`}
+              className="w-full flex items-center gap-3 py-1.5 text-left text-sm text-white">
+              <Dot on={selected.includes(c.id)} />
+              <span className="flex-1 min-w-0 truncate">{c.title}</span>
+              <span className="text-[11px] text-white/50 shrink-0">{c.stato}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 // The same frosted glass as the "+" menu and the profile menu, as a sheet from the bottom:
 // as wide as the screen (never wider - no sideways scrolling), long content scrolls up and down.
 function GlassSheet({ title, onClose, testid, children }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return createPortal(
-    <div className="fixed inset-0 z-[70]" data-testid={testid}>
-      <div className="absolute inset-0 bg-[#1A0820]/25 animate-in fade-in duration-200" onClick={onClose} />
-      <div className="glass-panel glass-sheet absolute left-3 right-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8 max-h-[88vh] overflow-y-auto overflow-x-hidden no-scrollbar px-5 pt-3 pb-6 animate-in slide-in-from-bottom duration-300">
-        <div className="w-10 h-1 rounded-full bg-white/35 mx-auto mb-4" />
-        <button onClick={onClose} aria-label="Chiudi" data-testid="collab-sheet-close" className="absolute top-4 right-4 p-1.5 rounded-full text-white/70 hover:bg-white/10"><X size={18} /></button>
-        <div className="text-lg font-semibold text-white pr-8 mb-4">{title}</div>
-        {children}
-      </div>
-    </div>,
-    document.body,
+  return (
+    <GlassBottomSheet onClose={onClose} testid={testid} className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-lg font-semibold text-white mb-4">{title}</div>
+      {children}
+    </GlassBottomSheet>
   );
 }
 
@@ -82,15 +111,18 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [invite, setInvite] = useState(null);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
-  const toggle = (id) => setF((x) => ({ ...x, commesse: x.commesse.includes(id) ? x.commesse.filter((c) => c !== id) : [...x.commesse, id] }));
+  const pick = (ids, on) => setF((x) => ({
+    ...x, commesse: on ? [...new Set([...x.commesse, ...ids])] : x.commesse.filter((c) => !ids.includes(c)),
+  }));
   const groups = useMemo(() => {
     const by = new Map();
     commesse.filter((c) => c.stato !== "chiusa" || f.commesse.includes(c.id)).forEach((c) => {
-      const g = by.get(c.client_name) || [];
-      g.push(c);
-      by.set(c.client_name, g);
+      const key = c.client_item_id || c.client_name;
+      const g = by.get(key) || { client: c.client_name, list: [] };
+      g.list.push(c);
+      by.set(key, g);
     });
-    return [...by.entries()].sort((a, b) => (a[0] || "").localeCompare(b[0] || ""));
+    return [...by.entries()].sort((a, b) => (a[1].client || "").localeCompare(b[1].client || ""));
   }, [commesse, f.commesse]);
   const save = async () => {
     if (!f.first_name.trim() || !f.last_name.trim()) { toast.error("Nome e cognome sono obbligatori"); return; }
@@ -134,19 +166,9 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
               {groups.length === 0 ? (
                 <div className="text-xs text-white/60">Nessuna commessa: le commesse stanno sotto ogni cliente nella lista Clienti.</div>
               ) : (
-                <div className="space-y-3" data-testid="collab-commesse">
-                  {groups.map(([client, list]) => (
-                    <div key={client}>
-                      <div className="text-[11px] uppercase tracking-widest text-white/50 mb-1">{client || "Senza cliente"}</div>
-                      {list.map((c) => (
-                        <button key={c.id} type="button" onClick={() => toggle(c.id)} data-testid={`collab-commessa-${c.id}`}
-                          className="w-full flex items-center gap-3 py-1.5 text-left text-sm text-white">
-                          <Dot on={f.commesse.includes(c.id)} />
-                          <span className="flex-1 min-w-0 truncate">{c.title}</span>
-                          <span className="text-[11px] text-white/50">{c.stato}</span>
-                        </button>
-                      ))}
-                    </div>
+                <div data-testid="collab-commesse">
+                  {groups.map(([key, g]) => (
+                    <ClientGroup key={key} client={g.client} list={g.list} selected={f.commesse} onSet={pick} />
                   ))}
                 </div>
               )}

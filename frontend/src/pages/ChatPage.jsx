@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
+import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -2676,23 +2676,7 @@ function HelpTag() {
 }
 
 function BottomSheet({ onClose, testid, children }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return createPortal(
-    <div className="fixed inset-0 z-[70]" data-testid={testid}>
-      <div className="absolute inset-0 bg-[#1A0820]/25 animate-in fade-in duration-200" onClick={onClose} />
-      {/* a floating card of frosted glass, the page's colours melting through it */}
-      <div className="glass-panel glass-sheet absolute left-3 right-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] max-h-[84vh] overflow-y-auto no-scrollbar px-5 pt-3 pb-6 animate-in slide-in-from-bottom duration-300">
-        <div className="w-10 h-1 rounded-full bg-white/35 mx-auto mb-4" />
-        <button onClick={onClose} aria-label="Chiudi" data-testid="sheet-close" className="absolute top-4 right-4 p-1.5 rounded-full text-white/70 hover:bg-white/10"><X size={18} /></button>
-        {children}
-      </div>
-    </div>,
-    document.body,
-  );
+  return <GlassBottomSheet onClose={onClose} testid={testid}>{children}</GlassBottomSheet>;
 }
 
 function SheetSection({ title, children }) {
