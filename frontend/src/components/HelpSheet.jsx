@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { X, LifeBuoy, ChevronRight, ArrowLeft } from "lucide-react";
+import { X, ChevronRight, ArrowLeft } from "lucide-react";
+import { HelpIcon } from "@/lib/helpIcon";
 import { api } from "@/lib/api";
 
 /* What the "i" next to a section's title opens: that page's part of the Help guide
@@ -60,7 +61,7 @@ export default function HelpSheet({ path, title, onClose }) {
 
         <button type="button" onClick={askHelp} data-testid="help-ask"
           className="mt-6 w-full flex items-center justify-center gap-2 py-3 rounded-full bg-white/[0.22] border border-white/30 text-white text-[15px] font-medium active:scale-[0.98]">
-          <LifeBuoy size={17} /> Chiedi a Help
+          <HelpIcon size={17} /> Chiedi a Help
         </button>
 
         {data && others.length > 0 && (

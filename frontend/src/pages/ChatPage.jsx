@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, LifeBuoy } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus } from "lucide-react";
+import { HelpIcon } from "@/lib/helpIcon";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -88,7 +89,7 @@ const ALL_ACTIONS = [
 // Help: not among the agents in the row - opened from the avatar menu (Help) or from a
 // section's "i" (Chiedi a Help). It answers on how mAIPAL works, from the app's guide.
 const HELP_ACTION = {
-  id: "help", key: "help", short: "Help", icon: <LifeBuoy size={22} />,
+  id: "help", key: "help", short: "Help", icon: <HelpIcon size={22} />,
   title: "Help",
   subtitle: "Chiedimi come si usa mAIPAL: cosa può fare, dove trovi le funzioni, come si usano",
   placeholder: "Es. Come creo una lista? Dove cambio il tema scuro?",
@@ -1956,7 +1957,7 @@ export default function ChatPage() {
             {active === "help" ? (
               <button type="button" data-testid="exit-help-desktop" onClick={exitHelp} title="Esci da Help"
                 className="text-xs font-bold uppercase tracking-wider text-white inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/15 hover:bg-white/20">
-                <LifeBuoy size={12} /> help <X size={12} />
+                <HelpIcon size={12} /> help <X size={12} />
               </button>
             ) : (
               <div className="text-xs font-bold uppercase tracking-wider text-white/70">{activeAction.title.toLowerCase()}</div>
@@ -2669,7 +2670,7 @@ function HistoryCard({ conv, index = 0, isReplying = false, onOpen, onToggleFav,
 function HelpTag() {
   return (
     <span data-testid="help-answer-tag" className="ml-4 inline-flex items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-white" style={{ background: HELP_ACTION.color }}>
-      <LifeBuoy size={11} /> Help
+      <HelpIcon size={11} /> Help
     </span>
   );
 }

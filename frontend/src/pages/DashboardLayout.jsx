@@ -4,8 +4,9 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, LifeBuoy,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic,
 } from "lucide-react";
+import { HelpIcon } from "@/lib/helpIcon";
 import { toast } from "sonner";
 import { usePref } from "@/lib/prefs";
 import logo3 from "@/assets/logo3.png";
@@ -164,7 +165,7 @@ export default function DashboardLayout() {
                     <GlassMenuItem icon={InstallIcon} label="Installa l'app" testid="install-app-btn"
                       onClick={() => { setMenuOpen(false); installApp.install(); }} />
                   )}
-                  <GlassMenuItem icon={LifeBuoy} label="Help" testid="help-btn" onClick={openHelpChat} />
+                  <GlassMenuItem icon={HelpIcon} label="Help" testid="help-btn" onClick={openHelpChat} />
                   <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn" onClick={() => { setMenuOpen(false); logout(); }} />
                   <ThemeRow />
                   <MicRow />
@@ -216,7 +217,7 @@ export default function DashboardLayout() {
                   <GlassMenuItem icon={InstallIcon} label="Installa l'app" testid="install-app-btn-mobile"
                     onClick={() => { setMenuOpen(false); installApp.install(); }} />
                 )}
-                <GlassMenuItem icon={LifeBuoy} label="Help" testid="help-btn-mobile" onClick={openHelpChat} />
+                <GlassMenuItem icon={HelpIcon} label="Help" testid="help-btn-mobile" onClick={openHelpChat} />
                 <GlassMenuItem icon={LogOut} label="Esci" testid="logout-btn-mobile" onClick={() => { setMenuOpen(false); logout(); }} />
                 <ThemeRow />
                 <MicRow />
