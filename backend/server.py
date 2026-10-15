@@ -833,6 +833,7 @@ async def _apply_vertical(current: User, key: str) -> None:
         await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org_doc["id"], "org_role": "owner"}})
         current = current.model_copy(update={"org_id": org_doc["id"], "org_role": "owner"})
     await _ensure_clienti_list(current)
+    await _ensure_weekly_jobs_action(current.model_copy(update={"business_vertical": "artigiano"}))
 
 
 async def _ensure_clienti_list(current: User) -> dict:
@@ -3470,6 +3471,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_economics.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.collaborators.update_many({"commesse": {"$in": commessa_ids}}, {"$pull": {"commesse": {"$in": commessa_ids}}})
 
 
@@ -5374,6 +5376,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if images:
         await _store_job_photos(current, log, images)
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
+    if log["hours"] or log["materials"]:
+        asyncio.create_task(_check_budget_alert(clienti, target["id"]))
     return {"status": "ok", "log": _public_log(log), "commessa": target, "client_created": bool(created.get("client")),
             "commessa_created": bool(created.get("commessa")), "message": _job_log_message(log, created)}
 
@@ -5423,8 +5427,10 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     reports = await db.work_reports.count_documents({"commessa_id": commessa_id})
     photos = sum(len(lg.get("photos") or []) for lg in light)
     todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
+    econ = await _commessa_economics(clienti, commessa_id, light)
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "todos": todos, "team": await _team_first_names(current),
+            "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
             "stati": vx.COMMESSA_STATI}
@@ -5509,6 +5515,180 @@ async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user
     await _job_todo_or_404(current, todo_id)
     await db.job_todos.delete_one({"id": todo_id})
     return {"ok": True}
+
+
+# ============ COSTI E MARGINI della commessa ============
+# Hourly costs per person (and a default one) and the materials' unit prices are on the
+# Clienti list - the same for every commessa; the quote (preventivo) and the other costs on
+# the commessa (job_economics). The admin gets a Telegram note at 80% and 100% of the quote.
+
+BUDGET_ALERTS = (80, 100)
+
+
+class EconomicsPatch(BaseModel):
+    budget: Optional[float] = None
+    clear_budget: bool = False
+
+
+class ExtraCostPayload(BaseModel):
+    label: str
+    amount: float
+    date: Optional[str] = None
+
+
+class CostsPatch(BaseModel):
+    default_rate: Optional[float] = None
+    clear_default_rate: bool = False
+    rates: Optional[dict] = None       # {person: €/h, or null to remove}
+    prices: Optional[List[dict]] = None   # [{name, unit, price (null to remove)}]
+
+
+def _num_or_none(v) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(f, 4) if f >= 0 else None
+
+
+async def _commessa_economics(clienti: dict, commessa_id: str, logs: Optional[list] = None) -> dict:
+    costs = clienti.get("costs") or {}
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
+    if logs is None:
+        logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "hours": 1, "materials": 1, "problems": 1, "kind": 1, "date": 1}).to_list(20000)
+    return jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), econ.get("extras"), econ.get("budget"))
+
+
+async def _check_budget_alert(clienti: dict, commessa_id: str) -> None:
+    """Once per threshold (80%, 100% of the quote): a note to the list's owner on Telegram.
+    Lowered again (quote raised, costs removed), the thresholds re-arm."""
+    try:
+        econ_doc = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
+        if not econ_doc.get("budget"):
+            return
+        e = await _commessa_economics(clienti, commessa_id)
+        pct = e["used_pct"] or 0
+        sent = set(econ_doc.get("alerts") or [])
+        keep = {t for t in sent if pct >= t}
+        new = [t for t in BUDGET_ALERTS if pct >= t and t not in sent]
+        if keep != sent or new:
+            await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"alerts": sorted(keep | set(new))}})
+        if not new:
+            return
+        owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+        sub = await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0})
+        client = await db.collection_items.find_one({"id": (sub or {}).get("item_id")}, {"_id": 0, "embedding": 0}) if sub else None
+        if not owner_doc or not sub:
+            return
+        v = _commessa_view(sub, client, clienti)
+        t = max(new)
+        head = "🔴 Preventivo superato" if t >= 100 else "🟠 Attenzione al preventivo"
+        await _notify_owner(User(**owner_doc), f"{head} su «{v['title']}» — {v['client_name']}: speso {jl._eur(e['cost_total'])} "
+                                               f"di {jl._eur(e['budget'])} ({pct:.0f}%), margine {jl._eur(e['margin'])}.")
+    except Exception:
+        logger.exception("budget alert failed")
+
+
+def _econ_people(e: dict, team: list, collabs: list) -> list:
+    """Whose hourly cost can be set: who has hours here, the team, the collaborators."""
+    names = [x["who"] for x in e["labor"]] + team + collabs
+    return list(dict.fromkeys(n for n in names if n))
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/economics")
+async def get_commessa_economics(commessa_id: str, current: User = Depends(get_current_user)):
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    e = await _commessa_economics(clienti, commessa_id)
+    costs = clienti.get("costs") or {}
+    team = await _team_first_names(current)
+    collabs = [c.get("first_name") for c in await db.collaborators.find({"owner_user_id": clienti.get("user_id")}, {"_id": 0, "first_name": 1}).to_list(500)]
+    rates = costs.get("rates") or {}
+    return {**e, "default_rate": costs.get("default_rate"),
+            "people": [{"who": n, "rate": rates.get(n)} for n in _econ_people(e, team, collabs)]}
+
+
+@api_router.patch("/jobs/commesse/{commessa_id}/economics")
+async def patch_commessa_economics(commessa_id: str, payload: EconomicsPatch, current: User = Depends(get_current_user)):
+    """The quote (what the client pays) of a commessa."""
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    budget = None if payload.clear_budget else _num_or_none(payload.budget)
+    await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"commessa_id": commessa_id, "budget": budget}}, upsert=True)
+    await _check_budget_alert(clienti, commessa_id)
+    return await get_commessa_economics(commessa_id, current)
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/extras")
+async def add_commessa_extra(commessa_id: str, payload: ExtraCostPayload, current: User = Depends(get_current_user)):
+    """Another cost of the commessa: scaffolding hire, disposal, a subcontract..."""
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    label = " ".join((payload.label or "").split())[:120]
+    amount = _num_or_none(payload.amount)
+    if not label or amount is None:
+        raise HTTPException(status_code=400, detail="Scrivi la voce e l'importo")
+    extra = {"id": f"xc_{uuid.uuid4().hex[:10]}", "label": label, "amount": amount,
+             "date": (payload.date or jl.today_local().isoformat())[:10], "by": _first_name(current.name)}
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0})
+    if econ:
+        await db.job_economics.update_one({"commessa_id": commessa_id}, {"$push": {"extras": extra}})
+    else:
+        await db.job_economics.insert_one({"commessa_id": commessa_id, "budget": None, "extras": [extra], "alerts": []})
+    await _check_budget_alert(clienti, commessa_id)
+    return await get_commessa_economics(commessa_id, current)
+
+
+@api_router.delete("/jobs/commesse/{commessa_id}/extras/{extra_id}")
+async def delete_commessa_extra(commessa_id: str, extra_id: str, current: User = Depends(get_current_user)):
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
+    extras = [x for x in econ.get("extras") or [] if x.get("id") != extra_id]
+    await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"extras": extras}})
+    await _check_budget_alert(clienti, commessa_id)
+    return await get_commessa_economics(commessa_id, current)
+
+
+@api_router.patch("/jobs/costs")
+async def patch_job_costs(payload: CostsPatch, commessa_id: Optional[str] = None, current: User = Depends(get_current_user)):
+    """Hourly costs and material prices, the same for every commessa (kept on the Clienti list)."""
+    clienti = await _clienti_list(current)
+    if not clienti:
+        raise HTTPException(status_code=404, detail="Lista Clienti non trovata")
+    costs = dict(clienti.get("costs") or {})
+    if payload.clear_default_rate:
+        costs["default_rate"] = None
+    elif payload.default_rate is not None:
+        costs["default_rate"] = _num_or_none(payload.default_rate)
+    if payload.rates is not None:
+        rates = dict(costs.get("rates") or {})
+        for who, v in payload.rates.items():
+            who = " ".join(str(who).split())[:60]
+            val = _num_or_none(v) if v is not None else None
+            if not who:
+                continue
+            if val is None:
+                rates.pop(who, None)
+            else:
+                rates[who] = val
+        costs["rates"] = rates
+    if payload.prices is not None:
+        prices = dict(costs.get("prices") or {})
+        for p in payload.prices:
+            name = " ".join(str(p.get("name") or "").split())[:120]
+            if not name:
+                continue
+            key = jl.price_key(name, p.get("unit") or "")
+            val = _num_or_none(p.get("price")) if p.get("price") is not None else None
+            if val is None:
+                prices.pop(key, None)
+            else:
+                prices[key] = {"name": name, "unit": (p.get("unit") or "")[:20], "price": val}
+        costs["prices"] = prices
+    await db.collections.update_one({"id": clienti["id"]}, {"$set": {"costs": costs}})
+    clienti["costs"] = costs
+    if commessa_id:
+        await _commessa_or_404(current, commessa_id)
+        await _check_budget_alert(clienti, commessa_id)
+        return await get_commessa_economics(commessa_id, current)
+    return {"ok": True, "costs": costs}
 
 
 # ============ COLLABORATORI: solo Telegram, solo le commesse abilitate ============
@@ -5850,6 +6030,7 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
     reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
+    view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))   # never for collaborators
     try:
         out = await jl.answer(view, logs, reports, question, payload.history[-8:], user_id=current.user_id)
     except Exception as e:
@@ -5885,6 +6066,10 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
     if upd:
         upd["embedding"] = None
         await db.job_logs.update_one({"id": log_id}, {"$set": upd})
+        if "hours" in upd or "materials" in upd:
+            clienti = await _clienti_list(current)
+            if clienti:
+                asyncio.create_task(_check_budget_alert(clienti, log["commessa_id"]))
     return _public_log({**log, **upd})
 
 
@@ -7665,6 +7850,7 @@ async def create_scheduled_action(payload: ScheduledCreatePayload, current: User
 
 @api_router.get("/scheduled-actions")
 async def list_scheduled_actions(current: User = Depends(get_current_user)):
+    await _ensure_weekly_jobs_action(current)   # artigiani who chose the vertical before it existed
     docs = await db.scheduled_actions.find({"user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
     # actions saved before short labels and descriptions existed get them once (then stored)
     for d in docs:
@@ -7941,6 +8127,10 @@ async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for
             result = (f"Eliminate {n} news" if n != 1 else "Eliminata 1 news") + f": {_news_rule_label(nw)}." if n else f"Nessuna news da eliminare ({_news_rule_label(nw)})."
             if a.get("notify") and chat_id:
                 delivered = await _send_telegram_text(chat_id, f"🔁 *{a['title']}*\n✅ {result}")
+        elif kind == "job_weekly":
+            result = await _job_weekly_summary(user, started.astimezone(LOCAL_TZ))
+            if chat_id:
+                delivered = await _send_telegram_text(chat_id, result)
         elif kind == "message":
             result = a.get("message_text") or a.get("title")
             if a.get("delivery") == "telegram" and chat_id:
@@ -7976,6 +8166,108 @@ async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for
                                      trigger="utente" if manual else "automatico", org_id=user.org_id)
     logger.info(f"[scheduled] {a['id']} kind={kind} status={status} manual={manual}")
     return run
+
+
+# ---- the artigiano's preconfigured action: Monday's summary of the job sites ----
+WEEKLY_JOBS_KEY = "artigiano_weekly"
+
+
+async def _job_weekly_summary(user: User, now_local: datetime) -> str:
+    """Last week (Mon-Sun) on the job sites, from the data, no AI: hours per site and person,
+    materials, problems, quote vs costs, the sites standing still, the activities due."""
+    clienti = await _clienti_list(user)
+    if not clienti:
+        return "Non c'è ancora la lista Clienti con le commesse."
+    lo, hi, label = sa.period_range("last_week", now_local)
+    commesse, _ = await _all_commesse(clienti)
+    open_c = [c for c in commesse if c["stato"] != "chiusa"]
+    ids = [c["id"] for c in commesse]
+    logs = await db.job_logs.find({"commessa_id": {"$in": ids}}, {"_id": 0, "embedding": 0}).to_list(50000) if ids else []
+    by: dict = {}
+    for lg in logs:
+        by.setdefault(lg["commessa_id"], []).append(lg)
+    week = lambda lgs: [x for x in lgs if not x.get("kind") and lo.isoformat() <= (x.get("date") or "") <= hi.isoformat()]
+    lines = [f"🗓 *Cantieri — {label}*"]
+    worked = sorted([c for c in commesse if week(by.get(c["id"], []))],
+                    key=lambda c: -jl.totals(week(by[c["id"]]))["hours_total"])
+    all_week = [x for c in worked for x in week(by[c["id"]])]
+    if not worked:
+        lines.append("Nessuna voce di diario nella settimana.")
+    else:
+        tot = jl.totals(all_week)
+        per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in sorted(tot["by_person"].items(), key=lambda x: -x[1]))
+        lines.append(f"Ore totali: *{jl._fmt_num(tot['hours_total'])} h*" + (f" ({per})" if per else ""))
+    econs = {}
+    for c in worked:
+        t = jl.totals(week(by[c["id"]]))
+        per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in t["by_person"].items())
+        lines.append(f"\n*{c['title']}* — {c['client_name']}: {jl._fmt_num(t['hours_total'])} h" + (f" ({per})" if per else ""))
+        if t["materials"]:
+            lines.append(f"🧰 {jl.materials_line(t['materials'])}")
+        for p in t["problems"]:
+            lines.append(f"⚠️ {p['text']}")
+        econs[c["id"]] = e = await _commessa_economics(clienti, c["id"], by[c["id"]])
+        if e.get("budget"):
+            flag = "🔴 " if e["used_pct"] >= 100 else "🟠 " if e["used_pct"] >= 80 else ""
+            lines.append(f"{flag}💶 speso {jl._eur(e['cost_total'])} di {jl._eur(e['budget'])} ({e['used_pct']:.0f}%), margine {jl._eur(e['margin'])}")
+    # quotes at risk on the sites not worked last week
+    risky = []
+    for c in open_c:
+        if c["id"] in econs:
+            continue
+        e = await _commessa_economics(clienti, c["id"], by.get(c["id"], []))
+        if e.get("budget") and e["used_pct"] >= 80:
+            risky.append(f"«{c['title']}» {e['used_pct']:.0f}%")
+    if risky:
+        lines.append("\n🟠 Preventivi oltre l'80%: " + ", ".join(risky))
+    # sites "in corso" standing still for more than a week
+    still = []
+    for c in open_c:
+        if c["stato"] != "in corso":
+            continue
+        days = [x.get("date") for x in by.get(c["id"], []) if not x.get("kind") and x.get("date")]
+        last = max(days) if days else None
+        if not last or last < (hi - timedelta(days=6)).isoformat():
+            still.append(f"«{c['title']}» ({'mai' if not last else 'ultima ' + _short_it_date(last)})")
+    if still:
+        lines.append("\n⏸ In corso ma senza voci da più di 7 giorni: " + ", ".join(still))
+    # the commesse's To Do due this week
+    today = now_local.date()
+    due = await db.job_todos.find({"commessa_id": {"$in": [c["id"] for c in open_c]}, "done": False}, {"_id": 0}).to_list(2000) if open_c else []
+    titles = {c["id"]: c["title"] for c in commesse}
+    week_due = sorted([t for t in due if t.get("due_date") and t["due_date"] <= (today + timedelta(days=6)).isoformat()],
+                      key=lambda t: t["due_date"])
+    if week_due:
+        lines.append("\n📌 Da fare entro questa settimana:")
+        lines += [f"• {t['text']} — {t.get('who') or ''} entro {_short_it_date(t['due_date'])}"
+                  + (" (scaduta)" if t["due_date"] < today.isoformat() else "") + f" · «{titles.get(t['commessa_id'], '')}»"
+                  for t in week_due[:15]]
+    return "\n".join(lines)
+
+
+async def _ensure_weekly_jobs_action(user: User) -> None:
+    """The artigiano gets the Monday summary of the job sites as an action, once: paused or
+    deleted, it is never created again."""
+    if user.business_vertical != "artigiano":
+        return
+    udoc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0, "system_actions": 1}) or {}
+    if WEEKLY_JOBS_KEY in (udoc.get("system_actions") or []):
+        return
+    await db.users.update_one({"user_id": user.user_id}, {"$addToSet": {"system_actions": WEEKLY_JOBS_KEY}})
+    schedule = sa.normalize_schedule({"freq": "weekly", "weekdays": [0], "time": "08:00"})
+    now = datetime.now(timezone.utc)
+    await db.scheduled_actions.insert_one({
+        "id": f"sched_{uuid.uuid4().hex[:12]}", "user_id": user.user_id, "org_id": user.org_id, "system_key": WEEKLY_JOBS_KEY,
+        "text": "Ogni lunedì alle 8 mandami il riepilogo della settimana passata dei cantieri",
+        "title": "Riepilogo cantieri",
+        "description": ("Ogni lunedì alle 8:00 ti invia il riepilogo della settimana appena conclusa: ore per cantiere e per "
+                        "persona, materiali, problemi segnalati, costi rispetto al preventivo, cantieri fermi da più di una "
+                        "settimana e attività in scadenza. Arriva su Telegram, se collegato, e resta qui."),
+        "kind": "job_weekly", "schedule": schedule, "schedule_label": sa.schedule_label(schedule),
+        "delivery": "telegram", "notify": False, "enabled": True,
+        "next_run_at": _dt_iso(sa.next_run_after(schedule, now)), "last_run_at": None, "last_status": None,
+        "last_result": None, "run_count": 0, "runs": [], "created_at": now.isoformat(),
+    })
 
 
 async def _scheduled_actions_loop():
@@ -8396,6 +8688,7 @@ async def start_services():
         await db.job_photos.create_index([("log_id", 1)])
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])
+        await db.job_economics.create_index([("commessa_id", 1)], unique=True)
         await db.collaborators.create_index([("telegram_chat_id", 1)])
         await db.collaborators.create_index([("code", 1)])
         await db.collaborators.create_index([("owner_user_id", 1)])

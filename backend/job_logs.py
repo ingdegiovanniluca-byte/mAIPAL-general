@@ -258,6 +258,74 @@ def totals(logs: list) -> dict:
             "last_day": max((lg.get("date") for lg in logs if lg.get("date")), default=None)}
 
 
+# ---- costs and margin ----
+# Hours x the person's hourly cost (or the default one), materials x their unit price, plus
+# the other costs entered by hand (scaffolding hire, disposal...), against the quote. The rates
+# and prices live on the Clienti list (the same for every commessa), the quote and the other
+# costs on the commessa. Anything without a price is counted apart, never guessed.
+
+def price_key(name: str, unit: str = "") -> str:
+    return "|".join(_mat_key({"name": name, "unit": unit}))
+
+
+def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[float] = None,
+              prices: Optional[dict] = None, extras: Optional[list] = None, budget: Optional[float] = None) -> dict:
+    tot = totals(logs)
+    rates = {k.lower(): float(v) for k, v in (rates or {}).items() if v is not None}
+    labor, unpriced_hours = [], 0.0
+    for who, h in sorted(tot["by_person"].items(), key=lambda x: x[0].lower()):
+        rate = rates.get(who.lower(), default_rate)
+        cost = round(h * rate, 2) if rate is not None else None
+        if cost is None:
+            unpriced_hours += h
+        labor.append({"who": who, "hours": h, "rate": rate, "own_rate": who.lower() in rates, "cost": cost})
+    mats, unpriced_mats = [], []
+    for m in tot["materials"]:
+        p = (prices or {}).get(price_key(m["name"], m.get("unit") or ""))
+        price = p.get("price") if isinstance(p, dict) else p
+        cost = round(m["qty"] * float(price), 2) if (price is not None and m.get("qty") is not None) else None
+        if cost is None:
+            unpriced_mats.append(m["name"])
+        mats.append({**m, "key": price_key(m["name"], m.get("unit") or ""), "price": price, "cost": cost})
+    extras = [x for x in (extras or []) if x.get("amount") is not None]
+    labor_total = round(sum(x["cost"] for x in labor if x["cost"] is not None), 2)
+    materials_total = round(sum(x["cost"] for x in mats if x["cost"] is not None), 2)
+    extras_total = round(sum(float(x["amount"]) for x in extras), 2)
+    cost_total = round(labor_total + materials_total + extras_total, 2)
+    out = {"labor": labor, "materials": mats, "extras": extras, "labor_total": labor_total, "materials_total": materials_total,
+           "extras_total": extras_total, "cost_total": cost_total, "budget": budget, "margin": None, "used_pct": None,
+           "unpriced_hours": round(unpriced_hours, 2), "unpriced_materials": unpriced_mats,
+           "complete": not unpriced_hours and not unpriced_mats}
+    if budget:
+        out["margin"] = round(float(budget) - cost_total, 2)
+        out["used_pct"] = round(cost_total / float(budget) * 100, 1)
+    return out
+
+
+def _eur(x: Optional[float]) -> str:
+    if x is None:
+        return "—"
+    s = f"{abs(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return ("-" if x < 0 else "") + "€ " + (s[:-3] if s.endswith(",00") else s)
+
+
+def economics_line(e: dict) -> str:
+    """One line for the AI answers and the weekly summary."""
+    parts = [f"costi {_eur(e['cost_total'])} (manodopera {_eur(e['labor_total'])}, materiali {_eur(e['materials_total'])}"
+             + (f", altre spese {_eur(e['extras_total'])}" if e["extras_total"] else "") + ")"]
+    if e.get("budget"):
+        parts.append(f"preventivo {_eur(e['budget'])}, margine {_eur(e['margin'])} ({e['used_pct']:.0f}% del preventivo speso)")
+    if not e["complete"]:
+        miss = []
+        if e["unpriced_hours"]:
+            miss.append(f"{_fmt_num(e['unpriced_hours'])} h senza tariffa")
+        if e["unpriced_materials"]:
+            n = len(e["unpriced_materials"])
+            miss.append(f"{n} material{'e' if n == 1 else 'i'} senza prezzo")
+        parts.append("non conteggiati: " + ", ".join(miss))
+    return "; ".join(parts)
+
+
 def hours_line(hours: list) -> str:
     if not hours:
         return ""
@@ -292,6 +360,7 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         f"Stato: {commessa.get('stato')}", f"Inizio: {commessa.get('data_inizio')}" if commessa.get("data_inizio") else "",
         f"Fine: {commessa.get('data_fine')}" if commessa.get("data_fine") else "",
         f"Descrizione: {commessa.get('descrizione')}" if commessa.get("descrizione") else "",
+        f"Economia: {commessa.get('economics_line')}" if commessa.get("economics_line") else "",
     ] if x)
     totals_s = (f"Voci di diario: {tot['entries']}. Ore totali: {_fmt_num(tot['hours_total'])} h" + (f" ({per})" if per else "")
                 + ". Materiali: " + (materials_line(tot["materials"]) or "nessuno") + ".")

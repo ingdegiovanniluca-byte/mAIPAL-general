@@ -143,12 +143,28 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - In alto i clienti: ogni riquadro mostra nome, indirizzo e quante commesse ha (**totali** e **attive**, cioè tutte tranne le chiuse). Con la **freccia** lo apri e vedi le sue commesse con il loro stato; tocca una commessa per aprirne il diario. Cercando un cliente o una commessa, i riquadri trovati si aprono da soli.
 - Nel diario della commessa:
   - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), Ore, Segnalazioni, Documenti, Cantiere (apre la mappa), Date, Telefono, Email;
-  - le sezioni **Diario / Ore / Problemi / Materiali / To Do**: scorri per passare dall'una all'altra;
+  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / To Do**: scorri per passare dall'una all'altra;
   - **To Do**: le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
   - il **periodo** (ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.
 - Il **tasto chat** tondo sul lato apre una chat per interrogare la commessa: "quante ore abbiamo fatto?", "cosa manca da comprare?".
+
+**Costi e margini**
+- Nella sezione **Costi** della commessa:
+  - **Preventivo**: l'importo concordato con il cliente;
+  - **Manodopera**: una **tariffa standard** (€/ora) e, se serve, una tariffa per ogni persona. Le ore sono quelle scritte nel diario;
+  - **Materiali**: il prezzo unitario di ogni materiale usato (per metro, pezzo, …);
+  - **Altre spese**: noleggi, trasferte, smaltimenti, con importo e descrizione.
+- Tariffe e prezzi valgono per **tutte le commesse** dei tuoi clienti: li scrivi una volta sola.
+- In alto vedi costi, preventivo, **margine** e la barra di quanto preventivo hai già consumato (arancione dall'80%, rossa oltre il 100%). Ore o materiali senza prezzo non vengono stimati: sono indicati a parte come "non conteggiati".
+- Il riquadro **Costi** nella riga di informazioni mostra il totale e la percentuale del preventivo.
+- Quando una commessa arriva all'**80%** e quando **supera** il preventivo ricevi un avviso su Telegram, una sola volta per soglia.
+- Puoi chiedere i numeri anche alla chat della commessa ("quanto margine mi resta?") o all'agente Cerca. I collaboratori su Telegram non vedono mai costi e margini.
+
+**Riepilogo cantieri del lunedì**
+- Con il verticale artigiano trovi già nelle **Azioni** il **Riepilogo cantieri**: ogni lunedì alle 8 ti arriva su Telegram la settimana passata (ore per persona e per commessa, materiali, problemi, situazione dei preventivi), le commesse in corso ferme da più di 7 giorni e le attività da fare in settimana.
+- Puoi metterlo in pausa, eseguirlo subito o eliminarlo come ogni altra azione; se lo elimini non viene ricreato.
 
 ## Report di lavoro
 <!-- id: report-lavoro · verticale: artigiano -->
@@ -211,6 +227,7 @@ Le azioni programmate sono comandi che mAIPAL esegue da solo, con la cadenza che
 - **Crearle**: dalla chat con l'agente **Azioni** ("Ogni lunedì alle 8 mandami su Telegram i task della settimana", "Ogni venerdì all'una di notte svuota gli iscritti della lista Lezioni Pilates"). Prima di attivarla, mAIPAL ti mostra cosa farà.
 - **Nella sezione**: una casella per azione, con il titolo e sotto quando si ripete. Il **pallino** a sinistra la attiva o la mette in pausa. Toccando la casella si apre la sua scheda: cosa fa, la prossima esecuzione, l'ultimo risultato, **Esegui ora** (senza cambiare la programmazione) ed elimina.
 - Da Telegram: `/azione <comando>` per crearne una, `/azioni` per l'elenco.
+- Per gli artigiani è già pronta l'azione **Riepilogo cantieri** (ogni lunedì alle 8 su Telegram): vedi Diario di commessa.
 
 ## Fitness
 <!-- id: fitness · path: /dashboard/fitness · verticale: fitness -->

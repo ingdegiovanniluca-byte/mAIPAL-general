@@ -733,6 +733,17 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                         f"Ore totali: {jl._fmt_num(tot['hours_total'])} h" + (f" ({per})." if per else "."),
                         ("Materiali: " + jl.materials_line(tot["materials"]) + ".") if tot["materials"] else "Materiali: nessuno registrato.",
                         ("Problemi segnalati: " + "; ".join(f"{p['date']} {p['text']}" for p in tot["problems"]) + ".") if tot["problems"] else ""]
+                # costs and margin, when the list has rates / prices or the commessa a quote
+                try:
+                    coll_doc = await db.collections.find_one({"id": lgs[0].get("collection_id")}, {"_id": 0, "costs": 1}) or {}
+                    econ_doc = await db.job_economics.find_one({"commessa_id": cid}, {"_id": 0}) or {}
+                    costs = coll_doc.get("costs") or {}
+                    if costs or econ_doc:
+                        e = jl.economics(lgs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"),
+                                         econ_doc.get("extras"), econ_doc.get("budget"))
+                        bits.append("Economia: " + jl.economics_line(e) + ".")
+                except Exception:
+                    logger.exception("economics in the commessa summary failed")
                 summaries.append({"text": "", "source": "summary", "meta": {"commessa_id": cid},
                                   "display": f"[Riepilogo diario commessa «{lgs[0].get('commessa_title') or ''}» · "
                                              f"{lgs[0].get('client_name') or ''}] " + " ".join(b for b in bits if b)})

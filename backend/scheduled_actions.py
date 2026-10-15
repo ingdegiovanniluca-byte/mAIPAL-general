@@ -40,7 +40,7 @@ MODEL = "gpt-4o"
 FEATURE = "azioni_programmate"
 MAX_ACTIVE_PER_USER = 20
 
-KINDS = {"list_update", "report", "message", "create_task", "list_delete", "news_delete"}
+KINDS = {"list_update", "report", "message", "create_task", "list_delete", "news_delete", "job_weekly"}
 FREQS = {"daily", "weekly", "monthly", "once", "now"}
 PERIODS = {"none", "today", "yesterday", "this_week", "last_week", "last_7_days", "this_month", "last_month", "last_30_days"}
 

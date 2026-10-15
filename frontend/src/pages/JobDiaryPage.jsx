@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat } from "lucide-react";
+  UserRound, HardHat, Euro } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
@@ -85,6 +85,7 @@ const SECTIONS = [
   { key: "ore", label: "Ore" },
   { key: "problemi", label: "Problemi" },
   { key: "materiali", label: "Materiali" },
+  { key: "costi", label: "Costi" },
   { key: "todo", label: "To Do" },
 ];
 const PERIODS = [
@@ -238,8 +239,146 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
   );
 }
 
-// A client: closed it shows only name, address and how many commesse it has (all / active =
-// all but the closed ones); the arrow opens it on its commesse.
+// ===== Costi: what the commessa has cost so far against its quote =====
+const eur = (x) => (x === null || x === undefined ? "—"
+  : new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", minimumFractionDigits: x % 1 ? 2 : 0, maximumFractionDigits: 2 }).format(x));
+const parseMoney = (v) => {
+  const t = String(v ?? "").replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : NaN;
+};
+
+// A small amount field: saved when it loses focus (or Enter), only if it changed.
+function MoneyInput({ value, onSave, placeholder, testid, wide = false }) {
+  const shown = value === null || value === undefined ? "" : String(value).replace(".", ",");
+  const [v, setV] = useState(shown);
+  useEffect(() => { setV(shown); }, [shown]);
+  const commit = () => {
+    const n = parseMoney(v);
+    if (Number.isNaN(n)) { toast.error("Importo non valido"); setV(shown); return; }
+    if ((n ?? null) !== (value ?? null)) onSave(n);
+  };
+  return (
+    <input value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      inputMode="decimal" placeholder={placeholder} data-testid={testid}
+      className={`h-8 ${wide ? "w-28" : "w-[72px]"} rounded-lg bg-white/10 px-2 text-right text-[13px] text-white placeholder:text-white/35 outline-none`} />
+  );
+}
+
+function CostsView({ commessaId, onChanged }) {
+  const [e, setE] = useState(null);
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+  useEffect(() => {
+    api.get(`/jobs/commesse/${commessaId}/economics`).then((r) => setE(r.data)).catch(() => toast.error("Errore nel caricamento dei costi"));
+  }, [commessaId]);
+  const done = (r) => { setE(r.data); onChanged(); };
+  const fail = (err) => toast.error(err.response?.data?.detail || "Errore nel salvataggio");
+  const setBudget = (n) => api.patch(`/jobs/commesse/${commessaId}/economics`, n === null ? { clear_budget: true } : { budget: n }).then(done).catch(fail);
+  const costs = (body) => api.patch(`/jobs/costs`, body, { params: { commessa_id: commessaId } }).then(done).catch(fail);
+  const addExtra = () => {
+    const n = parseMoney(amount);
+    if (!label.trim() || n === null || Number.isNaN(n)) { toast.error("Scrivi la voce e l'importo"); return; }
+    api.post(`/jobs/commesse/${commessaId}/extras`, { label, amount: n }).then((r) => { setLabel(""); setAmount(""); done(r); }).catch(fail);
+  };
+  const delExtra = (x) => api.delete(`/jobs/commesse/${commessaId}/extras/${x.id}`).then(done).catch(fail);
+  if (!e) return <div className="kicker text-center py-8">caricamento…</div>;
+  const pct = e.used_pct;
+  const barColor = pct >= 100 ? "#E8663F" : pct >= 80 ? "#E8A03F" : "rgba(255,255,255,0.75)";
+  const head = "text-[11px] font-medium tracking-[0.18em] uppercase text-white/60 pt-5 pb-1.5";
+  const row = "flex items-center gap-3 py-2.5 border-t border-white/[0.16]";
+  return (
+    <div className="mt-2" data-testid="costs-view">
+      {/* the quote, the costs, the margin */}
+      <div className={row}>
+        <span className="flex-1 text-[14px] text-white/90">Preventivo</span>
+        <MoneyInput value={e.budget} onSave={setBudget} placeholder="€" testid="costs-budget" wide />
+      </div>
+      <div className={row}>
+        <span className="flex-1 text-[14px] text-white/90">Costi</span>
+        <span className="text-[15px] font-medium text-white" data-testid="costs-total">{eur(e.cost_total)}</span>
+      </div>
+      <div className={row}>
+        <span className="flex-1 text-[14px] text-white/90">Margine</span>
+        <span className="text-[15px] font-medium text-white" data-testid="costs-margin">{e.budget ? eur(e.margin) : "—"}</span>
+      </div>
+      {e.budget ? (
+        <div className="pt-1 pb-1">
+          <div className="h-1.5 rounded-full bg-white/15 overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${Math.min(100, pct || 0)}%`, background: barColor }} />
+          </div>
+          <div className="mt-1.5 text-[12px] text-white/70" data-testid="costs-pct">
+            {pct >= 100 ? `Preventivo superato: speso il ${Math.round(pct)}%` : `Speso il ${Math.round(pct || 0)}% del preventivo`}
+          </div>
+        </div>
+      ) : <div className="text-[12px] text-white/55 pb-1">Inserisci il preventivo per vedere il margine.</div>}
+      {!e.complete && (
+        <div className="text-[12px] text-white/60" data-testid="costs-missing">
+          Non conteggiati: {[e.unpriced_hours ? `${fmtNum(e.unpriced_hours)} h senza tariffa` : "", e.unpriced_materials.length ? `${e.unpriced_materials.length} material${e.unpriced_materials.length === 1 ? "e" : "i"} senza prezzo` : ""].filter(Boolean).join(", ")}: inseriscili qui sotto.
+        </div>
+      )}
+
+      <div className={head}>manodopera · {eur(e.labor_total)}</div>
+      <div className={row}>
+        <span className="flex-1 min-w-0">
+          <span className="block text-[14px] text-white/90">Tariffa standard</span>
+          <span className="block text-[11.5px] text-white/50">per chi non ha una tariffa sua</span>
+        </span>
+        <MoneyInput value={e.default_rate} onSave={(n) => costs(n === null ? { clear_default_rate: true } : { default_rate: n })} placeholder="€/h" testid="costs-default-rate" />
+      </div>
+      {e.labor.map((x) => (
+        <div key={x.who} className={row} data-testid="costs-labor-row">
+          <span className="flex-1 min-w-0">
+            <span className="block text-[14px] text-white/90 truncate">{x.who}</span>
+            <span className="block text-[11.5px] text-white/50">{fmtNum(x.hours)} h{x.cost !== null ? ` · ${eur(x.cost)}` : " · senza tariffa"}</span>
+          </span>
+          <MoneyInput value={x.own_rate ? x.rate : null} placeholder={e.default_rate ? `${fmtNum(e.default_rate)} €/h` : "€/h"}
+            onSave={(n) => costs({ rates: { [x.who]: n } })} testid={`costs-rate-${x.who}`} />
+        </div>
+      ))}
+      {e.labor.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessuna ora registrata.</div>}
+
+      <div className={head}>materiali · {eur(e.materials_total)}</div>
+      {e.materials.map((m) => (
+        <div key={m.key} className={row} data-testid="costs-material-row">
+          <span className="flex-1 min-w-0">
+            <span className="block text-[14px] text-white/90 truncate">{m.name}</span>
+            <span className="block text-[11.5px] text-white/50">
+              {m.qty !== null ? `${fmtNum(m.qty)} ${m.unit || ""}` : "quantità non indicata"}{m.cost !== null ? ` · ${eur(m.cost)}` : ""}
+            </span>
+          </span>
+          <MoneyInput value={m.price} placeholder={`€/${m.unit || "pz"}`} onSave={(n) => costs({ prices: [{ name: m.name, unit: m.unit || "", price: n }] })}
+            testid={`costs-price-${m.key}`} />
+        </div>
+      ))}
+      {e.materials.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessun materiale registrato.</div>}
+
+      <div className={head}>altre spese · {eur(e.extras_total)}</div>
+      {e.extras.map((x) => (
+        <div key={x.id} className={row} data-testid="costs-extra-row">
+          <span className="flex-1 min-w-0">
+            <span className="block text-[14px] text-white/90 truncate">{x.label}</span>
+            <span className="block text-[11.5px] text-white/50">{shortDay(x.date)}{x.by ? ` · ${x.by}` : ""}</span>
+          </span>
+          <span className="text-[14px] text-white">{eur(x.amount)}</span>
+          <button type="button" onClick={() => delExtra(x)} aria-label="Elimina la spesa" className="p-1.5 text-white/55 hover:text-white"><Trash2 size={14} /></button>
+        </div>
+      ))}
+      <div className="flex items-center gap-2 py-2.5 border-t border-white/[0.16]">
+        <input value={label} onChange={(ev) => setLabel(ev.target.value)} placeholder="Es. noleggio ponteggio" data-testid="costs-extra-label"
+          className="h-8 flex-1 min-w-0 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/35 outline-none" />
+        <input value={amount} onChange={(ev) => setAmount(ev.target.value)} placeholder="€" inputMode="decimal" data-testid="costs-extra-amount"
+          onKeyDown={(ev) => { if (ev.key === "Enter") addExtra(); }}
+          className="h-8 w-[72px] rounded-lg bg-white/10 px-2 text-right text-[13px] text-white placeholder:text-white/35 outline-none" />
+        {/* keeps the field focused: a blur would bring the tab bar back under the finger */}
+        <button type="button" onMouseDown={(ev) => ev.preventDefault()} onClick={addExtra} data-testid="costs-extra-add" aria-label="Aggiungi la spesa" className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center text-white"><Plus size={15} /></button>
+      </div>
+      <div className="pt-3 text-[11.5px] text-white/50">Tariffe orarie e prezzi dei materiali valgono per tutte le commesse. All'80% e al 100% del preventivo ti avviso su Telegram.</div>
+    </div>
+  );
+}
+
 // To Do: an activity planned for the commessa - who takes care of it and by when (if said)
 // stand out on top, like the author of a diary line; the dot ticks it done.
 function TodoRow({ todo, onToggle, onOpen }) {
@@ -326,6 +465,8 @@ function TodoDialog({ todo, commessaId, team, onClose, onSaved }) {
   );
 }
 
+// A client: closed it shows only name, address and how many commesse it has (all / active =
+// all but the closed ones); the arrow opens it on its commesse.
 function ClientCard({ client, commesse, total, active, open, onToggle, onOpen }) {
   return (
     <div data-testid="client-group" data-open={open ? "1" : "0"} className="card-soft p-4 relative">
@@ -751,6 +892,10 @@ export default function JobDiaryPage() {
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
           ariaLabel="Cambia lo stato della commessa" onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
         <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")} />
+        {detail.economics && (
+          <InfoCard icon={Euro} label="Costi" value={eur(detail.economics.cost_total)} testid="glance-costi" ariaLabel="Mostra costi e margine"
+            note={detail.economics.budget ? `${Math.round(detail.economics.used_pct || 0)}% del preventivo` : ""} onClick={() => pickSection("costi")} />
+        )}
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
         <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti" ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
@@ -777,8 +922,10 @@ export default function JobDiaryPage() {
         <button type="button" onClick={() => pickSection(secAt(secIdx + 1).key)} className="flex-1 basis-0 text-left text-[15px] font-medium text-white/30">{secAt(secIdx + 1).label}</button>
       </div>
 
-      {/* To Do: the next activities instead of the period and the days */}
-      {section === "todo" ? (
+      {/* Costi and To Do: their own content instead of the period and the days */}
+      {section === "costi" ? (
+        <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+      ) : section === "todo" ? (
         <>
           <div className="mt-1.5 flex items-center justify-center gap-2.5">
             <button type="button" onClick={() => setTodoEditing({})} data-testid="job-todo-add" aria-label="Nuova attività"
