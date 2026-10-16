@@ -262,6 +262,26 @@ async def main():
     old = db.job_logs.docs[-1]
     old["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
     assert await tap(900, f"clu:{old['id']}") and "Sono passati più di" in REPLIES[-1][0]
+    # a photo, then its description: Annulla takes back only the description, the photo stays
+    author = {"id": c0["id"], "first_name": "Gino", "name": "Gino Neri", "company": ""}
+    import io as _io, base64 as _b64
+    from PIL import Image
+    buf = _io.BytesIO(); Image.new("RGB", (40, 30), (200, 80, 40)).save(buf, "JPEG")
+    pic = await server._save_job_log(me, "Foto dal cantiere", images=["data:image/jpeg;base64," + _b64.b64encode(buf.getvalue()).decode()],
+                                     commessa_id="s_bagno", channel="telegram", author=author)
+    pid = pic["log"]["id"]
+    async def describing(t, speaker, team, known=None, user_id=None, channel="web", photos=0):
+        return {"kind": "nota" if photos else "non_chiara", "doubt": "", "date": jl.today_local().isoformat(), "text": "Montato il miscelatore.",
+                "hours": [], "materials": [], "problems": [], "client": "", "commessa": ""}
+    jl.interpret = describing
+    n = len(db.job_logs.docs)
+    assert await send(900, "qui ho montato il miscelatore")
+    lg = next(x for x in db.job_logs.docs if x["id"] == pid)
+    assert len(db.job_logs.docs) == n and lg["text"] == "Montato il miscelatore." and "Descrizione aggiunta" in REPLIES[-1][0]
+    assert buttons(REPLIES[-1][1]) == [f"clu:{pid}"]
+    assert await tap(900, f"clu:{pid}") and "resta la foto" in REPLIES[-1][0]
+    lg = next(x for x in db.job_logs.docs if x["id"] == pid)
+    assert lg["text"] == "Foto dal cantiere" and lg["photos"] and "before_description" not in lg
 
     # 7) only diary and questions: other commands never reach the app's agents
     assert await send(900, "/task chiamare il fornitore") and "Qui puoi solo" in REPLIES[-1][0]

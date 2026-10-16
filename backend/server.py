@@ -5295,6 +5295,23 @@ def _public_log(log: dict) -> dict:
     return {k: v for k, v in log.items() if k not in ("embedding", "_id")}
 
 
+PHOTO_ONLY_TEXT = "Foto dal cantiere"
+PHOTO_DESCRIBE_MINUTES = 20   # a description sent within this time completes the photo sent just before
+
+
+async def _photo_awaiting_text(current: User, author: Optional[dict], commessa_id: Optional[str]) -> Optional[dict]:
+    """The last entry of this author that is only photos ("Foto dal cantiere"), sent in the last
+    minutes - on that commessa when it is known. The message that follows describes it."""
+    since = (datetime.now(timezone.utc) - timedelta(minutes=PHOTO_DESCRIBE_MINUTES)).isoformat()
+    q = {"user_id": current.user_id, "raw_text": PHOTO_ONLY_TEXT, "created_at": {"$gte": since},
+         "collaborator_id": author.get("id") if author else None}
+    if commessa_id:
+        q["commessa_id"] = commessa_id
+    cands = await db.job_logs.find(q, {"_id": 0, "embedding": 0}).to_list(50)
+    cands = [c for c in cands if c.get("photos") and not c.get("kind")]
+    return max(cands, key=lambda c: c.get("created_at") or "", default=None)
+
+
 JOB_LOG_QUESTION_MSG = ("Il Diario serve solo a scrivere note sulle commesse, quindi non ho salvato niente. "
                         "Per cercare informazioni usa l'agente Cerca, oppure apri la commessa nella sezione Diario "
                         "e chiedi con il tasto della chat.")
@@ -5321,13 +5338,18 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         speaker = author.get("first_name") or speaker
         team = [*team, _first_name(current.name)]
 
+    # text after a photo sent alone: it is the photo's description (same commessa, few minutes)
+    photo_entry = None if images else await _photo_awaiting_text(current, author, commessa_id or hint_commessa_id)
+    if photo_entry and not commessa_id and not hint_commessa_id:
+        hint_commessa_id = photo_entry["commessa_id"]
     known, target, created = None, None, {}
     if commessa_id:
         _, sub, client = await _commessa_or_404(current, commessa_id)
         target = _commessa_view(sub, client, clienti)
         known = {"title": target["title"], "client": target["client_name"]}
     try:
-        parsed = await jl.interpret(text, speaker, team, known=known, user_id=current.user_id, channel=channel)
+        parsed = await jl.interpret(text, speaker, team, known=known, user_id=current.user_id, channel=channel,
+                                    **({"photos": len(photo_entry["photos"])} if photo_entry else {}))
     except Exception:
         logger.exception("job log interpretation failed, saving the text as is")
         parsed = {"kind": "nota", "date": jl.today_local().isoformat(), "text": text, "hours": [], "materials": [], "problems": [],
@@ -5335,7 +5357,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
 
     # the agent Diario only writes entries, with only what the user said: a question or an entry
     # it can't understand saves nothing (and creates no client or commessa)
-    photo_only = bool(images) and text == "Foto dal cantiere"
+    photo_only = bool(images) and text == PHOTO_ONLY_TEXT
     if not photo_only and (parsed.get("kind") == "domanda" or jl.is_plain_question(text)):
         return {"status": "question", "message": JOB_LOG_QUESTION_MSG}
     if not photo_only and parsed.get("kind") == "non_chiara":
@@ -5384,6 +5406,20 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
                     "new_client_name": res.get("client_said") or "", "text": text}
 
     now = datetime.now(timezone.utc).isoformat()
+    if photo_entry and photo_entry["commessa_id"] == target["id"]:
+        # the description goes into the photo's entry (what it was is kept, to undo it)
+        upd = {"raw_text": text, "text": parsed["text"], "date": parsed["date"], "hours": parsed["hours"],
+               "materials": parsed["materials"], "problems": parsed["problems"], "described_at": now, "embedding": None,
+               "before_description": {k: photo_entry.get(k) for k in ("raw_text", "text", "date", "hours", "materials", "problems")}}
+        await db.job_logs.update_one({"id": photo_entry["id"]}, {"$set": upd})
+        log = {**photo_entry, **upd}
+        ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
+        if log["hours"] or log["materials"]:
+            asyncio.create_task(_check_budget_alert(clienti, target["id"]))
+        n = len(photo_entry.get("photos") or [])
+        msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
+        return {"status": "ok", "log": _public_log({k: v for k, v in log.items() if k != "before_description"}), "commessa": target,
+                "client_created": False, "commessa_created": False, "described_photo": True, "message": msg}
     log = {
         "id": f"jlog_{uuid.uuid4().hex[:12]}",
         "user_id": current.user_id, "org_id": current.org_id, "author_name": speaker,

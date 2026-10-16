@@ -427,6 +427,42 @@ async def main():
     jl.interpret = kind_said("non_chiara")
     r = await server._save_job_log(me, "Foto dal cantiere", images=[jpeg_uri()], commessa_id="s_cucina")
     assert r["status"] == "ok", r
+    # the description sent after the photo (a voice note, a text): it completes that entry, it is
+    # never dropped as "unclear" nor saved apart
+    photo_log = r["log"]
+    SEEN_PHOTOS = []
+    def describing(kind, text, needs_photo=True):
+        async def f(t, speaker, team, known=None, user_id=None, channel="web", photos=0):
+            SEEN_PHOTOS.append(photos)
+            if not photos and needs_photo:   # without knowing about the photo the model finds it unclear
+                return {"kind": "non_chiara", "doubt": "Cosa avete fatto?", "date": jl.today_local().isoformat(), "text": "",
+                        "hours": [], "materials": [], "problems": [], "client": "", "commessa": ""}
+            return {"kind": kind, "doubt": "", "date": jl.today_local().isoformat(), "text": text, "hours": jl.clean_hours([{"who": "io", "hours": 2}], speaker),
+                    "materials": [], "problems": [], "client": "", "commessa": ""}
+        return f
+    jl.interpret = describing("nota", "Nella foto il quadro elettrico montato oggi in cucina.")
+    n_logs = len(db.job_logs.docs)
+    r = await server._save_job_log(me, "nella foto c'è il quadro elettrico montato oggi in cucina, 2 ore", commessa_id="s_cucina")
+    assert r["status"] == "ok" and r.get("described_photo") and SEEN_PHOTOS[-1] == 1, r
+    assert len(db.job_logs.docs) == n_logs and r["log"]["id"] == photo_log["id"]
+    merged = next(x for x in db.job_logs.docs if x["id"] == photo_log["id"])
+    assert merged["text"] == "Nella foto il quadro elettrico montato oggi in cucina." and merged["photos"] and merged["hours"][0]["hours"] == 2
+    assert merged["before_description"]["raw_text"] == "Foto dal cantiere" and "Descrizione aggiunta alla foto" in r["message"]
+    # a second message is a new entry (the photo already has its description)
+    jl.interpret = describing("nota", "Pulito il cantiere.", needs_photo=False)
+    r = await server._save_job_log(me, "pulito il cantiere", commessa_id="s_cucina")
+    assert r["status"] == "ok" and not r.get("described_photo") and len(db.job_logs.docs) == n_logs + 1 and SEEN_PHOTOS[-1] == 0
+    # from the chat (no commessa given): the photo's commessa is the one meant
+    r = await server._save_job_log(me, "Foto dal cantiere", images=[jpeg_uri()], commessa_id="s_cucina")
+    jl.interpret = describing("nota", "Posata la canalina.")
+    r2 = await server._save_job_log(me, "qui abbiamo posato la canalina")
+    assert r2["status"] == "ok" and r2.get("described_photo") and r2["log"]["id"] == r["log"]["id"]
+    # too late (over 20 minutes): not attached to the old photo
+    r = await server._save_job_log(me, "Foto dal cantiere", images=[jpeg_uri()], commessa_id="s_cucina")
+    next(x for x in db.job_logs.docs if x["id"] == r["log"]["id"])["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+    jl.interpret = describing("nota", "Montate le prese.", needs_photo=False)
+    r2 = await server._save_job_log(me, "montate le prese", commessa_id="s_cucina")
+    assert r2["status"] == "ok" and not r2.get("described_photo") and r2["log"]["id"] != r["log"]["id"] and SEEN_PHOTOS[-1] == 0
     # @diario and the watch say the same, without saving
     jl.interpret = kind_said("domanda")
     res = await server._run_sub_agent(me, "journal", "quante ore abbiamo fatto dai Rossi?", "...", None, "conv_q")

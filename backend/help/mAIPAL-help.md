@@ -136,7 +136,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Dalla chat con l'agente **Diario**, anche a voce: "Oggi io e Gino dai Rossi, 4 ore a testa: posati 20 metri di corrugato, manca una scatola 503".
 - mAIPAL riconosce la commessa dal cliente o dai lavori che nomini; se non è sicuro te lo chiede con dei pulsanti (o ti propone di aprire una nuova commessa).
 - L'agente Diario **scrive soltanto**: salva solo quello che hai detto tu, senza aggiungere nulla. Se la nota non è chiara non salva niente e ti chiede di precisare. Se invece fai una domanda ("com'è messa la commessa dei Rossi?") non salva niente: per cercare usa l'agente **Cerca** oppure la chat della commessa qui nel Diario.
-- Puoi allegare le foto: vanno nella voce e nella cartella della commessa su Drive/OneDrive.
+- Puoi allegare le foto: vanno nella voce e nella cartella della commessa su Drive/OneDrive. Se mandi prima la foto e poi (entro 20 minuti) la sua descrizione, scritta o a voce, la descrizione completa la voce della foto invece di crearne una nuova.
 - Da Telegram: comando `/journal` o scrivi liberamente; le foto mandate subito dopo vanno nella stessa voce.
 
 **La sezione**

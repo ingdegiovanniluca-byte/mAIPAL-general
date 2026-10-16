@@ -264,6 +264,7 @@ export default function ChatPage() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [pendingVoice, setPendingVoice] = useState(null);
+  const voiceWaiterRef = useRef(null);
   const [attachments, setAttachments] = useState([]);
   const [uploadingFiles, setUploadingFiles] = useState([]); // filenames currently being caricati
   const [saveToDrive, setSaveToDrive] = useState(true);
@@ -514,8 +515,10 @@ export default function ChatPage() {
         if (recCancelRef.current) { recCancelRef.current = false; return; }
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         const seconds = Math.max(1, Math.round((Date.now() - recStartRef.current) / 1000));
-        setPendingVoice({ blob, seconds });
-        toast.success(`Vocale pronto (${seconds}s). Premi Invia.`);
+        const v = { blob, seconds };
+        setPendingVoice(v);
+        if (voiceWaiterRef.current) { voiceWaiterRef.current(v); voiceWaiterRef.current = null; }   // Invia pressed while recording
+        else toast.success(`Vocale pronto (${seconds}s). Premi Invia.`);
       };
       mr.start();
       mediaRecorderRef.current = mr;
@@ -541,6 +544,16 @@ export default function ChatPage() {
     const t = setInterval(() => setRecSeconds(Math.floor((Date.now() - recStartRef.current) / 1000)), 500);
     return () => clearInterval(t);
   }, [recording]);
+  // the voice note to send: when Invia is pressed while still recording, the recording is
+  // stopped and its note awaited (the state read by the sender would still be the old one)
+  const takeVoice = () => {
+    if (!(recording && mediaRecorderRef.current)) return Promise.resolve(pendingVoice);
+    return new Promise((resolve) => {
+      voiceWaiterRef.current = resolve;
+      setTimeout(() => { if (voiceWaiterRef.current === resolve) { voiceWaiterRef.current = null; resolve(null); } }, 4000);
+      stopRec();
+    });
+  };
   const discardVoice = () => { setPendingVoice(null); toast.success("Vocale scartato"); };
   const transcribeBlob = async (blob) => {
     const fd = new FormData();
@@ -616,11 +629,11 @@ export default function ChatPage() {
   };
 
   const sendWorkReport = async () => {
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    const voice = await takeVoice();
     let content = text.trim();
-    if (pendingVoice) {
+    if (voice) {
       setTranscribing(true);
-      try { content = [content, await transcribeBlob(pendingVoice.blob)].filter(Boolean).join(" ").trim(); }
+      try { content = [content, await transcribeBlob(voice.blob)].filter(Boolean).join(" ").trim(); }
       catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
       setTranscribing(false);
       setPendingVoice(null);
@@ -690,16 +703,19 @@ export default function ChatPage() {
   };
 
   const sendJobLog = async () => {
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    const voice = await takeVoice();
     let content = text.trim();
-    if (pendingVoice) {
+    const hadVoice = !!voice;
+    if (voice) {
       setTranscribing(true);
-      try { content = [content, await transcribeBlob(pendingVoice.blob)].filter(Boolean).join(" ").trim(); }
+      try { content = [content, await transcribeBlob(voice.blob)].filter(Boolean).join(" ").trim(); }
       catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
       setTranscribing(false);
       setPendingVoice(null);
     }
     const images = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
+    // a voice note that came out empty: never save the photos alone as if nothing was said
+    if (!content && hadVoice) { toast.error("Non ho capito il vocale: registralo di nuovo o scrivi la descrizione"); return; }
     if (!content && images.length) content = "Foto dal cantiere";
     if (!content) { toast.error("Racconta cosa avete fatto"); return; }
     if (streaming || transcribing || uploadingFiles.length) return;
@@ -740,11 +756,11 @@ export default function ChatPage() {
   };
 
   const sendVetReport = async () => {
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    const voice = await takeVoice();
     let content = text.trim();
-    if (pendingVoice) {
+    if (voice) {
       setTranscribing(true);
-      try { content = (await transcribeBlob(pendingVoice.blob)) || content; }
+      try { content = (await transcribeBlob(voice.blob)) || content; }
       catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
       setTranscribing(false);
       setPendingVoice(null);
@@ -776,11 +792,11 @@ export default function ChatPage() {
   // what will be done, shown back for an explicit "Attiva". Any further message in the same
   // thread before confirming is treated as a correction of that same command.
   const sendScheduledAction = async () => {
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    const voice = await takeVoice();
     let content = text.trim();
-    if (pendingVoice) {
+    if (voice) {
       setTranscribing(true);
-      try { content = [content, await transcribeBlob(pendingVoice.blob)].filter(Boolean).join(" ").trim(); }
+      try { content = [content, await transcribeBlob(voice.blob)].filter(Boolean).join(" ").trim(); }
       catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
       setTranscribing(false);
       setPendingVoice(null);
@@ -976,11 +992,11 @@ export default function ChatPage() {
   // openThread quando la card viene toccata), che questa funzione tiene aggiornata in diretta
   // con lo stesso pattern ottimistico/streaming usato da send() sul thread desktop.
   const sendMobileReply = async () => {
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
+    const voice = await takeVoice();
     let voiceText = "";
-    if (pendingVoice) {
+    if (voice) {
       setTranscribing(true);
-      try { voiceText = await transcribeBlob(pendingVoice.blob); }
+      try { voiceText = await transcribeBlob(voice.blob); }
       catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
       setTranscribing(false);
       setPendingVoice(null);
@@ -1047,23 +1063,23 @@ export default function ChatPage() {
     if (active === "job_log") { await sendJobLog(); return; }
     if (active === "work_report") { await sendWorkReport(); return; }
     if (active === "scheduled_action") { await sendScheduledAction(); return; }
-    if (recording) { stopRec(); await new Promise((r) => setTimeout(r, 400)); }
-    if (pendingDriveUpload && text.trim() && attachments.length === 0 && !pendingVoice) {
+    const voice = await takeVoice();
+    if (pendingDriveUpload && text.trim() && attachments.length === 0 && !voice) {
       const resolved = await resolveDrivePending(text.trim());
       if (resolved) { setText(""); return; }
     }
-    if (!text.trim() && attachments.length === 0 && !pendingVoice) return;
+    if (!text.trim() && attachments.length === 0 && !voice) return;
     if (streaming || transcribing) return;
-    if (active === "info_upload" && !text.trim() && !pendingVoice && attachments.length > 0 && attachments.every((a) => a.noExtract)
+    if (active === "info_upload" && !text.trim() && !voice && attachments.length > 0 && attachments.every((a) => a.noExtract)
         && !(isMobile ? cloudTargets.length > 0 : attachments.some((a) => a.driveExplicit))) {
       toast.warning("Niente da salvare: accendi Drive o l'estrazione del contenuto");
       return;
     }
 
     let voiceText = "";
-    if (pendingVoice) {
+    if (voice) {
       setTranscribing(true);
-      try { voiceText = await transcribeBlob(pendingVoice.blob); }
+      try { voiceText = await transcribeBlob(voice.blob); }
       catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
       setTranscribing(false);
       setPendingVoice(null);

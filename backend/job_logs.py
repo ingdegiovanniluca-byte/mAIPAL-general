@@ -171,13 +171,16 @@ def valid_day(s, fallback: date) -> str:
 
 
 async def interpret(text: str, speaker: str, team: list, known: Optional[dict] = None,
-                    user_id: Optional[str] = None, channel: str = "web") -> dict:
+                    user_id: Optional[str] = None, channel: str = "web", photos: int = 0) -> dict:
     """-> {"kind": nota|domanda|non_chiara, "doubt": str, "date", "text", "hours": [{who, hours}],
     "materials": [{name, qty, unit}], "problems": [...], "client": str, "commessa": str}"""
     today = today_local()
     team_s = ", ".join(t for t in team if t and t != speaker) or "nessuno registrato"
     job_s = (f"La voce riguarda la commessa «{known.get('title')}» del cliente {known.get('client')}.\n"
              if known and known.get("title") else "")
+    if photos:   # the description of photos just sent ("in questa foto…", "qui abbiamo…") is an entry
+        job_s += (f"Il messaggio descrive {'la foto' if photos == 1 else f'le {photos} foto'} del cantiere appena "
+                  "mandat" + ("a" if photos == 1 else "e") + ": se racconta cosa si vede o il lavoro fotografato è una \"nota\".\n")
     system = (
         "Sei l'assistente di un'impresa artigiana (impianti, edilizia, manutenzioni). Ricevi una voce del "
         "DIARIO DI COMMESSA: cosa è stato fatto in cantiere. Oggi è "

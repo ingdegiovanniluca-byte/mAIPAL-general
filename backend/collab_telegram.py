@@ -301,9 +301,21 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         await _reply(update, f"Ok, «{target[2]['title']}»: scrivimi (anche a voce) cosa avete fatto, o cosa vuoi sapere.")
         return
     if data.startswith("clu:"):
-        log = await db.job_logs.find_one({"id": data[4:]}, {"_id": 0, "id": 1, "collaborator_id": 1, "created_at": 1})
+        log = await db.job_logs.find_one({"id": data[4:]}, {"_id": 0, "id": 1, "collaborator_id": 1, "created_at": 1,
+                                                            "described_at": 1, "before_description": 1})
         mine = log and log.get("collaborator_id") in {r["id"] for r in recs}
-        fresh = log and log.get("created_at", "") >= (_now() - timedelta(minutes=COLLAB_UNDO_MINUTES)).isoformat()
+        limit = (_now() - timedelta(minutes=COLLAB_UNDO_MINUTES)).isoformat()
+        if mine and log.get("before_description") and (log.get("described_at") or "") >= limit:
+            # the last thing written was the description of a photo: only that goes, the photo stays
+            await db.job_logs.update_one({"id": log["id"]}, {"$set": {**log["before_description"], "embedding": None},
+                                                             "$unset": {"described_at": "", "before_description": ""}})
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await _reply(update, "↩️ Descrizione annullata: nel diario resta la foto.")
+            return
+        fresh = log and log.get("created_at", "") >= limit
         if not mine:
             await _reply(update, "Questa voce non c'è più.")
             return
