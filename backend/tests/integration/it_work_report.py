@@ -119,11 +119,14 @@ server._storage_targets = fake_targets
 server._storage_save = fake_save
 
 CALLS = []
-def interp(client, job, fields=None):
+def interp(client, job, fields=None, summary=None):
     async def f(text, sections, user_name="", user_id=None, channel="web"):
         CALLS.append(text)
         out = [{"title": s["title"], "fields": {k: (fields or {}).get(k, "") for k in s["fields"]}} for s in sections]
-        return {"sections": out, "client": {"name": "", "phone": "", "email": "", "address": "", **client}, "job_title": job}
+        res = {"sections": out, "client": {"name": "", "phone": "", "email": "", "address": "", **client}, "job_title": job}
+        if summary is not None:
+            res["summary"] = summary
+        return res
     return f
 
 def doc_text(b):
@@ -162,11 +165,27 @@ async def main():
     assert "Note e prescrizioni" not in txt   # a section nobody talked about stays out
     stored = db.work_reports.docs[-1]
     assert stored["docx_b64"] and stored["client_item_id"] == items[0]["id"] and stored["commessa_id"] == subs[0]["id"]
+    # the commessa's diary records it: which report, by whom, a summary (here from the fields: the model gave none)
+    lines = [x for x in db.job_logs.docs if x.get("kind") == "report"]
+    assert len(lines) == 1 and lines[0]["commessa_id"] == subs[0]["id"] and lines[0]["report_id"] == stored["id"]
+    print(lines[0]["text"])
+    assert lines[0]["text"].startswith("Report «Primo sopralluogo» generato da Luca (commessa aperta da questo report).\n")
+    assert "Oggetto dell'intervento: Rifacimento impianto elettrico della cucina." in lines[0]["text"] and "Nuovo quadro" in lines[0]["text"]
+    assert "Mario Rossi" not in lines[0]["text"].split("\n", 1)[1] and "333" not in lines[0]["text"]
+    assert stored["summary"] == lines[0]["text"].split("\n", 1)[1]
+    d = await server.get_job_commessa(subs[0]["id"], current=me)
+    assert any(x.get("kind") == "report" for x in d["logs"]) and d["totals"]["entries"] == 0   # an event, not an entry of work
+    try:
+        await server.update_job_log(lines[0]["id"], server.JobLogPatch(text="x"), me); assert False
+    except HTTPException as ex:
+        assert ex.status_code == 400 and "report" in ex.detail
 
     # 2) same client named again, same commessa title in the text: nothing duplicated; missing email filled in
-    wr.interpret = interp({"name": "Rossi", "email": "mario@rossi.it"}, "Impianto cucina")
+    wr.interpret = interp({"name": "Rossi", "email": "mario@rossi.it"}, "Impianto cucina", summary="Secondo sopralluogo: confermato il rifacimento.")
     r = await server._generate_work_report(me, "Torno da Rossi per il rifacimento impianto elettrico cucina, email mario@rossi.it")
     assert not r["client_created"] and not r["commessa_created"] and r["commessa_id"] == subs[0]["id"]
+    line = [x for x in db.job_logs.docs if x.get("kind") == "report"][-1]   # the model's summary when it gives one
+    assert line["report_id"] == r["id"] and line["text"] == "Report «Primo sopralluogo» generato da Luca.\nSecondo sopralluogo: confermato il rifacimento."
     items = [i for i in db.collection_items.docs if i["collection_id"] == cl["id"]]
     assert len(items) == 1 and items[0]["data"]["email"] == "mario@rossi.it" and items[0]["data"]["telefono"] == "333 1234567"
 
@@ -244,6 +263,9 @@ async def main():
     r = await server._revise_work_report(me, first["id"], "nei tempi indicativi metti 3 giorni lavorativi")
     print(r["message"])
     assert r["changed"] == ["Proposta › Tempi indicativi"] and r["version"] == 2 and r["client_name"] == "Mario Rossi"
+    line = [x for x in db.job_logs.docs if x.get("kind") == "report"][-1]
+    assert line["report_id"] == first["id"] and line["commessa_id"] == first["commessa_id"] and line["report_version"] == 2
+    assert line["text"] == "Report «Primo sopralluogo» aggiornato alla versione 2 da Luca: modificato Tempi indicativi."
     assert len(db.collection_items.docs) == n_clients and len(db.work_reports.docs) == n_reports   # nothing new
     assert SAVED[-1]["subs"] == ["Mario Rossi", "Rifacimento impianto elettrico cucina"] and SAVED[-1]["fname"].endswith(" - v2.docx")
     txt = doc_text(SAVED[-1]["bytes"]); assert "3 giorni lavorativi" in txt and "Mario Rossi" in txt and "Nuovo quadro" in txt
@@ -258,8 +280,10 @@ async def main():
     async def same(sections, instruction, user_id=None, channel="web"):
         return {"sections": sections, "client": {}, "job_title": ""}
     wr.revise = same
+    n_lines = len([x for x in db.job_logs.docs if x.get("kind") == "report"])
     r = await server._revise_work_report(me, first["id"], "boh")
     assert r["changed"] == [] and "Non ho trovato cosa cambiare" in r["message"]
+    assert len([x for x in db.job_logs.docs if x.get("kind") == "report"]) == n_lines   # nothing changed, nothing written
     assert next(x for x in db.work_reports.docs if x["id"] == first["id"])["version"] == 3
     # a phone stated in the change goes on the client's card; a name change on a client the report did not create: only the report
     async def phone(sections, instruction, user_id=None, channel="web"):
@@ -273,8 +297,10 @@ async def main():
     # the model's own example data never becomes a client: a dictation with no client name
     wr.interpret = interp({"name": "Giuseppe Verdi", "phone": "333 1234567"}, "", {"Cliente": "Giuseppe Verdi", "Telefono": "333 1234567"})
     n_clients = len(db.collection_items.docs)
+    n_lines = len([x for x in db.job_logs.docs if x.get("kind") == "report"])
     r = await server._generate_work_report(me, "modifica il campo tempi indicativi e togli la stima")
     assert r["client_item_id"] is None and len(db.collection_items.docs) == n_clients
+    assert len([x for x in db.job_logs.docs if x.get("kind") == "report"]) == n_lines   # no commessa, no diary line
     assert "Giuseppe Verdi" not in doc_text(SAVED[-1]["bytes"]) and "333 1234567" not in doc_text(SAVED[-1]["bytes"])
     # Telegram: "Modifica il report" button, then the change
     wr.revise = fake_revise
@@ -291,6 +317,26 @@ async def main():
     print(SENT[-1][0]); assert "Report aggiornato" in SENT[-1][0] and SENT[-1][1].inline_keyboard[0][0].callback_data == q.data
     assert not (await tb._get_state(db, "u1", 77)).get("pending_work_revise")
 
+    # a collaborator asking about the commessa: no report lines, no estimate from the reports
+    import job_logs as jl
+    SEEN = []
+    async def cap(commessa, logs, reports, question, history, user_id=None, channel="web"):
+        SEEN.append((logs, reports)); return {"answer": "ok", "is_entry": False}
+    jl.answer, real_answer = cap, jl.answer
+    for x in db.work_reports.docs:
+        if x["id"] == first["id"]:
+            for sec in x["sections"]:
+                if "Stima economica indicativa" in sec["fields"]:
+                    sec["fields"]["Stima economica indicativa"] = "€ 2.500"
+    sub = next(x for x in db.collection_sub_items.docs if x["id"] == first["commessa_id"])
+    view = server._commessa_view(sub, next(i for i in db.collection_items.docs if i["id"] == first["client_item_id"]), cl)
+    await server._collab_answer({"show_client_contacts": True}, me, view, "a che punto siamo?", [])
+    logs, reps = SEEN[-1]
+    assert not any(x.get("kind") == "report" for x in logs) and reps
+    flat = str([sec["fields"] for x in reps for sec in x["sections"]])
+    assert "2.500" not in flat and "Stima economica" not in flat and "Tempi indicativi" in flat
+    jl.answer = real_answer
+
     # 9) deleting a client takes its commesse and their diary with it
     cid = first["client_item_id"]
     comm_ids = [x["id"] for x in db.collection_sub_items.docs if x["item_id"] == cid]
@@ -298,7 +344,8 @@ async def main():
     db.job_photos.docs.append({"id": "jp1", "commessa_id": comm_ids[0]})
     await server.delete_collection_item(first["collection_id"], cid, me)
     assert not any(x["item_id"] == cid for x in db.collection_sub_items.docs)
-    assert [x["id"] for x in db.job_logs.docs] == ["jl2"] and not db.job_photos.docs
+    assert not any(x["commessa_id"] in comm_ids for x in db.job_logs.docs) and any(x["id"] == "jl2" for x in db.job_logs.docs)
+    assert not db.job_photos.docs
 
     # a vet (or no vertical) still gets the vet templates
     await db.users.update_one({"user_id": "u1"}, {"$set": {"business_vertical": "veterinario"}})

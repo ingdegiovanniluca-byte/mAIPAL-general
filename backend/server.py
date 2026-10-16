@@ -4824,6 +4824,7 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         "commessa_created": commessa_created,
         "transcript": text,
         "sections": sections,
+        "summary": interpreted.get("summary") or work_reports.summary_of(sections),
         "company": company,
         "drive_path": [folder] + subs,
         "version": 1,
@@ -4838,7 +4839,27 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_report", channel=channel, trigger="utente", org_id=current.org_id)
     report_doc.pop("_id", None)
     report_doc.pop("docx_b64", None)
+    if commessa:
+        head = f"Report «{template_name}» generato da {_first_name(current.name)}" + (" (commessa aperta da questo report)" if commessa_created else "") + "."
+        await _log_report_event(current, report_doc, head + (f"\n{report_doc['summary']}" if report_doc["summary"] else ""), channel)
     return report_doc
+
+
+async def _log_report_event(current: User, rep: dict, text: str, channel: str = "web") -> None:
+    """A report made (or changed) for a commessa, as a line of its diary: which report, a summary,
+    who and when. Not an entry of work (no hours): the diary shows it like a change of state."""
+    try:
+        log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "kind": "report", "report_id": rep["id"],
+               "report_type": rep.get("report_type"), "template_name": rep.get("template_name"), "report_version": rep.get("version") or 1,
+               "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+               "collection_id": rep.get("collection_id"), "collection_name": None,
+               "client_item_id": rep.get("client_item_id"), "client_name": rep.get("client_name"),
+               "commessa_id": rep["commessa_id"], "commessa_title": rep.get("commessa_title"), "date": jl.today_local().isoformat(),
+               "raw_text": text, "text": text, "hours": [], "materials": [], "problems": [], "photos": [],
+               "channel": channel, "created_at": datetime.now(timezone.utc).isoformat(), "embedding": None}
+        await db.job_logs.insert_one(log)
+    except Exception:
+        logger.exception("report diary line failed")   # the report itself is made: never lose it for this
 
 
 def _really_said(said: dict, text: str) -> dict:
@@ -4962,6 +4983,9 @@ async def _revise_work_report(current: User, report_id: str, instruction: str, c
     await db.work_reports.update_one({"id": report_id}, {"$set": upd})
     out = {**{k: v for k, v in rep.items() if k != "docx_b64"}, **{k: v for k, v in upd.items() if k not in ("docx_b64", "embedding")}}
     shown = ", ".join(c.split(" › ")[1] for c in changed[:8]) + ("…" if len(changed) > 8 else "")
+    if rep.get("commessa_id"):
+        await _log_report_event(current, out, f"Report «{rep['template_name']}» aggiornato alla versione {version} da "
+                                f"{_first_name(current.name)}: modificato {shown}.", channel)
     out.update({"revised": True, "changed": changed,
                 "message": f"✏️ Report aggiornato (versione {version}): modificato {shown}." + (f"\n{note}" if note else "")})
     return out
@@ -5922,14 +5946,17 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
     phone and e-mail left out unless the admin allowed them."""
     if not collab.get("show_client_contacts"):
         view = {k: v for k, v in view.items() if k not in ("client_phone", "client_email")}
-    logs = await db.job_logs.find({"commessa_id": view["id"]}, {"_id": 0, "embedding": 0}).to_list(5000)
+    # the reports' lines in the diary carry their summary: the reports below, filtered, say enough
+    logs = await db.job_logs.find({"commessa_id": view["id"], "kind": {"$ne": "report"}}, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
-    reports = await db.work_reports.find({"commessa_id": view["id"]}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
+    reports = await db.work_reports.find({"commessa_id": view["id"]}, {"_id": 0, "docx_b64": 0, "embedding": 0, "summary": 0}).to_list(50)
+    hidden = r"stima economica|prezz|cost|import|preventiv"   # money never reaches a collaborator
     if not collab.get("show_client_contacts"):
-        contact = re.compile(r"telefon|cellulare|email|e-mail|mail|contatt", re.I)
-        for r in reports:
-            for sec in r.get("sections") or []:
-                sec["fields"] = {f: v for f, v in (sec.get("fields") or {}).items() if not contact.search(f)}
+        hidden += r"|telefon|cellulare|email|e-mail|mail|contatt"
+    hide = re.compile(hidden, re.I)
+    for r in reports:
+        for sec in r.get("sections") or []:
+            sec["fields"] = {f: v for f, v in (sec.get("fields") or {}).items() if not hide.search(f)}
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
 
@@ -6051,7 +6078,8 @@ async def _job_log_or_404(current: User, log_id: str) -> dict:
 async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
     log = await _job_log_or_404(current, log_id)
     if log.get("kind"):
-        raise HTTPException(status_code=400, detail="Un cambio di stato non si modifica: puoi solo eliminarlo")
+        raise HTTPException(status_code=400, detail=("La riga di un report non si modifica: puoi solo eliminarla" if log["kind"] == "report"
+                                                     else "Un cambio di stato non si modifica: puoi solo eliminarlo"))
     upd: dict = {}
     if payload.text is not None and payload.text.strip():
         upd["text"] = payload.text.strip()

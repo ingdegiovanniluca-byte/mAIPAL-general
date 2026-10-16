@@ -92,7 +92,9 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
         "Rispondi SOLO con JSON: {\"sections\": [{\"title\": \"...\", \"fields\": {\"Nome campo\": \"valore\"}}], "
         "\"client\": {\"name\": \"nome e cognome o ragione sociale del cliente, se detto\", \"phone\": \"\", \"email\": \"\", "
         "\"address\": \"indirizzo del cantiere, se detto\"}, \"job_title\": \"titolo breve dei lavori (max 8 parole), "
-        "es. 'Rifacimento impianto elettrico cucina'\"}"
+        "es. 'Rifacimento impianto elettrico cucina'\", \"summary\": \"riassunto del report in 1-3 frasi brevi (max 300 "
+        "caratteri) per il diario della commessa: cosa si è rilevato, cosa si propone o si è fatto, i prossimi passi. Solo "
+        "ciò che è nel testo, senza dati del cliente\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -118,7 +120,34 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
         "sections": out,
         "client": {k: str(cl.get(k) or "").strip() for k in ("name", "phone", "email", "address")},
         "job_title": str(parsed.get("job_title") or "").strip()[:80],
+        "summary": str(parsed.get("summary") or "").strip()[:400],
     }
+
+
+# fields that are not the report's content: who the client is, who signed it, when
+_NOT_CONTENT = {"Cliente", "Telefono", "Email", "Indirizzo del cantiere", "Data", "Eseguito da"}
+
+
+def summary_of(sections: list, limit: int = 300) -> str:
+    """A short summary from the report's own fields, when the model gave none: the first filled
+    fields that say what the report is about (not the client's data, the date or the signature)."""
+    out = ""
+    for sec in sections or []:
+        for label, value in (sec.get("fields") or {}).items():
+            if label in _NOT_CONTENT or re.search(r"telefon|e-?mail|cellulare", label, re.I):
+                continue
+            rows = [r.strip() for r in str(value or "").splitlines() if r.strip()]
+            v = ", ".join(r[2:].strip() if r.startswith("- ") else r.rstrip(".") for r in rows)
+            if not v:
+                continue
+            part = f"{label}: {v.rstrip('.')}."
+            if not out:   # the first one always, cut if too long
+                out = part if len(part) <= limit else part[:limit].rsplit(" ", 1)[0] + "…"
+            elif len(out) + 1 + len(part) <= limit:
+                out += " " + part
+            else:
+                return out
+    return out
 
 
 async def revise(sections: list, instruction: str, user_id: Optional[str] = None, channel: str = "web") -> dict:

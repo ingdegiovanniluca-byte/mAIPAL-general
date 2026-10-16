@@ -123,16 +123,20 @@ function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaL
 
 // a line of the diary: who (grey) with a small icon when it carries hours / problems /
 // materials, the text, the photos; tap to change or delete it
-function DiaryLine({ log, section, onOpen, onPhoto }) {
-  const isEvent = log.kind === "stato";
+// A report made for the commessa is an event too: its type and summary, and (for who made it)
+// the link to download it.
+function DiaryLine({ log, section, onOpen, onPhoto, me }) {
+  const isEvent = !!log.kind;
+  const isReport = log.kind === "report";
   const full = section === "diario";
+  const [head, ...rest] = isReport ? (log.text || "").split("\n") : [];
   const detail = section === "ore" ? hoursLineOf(log) : section === "problemi" ? (log.problems || []).join("; ")
     : section === "materiali" ? (log.materials || []).map(matLabel).join(" · ") : "";
   return (
-    <div data-testid={isEvent ? "job-stato-event" : "job-entry"}>
+    <div data-testid={isReport ? "job-report-event" : isEvent ? "job-stato-event" : "job-entry"}>
       <button type="button" onClick={() => onOpen(log)} className="w-full text-left">
         <span className="flex items-center gap-[5px] text-white/50">
-          {isEvent && <RefreshCw size={11} strokeWidth={2} />}
+          {isEvent && (isReport ? <FileText size={11} strokeWidth={2} /> : <RefreshCw size={11} strokeWidth={2} />)}
           {full && !isEvent && log.hours?.length > 0 && <Clock size={11} strokeWidth={2} />}
           {full && !isEvent && log.problems?.length > 0 && <AlertTriangle size={11} strokeWidth={2} />}
           {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
@@ -143,9 +147,20 @@ function DiaryLine({ log, section, onOpen, onPhoto }) {
         {detail && <span className="block mt-[3px] text-[14.5px] font-medium leading-snug text-white">{detail}</span>}
         <span className={`block mt-[3px] leading-[1.45] whitespace-pre-wrap ${isEvent ? "text-[13px] text-white/70"
           : full ? "text-[14px] text-white/90" : "text-[12.5px] text-white/55"}`}>
-          {isEvent && log.stato_to ? `Stato: ${log.stato_from || "—"} → ${log.stato_to}` : log.text}
+          {isReport ? (
+            <>
+              <span className="block text-white/85" data-testid="job-report-head">{head}</span>
+              {rest.join("\n").trim() && <span className="block mt-[2px] text-white/65" data-testid="job-report-summary">{rest.join("\n").trim()}</span>}
+            </>
+          ) : isEvent && log.stato_to ? `Stato: ${log.stato_from || "—"} → ${log.stato_to}` : log.text}
         </span>
       </button>
+      {isReport && log.report_id && me && log.user_id === me && (
+        <a href={`${API}/work/reports/${log.report_id}/download`} data-testid="job-report-download"
+          className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-white/75 underline-offset-2 hover:underline">
+          <FileText size={12} /> Scarica il report
+        </a>
+      )}
       {full && log.photos?.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {log.photos.map((p) => (
@@ -772,7 +787,8 @@ export default function JobDiaryPage() {
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
   const delLog = (log) => {
-    toast(log.kind === "stato" ? "Togliere questo cambio di stato dal diario?" : "Eliminare questa voce del diario?", {
+    toast(log.kind === "stato" ? "Togliere questo cambio di stato dal diario?"
+      : log.kind === "report" ? "Togliere questa riga dal diario? Il report resta tra i documenti." : "Eliminare questa voce del diario?", {
       action: { label: "Elimina", onClick: async () => {
         try { await api.delete(`/jobs/logs/${log.id}`); await reload(); }
         catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -971,7 +987,7 @@ export default function JobDiaryPage() {
             <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]">
               <div className="text-[14px] font-medium leading-[1.45] text-white/90 tabular-nums">{g.dayNum}</div>
               <div className="flex flex-col gap-3 min-w-0">
-                {g.logs.map((lg) => <DiaryLine key={lg.id} log={lg} section={section} onOpen={(lg) => (lg.kind ? delLog(lg) : setEditing(lg))} onPhoto={(log, photo) => setViewer({ log, photo })} />)}
+                {g.logs.map((lg) => <DiaryLine key={lg.id} log={lg} section={section} me={me?.user_id} onOpen={(lg) => (lg.kind ? delLog(lg) : setEditing(lg))} onPhoto={(log, photo) => setViewer({ log, photo })} />)}
               </div>
             </div>
           </React.Fragment>

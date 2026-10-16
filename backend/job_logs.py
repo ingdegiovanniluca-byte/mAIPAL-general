@@ -341,7 +341,7 @@ def materials_line(materials: list) -> str:
 
 def _ctx_line(lg: dict) -> str:
     who = lg.get("author_name") or ""
-    if lg.get("kind") == "stato":
+    if lg.get("kind"):   # a change of state, a report made
         return f"- {lg.get('date')} · {lg.get('text')}"
     return f"- {lg.get('date')} · {who}: {search_text(lg)}" + (f" ({len(lg['photos'])} foto)" if lg.get("photos") else "")
 

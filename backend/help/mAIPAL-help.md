@@ -148,6 +148,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
   - il **periodo** (ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.
+- Anche ogni **report** generato con l'agente **Report** per una commessa resta scritto nel suo diario: il tipo di report, chi l'ha fatto e un breve riassunto, con il link **Scarica il report**. Se poi modifichi il report, nel diario compare anche la nuova versione con i campi cambiati. Toccando la riga puoi toglierla dal diario (il report resta tra i documenti).
 - Il **tasto chat** tondo sul lato apre una chat per interrogare la commessa: "quante ore abbiamo fatto?", "cosa manca da comprare?".
 
 **Costi e margini**
@@ -173,6 +174,7 @@ L'agente **Report** genera il report di un sopralluogo in Word, con lo spazio pe
 - mAIPAL riconosce il cliente nella lista Clienti e la commessa; se non ci sono li crea. Se ci sono più clienti simili, te lo chiede.
 - Il report si salva su Drive/OneDrive nella cartella del cliente e della commessa (mAIPAL/Clienti/cliente/commessa) e si scarica dalla chat.
 - **Modificare il report**: nella stessa chat scrivi la correzione ("nei tempi metti 3 giorni"): mAIPAL crea la versione successiva cambiando solo quello che hai detto.
+- **Nel diario della commessa** resta scritto ogni report generato (tipo, autore e un breve riassunto) e ogni sua nuova versione.
 - Con l'icona sotto il nome scegli il tipo di report o carichi un tuo modello.
 - Da Telegram: comando `/report`.
 
