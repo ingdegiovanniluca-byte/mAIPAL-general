@@ -145,7 +145,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
   - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), Ore, Segnalazioni, Documenti, Cantiere (apre la mappa), Date, Telefono, Email;
   - le sezioni **Diario / Ore / Problemi / Materiali / Costi / To Do**: scorri per passare dall'una all'altra;
   - **To Do**: le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
-  - il **periodo** (ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
+  - il **periodo** (questa settimana da lunedì, ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.
 - Anche ogni **report** generato con l'agente **Report** per una commessa resta scritto nel suo diario: il tipo di report, chi l'ha fatto e un breve riassunto, con il link **Scarica il report**. Se poi modifichi il report, nel diario compare anche la nuova versione con i campi cambiati. Toccando la riga puoi toglierla dal diario (il report resta tra i documenti).

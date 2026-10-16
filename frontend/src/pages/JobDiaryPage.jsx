@@ -72,6 +72,8 @@ const IT_MON_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "s
 const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const todayIso = () => isoDay(new Date());
 const daysAgoIso = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
+// the week starts on Monday
+const weekStartIso = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoDay(d); };
 const monthStartIso = () => { const d = new Date(); return isoDay(new Date(d.getFullYear(), d.getMonth(), 1)); };
 const rangeDay = (iso, withYear) => {
   if (!iso) return "";
@@ -89,11 +91,13 @@ const SECTIONS = [
   { key: "todo", label: "To Do" },
 ];
 const PERIODS = [
+  { key: "week", label: "Questa settimana" },
   { key: "30", label: "Ultimi 30 giorni" },
   { key: "month", label: "Questo mese" },
   { key: "all", label: "Tutta la commessa" },
 ];
 const periodRange = (p) => (p.key === "30" ? { from: daysAgoIso(29), to: todayIso() }
+  : p.key === "week" ? { from: weekStartIso(), to: todayIso() }
   : p.key === "month" ? { from: monthStartIso(), to: todayIso() }
   : p.key === "custom" ? { from: p.from || null, to: p.to || null }
   : { from: null, to: null });
