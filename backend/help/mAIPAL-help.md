@@ -214,6 +214,8 @@ Per gli artigiani c'è la lista **Clienti**, già pronta, con le **commesse** di
 - Tocca la commessa per aprirne il **diario di commessa**.
 - L'icona della **cartella** sulla commessa crea (o apre) su Drive/OneDrive la cartella mAIPAL/Clienti/cliente/commessa, dove finiscono anche report e foto del diario.
 - Clienti e commesse si creano anche da soli quando detti un report o una voce di diario per un cliente nuovo.
+- **Eliminare** un cliente o una commessa cancella anche il diario (voci, foto), le attività e i costi, e non si può annullare. Per questo, toccando **Elimina**, ti arriva su **Telegram** un codice di 6 cifre da scrivere nell'app: vale 10 minuti, una volta sola, e dopo 5 tentativi sbagliati ne serve uno nuovo. Se Telegram non è collegato, l'app ti chiede di collegarlo (Impostazioni → Collegamenti → Telegram). I file su Drive/OneDrive restano.
+- Dalla chat clienti e commesse non si eliminano: si usa il tasto Elimina nella lista.
 
 ## Documenti
 <!-- id: documenti · path: /dashboard/documents · verticale: tutti -->
@@ -248,6 +250,7 @@ Dalle Impostazioni (popup del profilo → Impostazioni, o dal menu) gestisci:
 - **Dove salvo file ed eventi**: se hai collegato entrambi, scegli dove salvare i file e dove mettere gli eventi.
 - **Telegram**: collega il bot (vedi "Telegram").
 - **Orologio**: collega il Galaxy Watch (vedi "Orologio").
+- **Notifiche**: gli avvisi di mAIPAL su questo dispositivo, anche con l'app chiusa (vedi "Notifiche").
 - **Team**: unisciti a un team con il codice ricevuto dall'amministratore, per condividere task e liste.
 - **Amministrazione** (solo amministratori): accessi e utenti. I team si creano e si gestiscono in **Team**.
 
@@ -268,6 +271,15 @@ Con Telegram usi mAIPAL dal telefono come una chat.
 Con l'app mAIPAL per **Galaxy Watch** parli con gli agenti e guardi task, to-do e liste dal polso.
 - **Collegarlo**: apri mAIPAL sull'orologio, mostra un codice di 6 cifre; scrivilo in Impostazioni → Orologio e tocca Collega.
 - In Impostazioni vedi gli orologi collegati e quando sono stati usati; con il cestino lo scolleghi.
+
+## Notifiche
+<!-- id: notifiche · verticale: tutti -->
+mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anche con l'app chiusa.
+- **Cosa arriva**: i **promemoria dei task** e, per gli artigiani, le **voci scritte dai collaboratori** nel diario delle commesse (testo, ore, problemi o foto). Toccando la notifica si apre la pagina giusta.
+- **Attivarle**: Impostazioni → **Notifiche** → **Attiva su questo dispositivo**, poi consenti le notifiche quando il telefono lo chiede. Ogni dispositivo si attiva per conto suo; con **Manda una prova** controlli che arrivino, con **Disattiva** le spegni.
+- **iPhone**: le notifiche arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home) e con iOS 16.4 o successivo.
+- Se le hai bloccate per errore, riattivale dalle impostazioni del browser o del telefono.
+- Telegram, se collegato, continua a ricevere i suoi avvisi come prima.
 
 ## Team e condivisione
 <!-- id: team · verticale: tutti -->

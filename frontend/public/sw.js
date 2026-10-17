@@ -81,3 +81,27 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+// ---- The app's notifications (Web Push): a collaborator's diary entry, a task's reminder ----
+self.addEventListener("push", (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch (e) { d = { body: event.data ? event.data.text() : "" }; }
+  event.waitUntil(self.registration.showNotification(d.title || "mAIPAL", {
+    body: d.body || "",
+    icon: `${BASE}/icon-192.png`,
+    badge: `${BASE}/icon-192.png`,
+    tag: d.tag || undefined,
+    data: { url: d.url || "/dashboard" },
+  }));
+});
+
+// a tap on the notification: the app's window (already open, or a new one) on the right page
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = `${BASE}${(event.notification.data && event.notification.data.url) || "/dashboard"}`;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    const win = list.find((c) => c.url.startsWith(self.registration.scope));
+    if (win) return win.focus().then((w) => (w && "navigate" in w ? w.navigate(target) : null)).catch(() => self.clients.openWindow(target));
+    return self.clients.openWindow(target);
+  }));
+});

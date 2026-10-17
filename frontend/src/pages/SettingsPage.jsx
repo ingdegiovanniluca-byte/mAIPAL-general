@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2 } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2, Bell } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import TeamPanel from "@/components/TeamPanel";
+import NotificationsPanel from "@/components/NotificationsPanel";
 import AdminPage from "@/pages/AdminPage";
 import CollaboratorsPanel from "@/components/CollaboratorsPanel";
 
@@ -474,6 +475,12 @@ export default function SettingsPage() {
       )}
     </Section>
   );
+  const secNotifications = (mode) => (
+    <Section mode={mode} id="notifications" testid="notifications-card-settings" icon={Bell} title="Notifiche"
+      subtitle="Avvisi di mAIPAL su questo dispositivo, anche con l'app chiusa.">
+      <NotificationsPanel />
+    </Section>
+  );
   const secTeam = (mode) => (
     <Section mode={mode} id="team" testid="team-card-settings" icon={Users} title="Team" plain
       subtitle="Condividi task e liste con le persone del tuo team.">
@@ -508,6 +515,7 @@ export default function SettingsPage() {
     { id: "profile", icon: UserIcon, title: "Profilo", sub: profession || "Incompleto", on: !!profession },
     { id: "vertical", icon: Compass, title: "Verticale", sub: BUSINESS_VERTICALS.find((v) => v.key === businessVertical)?.label || "Nessuno", on: !!businessVertical },
     { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
+    { id: "notifications", icon: Bell, title: "Notifiche", sub: "Promemoria e diario", on: false },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },
     ...(user?.role === "admin" ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori", sub: "Solo Telegram", on: false }] : []),
     ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Admin", full: "Amministrazione", sub: "Accessi e utenti", on: false }] : []),
@@ -529,6 +537,7 @@ export default function SettingsPage() {
             {panel === "profile" && secProfile("bare")}
             {panel === "vertical" && secVertical("bare")}
             {panel === "links" && <>{secGoogle("static")}{secMicrosoft("static")}{secTargets("static")}{secTelegram("static")}{secWatch("static")}</>}
+            {panel === "notifications" && secNotifications("bare")}
             {panel === "team" && secTeam("bare")}
             {panel === "collaborators" && secCollaborators("bare")}
             {panel === "admin" && secAdmin("bare")}
@@ -584,6 +593,7 @@ export default function SettingsPage() {
         {secTargets()}
         {secTelegram()}
         {secWatch()}
+        {secNotifications()}
         {secTeam()}
         {secCollaborators()}
         {secAdmin()}

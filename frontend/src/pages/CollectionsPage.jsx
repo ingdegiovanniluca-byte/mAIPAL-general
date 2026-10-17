@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen, ChevronDown, MapPin, Phone, Mail, Briefcase, Activity } from "lucide-react";
 import { toast } from "sonner";
+import DeleteWithCode from "@/components/DeleteWithCode";
 
 // a value as shown on a card: dates as dd/mm/yyyy, lists joined
 const fmtVal = (f, v) => {
@@ -532,23 +533,11 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+  // a client of the Clienti list goes with its commesse and their diary: confirmed with the code from Telegram
+  const [codeDelete, setCodeDelete] = useState(null);
   const delClient = (item) => {
     const name = item.data?.[sysKey("nome")] || "questo cliente";
-    const n = item.sub_item_count || 0;
-    toast(`Eliminare ${name}${n ? ` con ${n === 1 ? "la sua commessa" : `le sue ${n} commesse`} e il loro diario` : ""}?`, {
-      action: {
-        label: "Elimina",
-        onClick: async () => {
-          try {
-            await api.delete(`/collections/${coll.id}/items/${item.id}`);
-            await load();
-            toast.success("Cliente eliminato");
-          } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
-        },
-      },
-      cancel: { label: "Annulla", onClick: () => {} },
-      duration: 8000,
-    });
+    setCodeDelete({ item, title: `Elimina ${name}` });
   };
 
   // Drag-to-reorder the Campi cards - same approach as the Liste page's card reorder.
@@ -570,6 +559,11 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
 
   return (
     <div>
+      {codeDelete && (
+        <DeleteWithCode title={codeDelete.title} url={`/collections/${coll.id}/items/${codeDelete.item.id}`}
+          target={{ collection_id: coll.id, item_id: codeDelete.item.id }} onClose={() => setCodeDelete(null)}
+          onDone={async () => { setCodeDelete(null); await load(); toast.success("Cliente eliminato"); }} />
+      )}
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white mb-4">
         <ArrowLeft size={14} /> Liste
       </button>
@@ -817,9 +811,11 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [codeDelete, setCodeDelete] = useState(null);
   const delSub = (sub) => {
     const name = isCommesse ? (sub.data?.[subKey("titolo")] || "questa commessa") : "";
-    toast(isCommesse ? `Eliminare la commessa «${name}» e il suo diario?` : "Eliminare questo elemento?", {
+    if (isCommesse) { setCodeDelete({ sub, title: `Elimina la commessa «${name}»` }); return; }   // with the code from Telegram
+    toast("Eliminare questo elemento?", {
       action: {
         label: "Elimina",
         onClick: async () => {
@@ -837,6 +833,11 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
 
   return (
     <div>
+      {codeDelete && (
+        <DeleteWithCode title={codeDelete.title} url={`/collections/${coll.id}/items/${item.id}/sub-items/${codeDelete.sub.id}`}
+          target={{ collection_id: coll.id, item_id: item.id, sub_id: codeDelete.sub.id }} onClose={() => setCodeDelete(null)}
+          onDone={async () => { setCodeDelete(null); await load(); toast.success("Commessa eliminata"); }} />
+      )}
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white mb-4">
         <ArrowLeft size={14} /> {coll.name}
       </button>

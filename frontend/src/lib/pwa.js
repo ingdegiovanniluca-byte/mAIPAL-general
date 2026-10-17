@@ -64,3 +64,41 @@ export async function takeSharedPayload() {
     return null;
   }
 }
+
+// ---- Notifications on this device (Web Push) ----
+export const pushSupported = () =>
+  typeof window !== "undefined" && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+const keyBytes = (b64) => {
+  const s = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+};
+
+async function registration() {
+  const reg = await navigator.serviceWorker.getRegistration(`${BASE}/`);
+  if (reg) return reg;
+  return navigator.serviceWorker.register(`${BASE}/sw.js`, { scope: `${BASE}/` });
+}
+
+// this device's subscription, if any
+export async function currentPushSubscription() {
+  if (!pushSupported()) return null;
+  try { return await (await registration()).pushManager.getSubscription(); } catch { return null; }
+}
+
+// asks the permission (only after a tap) and subscribes with the server's public key
+export async function enablePush(publicKey) {
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error(perm === "denied" ? "denied" : "dismissed");
+  const reg = await registration();
+  await navigator.serviceWorker.ready;
+  const old = await reg.pushManager.getSubscription();
+  if (old) return old;
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+}
+
+export async function disablePush() {
+  const sub = await currentPushSubscription();
+  if (sub) { const endpoint = sub.endpoint; await sub.unsubscribe().catch(() => {}); return endpoint; }
+  return null;
+}

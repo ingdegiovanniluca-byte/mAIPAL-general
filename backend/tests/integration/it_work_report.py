@@ -342,7 +342,11 @@ async def main():
     comm_ids = [x["id"] for x in db.collection_sub_items.docs if x["item_id"] == cid]
     db.job_logs.docs.append({"id": "jl1", "commessa_id": comm_ids[0]}); db.job_logs.docs.append({"id": "jl2", "commessa_id": "other"})
     db.job_photos.docs.append({"id": "jp1", "commessa_id": comm_ids[0]})
-    await server.delete_collection_item(first["collection_id"], cid, me)
+    tgme = server.User(**{**me.model_dump(), "telegram_chat_id": 77}) if hasattr(me, "model_dump") else server.User(**{**me.dict(), "telegram_chat_id": 77})
+    db.delete_codes.docs.append({"user_id": "u1", "collection_id": first["collection_id"], "item_id": cid, "sub_id": None, "tries": 0,
+                                 "code_hash": server._code_hash("u1", "123456"),
+                                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()})
+    await server.delete_collection_item(first["collection_id"], cid, code="123456", current=tgme)
     assert not any(x["item_id"] == cid for x in db.collection_sub_items.docs)
     assert not any(x["commessa_id"] in comm_ids for x in db.job_logs.docs) and any(x["id"] == "jl2" for x in db.job_logs.docs)
     assert not db.job_photos.docs

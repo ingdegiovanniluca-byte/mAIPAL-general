@@ -53,6 +53,7 @@ import usage_tracking as ut
 import agent_guard
 import help_guide
 import verticals as vx
+import push_notify as push
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -3454,16 +3455,159 @@ async def update_collection_item(collection_id: str, item_id: str, payload: Coll
 
 
 @api_router.delete("/collections/{collection_id}/items/{item_id}")
-async def delete_collection_item(collection_id: str, item_id: str, current: User = Depends(get_current_user)):
+async def delete_collection_item(collection_id: str, item_id: str, code: Optional[str] = None, current: User = Depends(get_current_user)):
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     if coll.get("system_key") == vx.CLIENTI_KEY:   # the client's commesse take their diary with them
+        await _check_delete_code(current, collection_id, item_id, None, code)
         subs = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "id": 1}).to_list(5000)
         await _delete_job_diaries([sb["id"] for sb in subs])
     await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
     await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item_id})
     return {"ok": True}
+
+
+# ---- Deleting a client or a commessa (and its diary) of the Clienti list: confirmed with a
+# 6-digit code sent on Telegram - valid 10 minutes, once, for that one thing, 5 tries ----
+DELETE_CODE_MINUTES = 10
+DELETE_CODE_TRIES = 5
+TELEGRAM_NEEDED_FOR_DELETE = ("Per eliminare clienti e commesse ti mando un codice di conferma su Telegram, che però non è "
+                              "collegato: collegalo in Impostazioni → Collegamenti → Telegram.")
+
+
+class DeleteCodePayload(BaseModel):
+    collection_id: str
+    item_id: str
+    sub_id: Optional[str] = None
+
+
+def _code_hash(user_id: str, code: str) -> str:
+    import hashlib
+    return hashlib.sha256(f"{user_id}:{(code or '').strip()}".encode()).hexdigest()
+
+
+@api_router.post("/clienti/delete-code")
+async def request_delete_code(payload: DeleteCodePayload, current: User = Depends(get_current_user)):
+    """Elimina on a client or a commessa: the code goes to the user's Telegram with what will be
+    deleted. Without Telegram linked -> 409 (the app asks to link it)."""
+    coll = await db.collections.find_one({"id": payload.collection_id, **_lists_query(current)}, {"_id": 0})
+    if not coll or coll.get("system_key") != vx.CLIENTI_KEY:
+        raise HTTPException(status_code=404, detail="Lista non trovata")
+    if not current.telegram_chat_id or not tg.bot_token():
+        raise HTTPException(status_code=409, detail=TELEGRAM_NEEDED_FOR_DELETE)
+    client = await db.collection_items.find_one({"id": payload.item_id, "collection_id": coll["id"]}, {"_id": 0, "embedding": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente non trovato")
+    fmap, smap = coll.get("system_map") or {}, coll.get("system_sub_map") or {}
+    client_name = _sysval(client.get("data"), fmap, "nome") or "il cliente"
+    if payload.sub_id:
+        sub = await db.collection_sub_items.find_one({"id": payload.sub_id, "collection_id": coll["id"], "item_id": client["id"]}, {"_id": 0})
+        if not sub:
+            raise HTTPException(status_code=404, detail="Commessa non trovata")
+        ids = [sub["id"]]
+        what = f"la commessa «{_sysval(sub.get('data'), smap, 'titolo') or 'senza titolo'}» di {client_name}"
+    else:
+        ids = [x["id"] for x in await db.collection_sub_items.find({"collection_id": coll["id"], "item_id": client["id"]}, {"_id": 0, "id": 1}).to_list(5000)]
+        what = f"il cliente «{client_name}»" + (f" con {'la sua commessa' if len(ids) == 1 else f'le sue {len(ids)} commesse'}" if ids else "")
+    entries = await db.job_logs.count_documents({"commessa_id": {"$in": ids}, "kind": None}) if ids else 0
+    photos = await db.job_photos.count_documents({"commessa_id": {"$in": ids}}) if ids else 0
+    parts = [f"{entries} {'voce' if entries == 1 else 'voci'}"] + ([f"{photos} foto"] if photos else [])
+    code = f"{secrets.randbelow(10 ** 6):06d}"
+    sent = await _send_telegram_text(current.telegram_chat_id,
+        f"🗑 Codice per eliminare {what}: *{code}*\n"
+        f"Verranno cancellati anche il diario ({', '.join(parts)}), le attività e i costi. I file su Drive/OneDrive restano.\n"
+        f"Vale {DELETE_CODE_MINUTES} minuti. Se non sei stato tu, ignora questo messaggio.")
+    if not sent:
+        raise HTTPException(status_code=502, detail="Non sono riuscito a mandarti il codice su Telegram: riprova tra poco.")
+    await db.delete_codes.delete_many({"user_id": current.user_id})   # one at a time: a new one replaces the old
+    await db.delete_codes.insert_one({
+        "user_id": current.user_id, "collection_id": coll["id"], "item_id": client["id"], "sub_id": payload.sub_id or None,
+        "code_hash": _code_hash(current.user_id, code), "tries": 0,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=DELETE_CODE_MINUTES)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()})
+    return {"sent": True, "minutes": DELETE_CODE_MINUTES, "what": what, "entries": entries, "photos": photos}
+
+
+async def _check_delete_code(current: User, collection_id: str, item_id: str, sub_id: Optional[str], code: Optional[str]) -> None:
+    """The code asked for exactly this deletion, not expired, not over the tries: then it is used up."""
+    import hmac
+    if not current.telegram_chat_id:
+        raise HTTPException(status_code=409, detail=TELEGRAM_NEEDED_FOR_DELETE)
+    rec_ = await db.delete_codes.find_one({"user_id": current.user_id, "collection_id": collection_id, "item_id": item_id,
+                                           "sub_id": sub_id or None}, {"_id": 0})
+    if not code or not rec_:
+        raise HTTPException(status_code=403, detail="Serve il codice di conferma: tocca Elimina per riceverlo su Telegram.")
+    if rec_["expires_at"] < datetime.now(timezone.utc).isoformat():
+        await db.delete_codes.delete_many({"user_id": current.user_id})
+        raise HTTPException(status_code=403, detail="Il codice è scaduto: chiedine uno nuovo.")
+    if not hmac.compare_digest(rec_["code_hash"], _code_hash(current.user_id, re.sub(r"\D", "", code))):
+        tries = int(rec_.get("tries") or 0) + 1
+        if tries >= DELETE_CODE_TRIES:
+            await db.delete_codes.delete_many({"user_id": current.user_id})
+            raise HTTPException(status_code=403, detail="Codice errato troppe volte: chiedine uno nuovo.")
+        await db.delete_codes.update_one({"user_id": current.user_id}, {"$set": {"tries": tries}})
+        left = DELETE_CODE_TRIES - tries
+        raise HTTPException(status_code=403, detail=f"Codice errato: {'resta 1 tentativo' if left == 1 else f'restano {left} tentativi'}.")
+    await db.delete_codes.delete_many({"user_id": current.user_id})
+
+
+# ---- The app's notifications on the device (Web Push), also with the app closed: only what
+# external collaborators write in a commessa's diary and the tasks' reminders ----
+class PushSubscribePayload(BaseModel):
+    subscription: dict
+
+
+class PushEndpointPayload(BaseModel):
+    endpoint: str
+
+
+@api_router.get("/push/key")
+async def push_public_key(current: User = Depends(get_current_user)):
+    return {"public_key": (await push.vapid_keys(db))["public"]}
+
+
+@api_router.post("/push/subscribe")
+async def push_subscribe(payload: PushSubscribePayload, request: Request, current: User = Depends(get_current_user)):
+    try:
+        await push.subscribe(db, current.user_id, payload.subscription, request.headers.get("user-agent", ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "devices": await db.push_subscriptions.count_documents({"user_id": current.user_id})}
+
+
+@api_router.post("/push/unsubscribe")
+async def push_unsubscribe(payload: PushEndpointPayload, current: User = Depends(get_current_user)):
+    await push.unsubscribe(db, current.user_id, payload.endpoint)
+    return {"ok": True}
+
+
+@api_router.post("/push/status")
+async def push_status(payload: PushEndpointPayload, current: User = Depends(get_current_user)):
+    """Is this device (its endpoint) receiving this user's notifications?"""
+    on = bool(payload.endpoint) and bool(await db.push_subscriptions.find_one({"user_id": current.user_id, "endpoint": payload.endpoint}, {"_id": 1}))
+    return {"subscribed": on, "devices": await db.push_subscriptions.count_documents({"user_id": current.user_id})}
+
+
+@api_router.post("/push/test")
+async def push_test(current: User = Depends(get_current_user)):
+    n = await push.send_to_user(db, current.user_id, "🔔 mAIPAL", "Le notifiche funzionano: qui arriveranno i promemoria dei task e le voci dei collaboratori.", "/dashboard/settings?s=notifications", "test")
+    if not n:
+        raise HTTPException(status_code=400, detail="Nessun dispositivo ha ricevuto la prova: riattiva le notifiche su questo dispositivo.")
+    return {"sent": n}
+
+
+def _push_collab_entry(owner: User, log: dict, author: dict) -> None:
+    """A collaborator wrote in a commessa's diary: the owner's devices hear it."""
+    who = author.get("name") or author.get("first_name") or "Un collaboratore"
+    bits = [jl.hours_line(log["hours"])] if log.get("hours") else []
+    if log.get("problems"):
+        bits.append("⚠️ " + "; ".join(log["problems"]))
+    body = (log.get("text") or "") + (f" · {' · '.join(bits)}" if bits else "")
+    if log.get("photos") and (log.get("raw_text") == PHOTO_ONLY_TEXT):
+        body = f"📷 {len(log['photos'])} foto"
+    push.fire_and_forget(db, owner.user_id, f"📒 {who} · {log.get('commessa_title') or 'Diario'}", body,
+                         f"/dashboard/journal?commessa={log['commessa_id']}", f"jlog-{log['id']}")
 
 
 async def _delete_job_diaries(commessa_ids: list) -> None:
@@ -3542,10 +3686,14 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
 
 
 @api_router.delete("/collections/{collection_id}/items/{item_id}/sub-items/{sub_id}")
-async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, current: User = Depends(get_current_user)):
+async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, code: Optional[str] = None, current: User = Depends(get_current_user)):
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    if coll.get("system_key") == vx.CLIENTI_KEY:   # a commessa and its diary: only with the code from Telegram
+        if not await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"_id": 1}):
+            raise HTTPException(status_code=404, detail="Elemento non trovato")
+        await _check_delete_code(current, collection_id, item_id, sub_id, code)
     r = await db.collection_sub_items.delete_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
@@ -3932,6 +4080,9 @@ async def _execute_list_update(
         }
 
     coll = coll_by_id[collection_id]
+    if coll.get("system_key") == vx.CLIENTI_KEY and op in ("delete_item", "clear_items", "delete_sub_item", "clear_sub_items", "clear_all_sub_items"):
+        raise HTTPException(status_code=400, detail="Clienti e commesse non si eliminano dalla chat: apri la lista Clienti e tocca Elimina, "
+                                                    "ti mando un codice di conferma su Telegram.")
     items = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).to_list(2000)
 
     item = None
@@ -4056,7 +4207,7 @@ async def _execute_list_update(
         else:
             summary = f"Ho aggiunto \"{lu.item_display(created)}\" a \"{coll['name']}\"."
     elif op == "delete_item":
-        await delete_collection_item(collection_id, item["id"], current)
+        await delete_collection_item(collection_id, item["id"], current=current)
         summary = f"Ho rimosso \"{lu.item_display(item)}\" da \"{coll['name']}\"."
     elif op == "clear_items":
         item_ids = [i["id"] for i in items]
@@ -4077,7 +4228,7 @@ async def _execute_list_update(
         names = ", ".join(f"\"{lu.item_display(c)}\"" for c in created_list)
         summary = f"Ho aggiunto {names} a \"{lu.item_display(item)}\" ({coll['name']})."
     elif op == "delete_sub_item":
-        await delete_sub_item(collection_id, item["id"], sub_item["id"], current)
+        await delete_sub_item(collection_id, item["id"], sub_item["id"], current=current)
         summary = f"Ho rimosso \"{lu.item_display(sub_item)}\" da \"{lu.item_display(item)}\" ({coll['name']})."
     elif op == "clear_sub_items":
         await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item["id"]})
@@ -5418,6 +5569,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
             asyncio.create_task(_check_budget_alert(clienti, target["id"]))
         n = len(photo_entry.get("photos") or [])
         msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
+        if author:
+            _push_collab_entry(current, log, author)
         return {"status": "ok", "log": _public_log({k: v for k, v in log.items() if k != "before_description"}), "commessa": target,
                 "client_created": False, "commessa_created": False, "described_photo": True, "message": msg}
     log = {
@@ -5435,6 +5588,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     log.pop("_id", None)
     if images:
         await _store_job_photos(current, log, images)
+    if author:
+        _push_collab_entry(current, {**log, "photos": log.get("photos") or images or []}, author)
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
     if log["hours"] or log["materials"]:
         asyncio.create_task(_check_budget_alert(clienti, target["id"]))
@@ -8753,6 +8908,9 @@ async def start_services():
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])
         await db.job_economics.create_index([("commessa_id", 1)], unique=True)
+        await db.delete_codes.create_index([("user_id", 1)])
+        await db.push_subscriptions.create_index([("user_id", 1)])
+        await db.push_subscriptions.create_index([("endpoint", 1)])
         await db.collaborators.create_index([("telegram_chat_id", 1)])
         await db.collaborators.create_index([("code", 1)])
         await db.collaborators.create_index([("owner_user_id", 1)])
@@ -8912,83 +9070,98 @@ async def _kb_reminder_enrichment(user_id: str, task: dict, org_id: Optional[str
     return "\n".join(lines)
 
 
-async def _exact_reminders_loop():
+async def _exact_reminders_tick(now: Optional[datetime] = None) -> None:
     """Every minute: for tasks with reminder_enabled=True and reminder_msg_sent!=True,
     fire a Telegram message at (due_date + due_time - reminder_offset_minutes); offset
     defaults to 15 minutes when the user hasn't specified one. due_date/due_time are the
     wall-clock values the user typed, in Europe/Rome local time - converted to UTC here
     before comparing to now(), otherwise the reminder fires 1-2h later than intended."""
+    now = now or datetime.now(timezone.utc)
+    now_local = now.astimezone(LOCAL_TZ)
+    today_iso = now_local.date().isoformat()
+    tomorrow_iso = (now_local.date() + timedelta(days=1)).isoformat()
+    cursor = db.tasks.find(
+        {
+            "reminder_enabled": True,
+            "$or": [{"reminder_msg_sent": {"$exists": False}}, {"reminder_msg_sent": False}],
+            "due_date": {"$in": [today_iso, tomorrow_iso]},
+        },
+        {"_id": 0},
+    )
+    async for t in cursor:
+        due_time = t.get("due_time") or "09:00"
+        try:
+            due_dt_local = datetime.strptime(f"{t.get('due_date')} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
+        except ValueError:
+            continue
+        due_dt = due_dt_local.astimezone(timezone.utc)
+        offset = t.get("reminder_offset_minutes") or 15
+        fire_at = due_dt - timedelta(minutes=offset)
+        if now < fire_at:
+            continue
+        user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
+        minutes_left = max(0, round((due_dt - now).total_seconds() / 60))
+        # the app's notification on the user's devices, also with the app closed - once for this
+        # time (a Telegram retry next minute doesn't repeat it; a snoozed/moved task does)
+        if t.get("reminder_push_for") != fire_at.isoformat():
+            await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_push_for": fire_at.isoformat()}})
+            try:
+                await push.send_to_user(db, t["user_id"], f"🔔 {t.get('title') or 'Promemoria'}",
+                                        (f"Tra {minutes_left} minuti" if minutes_left else "Adesso") + f" ({due_time})"
+                                        + (f" · {t['notes']}" if t.get("notes") else ""), "/dashboard/tasks", f"task-{t['id']}")
+            except Exception:
+                logger.exception("task reminder push failed")
+        if not user or not user.get("telegram_chat_id"):
+            await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
+            continue
+        try:
+            from telegram import Bot
+            bot = Bot(token=tg.bot_token())
+            minutes_left = max(0, round((due_dt - now).total_seconds() / 60))
+            notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
+            text = (
+                f"🔔 Promemoria mAIPAL\n\n"
+                f"Tra {minutes_left} minuti ({due_time}) hai in programma:\n"
+                f"📌 *{t.get('title','(senza titolo)')}*\n"
+                f"{t.get('description','') or ''}"
+                f"{notes_line}"
+            )
+            # Best-effort: look up the user's own KB for info useful to carry out this
+            # task (e.g. a patient's last visit, a contact's last conversation) and
+            # append it. Never delays/blocks the reminder itself (bounded timeout,
+            # falls back to the plain text above on any failure or empty result) and
+            # never mentions the search when it finds nothing.
+            try:
+                enrichment = await asyncio.wait_for(
+                    _kb_reminder_enrichment(t["user_id"], t, org_id=t.get("org_id")), timeout=12
+                )
+            except Exception:
+                enrichment = ""
+            if enrichment:
+                # Stay well under Telegram's 4096-char cap - if the enrichment doesn't
+                # fully fit, drop whole bullet lines from the end rather than cutting
+                # into title/scadenza/note, per spec.
+                header = "\n\n💡 Informazioni utili\n"
+                budget = 4000 - len(text) - len(header)
+                kept, used = [], 0
+                for line in enrichment.split("\n"):
+                    if used + len(line) + 1 > budget:
+                        break
+                    kept.append(line)
+                    used += len(line) + 1
+                if kept:
+                    text = f"{text}{header}" + "\n".join(kept)
+            await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
+            await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
+            logger.info(f"exact reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
+        except Exception:
+            logger.exception("failed to send exact reminder")
+
+
+async def _exact_reminders_loop():
     while True:
         try:
-            now = datetime.now(timezone.utc)
-            now_local = now.astimezone(LOCAL_TZ)
-            today_iso = now_local.date().isoformat()
-            tomorrow_iso = (now_local.date() + timedelta(days=1)).isoformat()
-            cursor = db.tasks.find(
-                {
-                    "reminder_enabled": True,
-                    "$or": [{"reminder_msg_sent": {"$exists": False}}, {"reminder_msg_sent": False}],
-                    "due_date": {"$in": [today_iso, tomorrow_iso]},
-                },
-                {"_id": 0},
-            )
-            async for t in cursor:
-                due_time = t.get("due_time") or "09:00"
-                try:
-                    due_dt_local = datetime.strptime(f"{t.get('due_date')} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
-                except ValueError:
-                    continue
-                due_dt = due_dt_local.astimezone(timezone.utc)
-                offset = t.get("reminder_offset_minutes") or 15
-                fire_at = due_dt - timedelta(minutes=offset)
-                if now < fire_at:
-                    continue
-                user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
-                if not user or not user.get("telegram_chat_id"):
-                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True}})
-                    continue
-                try:
-                    from telegram import Bot
-                    bot = Bot(token=tg.bot_token())
-                    minutes_left = max(0, round((due_dt - now).total_seconds() / 60))
-                    notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
-                    text = (
-                        f"🔔 Promemoria mAIPAL\n\n"
-                        f"Tra {minutes_left} minuti ({due_time}) hai in programma:\n"
-                        f"📌 *{t.get('title','(senza titolo)')}*\n"
-                        f"{t.get('description','') or ''}"
-                        f"{notes_line}"
-                    )
-                    # Best-effort: look up the user's own KB for info useful to carry out this
-                    # task (e.g. a patient's last visit, a contact's last conversation) and
-                    # append it. Never delays/blocks the reminder itself (bounded timeout,
-                    # falls back to the plain text above on any failure or empty result) and
-                    # never mentions the search when it finds nothing.
-                    try:
-                        enrichment = await asyncio.wait_for(
-                            _kb_reminder_enrichment(t["user_id"], t, org_id=t.get("org_id")), timeout=12
-                        )
-                    except Exception:
-                        enrichment = ""
-                    if enrichment:
-                        # Stay well under Telegram's 4096-char cap - if the enrichment doesn't
-                        # fully fit, drop whole bullet lines from the end rather than cutting
-                        # into title/scadenza/note, per spec.
-                        header = "\n\n💡 Informazioni utili\n"
-                        budget = 4000 - len(text) - len(header)
-                        kept, used = [], 0
-                        for line in enrichment.split("\n"):
-                            if used + len(line) + 1 > budget:
-                                break
-                            kept.append(line)
-                            used += len(line) + 1
-                        if kept:
-                            text = f"{text}{header}" + "\n".join(kept)
-                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
-                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
-                    logger.info(f"exact reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
-                except Exception:
-                    logger.exception("failed to send exact reminder")
+            await _exact_reminders_tick()
         except Exception:
             logger.exception("exact reminders loop iteration failed")
         await asyncio.sleep(60)
