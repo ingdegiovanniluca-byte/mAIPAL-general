@@ -3,9 +3,10 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro } from "lucide-react";
+  UserRound, HardHat, Euro, Flag } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
@@ -88,6 +89,7 @@ const SECTIONS = [
   { key: "problemi", label: "Problemi" },
   { key: "materiali", label: "Materiali" },
   { key: "costi", label: "Costi" },
+  { key: "milestone", label: "Milestone" },
   { key: "todo", label: "To Do" },
 ];
 const PERIODS = [
@@ -140,7 +142,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
     <div data-testid={isReport ? "job-report-event" : isEvent ? "job-stato-event" : "job-entry"}>
       <button type="button" onClick={() => onOpen(log)} className="w-full text-left">
         <span className="flex items-center gap-[5px] text-white/50">
-          {isEvent && (isReport ? <FileText size={11} strokeWidth={2} /> : <RefreshCw size={11} strokeWidth={2} />)}
+          {isEvent && (isReport ? <FileText size={11} strokeWidth={2} /> : log.kind === "milestone" ? <Flag size={11} strokeWidth={2} /> : <RefreshCw size={11} strokeWidth={2} />)}
           {full && !isEvent && log.hours?.length > 0 && <Clock size={11} strokeWidth={2} />}
           {full && !isEvent && log.problems?.length > 0 && <AlertTriangle size={11} strokeWidth={2} />}
           {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
@@ -484,6 +486,149 @@ function TodoDialog({ todo, commessaId, team, onClose, onSaved }) {
   );
 }
 
+// ===== Milestone: the project's steps - who, by when; done (on which day), late, moved =====
+const LATE = "#FF9C85";
+const daysLabel = (n) => `${n} ${n === 1 ? "giorno" : "giorni"}`;
+function milestoneState(m) {
+  if (m.status === "done") return { text: m.delay_days ? `fatta il ${shortDay(m.done_date)} · ${daysLabel(m.delay_days)} di ritardo` : `fatta il ${shortDay(m.done_date)} · in tempo`, late: !!m.delay_days };
+  if (m.status === "late") return { text: `in ritardo di ${daysLabel(m.late_days)}`, late: true };
+  return { text: m.status === "soon" ? "in scadenza" : "", late: false };
+}
+
+function MilestoneRow({ m, onToggle, onOpen }) {
+  const st = milestoneState(m);
+  const done = m.status === "done";
+  const acts = (m.corrective_actions || []).length;
+  return (
+    <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]" data-testid="job-milestone" data-status={m.status}>
+      <button type="button" onClick={() => onToggle(m)} aria-pressed={done} data-testid="job-milestone-done"
+        aria-label={done ? "Segna come da fare" : "Segna come fatta"}
+        className={`mt-[1px] h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md ${done ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+        {done && <Check size={12} strokeWidth={2.8} />}
+      </button>
+      <button type="button" onClick={() => onOpen(m)} className="min-w-0 text-left">
+        <span className={`flex items-center gap-x-3.5 gap-y-0.5 flex-wrap text-[12.5px] font-medium ${done ? "text-white/50" : "text-white"}`}>
+          <span className="inline-flex items-center gap-1"><UserRound size={12} strokeWidth={2} /> {m.who}</span>
+          <span className="inline-flex items-center gap-1" data-testid="job-milestone-due"><Flag size={12} strokeWidth={2} /> {shortDay(m.due_date)}</span>
+        </span>
+        <span className={`block mt-[3px] text-[14px] leading-[1.45] ${done ? "text-white/45" : "text-white/90"}`}>{m.title}</span>
+        {(st.text || m.slip_days > 0 || acts > 0) && (
+          <span className="block mt-[2px] text-[11.5px] text-white/55" data-testid="job-milestone-state">
+            {st.text && <span style={st.late ? { color: LATE } : undefined}>{st.text}</span>}
+            {m.slip_days > 0 && `${st.text ? " · " : ""}spostata di ${daysLabel(m.slip_days)}`}
+            {acts > 0 && ` · ${acts} ${acts === 1 ? "azione correttiva" : "azioni correttive"}`}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function MilestoneSheet({ m, commessaId, team, onClose, onSaved }) {
+  const isNew = !m.id;
+  const [title, setTitle] = useState(m.title || "");
+  const [who, setWho] = useState(m.who || team[0] || "");
+  const [due, setDue] = useState(m.due_date || "");
+  const [doneDate, setDoneDate] = useState(m.done_date || "");
+  const [action, setAction] = useState("");
+  const [newDue, setNewDue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fail = (e) => toast.error(e.response?.data?.detail || "Errore nel salvataggio");
+  const save = async () => {
+    if (!title.trim()) { toast.error("Scrivi la milestone"); return; }
+    if (!due) { toast.error("Indica la scadenza"); return; }
+    setBusy(true);
+    try {
+      if (isNew) await api.post(`/jobs/commesse/${commessaId}/milestones`, { title, who, due_date: due });
+      else await api.patch(`/jobs/milestones/${m.id}`, { title, who, ...(due !== m.due_date ? { due_date: due } : {}),
+        ...(m.status === "done" && doneDate && doneDate !== m.done_date ? { done_date: doneDate } : {}) });
+      onSaved();
+    } catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const addAction = async () => {
+    if (!action.trim()) { toast.error("Scrivi l'azione correttiva"); return; }
+    setBusy(true);
+    try { await api.post(`/jobs/milestones/${m.id}/actions`, { text: action, new_due_date: newDue || null }); onSaved(); }
+    catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const del = async () => {
+    try { await api.delete(`/jobs/milestones/${m.id}`); onSaved(); } catch (e) { fail(e); }
+  };
+  const field = "h-9 rounded-lg bg-white/10 px-2.5 text-sm text-white placeholder:text-white/40 outline-none";
+  const st = isNew ? null : milestoneState(m);
+  return (
+    <GlassBottomSheet onClose={onClose} testid="job-milestone-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-lg font-semibold text-white mb-1">{isNew ? "Nuova milestone" : "Milestone"}</div>
+      {st?.text && <div className="text-[12.5px] mb-3" style={st.late ? { color: LATE } : { color: "rgba(255,255,255,0.6)" }} data-testid="job-milestone-sheet-state">{st.text}</div>}
+      <div className="space-y-4 mt-3">
+        <div>
+          <div className="kicker mb-1">cosa va completato</div>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus={isNew} data-testid="job-milestone-title"
+            placeholder="Es. Impianto elettrico completato" className={`${field} w-full`} />
+        </div>
+        <div className="grid grid-cols-2 gap-2.5">
+          <div className="min-w-0">
+            <div className="kicker mb-1">chi la esegue</div>
+            <input value={who} onChange={(e) => setWho(e.target.value)} list="job-ms-team" data-testid="job-milestone-who" placeholder="Nome" className={`${field} w-full`} />
+            <datalist id="job-ms-team">{team.map((n) => <option key={n} value={n} />)}</datalist>
+          </div>
+          <div className="min-w-0">
+            <div className="kicker mb-1">scadenza</div>
+            <input type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="job-milestone-due-input" className={`${field} w-full`} />
+          </div>
+        </div>
+        {!isNew && m.original_due_date && m.original_due_date !== m.due_date && (
+          <div className="text-[12px] text-white/55">Prima scadenza: {shortDay(m.original_due_date)}</div>
+        )}
+        {m.status === "done" && (
+          <div>
+            <div className="kicker mb-1">fatta il</div>
+            <input type="date" value={doneDate} onChange={(e) => setDoneDate(e.target.value)} data-testid="job-milestone-done-date" className={`${field} w-full`} />
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          {!isNew && (
+            <button onClick={del} data-testid="job-milestone-delete" className="mr-auto px-3 py-2 rounded-full text-sm text-white/75 hover:bg-white/10 inline-flex items-center gap-1.5">
+              <Trash2 size={14} /> Elimina
+            </button>
+          )}
+          <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-white/80 hover:bg-white/10">Annulla</button>
+          <button onClick={save} disabled={busy} data-testid="job-milestone-save" className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">
+            {busy ? "Salvo…" : "Salva"}
+          </button>
+        </div>
+        {!isNew && (
+          <div className="pt-4 border-t border-white/[0.16]" data-testid="job-milestone-actions">
+            <div className="kicker mb-2">azioni correttive</div>
+            {(m.corrective_actions || []).map((a) => (
+              <div key={a.id} className="py-2 border-b border-white/[0.08] text-[13px] text-white/85">
+                {a.text}
+                <span className="block text-[11px] text-white/50">
+                  {a.by} · {shortDay(a.at.slice(0, 10))}{a.new_due_date ? ` · scadenza ${shortDay(a.old_due_date)} → ${shortDay(a.new_due_date)}` : ""}
+                </span>
+              </div>
+            ))}
+            {m.status !== "done" && (
+              <div className="mt-2 space-y-2">
+                <textarea value={action} onChange={(e) => setAction(e.target.value)} rows={2} data-testid="job-milestone-action-text"
+                  placeholder={m.status === "late" ? "Cosa fai per recuperare il ritardo?" : "Es. squadra in più da lunedì"}
+                  className="w-full rounded-lg bg-white/10 p-2.5 text-sm text-white placeholder:text-white/40 outline-none" />
+                <div className="flex items-center gap-2">
+                  <span className="text-[12px] text-white/60 shrink-0">Nuova scadenza</span>
+                  <input type="date" value={newDue} onChange={(e) => setNewDue(e.target.value)} data-testid="job-milestone-action-due" className={`${field} flex-1 min-w-0`} />
+                  <button onClick={addAction} disabled={busy} data-testid="job-milestone-action-add"
+                    className="h-9 px-3 rounded-full text-sm bg-white/15 text-white shrink-0 disabled:opacity-50">Aggiungi</button>
+                </div>
+              </div>
+            )}
+            {m.status === "done" && !(m.corrective_actions || []).length && <div className="text-[12px] text-white/50">Nessuna.</div>}
+          </div>
+        )}
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
 // A client: closed it shows only name, address and how many commesse it has (all / active =
 // all but the closed ones); the arrow opens it on its commesse.
 function ClientCard({ client, commesse, total, active, open, onToggle, onOpen }) {
@@ -707,6 +852,7 @@ export default function JobDiaryPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
+  const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
   const [period, setPeriod] = useState({ key: "30" });
@@ -888,6 +1034,12 @@ export default function JobDiaryPage() {
     setMenu(null);
   };
   const delFromEdit = (log) => { setEditing(null); delLog(log); };
+  const milestones = detail?.milestones || [];
+  const msSum = detail?.milestones_summary || { total: 0, done: 0, late: 0 };
+  const toggleMilestone = async (m) => {
+    try { await api.patch(`/jobs/milestones/${m.id}`, { done: m.status !== "done" }); await loadDetail(selectedId); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
   const todos = detail?.todos || [];
   const openTodos = todos.filter((x) => !x.done).length;
   const toggleTodo = async (todo) => {
@@ -916,6 +1068,9 @@ export default function JobDiaryPage() {
           <InfoCard icon={Euro} label="Costi" value={eur(detail.economics.cost_total)} testid="glance-costi" ariaLabel="Mostra costi e margine"
             note={detail.economics.budget ? `${Math.round(detail.economics.used_pct || 0)}% del preventivo` : ""} onClick={() => pickSection("costi")} />
         )}
+        <InfoCard icon={Flag} label="Milestone" value={msSum.total ? `${msSum.done}/${msSum.total}` : "nessuna"} testid="glance-milestone"
+          ariaLabel="Mostra le milestone" onClick={() => pickSection("milestone")}
+          note={msSum.late ? `${msSum.late} in ritardo` : msSum.next ? `prossima ${shortDay(msSum.next.due_date)}` : ""} />
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
         <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti" ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
@@ -942,9 +1097,35 @@ export default function JobDiaryPage() {
         <button type="button" onClick={() => pickSection(secAt(secIdx + 1).key)} className="flex-1 basis-0 text-left text-[15px] font-medium text-white/30">{secAt(secIdx + 1).label}</button>
       </div>
 
-      {/* Costi and To Do: their own content instead of the period and the days */}
+      {/* Costi, Milestone and To Do: their own content instead of the period and the days */}
       {section === "costi" ? (
         <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+      ) : section === "milestone" ? (
+        <>
+          <div className="mt-1.5 flex items-center justify-center gap-2.5">
+            <button type="button" onClick={() => setMsEditing({})} data-testid="job-milestone-add" aria-label="Nuova milestone"
+              className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 whitespace-nowrap">
+              <Plus size={17} />
+              <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova milestone</span>
+            </button>
+          </div>
+          {msSum.total > 0 && (
+            <div className="mt-0.5 text-center text-[11.5px] text-white/60" data-testid="job-milestone-count">
+              {msSum.done}/{msSum.total} fatte
+              {msSum.late ? <span style={{ color: LATE }}> · {msSum.late} in ritardo</span> : null}
+              {msSum.done > 0 && <span data-testid="job-milestone-delays"> · {msSum.on_time} di {msSum.done} in tempo{msSum.avg_delay ? `, ritardo medio ${String(msSum.avg_delay).replace(".", ",")} g` : ""}</span>}
+            </div>
+          )}
+          <div className="mt-3" data-testid="job-milestones">
+            {milestones.map((m) => <MilestoneRow key={m.id} m={m} onToggle={toggleMilestone} onOpen={setMsEditing} />)}
+            {milestones.length === 0 && (
+              <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="job-milestones-empty">
+                Nessuna milestone. Tocca «Nuova milestone» per segnare le tappe del lavoro: cosa, chi la esegue ed entro quando.
+                Ti ricordo le scadenze su Telegram e, se una va in ritardo, puoi scrivere l'azione correttiva.
+              </div>
+            )}
+          </div>
+        </>
       ) : section === "todo" ? (
         <>
           <div className="mt-1.5 flex items-center justify-center gap-2.5">
@@ -1092,6 +1273,10 @@ export default function JobDiaryPage() {
           onClick={() => setChatOpen(true)} />
       )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
+      {msEditing && c && (
+        <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} onClose={() => setMsEditing(null)}
+          onSaved={async () => { setMsEditing(null); await loadDetail(selectedId); }} />
+      )}
       {todoEditing && c && (
         <TodoDialog todo={todoEditing} commessaId={c.id} team={detail?.team || []} onClose={() => setTodoEditing(null)}
           onSaved={async () => { setTodoEditing(null); await loadDetail(selectedId); }} />

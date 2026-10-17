@@ -143,13 +143,22 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - In alto i clienti: ogni riquadro mostra nome, indirizzo e quante commesse ha (**totali** e **attive**, cioè tutte tranne le chiuse). Con la **freccia** lo apri e vedi le sue commesse con il loro stato; tocca una commessa per aprirne il diario. Cercando un cliente o una commessa, i riquadri trovati si aprono da soli.
 - Nel diario della commessa:
   - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), Ore, Segnalazioni, Documenti, Cantiere (apre la mappa), Date, Telefono, Email;
-  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / To Do**: scorri per passare dall'una all'altra;
+  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / Milestone / To Do**: scorri per passare dall'una all'altra;
   - **To Do**: le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
   - il **periodo** (questa settimana da lunedì, ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.
 - Anche ogni **report** generato con l'agente **Report** per una commessa resta scritto nel suo diario: il tipo di report, chi l'ha fatto e un breve riassunto, con il link **Scarica il report**. Se poi modifichi il report, nel diario compare anche la nuova versione con i campi cambiati. Toccando la riga puoi toglierla dal diario (il report resta tra i documenti).
 - Il **tasto chat** tondo sul lato apre una chat per interrogare la commessa: "quante ore abbiamo fatto?", "cosa manca da comprare?".
+
+**Milestone**
+- Nella sezione **Milestone** segni le tappe del lavoro: cosa va completato, **chi la esegue** e la **scadenza** (Nuova milestone).
+- Il **pallino** la segna come fatta (con la data di oggi); toccandola puoi cambiare la data di esecuzione, la scadenza, chi la esegue, oppure eliminarla.
+- **Ritardi**: la prima scadenza resta salvata. Vedi se una milestone è **in ritardo** (e di quanti giorni), se è stata fatta in tempo o con quanti giorni di ritardo, e di quanto è stata spostata. In alto: quante sono fatte, quante in ritardo, quante in tempo e il ritardo medio. Cambiare la scadenza prima che sia scaduta è una nuova pianificazione, non un ritardo.
+- **Azioni correttive**: su una milestone in ritardo (o a rischio) scrivi cosa fai per recuperare e, se serve, la nuova scadenza. Restano nella milestone e nel diario.
+- **Promemoria su Telegram**, dalle 8 del mattino: il giorno prima della scadenza, il giorno stesso e quando va in ritardo (ti chiede di segnarla fatta o di scrivere l'azione correttiva). Li ricevono chi l'ha creata e chi la esegue, se è un collega del team o un collaboratore abilitato sulla commessa con Telegram collegato (riconosciuto dal nome).
+- Le milestone completate e le azioni correttive restano scritte nel diario; il **riepilogo del lunedì** elenca quelle in ritardo e quelle della settimana; la chat della commessa risponde anche su di loro ("quali milestone sono in ritardo?").
+- Il riquadro **Milestone** in alto mostra quante sono fatte e quante in ritardo.
 
 **Costi e margini**
 - Nella sezione **Costi** della commessa:

@@ -3615,6 +3615,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_milestones.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_economics.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.collaborators.update_many({"commesse": {"$in": commessa_ids}}, {"$pull": {"commesse": {"$in": commessa_ids}}})
 
@@ -5643,8 +5644,10 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     photos = sum(len(lg.get("photos") or []) for lg in light)
     todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
     econ = await _commessa_economics(clienti, commessa_id, light)
+    milestones = await _commessa_milestones(commessa_id)
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "todos": todos, "team": await _team_first_names(current),
+            "milestones": milestones, "milestones_summary": _milestones_summary(milestones),
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
@@ -5730,6 +5733,244 @@ async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user
     await _job_todo_or_404(current, todo_id)
     await db.job_todos.delete_one({"id": todo_id})
     return {"ok": True}
+
+
+# ---- the commessa's MILESTONES: the project's steps, who does them and by when. Done ones keep
+# their execution date; the first planned date stays, so delays are measured; a late one gets
+# corrective actions (with a new date). Reminders on Telegram: the day before, the day itself
+# and when late - to whoever created it and to who has to do it (a team mate or a collaborator).
+
+class MilestonePayload(BaseModel):
+    title: str
+    who: Optional[str] = ""
+    due_date: str                             # scadenza, YYYY-MM-DD
+
+
+class MilestonePatch(BaseModel):
+    title: Optional[str] = None
+    who: Optional[str] = None
+    due_date: Optional[str] = None
+    done: Optional[bool] = None
+    done_date: Optional[str] = None           # the day it was done (default today)
+
+
+class MilestoneActionPayload(BaseModel):
+    text: str
+    new_due_date: Optional[str] = None
+
+
+def _days(a: str, b: str) -> int:
+    return (datetime.strptime(a, "%Y-%m-%d").date() - datetime.strptime(b, "%Y-%m-%d").date()).days
+
+
+def _milestone_view(m: dict, today: Optional[str] = None) -> dict:
+    """The milestone with its state: done (and how late against the first plan), late (days past
+    the current date), soon (within 3 days), planned; slip = how far the date was moved."""
+    today = today or jl.today_local().isoformat()
+    due, orig = m["due_date"], m.get("original_due_date") or m["due_date"]
+    out = {**m, "slip_days": _days(due, orig)}
+    if m.get("done"):
+        done = m.get("done_date") or today
+        out.update({"status": "done", "delay_days": max(0, _days(done, orig)), "late_days": 0})
+    elif due < today:
+        out.update({"status": "late", "late_days": _days(today, due), "delay_days": _days(today, orig)})
+    else:
+        out.update({"status": "soon" if _days(due, today) <= 3 else "planned", "late_days": 0, "delay_days": max(0, _days(due, orig))})
+    return out
+
+
+def _milestones_summary(views: list) -> dict:
+    done = [v for v in views if v["status"] == "done"]
+    late = [v for v in views if v["status"] == "late"]
+    return {"total": len(views), "done": len(done), "late": len(late),
+            "on_time": sum(1 for v in done if not v["delay_days"]),
+            "avg_delay": round(sum(v["delay_days"] for v in done) / len(done), 1) if done else 0,
+            "next": next((v for v in views if v["status"] != "done"), None)}
+
+
+async def _commessa_milestones(commessa_id: str) -> list:
+    ms = await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0, "reminded": 0}).to_list(500)
+    today = jl.today_local().isoformat()
+    return [_milestone_view(m, today) for m in sorted(ms, key=lambda x: (x["due_date"], x.get("created_at") or ""))]
+
+
+def milestones_line(views: list) -> str:
+    """For the commessa's chat: every milestone with its state."""
+    if not views:
+        return ""
+    def one(v):
+        st = (f"fatta il {v.get('done_date')}" + (f", {v['delay_days']} giorni di ritardo" if v["delay_days"] else ", in tempo")
+              if v["status"] == "done" else f"in ritardo di {v['late_days']} giorni" if v["status"] == "late" else "da fare")
+        acts = "; ".join(a["text"] for a in v.get("corrective_actions") or [])
+        return f"«{v['title']}» ({v.get('who') or '-'}) scadenza {v['due_date']}: {st}" + (f" [azioni correttive: {acts}]" if acts else "")
+    return " | ".join(one(v) for v in views)
+
+
+async def _milestone_or_404(current: User, ms_id: str) -> tuple:
+    m = await db.job_milestones.find_one({"id": ms_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(status_code=404, detail="Milestone non trovata")
+    clienti, sub, client = await _commessa_or_404(current, m["commessa_id"])
+    return m, _commessa_view(sub, client, clienti)
+
+
+async def _log_commessa_event(current: User, view: dict, kind: str, text: str, extra: Optional[dict] = None) -> None:
+    """A line of the commessa's diary that is not work done (a milestone reached, an action)."""
+    log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "kind": kind, **(extra or {}),
+           "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+           "collection_id": view.get("collection_id"), "client_item_id": view.get("client_item_id"), "client_name": view.get("client_name"),
+           "commessa_id": view["id"], "commessa_title": view.get("title"), "date": jl.today_local().isoformat(),
+           "raw_text": text, "text": text, "hours": [], "materials": [], "problems": [], "photos": [],
+           "channel": "web", "created_at": datetime.now(timezone.utc).isoformat(), "embedding": None}
+    await db.job_logs.insert_one(log)
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/milestones")
+async def list_milestones(commessa_id: str, current: User = Depends(get_current_user)):
+    await _commessa_or_404(current, commessa_id)
+    views = await _commessa_milestones(commessa_id)
+    return {"milestones": views, "summary": _milestones_summary(views)}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/milestones")
+async def create_milestone(commessa_id: str, payload: MilestonePayload, current: User = Depends(get_current_user)):
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    title = " ".join((payload.title or "").split())
+    if not title:
+        raise HTTPException(status_code=400, detail="Scrivi la milestone")
+    due = _valid_due(payload.due_date)
+    if not due:
+        raise HTTPException(status_code=400, detail="Indica la scadenza")
+    doc = {"id": f"jms_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
+           "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+           "title": title[:200], "who": (payload.who or "").strip()[:60] or _first_name(current.name),
+           "due_date": due, "original_due_date": due, "done": False, "done_date": None, "corrective_actions": [],
+           "reminded": {}, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.job_milestones.insert_one(doc)
+    doc.pop("_id", None)
+    doc.pop("reminded", None)
+    return _milestone_view(doc)
+
+
+@api_router.patch("/jobs/milestones/{ms_id}")
+async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = Depends(get_current_user)):
+    m, view = await _milestone_or_404(current, ms_id)
+    today = jl.today_local().isoformat()
+    upd: dict = {}
+    if payload.title is not None:
+        title = " ".join(payload.title.split())
+        if not title:
+            raise HTTPException(status_code=400, detail="Scrivi la milestone")
+        upd["title"] = title[:200]
+    if payload.who is not None:
+        upd["who"] = payload.who.strip()[:60] or m.get("who")
+    if payload.due_date is not None:
+        due = _valid_due(payload.due_date)
+        if not due:
+            raise HTTPException(status_code=400, detail="Indica la scadenza")
+        upd["due_date"] = due
+        # a new plan before anything slipped is not a delay: the first date moves too
+        if not m.get("done") and not m.get("corrective_actions") and m["due_date"] >= today:
+            upd["original_due_date"] = due
+        upd["reminded"] = {}
+    if payload.done is not None and payload.done != bool(m.get("done")):
+        upd["done"] = payload.done
+        upd["done_date"] = (_valid_due(payload.done_date) or today) if payload.done else None
+    elif payload.done_date is not None and m.get("done"):
+        upd["done_date"] = _valid_due(payload.done_date) or today
+    if upd:
+        await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
+    out = _milestone_view({k: v for k, v in {**m, **upd}.items() if k != "reminded"}, today)
+    if upd.get("done"):
+        late = f", {out['delay_days']} {'giorno' if out['delay_days'] == 1 else 'giorni'} di ritardo" if out["delay_days"] else ", in tempo"
+        await _log_commessa_event(current, view, "milestone", f"Milestone «{out['title']}» completata il {_short_it_date(out['done_date'])}{late}.",
+                                  {"milestone_id": ms_id})
+    return out
+
+
+@api_router.post("/jobs/milestones/{ms_id}/actions")
+async def add_milestone_action(ms_id: str, payload: MilestoneActionPayload, current: User = Depends(get_current_user)):
+    """A corrective action on a late (or at risk) milestone; with a new date the deadline moves,
+    the first one stays to measure the delay."""
+    m, view = await _milestone_or_404(current, ms_id)
+    text = " ".join((payload.text or "").split())
+    if not text:
+        raise HTTPException(status_code=400, detail="Scrivi l'azione correttiva")
+    new_due = _valid_due(payload.new_due_date)
+    act = {"id": f"act_{uuid.uuid4().hex[:8]}", "text": text[:500], "new_due_date": new_due, "old_due_date": m["due_date"],
+           "by": _first_name(current.name), "at": datetime.now(timezone.utc).isoformat()}
+    upd = {"corrective_actions": (m.get("corrective_actions") or []) + [act]}
+    if new_due:
+        upd.update({"due_date": new_due, "reminded": {}})
+    await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
+    await _log_commessa_event(current, view, "milestone",
+                              f"Milestone «{m['title']}»: azione correttiva — {text}"
+                              + (f" Nuova scadenza {_short_it_date(new_due)} (era {_short_it_date(m['due_date'])})." if new_due else ""),
+                              {"milestone_id": ms_id})
+    return _milestone_view({k: v for k, v in {**m, **upd}.items() if k != "reminded"})
+
+
+@api_router.delete("/jobs/milestones/{ms_id}")
+async def delete_milestone(ms_id: str, current: User = Depends(get_current_user)):
+    await _milestone_or_404(current, ms_id)
+    await db.job_milestones.delete_one({"id": ms_id})
+    return {"ok": True}
+
+
+async def _milestone_recipients(m: dict) -> list:
+    """Telegram chats to remind: who created it, and who has to do it - a team mate or a
+    collaborator enabled on that commessa, recognized by name."""
+    chats = []
+    owner = await db.users.find_one({"user_id": m["user_id"]}, {"_id": 0, "telegram_chat_id": 1, "org_id": 1})
+    if owner and owner.get("telegram_chat_id"):
+        chats.append(owner["telegram_chat_id"])
+    who = (m.get("who") or "").strip().lower()
+    if who:
+        if m.get("org_id"):
+            for u in await db.users.find({"org_id": m["org_id"]}, {"_id": 0, "name": 1, "telegram_chat_id": 1}).to_list(200):
+                if u.get("telegram_chat_id") and who in {(u.get("name") or "").strip().lower(), _first_name(u.get("name")).lower()}:
+                    chats.append(u["telegram_chat_id"])
+        for c in await db.collaborators.find({"commesse": {"$in": [m["commessa_id"]]}, "status": "active"}, {"_id": 0}).to_list(200):
+            names = {(c.get("first_name") or "").lower(), f"{c.get('first_name', '')} {c.get('last_name', '')}".strip().lower()}
+            if c.get("telegram_chat_id") and who in names:
+                chats.append(c["telegram_chat_id"])
+    return list(dict.fromkeys(chats))
+
+
+async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
+    """From 8:00, once per kind and per deadline: the day before, the day itself, and the first
+    day it is late (asking to mark it done or to write a corrective action). -> how many sent."""
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_local.strftime("%H:%M") < "08:00":
+        return 0
+    today = now_local.date().isoformat()
+    tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
+    sent = 0
+    for m in await db.job_milestones.find({"done": False, "due_date": {"$lte": tomorrow}}, {"_id": 0}).to_list(5000):
+        kind = "before" if m["due_date"] == tomorrow else "due" if m["due_date"] == today else "late"
+        if (m.get("reminded") or {}).get(kind) == m["due_date"]:
+            continue
+        await db.job_milestones.update_one({"id": m["id"]}, {"$set": {"reminded": {**(m.get("reminded") or {}), kind: m["due_date"]}}})
+        sub = await db.collection_sub_items.find_one({"id": m["commessa_id"]}, {"_id": 0})
+        coll = await db.collections.find_one({"id": m.get("collection_id")}, {"_id": 0}) if sub else None
+        if not sub or not coll:
+            continue
+        client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+        view = _commessa_view(sub, client, coll)
+        where = f"«{view['title']}» — {view['client_name']}"
+        head = (f"🚩 Domani scade la milestone *{m['title']}*" if kind == "before" else
+                f"🚩 Oggi scade la milestone *{m['title']}*" if kind == "due" else
+                f"🔴 Milestone in ritardo di {_days(today, m['due_date'])} giorni: *{m['title']}*")
+        text = (f"{head}\n{where} · {m.get('who') or ''} · scadenza {_short_it_date(m['due_date'])}"
+                + ("\nSe è fatta segnala come fatta; se no scrivi un'azione correttiva con la nuova data "
+                   "(diario della commessa → Milestone)." if kind == "late" else ""))
+        for chat in await _milestone_recipients(m):
+            try:
+                if await _send_telegram_text(chat, text):
+                    sent += 1
+            except Exception:
+                logger.exception("milestone reminder failed")
+    return sent
 
 
 # ============ COSTI E MARGINI della commessa ============
@@ -6148,6 +6389,7 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
     for r in reports:
         for sec in r.get("sections") or []:
             sec["fields"] = {f: v for f, v in (sec.get("fields") or {}).items() if not hide.search(f)}
+    view = {**view, "milestones_line": milestones_line(await _commessa_milestones(view["id"]))}
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
 
@@ -6186,6 +6428,7 @@ async def _collab_reminder_loop():
         try:
             if tg.bot_token():
                 await _collab_remind_due()
+                await _milestone_reminders()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
@@ -6249,6 +6492,7 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
     reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
     view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))   # never for collaborators
+    view["milestones_line"] = milestones_line(await _commessa_milestones(commessa_id))
     try:
         out = await jl.answer(view, logs, reports, question, payload.history[-8:], user_id=current.user_id)
     except Exception as e:
@@ -6269,8 +6513,8 @@ async def _job_log_or_404(current: User, log_id: str) -> dict:
 async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
     log = await _job_log_or_404(current, log_id)
     if log.get("kind"):
-        raise HTTPException(status_code=400, detail=("La riga di un report non si modifica: puoi solo eliminarla" if log["kind"] == "report"
-                                                     else "Un cambio di stato non si modifica: puoi solo eliminarlo"))
+        raise HTTPException(status_code=400, detail=("Un cambio di stato non si modifica: puoi solo eliminarlo" if log["kind"] == "stato"
+                                                     else "Questa riga del diario non si modifica: puoi solo eliminarla"))
     upd: dict = {}
     if payload.text is not None and payload.text.strip():
         upd["text"] = payload.text.strip()
@@ -8456,6 +8700,18 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
     titles = {c["id"]: c["title"] for c in commesse}
     week_due = sorted([t for t in due if t.get("due_date") and t["due_date"] <= (today + timedelta(days=6)).isoformat()],
                       key=lambda t: t["due_date"])
+    # the milestones: late ones, and the ones due this week
+    ms = await db.job_milestones.find({"commessa_id": {"$in": [c["id"] for c in open_c]}, "done": False}, {"_id": 0}).to_list(2000) if open_c else []
+    ms_late = sorted([m for m in ms if m["due_date"] < today.isoformat()], key=lambda m: m["due_date"])
+    ms_week = sorted([m for m in ms if today.isoformat() <= m["due_date"] <= (today + timedelta(days=6)).isoformat()], key=lambda m: m["due_date"])
+    if ms_late:
+        lines.append("\n🔴 Milestone in ritardo:")
+        lines += [f"• {m['title']} — {m.get('who') or ''}, scadenza {_short_it_date(m['due_date'])} "
+                  f"({_days(today.isoformat(), m['due_date'])} g) · «{titles.get(m['commessa_id'], '')}»" for m in ms_late[:15]]
+    if ms_week:
+        lines.append("\n🚩 Milestone di questa settimana:")
+        lines += [f"• {m['title']} — {m.get('who') or ''} entro {_short_it_date(m['due_date'])} · «{titles.get(m['commessa_id'], '')}»"
+                  for m in ms_week[:15]]
     if week_due:
         lines.append("\n📌 Da fare entro questa settimana:")
         lines += [f"• {t['text']} — {t.get('who') or ''} entro {_short_it_date(t['due_date'])}"
@@ -8907,6 +9163,8 @@ async def start_services():
         await db.job_photos.create_index([("log_id", 1)])
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])
+        await db.job_milestones.create_index([("commessa_id", 1)])
+        await db.job_milestones.create_index([("done", 1), ("due_date", 1)])
         await db.job_economics.create_index([("commessa_id", 1)], unique=True)
         await db.delete_codes.create_index([("user_id", 1)])
         await db.push_subscriptions.create_index([("user_id", 1)])

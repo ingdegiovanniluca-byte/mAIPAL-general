@@ -178,7 +178,7 @@ async def main():
     try:
         await server.update_job_log(lines[0]["id"], server.JobLogPatch(text="x"), me); assert False
     except HTTPException as ex:
-        assert ex.status_code == 400 and "report" in ex.detail
+        assert ex.status_code == 400 and "non si modifica" in ex.detail
 
     # 2) same client named again, same commessa title in the text: nothing duplicated; missing email filled in
     wr.interpret = interp({"name": "Rossi", "email": "mario@rossi.it"}, "Impianto cucina", summary="Secondo sopralluogo: confermato il rifacimento.")
