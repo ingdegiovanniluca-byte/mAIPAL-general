@@ -2,11 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2 } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import OrganizationPage from "@/pages/OrganizationPage";
+import TeamPanel from "@/components/TeamPanel";
 import AdminPage from "@/pages/AdminPage";
 import CollaboratorsPanel from "@/components/CollaboratorsPanel";
 
@@ -239,16 +239,12 @@ export default function SettingsPage() {
           <Input data-testid="prof-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-11 rounded-xl bg-white/10" />
         </div>
         <div className="md:col-span-2">
-          <FieldLabel icon={LayoutGrid} mb="mb-2">verticali d'uso</FieldLabel>
-          <div className="flex flex-wrap gap-2">
+          <FieldLabel icon={LayoutGrid} mb="mb-2">ambiti d'uso</FieldLabel>
+          <ChipRow testid="prof-verticals">
             {VERTICALS.map((v) => (
-              <button key={v} data-testid={`prof-v-${v}`} onClick={() => toggleV(v)}
-                      style={verticals.includes(v) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                      className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white/10  hover:"}`}>
-                {v}
-              </button>
+              <Chip key={v} on={verticals.includes(v)} onClick={() => toggleV(v)} testid={`prof-v-${v}`}>{v}</Chip>
             ))}
-          </div>
+          </ChipRow>
         </div>
         <div className="md:col-span-2">
           <FieldLabel icon={Heart}>interessi (separati da virgola)</FieldLabel>
@@ -256,15 +252,11 @@ export default function SettingsPage() {
         </div>
         <div className="md:col-span-2">
           <FieldLabel icon={MessageSquareText} mb="mb-2">tono di risposta</FieldLabel>
-          <div className="flex flex-wrap gap-2">
+          <ChipRow testid="prof-tones">
             {TONES.map((t) => (
-              <button key={t} data-testid={`prof-tone-${t}`} onClick={() => setTone(t)}
-                      style={tone === t ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                      className={`px-4 py-2 rounded-full text-sm transition-colors duration-150 ${tone === t ? "" : "bg-white/10  hover:"}`}>
-                {t}
-              </button>
+              <Chip key={t} on={tone === t} onClick={() => setTone(t)} testid={`prof-tone-${t}`}>{t}</Chip>
             ))}
-          </div>
+          </ChipRow>
         </div>
         <div>
           <FieldLabel icon={Home}>indirizzo casa</FieldLabel>
@@ -276,11 +268,11 @@ export default function SettingsPage() {
         </div>
         <div>
           <FieldLabel icon={Newspaper}>orario invio news</FieldLabel>
-          <Input data-testid="prof-news-time" type="time" value={newsTime} onChange={(e) => setNewsTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
+          <TimeField testid="prof-news-time" value={newsTime} onChange={setNewsTime} />
         </div>
         <div>
           <FieldLabel icon={Sunrise}>orario riepilogo mattutino</FieldLabel>
-          <Input data-testid="prof-summary-time" type="time" value={summaryTime} onChange={(e) => setSummaryTime(e.target.value)} className="h-11 rounded-xl bg-white/10" />
+          <TimeField testid="prof-summary-time" value={summaryTime} onChange={setSummaryTime} />
         </div>
       </div>
 
@@ -483,9 +475,9 @@ export default function SettingsPage() {
     </Section>
   );
   const secTeam = (mode) => (
-    <Section mode={mode} id="team" testid="team-card-settings" icon={Users} title="Team"
+    <Section mode={mode} id="team" testid="team-card-settings" icon={Users} title="Team" plain
       subtitle="Condividi task e liste con le persone del tuo team.">
-      <OrganizationPage />
+      <TeamPanel />
     </Section>
   );
   // collaborators on Telegram only: for now the Admin manages them (later the subscription's holder)
@@ -497,7 +489,7 @@ export default function SettingsPage() {
   ) : null;
   const secAdmin = (mode) => (user?.role === "admin") ? (
     <Section mode={mode} id="admin" testid="admin-card-settings" icon={Shield} title="Amministrazione"
-      subtitle="Whitelist accessi, utenti e team.">
+      subtitle="Whitelist accessi e utenti.">
       <AdminPage />
     </Section>
   ) : null;
@@ -604,7 +596,7 @@ export default function SettingsPage() {
 // closed); the choice is remembered on this device. Profilo starts open, the rest closed.
 // mode "static" (mobile, inside Collegamenti): always open, no arrow; "bare" (mobile, a tile's
 // own page): just the content, the page already shows the title.
-function Section({ id, testid, icon: Icon, title, badge, subtitle, defaultOpen = false, mode, children }) {
+function Section({ id, testid, icon: Icon, title, badge, subtitle, defaultOpen = false, mode, plain = false, children }) {
   const key = `maipal.settings.${id}`;
   const [open, setOpen] = useState(() => {
     try { const v = localStorage.getItem(key); return v === null ? defaultOpen : v === "1"; } catch { return defaultOpen; }
@@ -613,11 +605,13 @@ function Section({ id, testid, icon: Icon, title, badge, subtitle, defaultOpen =
     try { localStorage.setItem(key, o ? "0" : "1"); } catch { /* private mode */ }
     return !o;
   });
+  // the explanation stays under the page's title, outside the card; "plain": the content brings
+  // its own cards (Team: one per team)
   if (mode === "bare") {
     return (
-      <div className="card-soft p-5" data-testid={testid}>
-        {subtitle && <div className="text-sm text-white/60 mb-4">{subtitle}</div>}
-        {children}
+      <div data-testid={testid}>
+        {subtitle && <div className="text-sm text-white/60 -mt-2 mb-4" data-testid={`${testid}-subtitle`}>{subtitle}</div>}
+        {plain ? children : <div className="card-soft p-5">{children}</div>}
       </div>
     );
   }
@@ -652,6 +646,31 @@ function Section({ id, testid, icon: Icon, title, badge, subtitle, defaultOpen =
           {children}
         </div>
       )}
+    </div>
+  );
+}
+
+// A row of choices that never wraps: it scrolls sideways when it doesn't fit. The chips are the
+// commands' size of the commesse (Diario, Modifica, Elimina); the chosen one is lit like the
+// current section in the bottom menu.
+function ChipRow({ testid, children }) {
+  return <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1" data-testid={testid}>{children}</div>;
+}
+function Chip({ on, onClick, testid, children }) {
+  return (
+    <button type="button" data-testid={testid} onClick={onClick} aria-pressed={on}
+      className={`shrink-0 whitespace-nowrap inline-flex items-center px-2.5 py-1 rounded-full text-xs transition-colors ${on ? "lg-bubble text-white font-medium" : "bg-white/10 text-white/75 hover:bg-white/15"}`}>
+      {children}
+    </button>
+  );
+}
+
+// A time, with a white clock on its left; a tap anywhere on it opens the picker.
+function TimeField({ testid, value, onChange }) {
+  return (
+    <div className="relative">
+      <Clock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white pointer-events-none" />
+      <Input data-testid={testid} type="time" value={value} onChange={(e) => onChange(e.target.value)} className="time-field relative h-11 rounded-xl bg-white/10 pl-10" />
     </div>
   );
 }

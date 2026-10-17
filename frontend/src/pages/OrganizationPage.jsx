@@ -5,8 +5,18 @@ import { Input } from "@/components/ui/input";
 import { Users, LogOut } from "lucide-react";
 import { toast } from "sonner";
 
-// Sezione "Il tuo team", pensata per stare dentro Impostazioni. La creazione dei team,
-// gli inviti e il codice sono gestiti dall'amministratore (vedi AdminPage) - qui l'utente
+// a team's card: it opens with the name, the number of members on its right
+export const teamCard = "rounded-2xl bg-white/[0.07] border border-white/10 p-4";
+export function MembersCount({ n }) {
+  return (
+    <span className="shrink-0 inline-flex items-center gap-1 text-xs text-white/70" data-testid="team-members-count" title={`${n} ${n === 1 ? "membro" : "membri"}`}>
+      <Users size={13} /> {n}
+    </span>
+  );
+}
+
+// Sezione "Il tuo team", pensata per stare dentro Impostazioni (Team). La creazione dei team,
+// gli inviti e il codice sono dell'amministratore (vedi components/TeamPanel) - qui l'utente
 // può solo unirsi con un codice ricevuto (se la sua email è stata invitata) o uscire.
 export default function OrganizationPage() {
   const { user, refresh } = useAuth();
@@ -60,7 +70,7 @@ export default function OrganizationPage() {
 
   if (!org) {
     return (
-      <div>
+      <div className={teamCard} data-testid="team-join">
         <div className="text-sm text-white/60 mb-4">
           Non fai ancora parte di un team. Se un amministratore ti ha invitato, inserisci qui il codice che ti ha fornito.
         </div>
@@ -79,10 +89,10 @@ export default function OrganizationPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-4">
-        <Users size={16} className="text-white/70" />
-        <div className="font-semibold text-lg">{org.name}</div>
+    <div className={teamCard} data-testid="my-team">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="flex-1 min-w-0 font-semibold text-lg truncate">{org.name}</div>
+        <MembersCount n={(org.members || []).length} />
       </div>
 
       <div className="space-y-2">

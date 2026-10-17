@@ -613,6 +613,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 @media (prefers-reduced-motion: reduce) { .lg-bubble { transition: none; } }
 
+/* a time field with its own clock on the left: the browser's picker icon stays, invisible, over
+   the whole field so a tap anywhere opens it */
+.time-field::-webkit-calendar-picker-indicator {
+    position: absolute; inset: 0; width: auto; height: auto; opacity: 0; cursor: pointer;
+}
+
 /* chat composer: the voice button while recording (red drop with a pulsing ring) and the
    live wave in the bar */
 .mic-rec {
