@@ -243,7 +243,7 @@ La sezione Fitness (per istruttori, es. danza e pilates) ha tre parti:
 ## Impostazioni
 <!-- id: impostazioni · path: /dashboard/settings · verticale: tutti -->
 Dalle Impostazioni (popup del profilo → Impostazioni, o dal menu) gestisci:
-- **Profilo**: foto, professione, settore, ambiti d'uso (lavoro, tempo libero, vita privata), interessi, tono delle risposte, indirizzi di casa e lavoro, orario delle news e del riepilogo del mattino. Ricorda di toccare **Salva profilo**.
+- **Profilo**: foto, professione, settore, ambito di utilizzo (lavoro, vita privata, tempo libero), interessi, tono delle risposte, indirizzi di casa e lavoro, orario delle news e del riepilogo del mattino. Ricorda di toccare **Salva profilo**.
 - **Verticale**: il tuo settore (Veterinario, Fitness, Artigiano); quello scelto è evidenziato con la spunta. Cambia gli agenti e le sezioni dedicate.
 - **Google Workspace**: collega Drive (cartella mAIPAL per file e allegati) e Calendar (eventi dai task).
 - **Microsoft**: collega OneDrive e Outlook.

@@ -11,7 +11,9 @@ import NotificationsPanel from "@/components/NotificationsPanel";
 import AdminPage from "@/pages/AdminPage";
 import CollaboratorsPanel from "@/components/CollaboratorsPanel";
 
-const VERTICALS = ["Lavoro", "Gestione tempo libero", "Vita privata"];
+// the value saved stays the same ("Gestione tempo libero"): only the label shown is shorter
+const VERTICALS = ["Lavoro", "Vita privata", "Gestione tempo libero"];
+const VERTICAL_LABEL = { "Gestione tempo libero": "Tempo libero" };
 const TONES = ["formale", "informale", "sintetico", "dettagliato"];
 const BUSINESS_VERTICALS = [
   { key: "veterinario", label: "Veterinario", icon: PawPrint },
@@ -228,7 +230,7 @@ export default function SettingsPage() {
           </span>
         </button>
         <input ref={avatarInputRef} type="file" accept="image/*" hidden onChange={onAvatarPicked} data-testid="avatar-input" />
-        <div className="text-sm text-white/60">Queste informazioni personalizzano ogni risposta di mAIPAL. Tocca la foto per cambiarla.</div>
+        <div className="text-[13px] leading-snug text-white/60" data-testid="profile-intro">Il profilo personalizza le risposte.<br />Tocca la foto per cambiarla.</div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
@@ -240,10 +242,10 @@ export default function SettingsPage() {
           <Input data-testid="prof-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-11 rounded-xl bg-white/10" />
         </div>
         <div className="md:col-span-2">
-          <FieldLabel icon={LayoutGrid} mb="mb-2">ambiti d'uso</FieldLabel>
+          <FieldLabel icon={LayoutGrid} mb="mb-2">ambito di utilizzo</FieldLabel>
           <ChipRow testid="prof-verticals">
             {VERTICALS.map((v) => (
-              <Chip key={v} on={verticals.includes(v)} onClick={() => toggleV(v)} testid={`prof-v-${v}`}>{v}</Chip>
+              <Chip key={v} on={verticals.includes(v)} onClick={() => toggleV(v)} testid={`prof-v-${v}`}>{VERTICAL_LABEL[v] || v}</Chip>
             ))}
           </ChipRow>
         </div>

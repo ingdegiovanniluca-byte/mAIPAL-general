@@ -6,7 +6,9 @@ import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
-const VERTICALS = ["Lavoro", "Gestione tempo libero", "Vita privata"];
+// the value saved stays the same ("Gestione tempo libero"): only the label shown is shorter
+const VERTICALS = ["Lavoro", "Vita privata", "Gestione tempo libero"];
+const VERTICAL_LABEL = { "Gestione tempo libero": "Tempo libero" };
 const TONES = ["formale", "informale", "sintetico", "dettagliato"];
 
 export default function OnboardingPage() {
@@ -69,7 +71,7 @@ export default function OnboardingPage() {
               onClick={() => toggleVertical(v)}
               style={verticals.includes(v) ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
               className={`px-5 py-3 rounded-full transition-colors duration-150 ${verticals.includes(v) ? "" : "bg-white/10  hover:"}`}
-            >{v}</button>
+            >{VERTICAL_LABEL[v] || v}</button>
           ))}
         </div>
       ),
