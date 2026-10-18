@@ -126,7 +126,7 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
   }, [commesse, f.commesse]);
   const save = async () => {
     if (!f.first_name.trim() || !f.last_name.trim()) { toast.error("Nome e cognome sono obbligatori"); return; }
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) { toast.error("Email non valida"); return; }
+    if (f.email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) { toast.error("Email non valida"); return; }
     setSaving(true);
     try {
       if (isNew) {
@@ -155,8 +155,11 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
               <input value={f.first_name} onChange={set("first_name")} placeholder="Nome" data-testid="collab-first" className={field} />
               <input value={f.last_name} onChange={set("last_name")} placeholder="Cognome" data-testid="collab-last" className={field} />
             </div>
-            <input value={f.email} onChange={set("email")} placeholder="Email" type="email" data-testid="collab-email" className={field} />
-            <input value={f.phone} onChange={set("phone")} placeholder="Telefono (facoltativo)" inputMode="tel" data-testid="collab-phone" className={field} />
+            <div>
+              <input value={f.phone} onChange={set("phone")} placeholder="Cellulare (es. 333 1234567)" inputMode="tel" data-testid="collab-phone" className={field} />
+              <div className="text-[11px] text-white/50 mt-1 px-1">Per i cellulari italiani il +39 non serve; per un numero estero scrivi il prefisso (es. +41 …). Serve per mandare l'invito su WhatsApp.</div>
+            </div>
+            <input value={f.email} onChange={set("email")} placeholder="Email (facoltativa)" type="email" data-testid="collab-email" className={field} />
             <div className="grid grid-cols-2 gap-2.5">
               <input value={f.role} onChange={set("role")} placeholder="Ruolo (es. idraulico)" data-testid="collab-role" className={field} />
               <input value={f.company} onChange={set("company")} placeholder="Azienda" data-testid="collab-company" className={field} />
@@ -235,7 +238,7 @@ export default function CollaboratorsPanel() {
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-white leading-snug">{c.name}</div>
-                    <div className="text-xs text-white/60">{[c.role, c.company].filter(Boolean).join(" · ") || c.email}</div>
+                    <div className="text-xs text-white/60">{[c.role, c.company].filter(Boolean).join(" · ") || c.phone || c.email}</div>
                   </div>
                   <span className="inline-flex items-center gap-1.5 text-[11px] text-white/80 shrink-0" data-testid="collab-status">
                     <span className="h-2 w-2 rounded-full" style={{ background: st.dot }} />{st.label}

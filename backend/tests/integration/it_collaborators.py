@@ -197,11 +197,21 @@ async def main():
     assert inv["link"] == f"https://t.me/maipal_bot?start={code}" and code in inv["message"] and "Bagno" in inv["message"]
     assert inv["whatsapp_url"].startswith("https://wa.me/393331234567?text=")
     assert db.collaborators.docs[0]["email"] == "gino@idraulica.it"
-    for bad in (dict(first_name="", last_name="X", email="a@b.it"), dict(first_name="A", last_name="B", email="nope")):
+    for bad in (dict(first_name="", last_name="X", email="a@b.it"), dict(first_name="A", last_name="B", email="nope"),
+                dict(first_name="A", last_name="B", phone="12345")):
         try:
             await server.create_collaborator(server.CollaboratorPayload(**bad), me); assert False
         except HTTPException as e:
             assert e.status_code == 400
+    # no e-mail: only the phone (an Italian mobile gets +39; a foreign one keeps its prefix)
+    n = len(db.collaborators.docs)
+    r = await server.create_collaborator(server.CollaboratorPayload(first_name="Pino", last_name="Verdi", phone="347 765 4321"), me)
+    assert r["invite"]["whatsapp_url"].startswith("https://wa.me/393477654321?text=") and r["collaborator"]["email"] == ""
+    r = await server.create_collaborator(server.CollaboratorPayload(first_name="Hans", last_name="Muller", phone="+41 79 123 45 67"), me)
+    assert r["invite"]["whatsapp_url"].startswith("https://wa.me/41791234567?text=")
+    r = await server.create_collaborator(server.CollaboratorPayload(first_name="Ugo", last_name="Bassi"), me)   # nothing: WhatsApp asks who
+    assert r["invite"]["whatsapp_url"].startswith("https://wa.me/?text=")
+    db.collaborators.docs[:] = db.collaborators.docs[:n]
 
     # 3) linking: a wrong code is not theirs (the app's own /start goes on), the right one asks the phone
     assert not await send(900, "/start WRONGCODE")

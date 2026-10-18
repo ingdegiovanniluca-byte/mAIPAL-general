@@ -6298,7 +6298,7 @@ COLLAB_REMIND_AT = "18:00"       # end-of-day reminder, Monday-Friday, if nothin
 class CollaboratorPayload(BaseModel):
     first_name: str
     last_name: str
-    email: str
+    email: Optional[str] = ""                 # optional: the invitation goes by WhatsApp to the phone
     phone: Optional[str] = ""
     role: Optional[str] = ""
     company: Optional[str] = ""
@@ -6388,12 +6388,18 @@ async def _collab_or_404(current: User, collab_id: str) -> dict:
 
 
 def _clean_collab_fields(d: dict) -> dict:
+    """Trimmed fields; the e-mail, if given, must look like one; the phone, if given, must have
+    8-15 digits once normalized (an Italian mobile without +39 gets it)."""
     out = {}
     for k in ("first_name", "last_name", "email", "phone", "role", "company"):
         if d.get(k) is not None:
             out[k] = " ".join(str(d[k]).split())[:120]
-    if "email" in out:
+    if out.get("email"):
         out["email"] = out["email"].lower()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", out["email"]):
+            raise HTTPException(status_code=400, detail="Email non valida")
+    if out.get("phone") and not 8 <= len(_phone_digits(out["phone"])) <= 15:
+        raise HTTPException(status_code=400, detail="Numero di telefono non valido")
     return out
 
 
@@ -6411,8 +6417,6 @@ async def create_collaborator(payload: CollaboratorPayload, current: User = Depe
     fields = _clean_collab_fields(payload.model_dump())
     if not fields.get("first_name") or not fields.get("last_name"):
         raise HTTPException(status_code=400, detail="Nome e cognome sono obbligatori")
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", fields.get("email") or ""):
-        raise HTTPException(status_code=400, detail="Email non valida")
     views = await _collab_views(current)
     now = datetime.now(timezone.utc)
     c = {
