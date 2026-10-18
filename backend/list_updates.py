@@ -209,6 +209,15 @@ def names_an_existing_list(text: str, list_names: list[str]) -> bool:
     return any(n and re.search(rf"\b{re.escape(n.strip().lower())}\b", t) for n in list_names)
 
 
+_JOB_WORD = re.compile(r"\b(commess[ae]|cantier[ei])\b", re.I)
+
+
+def about_jobs(text: str, list_names: list[str]) -> bool:
+    """Artigiano: a commessa (or a cantiere) lives inside the Clienti list, under its client - "crea
+    una commessa per i Rossi" adds to that list, it never creates a new one."""
+    return any((n or "").strip().lower() == "clienti" for n in list_names) and bool(_JOB_WORD.search(text or ""))
+
+
 async def classify_save_intent(text: str, list_names: list[str], user_id: Optional[str] = None, channel: str = "web",
                                context: str = "") -> str:
     """Cheap pre-classification used to merge "salva informazione" and "modifica lista"
@@ -216,7 +225,7 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
     record in one of the user's existing Liste, or just generic information to save as a
     note? Falls back to 'info_upload' (the safe default - nothing gets deleted) on any
     error or when the user has no lists at all."""
-    if names_an_existing_list(text, list_names):
+    if names_an_existing_list(text, list_names) or about_jobs(text, list_names):
         return "list_update"
     names_desc = ", ".join(f'"{n}"' for n in list_names[:50]) or "nessuna lista ancora"
     system = (
@@ -247,6 +256,9 @@ async def classify_save_intent(text: str, list_names: list[str], user_id: Option
         "NON è la lista 'Spesa' delle cose da comprare: è 'info_upload'. Perché sia 'list_update' l'utente deve "
         "chiedere chiaramente di mettere qualcosa DENTRO quella lista (es. 'aggiungi il latte alla spesa', 'metti "
         "le uova nella lista della spesa').\n"
+        "Se esiste la lista 'Clienti', contiene i clienti e dentro ciascuno le sue COMMESSE (cantieri, lavori): "
+        "creare o aggiungere un cliente o una commessa ('crea una commessa nuova per Rossi', 'nuovo cantiere dai "
+        "Bianchi') è 'list_update' nella lista Clienti, MAI 'list_create'.\n"
         "Se l'utente chiede di creare una lista con un nome che esiste già, è comunque 'list_create' (gli "
         "dirò io che c'è già).\n"        "Chiedere di creare la cartella su Drive/OneDrive di una lista ESISTENTE (es. 'crea la cartella su "
         "drive per la lista della spesa') è 'list_update'; una lista NUOVA con la sua cartella è 'list_create'.\n"

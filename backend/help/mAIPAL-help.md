@@ -234,6 +234,7 @@ Per gli artigiani c'è la lista **Clienti**, già pronta, con le **commesse** di
 - Tocca la commessa per aprirne il **diario di commessa**.
 - L'icona della **cartella** sulla commessa crea (o apre) su Drive/OneDrive la cartella mAIPAL/Clienti/cliente/commessa, dove finiscono anche report e foto del diario.
 - Clienti e commesse si creano anche da soli quando detti un report o una voce di diario per un cliente nuovo.
+- Puoi crearli anche dalla chat con l'agente **Salva**: "crea la commessa Bagno per Mario Rossi" la aggiunge sotto il cliente nella lista Clienti (stato «in corso», da oggi), non crea una lista nuova.
 - **Eliminare** un cliente o una commessa cancella anche il diario (voci, foto), le attività e i costi, e non si può annullare. Per questo, toccando **Elimina**, ti arriva su **Telegram** un codice di 6 cifre da scrivere nell'app: vale 10 minuti, una volta sola, e dopo 5 tentativi sbagliati ne serve uno nuovo. Se Telegram non è collegato, l'app ti chiede di collegarlo (Impostazioni → Collegamenti → Telegram). I file su Drive/OneDrive restano.
 - Dalla chat clienti e commesse non si eliminano: si usa il tasto Elimina nella lista.
 

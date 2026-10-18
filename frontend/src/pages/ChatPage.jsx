@@ -941,7 +941,8 @@ export default function ChatPage() {
     try {
       const r = await api.post("/lists/create-from-text", { text: content, ...(docIds.length ? { attachment_doc_ids: docIds } : {}), ...(convId ? { conv_id: convId } : {}) });
       reply = (r.data?.status === "ok" ? "📋 " : "⚠️ ") + (r.data?.message || "");
-      if (r.data?.status === "ok") toast.success(r.data.folder_only ? `Cartella «${r.data.name}» creata` : `Lista «${r.data.name}» creata`);
+      // a commessa asked here goes under its client in Clienti: no "list created"
+      if (r.data?.status === "ok" && r.data.name) toast.success(r.data.folder_only ? `Cartella «${r.data.name}» creata` : `Lista «${r.data.name}» creata`);
     } catch (e) {
       reply = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a creare la lista");
     }

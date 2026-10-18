@@ -3654,11 +3654,18 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
             existing = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "data": 1}).to_list(500)
             if any(str((e.get("data") or {}).get(name_field["key"]) or "").strip().lower() == new_val for e in existing):
                 raise HTTPException(status_code=400, detail=f"Esiste già un elemento con {name_field['label']} \"{payload.data.get(name_field['key'])}\" in questo campo.")
+    data = dict(payload.data or {})
+    if coll.get("system_key") == vx.CLIENTI_KEY:   # a new commessa: in corso from today, unless said otherwise
+        smap = coll.get("system_sub_map") or {}
+        data.setdefault(smap.get("stato", "stato"), "in corso")
+        if not data.get(smap.get("stato", "stato")):
+            data[smap.get("stato", "stato")] = "in corso"
+        data.setdefault(smap.get("data_inizio", "data_inizio"), jl.today_local().isoformat())
     doc = {
         "id": f"sub_{uuid.uuid4().hex[:12]}",
         "collection_id": collection_id,
         "item_id": item_id,
-        "data": payload.data,
+        "data": data,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.collection_sub_items.insert_one(doc)
@@ -3897,6 +3904,13 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
     """Creates a new list (and its first items) from a sentence. Until now chat could only
     EDIT existing lists: "crea una lista ..." was either saved as a plain note or sent to
     the list editor, which found no such list - and nothing was created."""
+    clienti = await _clienti_list(current)
+    if clienti and lu.about_jobs(text, [clienti.get("name") or "", "clienti"]):
+        # "crea una commessa per i Rossi": it goes under the client in the Clienti list, never a new list
+        res = await _execute_list_update(current, text, collection_id=None, channel=channel)
+        if res.get("status") in ("ok", "error"):
+            return res
+        return {"status": "error", "message": res.get("message") or "Per quale cliente? Scrivimi il nome esatto (es. «crea la commessa Bagno per Mario Rossi»)."}
     try:
         doc_ids = [d for d in (attachment_doc_ids or []) if isinstance(d, str)][:10]
         if doc_ids:
@@ -4040,7 +4054,12 @@ async def _execute_list_update(
             return res
 
     if not op or not collection_id:
-        catalog = [{"id": c["id"], "name": c["name"], "fields": c.get("fields", []), "sub_item_fields": c.get("sub_item_fields", [])} for c in colls]
+        pool = colls
+        if not collection_id:   # a commessa / cantiere: only the Clienti list (under its client)
+            clienti_c = [c for c in colls if c.get("system_key") == vx.CLIENTI_KEY]
+            if clienti_c and lu.about_jobs(text, ["clienti"]):
+                pool = clienti_c
+        catalog = [{"id": c["id"], "name": c["name"], "fields": c.get("fields", []), "sub_item_fields": c.get("sub_item_fields", [])} for c in pool]
         # Give the interpreter a shot at the user's own uploaded documents too - e.g. "crea
         # un campo per ogni orario delle lezioni di pilates" only makes sense if it can see
         # the schedule that was OCR'd/extracted into the KB in an earlier message.
