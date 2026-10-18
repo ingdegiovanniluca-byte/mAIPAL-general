@@ -10,14 +10,19 @@ import { pushSupported, currentPushSubscription, enablePush, disablePush, isIos,
 export default function NotificationsPanel() {
   const [state, setState] = useState("checking");   // checking | unsupported | ios_home | denied | off | on
   const [busy, setBusy] = useState(false);
+  const [last, setLast] = useState(null);   // the last notification sent to this account
 
+  // this device's state + the last notification sent (shown whatever the state: it says why one didn't arrive)
+  const status = async (endpoint) => {
+    try { const r = (await api.post("/push/status", { endpoint: endpoint || "" })).data; setLast(r.last || null); return r; }
+    catch { return null; }
+  };
   const check = async () => {
-    if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); return; }
-    if (Notification.permission === "denied") { setState("denied"); return; }
+    if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); status(); return; }
+    if (Notification.permission === "denied") { setState("denied"); status(); return; }
     const sub = await currentPushSubscription();
-    if (!sub) { setState("off"); return; }
-    try { setState((await api.post("/push/status", { endpoint: sub.endpoint })).data.subscribed ? "on" : "off"); }
-    catch { setState("off"); }
+    const r = await status(sub?.endpoint);
+    setState(sub && r?.subscribed ? "on" : "off");
   };
   useEffect(() => { check(); }, []);
 
@@ -28,6 +33,7 @@ export default function NotificationsPanel() {
       const sub = await enablePush(key);
       await api.post("/push/subscribe", { subscription: sub.toJSON() });
       setState("on");
+      status(sub.endpoint);
       toast.success("Notifiche attive su questo dispositivo");
     } catch (e) {
       if (e.message === "denied") setState("denied");
@@ -45,8 +51,8 @@ export default function NotificationsPanel() {
   };
   const test = async () => {
     setBusy(true);
-    try { await api.post("/push/test"); toast.success("Notifica di prova inviata"); }
-    catch (e) { toast.error(e.response?.data?.detail || "Errore"); } finally { setBusy(false); }
+    try { await api.post("/push/test"); toast.success("Notifica di prova inviata: se non la vedi, controlla le notifiche di mAIPAL nelle impostazioni del telefono"); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); } finally { setBusy(false); await check(); }
   };
 
   return (
@@ -83,7 +89,24 @@ export default function NotificationsPanel() {
           </div>
         </div>
       )}
+      {last && <LastSending last={last} />}
       <p className="text-xs text-white/50 mt-4">Ogni dispositivo si attiva per conto suo. Telegram, se collegato, continua a ricevere i suoi avvisi come prima.</p>
+    </div>
+  );
+}
+
+/* what happened to the last notification: when one doesn't arrive, here is why */
+function LastSending({ last }) {
+  const when = new Date(last.at).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const outcome = !last.devices ? "non partita: nessun dispositivo con le notifiche attive"
+    : last.sent === last.devices ? `arrivata a ${last.sent === 1 ? "1 dispositivo" : `${last.sent} dispositivi`}`
+    : `arrivata a ${last.sent} di ${last.devices} dispositivi`;
+  return (
+    <div className="mt-4 rounded-2xl bg-white/[0.06] px-3.5 py-3 text-xs" data-testid="push-last">
+      <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1">ultima notifica · {when}</div>
+      <div className="text-white/85 break-words">{last.title}</div>
+      <div className={last.sent ? "text-white/60 mt-0.5" : "text-amber-300 mt-0.5"}>{outcome}</div>
+      {(last.errors || []).map((e, i) => <div key={i} className="text-amber-300/90 mt-0.5 break-words">{e}</div>)}
     </div>
   );
 }

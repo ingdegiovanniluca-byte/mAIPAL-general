@@ -303,6 +303,7 @@ mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anch
 - **Cosa arriva**: i **promemoria dei task** e, per gli artigiani, le **voci scritte dai collaboratori** nel diario delle commesse (testo, ore, problemi o foto). Toccando la notifica si apre la pagina giusta.
 - **Attivarle**: Impostazioni → **Notifiche** → **Attiva su questo dispositivo**, poi consenti le notifiche quando il telefono lo chiede. Ogni dispositivo si attiva per conto suo; con **Manda una prova** controlli che arrivino, con **Disattiva** le spegni.
 - **iPhone**: le notifiche arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home) e con iOS 16.4 o successivo.
+- **Non arriva una notifica?** In Impostazioni → Notifiche, sotto **Ultima notifica**, vedi l'ultima mandata e com'è andata: a quanti dispositivi è arrivata, "nessun dispositivo con le notifiche attive" (attivale su quel dispositivo), un dispositivo non più iscritto (riattivale lì) o l'errore del servizio di notifiche. Se risulta arrivata ma non la vedi, controlla che le notifiche di mAIPAL (o del browser) siano permesse nelle impostazioni del telefono e che non sia attiva la modalità Non disturbare / Full immersion.
 - Se le hai bloccate per errore, riattivale dalle impostazioni del browser o del telefono.
 - Telegram, se collegato, continua a ricevere i suoi avvisi come prima.
 

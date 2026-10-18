@@ -180,6 +180,13 @@ async def main():
     print(msg)
     assert len(PUSHED) == n + 1 and ep == SUB["endpoint"] and msg["title"] == "📒 Gino Neri · Bagno"
     assert "Gino 3 h" in msg["body"] and "manca il miscelatore" in msg["body"] and msg["url"] == "/dashboard/journal?commessa=s_bagno"
+    # the outcome is kept, for Impostazioni > Notifiche
+    for _ in range(40):
+        last = (await server.push_status(server.PushEndpointPayload(endpoint=SUB["endpoint"]), me))["last"]
+        if last and last["title"] == "📒 Gino Neri · Bagno":
+            break
+        await asyncio.sleep(0.05)
+    assert last["title"] == "📒 Gino Neri · Bagno" and last["devices"] == 1 and last["sent"] == 1 and not last["errors"], last
 
     # 3) a task's reminder: on the device, once (a Telegram retry doesn't repeat it)
     now = datetime.now(timezone.utc)
@@ -208,6 +215,30 @@ async def main():
     if due.hour < 21:
         await server._exact_reminders_tick(now)
         assert len(PUSHED) == n
+
+    # a device the push service refuses: said; one that is gone: removed and said
+    class Gone(Exception):
+        def __init__(s, code, text):
+            super().__init__(text); s.response = type("R", (), {"status_code": code, "text": text})()
+    def refusing(sub, payload, private_pem, claims_sub):
+        raise Gone(403, "BadJwtToken")
+    pn._send_one = refusing
+    try:
+        await server.push_test(me); assert False
+    except server.HTTPException as e:
+        assert e.status_code == 400 and "403" in e.detail and "BadJwtToken" in e.detail, e.detail
+    def gone(sub, payload, private_pem, claims_sub):
+        raise Gone(410, "expired")
+    pn._send_one = gone
+    try:
+        await server.push_test(me); assert False
+    except server.HTTPException as e:
+        assert "non è più iscritto" in e.detail, e.detail
+    assert not db.push_subscriptions.docs
+    st = await server.push_status(server.PushEndpointPayload(endpoint=SUB["endpoint"]), me)
+    assert not st["subscribed"] and st["last"]["sent"] == 0
+    await server.push_subscribe(server.PushSubscribePayload(subscription=SUB), Req(), me)
+    pn._send_one = fake_send_one
 
     # 4) the device turned off: nothing more
     await server.push_unsubscribe(server.PushEndpointPayload(endpoint=SUB["endpoint"]), me)

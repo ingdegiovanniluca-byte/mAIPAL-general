@@ -3596,14 +3596,17 @@ async def push_unsubscribe(payload: PushEndpointPayload, current: User = Depends
 async def push_status(payload: PushEndpointPayload, current: User = Depends(get_current_user)):
     """Is this device (its endpoint) receiving this user's notifications?"""
     on = bool(payload.endpoint) and bool(await db.push_subscriptions.find_one({"user_id": current.user_id, "endpoint": payload.endpoint}, {"_id": 1}))
-    return {"subscribed": on, "devices": await db.push_subscriptions.count_documents({"user_id": current.user_id})}
+    return {"subscribed": on, "devices": await db.push_subscriptions.count_documents({"user_id": current.user_id}),
+            "last": await push.last_sending(db, current.user_id)}
 
 
 @api_router.post("/push/test")
 async def push_test(current: User = Depends(get_current_user)):
     n = await push.send_to_user(db, current.user_id, "🔔 mAIPAL", "Le notifiche funzionano: qui arriveranno i promemoria dei task e le voci dei collaboratori.", "/dashboard/settings?s=notifications", "test")
     if not n:
-        raise HTTPException(status_code=400, detail="Nessun dispositivo ha ricevuto la prova: riattiva le notifiche su questo dispositivo.")
+        errs = ((await push.last_sending(db, current.user_id)) or {}).get("errors") or []
+        raise HTTPException(status_code=400, detail="Nessun dispositivo ha ricevuto la prova"
+                            + (f" ({errs[0]})." if errs else ": riattiva le notifiche su questo dispositivo."))
     return {"sent": n}
 
 

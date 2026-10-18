@@ -73,26 +73,51 @@ def _send_one(sub: dict, payload: str, private_pem: str, claims_sub: str):
                    vapid_private_key=Vapid02.from_pem(private_pem.encode()), vapid_claims={"sub": claims_sub}, ttl=6 * 3600)
 
 
+async def _record(db, user_id: str, title: str, devices: int, sent: int, errors: list) -> None:
+    """The last sending of each user, shown in Impostazioni > Notifiche: when nothing arrives,
+    the user (and whoever helps them) sees why - no device, a device gone, an error."""
+    logger.info("web push to %s: %d/%d device(s) - %s%s", user_id, sent, devices, title[:60], f" - {errors}" if errors else "")
+    try:
+        await db.push_log.update_one({"user_id": user_id}, {"$set": {
+            "user_id": user_id, "at": datetime.now(timezone.utc).isoformat(), "title": title[:120],
+            "devices": devices, "sent": sent, "errors": errors[:5]}}, upsert=True)
+    except Exception:
+        logger.exception("web push log failed")
+
+
+async def last_sending(db, user_id: str) -> Optional[dict]:
+    return await db.push_log.find_one({"user_id": user_id}, {"_id": 0})
+
+
 async def send_to_user(db, user_id: str, title: str, body: str, url: str = "/dashboard", tag: Optional[str] = None) -> int:
     """To every device of the user that turned notifications on. -> how many got it."""
     subs = await db.push_subscriptions.find({"user_id": user_id}, {"_id": 0}).to_list(20)
     if not subs:
+        await _record(db, user_id, title, 0, 0, [])
         return 0
     keys = await vapid_keys(db)
     claims_sub = "mailto:" + (os.environ.get("ADMIN_EMAIL") or "ingdegiovanniluca@gmail.com")
     payload = json.dumps({"title": title, "body": body[:240], "url": url, "tag": tag}, ensure_ascii=False)
-    sent = 0
+    sent, errors = 0, []
     for sub in subs:
         try:
             await asyncio.to_thread(_send_one, sub, payload, keys["private_pem"], claims_sub)
             sent += 1
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            resp = getattr(e, "response", None)
+            status = getattr(resp, "status_code", None)
             if status in (404, 410):   # the device unsubscribed or the browser data was cleared
                 await db.push_subscriptions.delete_many({"endpoint": sub["endpoint"]})
+                errors.append("un dispositivo non è più iscritto ed è stato tolto: riattiva le notifiche su quel dispositivo")
             else:
-                logger.warning("web push failed (%s): %s", status, str(e)[:200])
+                detail = (getattr(resp, "text", "") or str(e) or type(e).__name__).strip().replace("\n", " ")
+                logger.warning("web push failed (%s): %s", status, detail[:300])
+                errors.append(f"errore {status or type(e).__name__}: {detail[:160]}")
+    await _record(db, user_id, title, len(subs), sent, errors)
     return sent
+
+
+_running: set = set()   # the tasks in flight: a task nobody refers to can be collected before it ends
 
 
 def fire_and_forget(db, user_id: str, title: str, body: str, url: str = "/dashboard", tag: Optional[str] = None) -> None:
@@ -102,6 +127,8 @@ def fire_and_forget(db, user_id: str, title: str, body: str, url: str = "/dashbo
         except Exception:
             logger.exception("web push failed")
     try:
-        asyncio.get_running_loop().create_task(run())
+        task = asyncio.get_running_loop().create_task(run())
     except RuntimeError:
-        pass
+        return
+    _running.add(task)
+    task.add_done_callback(_running.discard)
