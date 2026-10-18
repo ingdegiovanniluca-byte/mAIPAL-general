@@ -54,6 +54,7 @@ import agent_guard
 import help_guide
 import verticals as vx
 import push_notify as push
+import fitness as fx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -321,12 +322,22 @@ class NewsFeedbackPayload(BaseModel):
 # ---- Verticale fitness (scuole di danza/pilates): esercizi, lezioni, clienti ----
 class ExerciseUpsert(BaseModel):
     name: str
-    discipline: Literal["danza", "pilates", "altro"] = "altro"
-    category: Optional[str] = ""
-    level: Optional[Literal["base", "intermedio", "avanzato"]] = None
-    equipment: Optional[str] = ""
-    duration_minutes: Optional[int] = None
+    activity: Optional[str] = "funzionale"     # funzionale, pilates, danza...
+    type: Optional[str] = ""                   # tipologia (Squat, Affondi...)
+    role: Optional[str] = "esercizio"          # riscaldamento | esercizio | stretching
+    body_part: Optional[str] = ""
+    level: Optional[str] = None                # basso | medio | alto
+    equipment: Optional[str] = ""              # "" = corpo libero
+    equipment_per_person: Optional[int] = 0
+    timed: Optional[dict] = None               # {allowed, min_sec, max_sec, min_sets, max_sets}
+    reps: Optional[dict] = None                # {allowed, sec_per_set, min_reps, max_reps, min_sets, max_sets}
+    description: Optional[str] = ""
     notes: Optional[str] = ""
+    link: Optional[str] = ""
+    # older fields (danza / pilates)
+    discipline: Optional[str] = None
+    category: Optional[str] = ""
+    duration_minutes: Optional[int] = None
     visibility: Literal["private", "org"] = "private"
 
 
@@ -357,10 +368,6 @@ class ClientUpsert(BaseModel):
 
 class LessonGuidelinesPayload(BaseModel):
     text: str
-
-
-class GenerateLessonPayload(BaseModel):
-    prompt: str
 
 
 # ---- Verticale veterinario: report visita ----
@@ -818,6 +825,9 @@ async def _apply_vertical(current: User, key: str) -> None:
     deletes or rewrites anything the user already has."""
     if key == "veterinario":
         await _ensure_vet_patients_list(current)
+        return
+    if key == "fitness":
+        await _ensure_fitness_base(current)
         return
     if key != "artigiano":
         return
@@ -4270,17 +4280,82 @@ async def _execute_list_update(
 
 
 # ============ FITNESS: ESERCIZI / LEZIONI / CLIENTI ============
+def _int_or_none(v):
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_exercise(d: dict) -> dict:
+    """The exercise as stored: words in lower case where they are filters, levels and roles
+    from their lists, numbers as numbers (only the keys given are touched)."""
+    out = dict(d)
+    if "name" in out:
+        out["name"] = " ".join(str(out["name"] or "").split())[:120]
+        if not out["name"]:
+            raise HTTPException(status_code=400, detail="Scrivi il nome dell'esercizio")
+    for k in ("activity", "body_part", "equipment"):
+        if k in out:
+            out[k] = " ".join(str(out[k] or "").lower().split())[:60]
+    if out.get("equipment") in ("nessuno", "corpo libero"):
+        out["equipment"] = ""
+    if "type" in out:
+        out["type"] = " ".join(str(out["type"] or "").split())[:60]
+    if "level" in out:
+        out["level"] = fx.norm_level(out["level"])
+    if "role" in out:
+        out["role"] = out["role"] if out["role"] in fx.ROLES else "esercizio"
+    if "equipment_per_person" in out:
+        out["equipment_per_person"] = max(0, _int_or_none(out["equipment_per_person"]) or 0)
+    for k, keys in (("timed", ("min_sec", "max_sec", "min_sets", "max_sets")),
+                    ("reps", ("sec_per_set", "min_reps", "max_reps", "min_sets", "max_sets"))):
+        if out.get(k) is not None:
+            src = out[k] or {}
+            out[k] = {"allowed": bool(src.get("allowed", True)), **{x: _int_or_none(src.get(x)) for x in keys}}
+    return out
+
+
+async def _ensure_fitness_base(current: User) -> None:
+    """The fitness vertical's starting set, once per studio (the team, or the user alone): the
+    base exercises, the equipment of the example and the base lesson type. Never added again,
+    even if the studio deletes them."""
+    owner = _fitness_owner_key(current)
+    if await db.fitness_setup.find_one({"owner_key": owner, "base": 1}, {"_id": 1}):
+        return
+    await db.fitness_setup.update_one({"owner_key": owner}, {"$set": {"owner_key": owner, "base": 1,
+                                       "at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    base = fx.base_catalog()
+    now = datetime.now(timezone.utc).isoformat()
+    vis = "org" if current.org_id else "private"
+    docs = []
+    for e in base["exercises"]:
+        d = {"id": f"ex_{uuid.uuid4().hex[:12]}", **_clean_exercise(e), "base_id": e.get("base_id"), "builtin": True,
+             "visibility": vis, "created_at": now}
+        _stamp_owner_fields(d, current)
+        docs.append(d)
+    for d in docs:
+        await db.exercises.insert_one(d)
+    for e in base["equipment"]:
+        await db.fitness_equipment.insert_one({"id": f"eq_{uuid.uuid4().hex[:12]}", "owner_key": owner, "name": e["name"],
+                                               "quantity": int(e["quantity"]), "notes": "", "created_at": now})
+    for t in fx.BASE_LESSON_TYPES:
+        await db.lesson_types.insert_one({"id": f"ltype_{uuid.uuid4().hex[:12]}", "owner_key": owner, **t, "builtin": True, "created_at": now})
+
+
 @api_router.get("/exercises")
 async def list_exercises(current: User = Depends(get_current_user)):
+    if current.business_vertical == "fitness":
+        await _ensure_fitness_base(current)
     cursor = db.exercises.find(_visible_query(current), {"_id": 0}).sort("name", 1)
-    return await cursor.to_list(500)
+    return await cursor.to_list(2000)
 
 
 @api_router.post("/exercises")
 async def create_exercise(payload: ExerciseUpsert, current: User = Depends(get_current_user)):
     doc = {
         "id": f"ex_{uuid.uuid4().hex[:12]}",
-        **payload.model_dump(),
+        **_clean_exercise(payload.model_dump()),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _stamp_owner_fields(doc, current)
@@ -4291,7 +4366,9 @@ async def create_exercise(payload: ExerciseUpsert, current: User = Depends(get_c
 
 @api_router.patch("/exercises/{exercise_id}")
 async def update_exercise(exercise_id: str, payload: dict, current: User = Depends(get_current_user)):
-    payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None); payload.pop("org_id", None)
+    for k in ("id", "user_id", "_id", "org_id", "builtin", "base_id", "created_at"):
+        payload.pop(k, None)
+    payload = _clean_exercise(payload)
     if "visibility" in payload:
         if payload["visibility"] == "org" and current.org_id:
             payload["org_id"] = current.org_id
@@ -4310,6 +4387,152 @@ async def delete_exercise(exercise_id: str, current: User = Depends(get_current_
     r = await db.exercises.delete_one({"id": exercise_id, **_editable_query(current)})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Esercizio non trovato")
+    return {"ok": True}
+
+
+# ---- the studio's equipment: what there is and how many (the lessons are built on it) ----
+class EquipmentPayload(BaseModel):
+    name: Optional[str] = None
+    quantity: Optional[int] = None
+    delta: Optional[int] = None               # +1 / -1 from the list
+    notes: Optional[str] = None
+
+
+@api_router.get("/fitness/equipment")
+async def list_equipment(current: User = Depends(get_current_user)):
+    await _ensure_fitness_base(current)
+    items = await db.fitness_equipment.find({"owner_key": _fitness_owner_key(current)}, {"_id": 0}).to_list(500)
+    return sorted(items, key=lambda e: e["name"].lower())
+
+
+@api_router.post("/fitness/equipment")
+async def add_equipment(payload: EquipmentPayload, current: User = Depends(get_current_user)):
+    owner = _fitness_owner_key(current)
+    name = " ".join((payload.name or "").lower().split())[:60]
+    if not name:
+        raise HTTPException(status_code=400, detail="Scrivi il nome dell'attrezzo")
+    qty = max(0, payload.quantity or 0)
+    existing = await db.fitness_equipment.find_one({"owner_key": owner, "name": name}, {"_id": 0})
+    if existing:   # the same piece again: its quantity goes up
+        await db.fitness_equipment.update_one({"id": existing["id"]}, {"$set": {"quantity": existing["quantity"] + qty}})
+        return {**existing, "quantity": existing["quantity"] + qty}
+    doc = {"id": f"eq_{uuid.uuid4().hex[:12]}", "owner_key": owner, "name": name, "quantity": qty,
+           "notes": (payload.notes or "").strip()[:200], "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.fitness_equipment.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/fitness/equipment/{eq_id}")
+async def update_equipment(eq_id: str, payload: EquipmentPayload, current: User = Depends(get_current_user)):
+    eq = await db.fitness_equipment.find_one({"id": eq_id, "owner_key": _fitness_owner_key(current)}, {"_id": 0})
+    if not eq:
+        raise HTTPException(status_code=404, detail="Attrezzo non trovato")
+    upd = {}
+    if payload.name is not None:
+        name = " ".join(payload.name.lower().split())[:60]
+        if not name:
+            raise HTTPException(status_code=400, detail="Scrivi il nome dell'attrezzo")
+        upd["name"] = name
+    if payload.quantity is not None:
+        upd["quantity"] = max(0, payload.quantity)
+    if payload.delta:
+        upd["quantity"] = max(0, upd.get("quantity", eq["quantity"]) + payload.delta)
+    if payload.notes is not None:
+        upd["notes"] = payload.notes.strip()[:200]
+    if upd:
+        await db.fitness_equipment.update_one({"id": eq_id}, {"$set": upd})
+        if upd.get("name") and upd["name"] != eq["name"]:   # the exercises follow the new name
+            await db.exercises.update_many({**_visible_query(current), "equipment": eq["name"]}, {"$set": {"equipment": upd["name"]}})
+    return {**eq, **upd}
+
+
+@api_router.delete("/fitness/equipment/{eq_id}")
+async def delete_equipment(eq_id: str, current: User = Depends(get_current_user)):
+    r = await db.fitness_equipment.delete_one({"id": eq_id, "owner_key": _fitness_owner_key(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Attrezzo non trovato")
+    return {"ok": True}
+
+
+# ---- the lesson types and their rules (duration, stretching at start and end, rest...) ----
+class LessonTypePayload(BaseModel):
+    name: Optional[str] = None
+    activity: Optional[str] = None
+    duration_min: Optional[int] = None
+    start_min: Optional[int] = None
+    start_kind: Optional[str] = None
+    end_min: Optional[int] = None
+    end_kind: Optional[str] = None
+    rest_sec: Optional[int] = None
+    default_level: Optional[str] = None
+    default_participants: Optional[int] = None
+    mode: Optional[str] = None
+    rules_text: Optional[str] = None
+
+
+def _clean_lesson_type(p: dict) -> dict:
+    out = {}
+    if p.get("name") is not None:
+        out["name"] = " ".join(p["name"].split())[:60]
+        if not out["name"]:
+            raise HTTPException(status_code=400, detail="Scrivi il nome del tipo di lezione")
+    if p.get("activity") is not None:
+        out["activity"] = " ".join(p["activity"].lower().split())[:40]
+    for k, lo, hi in (("duration_min", 5, 240), ("start_min", 0, 60), ("end_min", 0, 60), ("rest_sec", 0, 300), ("default_participants", 1, 200)):
+        if p.get(k) is not None:
+            out[k] = max(lo, min(hi, int(p[k])))
+    for k in ("start_kind", "end_kind"):
+        if p.get(k) is not None:
+            out[k] = p[k] if p[k] in fx.PHASE_KINDS else "stretching"
+    if p.get("default_level") is not None:
+        out["default_level"] = fx.norm_level(p["default_level"])
+    if p.get("mode") is not None:
+        out["mode"] = p["mode"] if p["mode"] in ("misto", "tempo", "ripetizioni") else "misto"
+    if p.get("rules_text") is not None:
+        out["rules_text"] = p["rules_text"].strip()[:2000]
+    if "duration_min" in out and (out.get("start_min", 0) + out.get("end_min", 0)) >= out["duration_min"]:
+        raise HTTPException(status_code=400, detail="Inizio e fine non possono occupare tutta la lezione")
+    return out
+
+
+@api_router.get("/fitness/lesson-types")
+async def list_lesson_types(current: User = Depends(get_current_user)):
+    await _ensure_fitness_base(current)
+    return await db.lesson_types.find({"owner_key": _fitness_owner_key(current)}, {"_id": 0}).sort("created_at", 1).to_list(100)
+
+
+@api_router.post("/fitness/lesson-types")
+async def create_lesson_type(payload: LessonTypePayload, current: User = Depends(get_current_user)):
+    data = {**fx.BASE_LESSON_TYPES[0], "name": "", **_clean_lesson_type(payload.model_dump())}
+    if not data["name"]:
+        raise HTTPException(status_code=400, detail="Scrivi il nome del tipo di lezione")
+    doc = {"id": f"ltype_{uuid.uuid4().hex[:12]}", "owner_key": _fitness_owner_key(current), **data, "builtin": False,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.lesson_types.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/fitness/lesson-types/{type_id}")
+async def update_lesson_type(type_id: str, payload: LessonTypePayload, current: User = Depends(get_current_user)):
+    t = await db.lesson_types.find_one({"id": type_id, "owner_key": _fitness_owner_key(current)}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Tipo di lezione non trovato")
+    upd = _clean_lesson_type(payload.model_dump())
+    merged = {**t, **upd}
+    if merged["start_min"] + merged["end_min"] >= merged["duration_min"]:
+        raise HTTPException(status_code=400, detail="Inizio e fine non possono occupare tutta la lezione")
+    if upd:
+        await db.lesson_types.update_one({"id": type_id}, {"$set": upd})
+    return merged
+
+
+@api_router.delete("/fitness/lesson-types/{type_id}")
+async def delete_lesson_type(type_id: str, current: User = Depends(get_current_user)):
+    r = await db.lesson_types.delete_one({"id": type_id, "owner_key": _fitness_owner_key(current)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Tipo di lezione non trovato")
     return {"ok": True}
 
 
@@ -4341,11 +4564,36 @@ async def update_lesson_template(lesson_id: str, payload: dict, current: User = 
         else:
             payload["visibility"] = "private"
             payload["org_id"] = None
+    if isinstance(payload.get("blocks"), list):   # a generated lesson changed by hand: checked like the model's
+        payload = {**payload, **(await _relesson_blocks(current, lesson_id, payload["blocks"]))}
     await db.lesson_templates.update_one({"id": lesson_id, **_editable_query(current)}, {"$set": payload})
     doc = await db.lesson_templates.find_one({"id": lesson_id, **_editable_query(current)}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Lezione non trovata")
     return doc
+
+
+async def _relesson_blocks(current: User, lesson_id: str, blocks: list) -> dict:
+    """Blocks edited in the app: known exercises only, within their limits, totals recomputed."""
+    doc = await db.lesson_templates.find_one({"id": lesson_id, **_editable_query(current)}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lezione non trovata")
+    ids = [b.get("exercise_id") for b in blocks if isinstance(b, dict)]
+    by_id = {e["id"]: e for e in await db.exercises.find({**_visible_query(current), "id": {"$in": ids}}, {"_id": 0}).to_list(500)}
+    order = {"inizio": 0, "centrale": 1, "fine": 2}
+    seq = []
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("exercise_id") not in by_id:
+            continue
+        x = fx.fix_block(b, by_id[b["exercise_id"]], "misto")
+        x["phase"] = b.get("phase") if b.get("phase") in order else "centrale"
+        seq.append(x)
+    seq.sort(key=lambda x: order[x["phase"]])   # stable: the order inside a phase is kept
+    rest = int(doc.get("rest_sec") or fx.DEFAULT_REST_SEC)
+    participants = int(doc.get("participants") or 1)
+    return {"blocks": seq, "total_sec": sum(fx.block_seconds(x, rest) for x in seq),
+            "equipment_needed": fx.equipment_summary(seq, participants),
+            "exercises": [{"exercise_id": x["exercise_id"], "notes": x.get("notes", "")} for x in seq]}
 
 
 @api_router.delete("/lesson-templates/{lesson_id}")
@@ -4427,125 +4675,164 @@ async def set_lesson_guidelines(payload: LessonGuidelinesPayload, current: User 
     return {"text": payload.text}
 
 
-@api_router.post("/fitness/generate-lesson")
-async def generate_lesson(payload: GenerateLessonPayload, current: User = Depends(get_current_user)):
-    """Builds a lesson template from a free-text request (e.g. 'lezione funzionale per 10
-    persone, 40 minuti, livello medio, focus gambe'), reusing existing exercises where
-    possible and proposing new ones - which get added to the shared exercise database -
-    when nothing suitable already exists. Always follows the studio's saved guidelines
-    (e.g. 'sempre 5 minuti di stretching a inizio e fine')."""
-    import re as _re, json as _json
+class GenerateLessonV2Payload(BaseModel):
+    prompt: str
+    type_id: Optional[str] = None
 
-    if not (payload.prompt or "").strip():
-        raise HTTPException(status_code=400, detail="Descrivi la lezione che vuoi creare")
 
-    exercises = await db.exercises.find(_visible_query(current), {"_id": 0}).to_list(500)
-    guidelines_doc = await db.lesson_guidelines.find_one({"owner_key": _fitness_owner_key(current)}, {"_id": 0})
-    guidelines_text = (guidelines_doc or {}).get("text", "").strip()
+async def _lesson_llm(system: str, prompt: str, current: User, model: str, feature: str = "creazione_lezioni") -> str:
+    """One model call of the lesson builder (kept apart: the tests replace it)."""
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"lesson_{uuid.uuid4().hex[:8]}", system_message=system,
+                   user_id=current.user_id, feature=feature, channel="web", trigger="utente", org_id=current.org_id
+                   ).with_model("openai", model)
+    return await chat.send_message(UserMessage(text=prompt))
 
-    exercises_listing = "\n".join(
-        f"- id={e['id']} | {e['name']} | disciplina={e['discipline']} | categoria={e.get('category') or '—'} | "
-        f"livello={e.get('level') or '—'} | durata={e.get('duration_minutes') or '—'}min | attrezzatura={e.get('equipment') or '—'}"
-        for e in exercises
-    ) or "(nessun esercizio nel database ancora: proponi tu gli esercizi necessari come nuovi)"
 
-    guidelines_block = (
-        f"\nLinee guida fisse dello studio, da rispettare SEMPRE nella costruzione della lezione:\n{guidelines_text}\n"
-        if guidelines_text else ""
-    )
+def _json_in(raw: str) -> dict:
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        raise ValueError("no JSON")
+    return json.loads(m.group(0))
 
+
+async def _read_lesson_request(current: User, prompt: str, type_names: list) -> dict:
+    """The request's parameters: the model reads them (types, level words, body parts said in
+    other words); the numbers it gives are checked against the ones in the text."""
+    found = fx.parse_request_fallback(prompt)
     system = (
-        "Sei l'assistente di segreteria di una scuola di danza/pilates. Componi il piano di una lezione a partire "
-        "dalla richiesta in linguaggio naturale della titolare (numero di persone, durata, livello, focus/obiettivo). "
-        "Riusa quando possibile gli esercizi già presenti nel database sotto. Se per soddisfare la richiesta "
-        "servono esercizi che non esistono ancora, proponili come nuovi: verranno aggiunti automaticamente al "
-        "database condiviso."
-        f"{guidelines_block}\n"
-        "Database esercizi disponibili:\n"
-        f"{exercises_listing}\n\n"
-        "Rispondi SOLO con un JSON valido (nessun testo prima o dopo, nessun markdown), in questo formato esatto:\n"
-        '{"name": "nome breve della lezione", "discipline": "danza|pilates|altro", '
-        '"level": "base|intermedio|avanzato", "notes": "note generali sulla lezione (n. persone, obiettivo, ecc.)", '
-        '"sequence": [ '
-        '{"exercise_id": "id di un esercizio esistente dalla lista sopra", "item_notes": "nota opzionale per questo esercizio in questa lezione"} '
-        "OPPURE "
-        '{"new_exercise": {"name": "...", "discipline": "danza|pilates|altro", "category": "...", '
-        '"level": "base|intermedio|avanzato", "equipment": "...", "duration_minutes": 5, "notes": "..."}, "item_notes": "..."} '
-        "] }\n"
-        "La somma delle duration_minutes degli esercizi in sequence deve avvicinarsi alla durata totale richiesta."
+        "Leggi la richiesta di un istruttore di fitness che vuole creare una lezione ed estrai i parametri. "
+        f"Tipi di lezione disponibili: {', '.join(type_names) or 'nessuno'}.\n"
+        "Rispondi SOLO con JSON: {\"type\": \"uno dei tipi o vuoto\", \"participants\": numero o null, "
+        "\"duration_min\": numero o null, \"level\": \"basso|medio|alto\" o null, "
+        "\"body_parts\": [\"gambe\", \"braccia\", \"glutei\", ...] (vuoto se tutto il corpo), "
+        "\"mode\": \"tempo|ripetizioni|misto\" o null}. Solo ciò che è detto, mai inventare."
     )
+    try:
+        got = _json_in(await _lesson_llm(system, prompt, current, "gpt-4o-mini"))
+    except Exception:
+        logger.exception("lesson request reading failed, using the plain reading")
+        got = {}
+    out = {"type": str(got.get("type") or "").strip()}
+    for k in ("participants", "duration_min"):
+        v = _int_or_none(got.get(k))
+        out[k] = found.get(k) if found.get(k) else v
+    out["level"] = fx.norm_level(got.get("level")) or found.get("level")
+    parts = [str(x).strip().lower() for x in (got.get("body_parts") or []) if str(x).strip()]
+    out["body_parts"] = parts or found.get("body_parts") or []
+    out["mode"] = got.get("mode") if got.get("mode") in ("tempo", "ripetizioni", "misto") else found.get("mode")
+    return out
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"lesson_gen_{uuid.uuid4().hex[:8]}",
-        system_message=system,
-        user_id=current.user_id, feature="creazione_lezioni", channel="web", trigger="utente", org_id=current.org_id,
-    ).with_model("openai", "gpt-4o")
-    raw = await chat.send_message(UserMessage(text=payload.prompt))
+
+def _exercise_line(e: dict, participants: int) -> str:
+    t, r = e.get("timed") or {}, e.get("reps") or {}
+    eq = f"{e['equipment']} x{e.get('equipment_per_person')} a persona" if e.get("equipment") else "corpo libero"
+    bits = [f"id={e['id']}", e["name"], f"parte={e.get('body_part') or '-'}", f"livello={e.get('level') or '-'}", eq]
+    if t.get("allowed", True):
+        bits.append(f"a tempo: serie {t.get('min_sets')}-{t.get('max_sets')}, {t.get('min_sec')}-{t.get('max_sec')} s")
+    if r.get("allowed", True):
+        bits.append(f"a ripetizioni: serie {r.get('min_sets')}-{r.get('max_sets')}, ripetizioni {r.get('min_reps')}-{r.get('max_reps')}")
+    if e.get("notes"):
+        bits.append(f"nota: {e['notes']}")
+    return " | ".join(str(b) for b in bits)
+
+
+@api_router.post("/fitness/generate-lesson")
+async def generate_lesson(payload: GenerateLessonV2Payload, current: User = Depends(get_current_user)):
+    return await _generate_lesson(current, payload.prompt, payload.type_id)
+
+
+async def _generate_lesson(current: User, prompt: str, type_id: Optional[str] = None) -> dict:
+    """The lesson from the request + the rules of its type + the exercises and the equipment
+    the studio has (see fitness.py for what is decided here and what the model chooses)."""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Descrivi la lezione che vuoi creare")
+    await _ensure_fitness_base(current)
+    owner = _fitness_owner_key(current)
+    types = await db.lesson_types.find({"owner_key": owner}, {"_id": 0}).sort("created_at", 1).to_list(100)
+    if not types:
+        raise HTTPException(status_code=400, detail="Crea prima un tipo di lezione (es. Funzionale) con le sue regole")
+    exercises = await db.exercises.find(_visible_query(current), {"_id": 0}).to_list(3000)
+    inventory = fx.inventory_map(await db.fitness_equipment.find({"owner_key": owner}, {"_id": 0}).to_list(500))
+    guidelines = ((await db.lesson_guidelines.find_one({"owner_key": owner}, {"_id": 0})) or {}).get("text", "").strip()
+
+    req = await _read_lesson_request(current, prompt, [t["name"] for t in types])
+    ltype = next((t for t in types if t["id"] == type_id), None) \
+        or next((t for t in types if req["type"] and t["name"].lower() == req["type"].lower()), None) \
+        or next((t for t in types if t["name"].lower() in prompt.lower()), None) or types[0]
+    participants = req["participants"] or ltype.get("default_participants") or 10
+    level = req["level"] or fx.norm_level(ltype.get("default_level"))
+    duration = req["duration_min"] or ltype.get("duration_min") or 40
+    parts = req["body_parts"]
+    mode = req["mode"] or ltype.get("mode") or "misto"
+    rest = int(ltype.get("rest_sec") if ltype.get("rest_sec") is not None else fx.DEFAULT_REST_SEC)
+    start_min, end_min = int(ltype.get("start_min") or 0), int(ltype.get("end_min") or 0)
+    budgets = {"inizio": start_min * 60, "fine": end_min * 60, "centrale": max(60, duration * 60 - (start_min + end_min) * 60)}
+
+    cand = fx.candidates(exercises, ltype.get("activity") or "", level, parts, participants, inventory)
+    pools = {"inizio": cand[ltype.get("start_kind") or "stretching"] if start_min else [],
+             "centrale": cand["esercizio"],
+             "fine": cand[ltype.get("end_kind") or "stretching"] if end_min else []}
+    if not pools["centrale"]:
+        raise HTTPException(status_code=400, detail="Non trovo esercizi adatti" + (f" per {', '.join(parts)}" if parts else "")
+                            + (f" al livello {level}" if level else "") + f" con gli attrezzi disponibili per {participants} persone.")
+
+    listing = "\n".join(f"[{ph}] " + _exercise_line(e, participants) for ph, pool in pools.items() for e in pool)
+    system = (
+        "Sei un istruttore di fitness esperto. Componi una lezione SCEGLIENDO SOLO tra gli esercizi elencati (usa i loro id), "
+        "rispettando le regole. Fasi e tempo a disposizione:\n"
+        + "".join(f"- {ph}: {budgets[ph] // 60} minuti\n" for ph in ("inizio", "centrale", "fine") if budgets[ph])
+        + f"Partecipanti: {participants}. Livello: {level or 'misto'}. Parti del corpo: {', '.join(parts) or 'tutto il corpo'}. "
+        f"Modalità delle serie: {mode} (tempo = secondi, ripetizioni = numero di ripetizioni). Pausa tra le serie: {rest} secondi.\n"
+        f"Tipo di lezione: {ltype['name']}." + (f" Regole del tipo: {ltype['rules_text']}" if ltype.get("rules_text") else "") + "\n"
+        + (f"Regole generali dello studio: {guidelines}\n" if guidelines else "")
+        + "Alterna le parti del corpo e varia gli esercizi; per ogni esercizio resta dentro i limiti di serie, secondi e "
+        "ripetizioni indicati. Gli esercizi con [inizio] vanno all'inizio, [fine] alla fine, [centrale] nel corpo della lezione.\n"
+        f"Esercizi disponibili:\n{listing}\n\n"
+        "Rispondi SOLO con JSON: {\"title\": \"nome breve della lezione\", \"notes\": \"indicazioni per l'istruttore (breve)\", "
+        "\"blocks\": [{\"phase\": \"inizio|centrale|fine\", \"exercise_id\": \"...\", \"mode\": \"tempo|ripetizioni\", "
+        "\"sets\": n, \"seconds\": n, \"reps\": n, \"notes\": \"\"}]}"
+    )
+    try:
+        plan = _json_in(await _lesson_llm(system, prompt, current, "gpt-4o"))
+    except Exception:
+        logger.exception("lesson composition failed, building it from the rules alone")
+        plan = {}
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_lezioni", channel="web", trigger="utente", org_id=current.org_id)
 
-    match = _re.search(r"\{.*\}", raw or "", _re.DOTALL)
-    if not match:
-        raise HTTPException(status_code=500, detail="Non sono riuscito a generare la lezione, riprova.")
-    try:
-        parsed = _json.loads(match.group(0))
-    except _json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Risposta AI non valida, riprova.")
-
-    exercises_by_id = {e["id"]: e for e in exercises}
-    final_sequence = []
-    new_exercise_count = 0
-
-    for item in (parsed.get("sequence") or []):
-        if not isinstance(item, dict):
+    # the model's answer, checked: only the candidates of each phase, within their limits, fitted to the time
+    by_id = {e["id"]: e for pool in pools.values() for e in pool}
+    pool_ids = {ph: {e["id"] for e in pool} for ph, pool in pools.items()}
+    blocks = {ph: [] for ph in pools}
+    for b in plan.get("blocks") or []:
+        ph = b.get("phase") if b.get("phase") in pools else None
+        if not ph or b.get("exercise_id") not in pool_ids[ph] or any(x["exercise_id"] == b["exercise_id"] for x in blocks[ph]):
             continue
-        item_notes = (item.get("item_notes") or "").strip()
-
-        ref_id = item.get("exercise_id")
-        if ref_id and ref_id in exercises_by_id:
-            final_sequence.append({"exercise_id": ref_id, "notes": item_notes})
-            continue
-
-        new_ex = item.get("new_exercise")
-        if isinstance(new_ex, dict) and (new_ex.get("name") or "").strip():
-            duration = new_ex.get("duration_minutes")
-            try:
-                duration = int(duration) if duration is not None else None
-            except (TypeError, ValueError):
-                duration = None
-            ex_doc = {
-                "id": f"ex_{uuid.uuid4().hex[:12]}",
-                "name": new_ex["name"].strip()[:200],
-                "discipline": new_ex.get("discipline") if new_ex.get("discipline") in ("danza", "pilates", "altro") else "altro",
-                "category": (new_ex.get("category") or "").strip(),
-                "level": new_ex.get("level") if new_ex.get("level") in ("base", "intermedio", "avanzato") else None,
-                "equipment": (new_ex.get("equipment") or "").strip(),
-                "duration_minutes": duration,
-                "notes": (new_ex.get("notes") or "").strip(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            _stamp_owner_fields(ex_doc, current)
-            await db.exercises.insert_one(ex_doc)
-            ex_doc.pop("_id", None)
-            exercises_by_id[ex_doc["id"]] = ex_doc
-            final_sequence.append({"exercise_id": ex_doc["id"], "notes": item_notes})
-            new_exercise_count += 1
-
-    lesson_doc = {
-        "id": f"lsn_{uuid.uuid4().hex[:12]}",
-        "name": (parsed.get("name") or "Lezione generata").strip()[:200],
-        "discipline": parsed.get("discipline") if parsed.get("discipline") in ("danza", "pilates", "altro") else "altro",
-        "level": parsed.get("level") if parsed.get("level") in ("base", "intermedio", "avanzato") else None,
-        "notes": (parsed.get("notes") or "").strip(),
-        "exercises": final_sequence,
-        "visibility": "org" if current.org_id else "private",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        blocks[ph].append(fx.fix_block({**b, "phase": ph}, by_id[b["exercise_id"]], mode))
+    for ph in pools:
+        if budgets[ph] and pools[ph]:
+            blocks[ph] = fx.fit_phase(blocks[ph], budgets[ph], rest, by_id, pools[ph], mode)
+            for x in blocks[ph]:
+                x["phase"] = ph
+    seq = blocks["inizio"] + blocks["centrale"] + blocks["fine"]
+    total = sum(fx.block_seconds(x, rest) for x in seq)
+    notes = (plan.get("notes") or "").strip()[:600]
+    lesson = {
+        "id": f"lsn_{uuid.uuid4().hex[:12]}", "kind": "v2",
+        "name": (plan.get("title") or f"{ltype['name']} {', '.join(parts) or 'total body'}").strip()[:120],
+        "type_id": ltype["id"], "type_name": ltype["name"], "activity": ltype.get("activity") or "",
+        "participants": participants, "level": level, "body_parts": parts, "duration_min": duration, "mode": mode,
+        "rest_sec": rest, "blocks": seq, "total_sec": total,
+        "equipment_needed": fx.equipment_summary(seq, participants), "excluded_equipment": cand["excluded_equipment"][:20],
+        "request": prompt, "notes": notes,
+        # older fields, for the lists that still read them
+        "discipline": "altro", "exercises": [{"exercise_id": x["exercise_id"], "notes": x.get("notes", "")} for x in seq],
+        "visibility": "org" if current.org_id else "private", "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    _stamp_owner_fields(lesson_doc, current)
-    await db.lesson_templates.insert_one(lesson_doc)
-    lesson_doc.pop("_id", None)
-
-    return {"lesson": lesson_doc, "new_exercises_created": new_exercise_count}
+    _stamp_owner_fields(lesson, current)
+    await db.lesson_templates.insert_one(lesson)
+    lesson.pop("_id", None)
+    return {"lesson": lesson, "new_exercises_created": 0}
 
 
 # ============ VETERINARIO: REPORT VISITA ============

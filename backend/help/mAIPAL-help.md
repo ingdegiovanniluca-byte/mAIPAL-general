@@ -256,10 +256,14 @@ Le azioni programmate sono comandi che mAIPAL esegue da solo, con la cadenza che
 
 ## Fitness
 <!-- id: fitness · path: /dashboard/fitness · verticale: fitness -->
-La sezione Fitness (per istruttori, es. danza e pilates) ha tre parti:
-- **Esercizi**: il database degli esercizi, con descrizione, categoria (es. riscaldamento, core) e attrezzi (es. tappetino, elastico); può essere condiviso con il team.
-- **Lezioni**: componi lezioni riutilizzabili mettendo in sequenza gli esercizi, con una nota per ognuno; oppure descrivi la lezione e mAIPAL la propone. Le **linee guida** dicono a mAIPAL come generarle.
-- **Clienti**: i tuoi clienti con abbonamento (es. mensile, 10 lezioni).
+La sezione Fitness (per istruttori e studi) ha quattro parti: Lezioni, Esercizi, Attrezzi e Clienti. Scegliendo il verticale Fitness trovi già pronti gli esercizi di base del funzionale, gli attrezzi di partenza e il tipo di lezione **Funzionale**.
+- **Lezioni**: tocca **Crea lezione**, scegli il tipo e scrivi la richiesta, es. "lezione per 10 persone, livello medio, allenamento gambe". mAIPAL unisce la richiesta alle regole del tipo e compone la lezione in tre parti (inizio, parte centrale, fine), con serie, secondi o ripetizioni di ogni esercizio, la durata totale e gli attrezzi da preparare. Nella richiesta puoi dire partecipanti, livello, parti del corpo, durata, "a tempo" o "a ripetizioni"; quello che non dici lo prende dalle regole del tipo.
+- **Come sceglie gli esercizi**: usa solo esercizi del tuo catalogo, del livello giusto (una lezione di livello medio usa esercizi di livello basso e medio) e delle parti del corpo chieste; rispetta i minimi e i massimi di ogni esercizio e i minuti di ogni parte. Un esercizio entra solo se gli attrezzi bastano per tutti insieme (partecipanti × pezzi a persona): quelli esclusi per questo sono elencati nella lezione.
+- **Modificare una lezione**: toccala per aprirla; puoi rinominarla, cambiare le serie con − e +, togliere un esercizio (×) o aggiungerne uno a una parte (+), poi **Salva**: la durata viene ricalcolata.
+- **Regole**: dal pulsante **Regole** gestisci i tipi di lezione. Per ognuno: durata (es. 40 minuti), minuti e tipo di inizio e fine (stretching o riscaldamento, es. 5 minuti di stretching all'inizio e alla fine), pausa tra le serie, partecipanti e livello se non detti, esercizi a tempo, a ripetizioni o misti, e altre regole a testo libero. Sotto ci sono le regole valide per tutte le lezioni dello studio.
+- **Esercizi**: il catalogo, filtrabile per tipo (riscaldamento, esercizio, stretching), parte del corpo, livello e attrezzo. Con **Nuovo esercizio** aggiungi i tuoi: parte del corpo, livello, attrezzo e pezzi per persona, se si fa a tempo (secondi e serie minimi e massimi) e/o a ripetizioni, descrizione, note e link a un video. Puoi modificare o eliminare anche quelli di base.
+- **Attrezzi**: gli attrezzi dello studio con la quantità; cambiala con − e +, aggiungine di nuovi (se esiste già, la quantità si somma) o tocca il nome per rinominarlo o eliminarlo.
+- **Clienti**: i tuoi clienti con abbonamento (es. mensile, 10 lezioni) e scadenza del certificato medico.
 
 ## Impostazioni
 <!-- id: impostazioni · path: /dashboard/settings · verticale: tutti -->

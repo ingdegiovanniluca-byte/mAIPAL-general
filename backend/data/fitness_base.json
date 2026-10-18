@@ -1,0 +1,1904 @@
+{
+ "source": "Esercizi_e_Attrezzi_1.xlsx",
+ "exercises": [
+  {
+   "base_id": 1,
+   "name": "Squat corpo libero",
+   "type": "Squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 2,
+   "name": "Squat con un manubrio",
+   "type": "Squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 3,
+   "name": "Squat con due manubri",
+   "type": "Squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 4,
+   "name": "Squat con elastico",
+   "type": "Squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 5,
+   "name": "Affondi indietro corpo libero",
+   "type": "Affondi indietro",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 6,
+   "name": "Affondi indietro con un manubrio",
+   "type": "Affondi indietro",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 7,
+   "name": "Affondi indietro con due manubri",
+   "type": "Affondi indietro",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 8,
+   "name": "Affondi indietro con elastico",
+   "type": "Affondi indietro",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 9,
+   "name": "Affondi avanti corpo libero",
+   "type": "Affondi avanti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 10,
+   "name": "Affondi avanti con un manubrio",
+   "type": "Affondi avanti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 11,
+   "name": "Affondi avanti con due manubri",
+   "type": "Affondi avanti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 12,
+   "name": "Affondi avanti con elastico",
+   "type": "Affondi avanti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 13,
+   "name": "Affondi laterali corpo libero",
+   "type": "Affondi laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 14,
+   "name": "Affondi laterali con un manubrio",
+   "type": "Affondi laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 15,
+   "name": "Affondi laterali con due manubri",
+   "type": "Affondi laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 16,
+   "name": "Sumo squat corpo libero",
+   "type": "Sumo squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 17,
+   "name": "Sumo squat con un manubrio",
+   "type": "Sumo squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 18,
+   "name": "Sumo squat con due manubri",
+   "type": "Sumo squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 19,
+   "name": "Sumo squat con elastico",
+   "type": "Sumo squat",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 45,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 12,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 20,
+   "name": "Curl con un manubrio",
+   "type": "Curl",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un braccio e poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 21,
+   "name": "Curl con due manubri",
+   "type": "Curl",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 22,
+   "name": "Press con un manubrio",
+   "type": "Press",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un braccio e poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 23,
+   "name": "Press con due manubri",
+   "type": "Press",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 24,
+   "name": "Tricipiti con un manubrio",
+   "type": "Tricipiti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un braccio e poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 25,
+   "name": "Tricipiti con due manubri",
+   "type": "Tricipiti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 26,
+   "name": "Rematore con un manubrio",
+   "type": "Rematore",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un braccio e poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 27,
+   "name": "Rematore con due manubri",
+   "type": "Rematore",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 28,
+   "name": "Alzata avanti con un manubrio",
+   "type": "Alzata avanti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un braccio e poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 29,
+   "name": "Alzata avanti con due manubri",
+   "type": "Alzata avanti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 30,
+   "name": "Alzata laterale con un manubrio",
+   "type": "Alzata laterale",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 16,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un braccio e poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 31,
+   "name": "Alzata laterale con due manubri",
+   "type": "Alzata laterale",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 32,
+   "name": "Spinta soffitto gomiti chiusi",
+   "type": "Braccia per terra supina",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 33,
+   "name": "Spinta soffitto gomiti aperti",
+   "type": "Braccia per terra supina",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 34,
+   "name": "Pettorali supini con due manubri",
+   "type": "Pettorali supini",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "manubrio",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 30,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "alto",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 35,
+   "name": "Pushup gomiti chiusi",
+   "type": "Pushup",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 36,
+   "name": "Pushup tricipiti",
+   "type": "Pushup",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 37,
+   "name": "Orsetto",
+   "type": "Orsetto",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 38,
+   "name": "Tricipiti seduti",
+   "type": "Tricipiti",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 3,
+    "min_sets": 2
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 12,
+    "min_reps": 8,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 39,
+   "name": "Slanci gamba tesa corpo libero",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 40,
+   "name": "Slanci gamba tesa con elastico",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 41,
+   "name": "Slanci gamba tesa con cavigliere",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "cavigliera",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 42,
+   "name": "Slanci gamba piegata corpo libero",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 43,
+   "name": "Slanci gamba piegata con elastico",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 44,
+   "name": "Slanci gamba piegata con cavigliere",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "cavigliera",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 45,
+   "name": "Aperture del ginocchio corpo libero",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "basso",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 46,
+   "name": "Aperture del ginocchio con elastico",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 47,
+   "name": "Aperture del ginocchio con cavigliere",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "cavigliera",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 48,
+   "name": "Circle corpo con elastico",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 49,
+   "name": "Circle corpo con cavigliere",
+   "type": "Quadrupedia",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "cavigliera",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 50,
+   "name": "Slanci side gamba sopra con elastico",
+   "type": "Laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 51,
+   "name": "Slanci side gamba sopra con cavigliere",
+   "type": "Laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "cavigliera",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 52,
+   "name": "Circle gamba sopra con elastico",
+   "type": "Laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "elastico piccolo",
+   "equipment_per_person": 1,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 53,
+   "name": "Circle gamba sopra con cavigliera",
+   "type": "Laterali",
+   "role": "esercizio",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "cavigliera",
+   "equipment_per_person": 2,
+   "timed": {
+    "allowed": true,
+    "max_sec": 40,
+    "min_sec": 20,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": "medio",
+   "notes": "Va fatto prima con un arto poi con l'altro",
+   "link": ""
+  },
+  {
+   "base_id": 54,
+   "name": "Riscaldamento gambe 1",
+   "type": "Riscaldamento",
+   "role": "riscaldamento",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 55,
+   "name": "Riscaldamento gambe 2",
+   "type": "Riscaldamento",
+   "role": "riscaldamento",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 56,
+   "name": "Riscaldamento braccia 1",
+   "type": "Riscaldamento",
+   "role": "riscaldamento",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 57,
+   "name": "Riscaldamento braccia 2",
+   "type": "Riscaldamento",
+   "role": "riscaldamento",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 58,
+   "name": "Riscaldamento braccia 3",
+   "type": "Riscaldamento",
+   "role": "riscaldamento",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 59,
+   "name": "Riscaldamento glutei 1",
+   "type": "Riscaldamento",
+   "role": "riscaldamento",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 60,
+   "name": "Stretching gambe 1",
+   "type": "Stretching",
+   "role": "stretching",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 61,
+   "name": "Stretching gambe 2",
+   "type": "Stretching",
+   "role": "stretching",
+   "activity": "funzionale",
+   "body_part": "gambe",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 62,
+   "name": "Stretching braccia 1",
+   "type": "Stretching",
+   "role": "stretching",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 63,
+   "name": "Stretching braccia 2",
+   "type": "Stretching",
+   "role": "stretching",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 64,
+   "name": "Stretching braccia 3",
+   "type": "Stretching",
+   "role": "stretching",
+   "activity": "funzionale",
+   "body_part": "braccia",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  },
+  {
+   "base_id": 65,
+   "name": "Stretching glutei 1",
+   "type": "Stretching",
+   "role": "stretching",
+   "activity": "funzionale",
+   "body_part": "glutei",
+   "description": "",
+   "equipment": "",
+   "equipment_per_person": 0,
+   "timed": {
+    "allowed": true,
+    "max_sec": 60,
+    "min_sec": 40,
+    "max_sets": 3,
+    "min_sets": 1
+   },
+   "reps": {
+    "allowed": true,
+    "sec_per_set": 30,
+    "max_reps": 20,
+    "min_reps": 16,
+    "max_sets": 2,
+    "min_sets": 1
+   },
+   "level": null,
+   "notes": "",
+   "link": ""
+  }
+ ],
+ "equipment": [
+  {
+   "name": "manubrio",
+   "quantity": 40
+  },
+  {
+   "name": "elastico piccolo",
+   "quantity": 30
+  },
+  {
+   "name": "cavigliera",
+   "quantity": 20
+  }
+ ]
+}
