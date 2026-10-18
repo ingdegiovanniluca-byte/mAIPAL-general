@@ -218,6 +218,16 @@ async def main():
     print("centrale", main, "s of", 30 * 60, "| total", L["total_sec"], "| equipment", L["equipment_needed"])
     assert 0.9 * 1800 <= main <= 1.05 * 1800
     assert all(v <= 40 for v in L["equipment_needed"].values())
+    assert r["message"].startswith("🏋️ Lezione creata: Gambe medio") and "Parte centrale" in r["message"] and "Attrezzi da preparare" in r["message"]
+    # a change asked in the chat: the same lesson rebuilt with the request + the change, star kept
+    await server.update_lesson_template(L["id"], {"favorite": True}, me)
+    n_before = len(await server.list_lesson_templates(me))
+    r2 = await server._generate_lesson(me, "fallo per 15 persone", replace_id=L["id"])
+    L2 = r2["lesson"]
+    assert r2["replaced"] and L2["id"] == L["id"] and L2["favorite"] and L2["participants"] == 15 and L2["created_at"] == L["created_at"]
+    assert "Modifiche richieste: fallo per 15 persone" in L2["request"] and "Partecipanti: 15" in CALLS[-1][1]
+    assert len(await server.list_lesson_templates(me)) == n_before and r2["message"].startswith("🏋️ Lezione modificata")
+    L = L2
     # changed by hand: blocks kept in their limits, totals recomputed
     b0 = dict(L["blocks"][1]); b0["sets"] = 99
     ed = await server.update_lesson_template(L["id"], {"name": "Mia", "blocks": [L["blocks"][0], b0, {"exercise_id": "nope"}, L["blocks"][-1]]}, me)

@@ -13,7 +13,7 @@ FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages"
 AGENT_SECTIONS = {
     "info_request": "agente-cerca", "info_upload": "agente-salva", "task_todo": "agente-task",
     "journal": "diario", "job_log": "diario-commessa", "vet_report": "referto",
-    "work_report": "report-lavoro", "scheduled_action": "azioni",
+    "work_report": "report-lavoro", "scheduled_action": "azioni", "lesson": "fitness",
 }
 VERTICALS = [None, "artigiano", "veterinario", "fitness"]
 

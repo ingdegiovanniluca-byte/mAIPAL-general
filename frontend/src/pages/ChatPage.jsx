@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, Dumbbell } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,7 +17,7 @@ import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleD
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
 
-const ACTION_LABELS_IT = { help: "Help", info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", list_update: "Modifica lista", scheduled_action: "Azione" };
+const ACTION_LABELS_IT = { help: "Help", info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", lesson: "Lezione", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
 const HISTORY_RETENTION_NOTE = "Le chat non preferite si cancellano da sole 10 giorni dopo l'ultimo messaggio: segna con la stella quelle da tenere. Note, task e diario salvati restano.";
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
@@ -78,6 +78,13 @@ const ALL_ACTIONS = [
     color: "#A0672E",
   },
   {
+    id: "lesson", key: "lesson", short: "Lezioni", icon: <Dumbbell size={22} />,
+    title: "Lezioni",
+    subtitle: "Chiedi la lezione: la compongo con le regole del tipo, i tuoi esercizi e i tuoi attrezzi",
+    placeholder: 'Es. "Lezione funzionale per 10 persone, livello medio, allenamento gambe"',
+    color: "#B0476E",
+  },
+  {
     id: "scheduled_action", key: "scheduled", short: "Azioni", icon: <Repeat size={22} />,
     title: "Azioni programmate",
     subtitle: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi",
@@ -102,6 +109,7 @@ const HELP_ACTION = {
 const actionsFor = (vertical) => ALL_ACTIONS.filter((a) =>
   a.id === "vet_report" ? (!vertical || vertical === "veterinario")
   : a.id === "work_report" || a.id === "job_log" ? vertical === "artigiano"
+  : a.id === "lesson" ? vertical === "fitness"
   : a.id === "journal" ? vertical !== "artigiano"
   : true);
 
@@ -148,6 +156,11 @@ const AGENT_INFO = {
     options: [[ClipboardList, "Scegli il tipo di report o carica un tuo modello"]],
     examples: ["Sopralluogo dal signor Mario Rossi in via Roma 5 a Torino: impianto elettrico della cucina da rifare, manca il differenziale, propongo nuovo quadro e 6 punti presa"],
   },
+  lesson: {
+    what: "Chiedi la lezione che ti serve (partecipanti, livello, parti del corpo, durata): la compongo con le regole del tipo di lezione, i tuoi esercizi e i tuoi attrezzi, e la salvo in Fitness → Lezioni. Nella stessa chat puoi chiedere modifiche (\"fallo per 15 persone\", \"togli gli affondi\"); per una lezione nuova scrivi \"nuova lezione…\".",
+    options: [],
+    examples: ["Lezione funzionale per 10 persone, livello medio, allenamento gambe", "Lezione di 30 minuti per 8 persone livello alto, braccia e glutei", "Fallo per 15 persone"],
+  },
   scheduled_action: {
     what: "Un comando che eseguo da solo con la cadenza che scegli, finché non lo fermi. Prima di attivarlo ti mostro cosa farò.",
     options: [],
@@ -160,8 +173,8 @@ const SCHED_YES = /^[\s"'«(]*(s[iì]|ok|okay|confermo|conferma|procedi|vai|eseg
 const SCHED_NO = /^[\s"'«(]*(no|annulla|lascia stare|non farlo|stop)(?![a-zàèéìòù])/i;
 const readChatOpts = () => { try { return JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || "{}"); } catch { return {}; } };
 
-const ACTION_COLOR = { help: "#5B6FA8", info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
-const TITLE_COLOR  = { info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const ACTION_COLOR = { lesson: "#B0476E", help: "#5B6FA8", info_upload: "#6D6181", info_request: "#DD772F", task_todo: "#7C6A7D", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
+const TITLE_COLOR  = { lesson: "#B0476E", info_upload: "#534357", info_request: "#DD772F", task_todo: "#372F42", journal: "#8E2E11", job_log: "#8E2E11", vet_report: "#2E7D63", work_report: "#A0672E", list_update: "#2E5F7D", scheduled_action: "#3E7C8C" };
 
 // Images over 1 MB for the knowledge base / Drive (typical PC screenshots or camera photos)
 // are re-encoded client-side into a JPEG of at most 2560px before upload - whichever of the
@@ -796,6 +809,40 @@ export default function ChatPage() {
   // "Azioni programmate": the command is interpreted server-side into an exact schedule +
   // what will be done, shown back for an explicit "Attiva". Any further message in the same
   // thread before confirming is treated as a correction of that same command.
+  // Lezioni (fitness): a message in the chat of a lesson changes THAT lesson ("fallo per 15
+  // persone"); "nuova lezione…" / "crea…" starts another one.
+  const sendLesson = async () => {
+    const voice = await takeVoice();
+    let content = text.trim();
+    if (voice) {
+      setTranscribing(true);
+      try { content = [content, await transcribeBlob(voice.blob)].filter(Boolean).join(" ").trim(); }
+      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      setTranscribing(false);
+      setPendingVoice(null);
+    }
+    if (!content) { toast.error("Descrivi la lezione che vuoi creare"); return; }
+    if (streaming || transcribing) return;
+    const last = thread?.action === "lesson" ? [...thread.messages].reverse().find((m) => m.lessonId)?.lessonId : null;
+    const isNew = !last || /\b(nuova|un'altra|altra)\s+lezione\b|^\s*(crea|creami|fai|fammi|prepara|preparami|genera)\b/i.test(content);
+    setStreaming(true);
+    setThread((th) => (th && th.action === "lesson")
+      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      : { conv_id: null, action: "lesson", messages: [{ role: "user", content }], liveAnswer: "" });
+    setText("");
+    try {
+      const { main } = splitMentions(content);
+      const r = await api.post("/fitness/generate-lesson", { prompt: main || content, ...(isNew ? {} : { replace_id: last }) });
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: r.data.message, lessonId: r.data.lesson.id }] }));
+      await dispatchTagged(content, null);
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a creare la lezione");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
   const sendScheduledAction = async () => {
     const voice = await takeVoice();
     let content = text.trim();
@@ -1068,6 +1115,7 @@ export default function ChatPage() {
     if (active === "vet_report") { await sendVetReport(); return; }
     if (active === "job_log") { await sendJobLog(); return; }
     if (active === "work_report") { await sendWorkReport(); return; }
+    if (active === "lesson") { await sendLesson(); return; }
     if (active === "scheduled_action") { await sendScheduledAction(); return; }
     const voice = await takeVoice();
     if (pendingDriveUpload && text.trim() && attachments.length === 0 && !voice) {
@@ -2182,7 +2230,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ACTION_COLOR[thread.action] || "#CECAD0" }} />
                   <div className="kicker">
-                    {thread.action === "help" ? "help" : thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "job_log" ? "diario commessa" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
+                    {thread.action === "help" ? "help" : thread.action === "info_upload" ? "caricamento" : thread.action === "info_request" ? "richiesta" : thread.action === "journal" ? "diario" : thread.action === "vet_report" ? "referto" : thread.action === "work_report" ? "report" : thread.action === "job_log" ? "diario commessa" : thread.action === "lesson" ? "lezione" : thread.action === "list_update" ? "modifica lista" : thread.action === "scheduled_action" ? "azione programmata" : "task / to-do"}
                     {" · thread "}{thread.conv_id ? thread.conv_id.slice(-6) : "nuovo"}
                   </div>
                 </div>
@@ -2246,6 +2294,15 @@ export default function ChatPage() {
                           </button>
                         ))}
                       </div>
+                    )}
+                    {m.lessonId && (
+                      <button
+                        data-testid="open-lesson"
+                        onClick={() => navigate("/dashboard/fitness", { state: { lesson: m.lessonId } })}
+                        className="ml-4 mt-1 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white"
+                      >
+                        <Dumbbell size={12} /> Apri la lezione
+                      </button>
                     )}
                     {m.jobCommessaId && (
                       <button

@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
-import { Dumbbell, Plus, Minus, Trash2, Pencil, Lock, Users as UsersIcon, AlertTriangle, Sparkles, ListChecks, Search, Clock, X, Loader2, ExternalLink } from "lucide-react";
+import { Dumbbell, Plus, Minus, Trash2, Pencil, Lock, Users as UsersIcon, AlertTriangle, Sparkles, ListChecks, Search, Clock, X, Loader2, ExternalLink, Star } from "lucide-react";
 import { toast } from "sonner";
 
 /* Fitness: the lessons built by the agent from the rules of their type + the request, the
@@ -49,12 +50,9 @@ export default function FitnessPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-2xl bg-[#403A3C] text-white flex items-center justify-center"><Dumbbell size={18} /></div>
-        <div>
-          <div className="kicker">· fitness</div>
-          <h2 className="text-2xl font-bold tracking-tight">Lezioni & allenamenti</h2>
-        </div>
+      <div className="flex items-center gap-2.5 mb-6">
+        <Dumbbell size={24} strokeWidth={1.8} className="text-white shrink-0" />
+        <h2 className="text-2xl font-bold tracking-tight">Lezioni & allenamenti</h2>
       </div>
 
       <div className="flex items-center gap-1 p-1 rounded-full bg-white/10 mb-6 w-fit max-w-full overflow-x-auto" data-testid="fitness-tabs">
@@ -101,6 +99,15 @@ function ChipRow({ options, value, onChange, testid }) {
   );
 }
 
+function RoundBtn({ icon: Icon, label, onClick, testid }) {
+  return (
+    <button type="button" data-testid={testid} onClick={onClick} title={label} aria-label={label}
+      className="lg-glass shrink-0 rounded-full h-11 w-11 flex items-center justify-center text-white active:scale-95 transition-transform">
+      <Icon size={22} strokeWidth={1.7} />
+    </button>
+  );
+}
+
 function Label({ children }) {
   return <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1.5">{children}</div>;
 }
@@ -130,33 +137,63 @@ function blockDose(b) {
 }
 
 function LessonsTab() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [lessons, setLessons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [open, setOpen] = useState(null);
+  const [onlyFav, setOnlyFav] = useState(false);
 
   const load = async () => {
-    try { setLessons((await api.get("/lesson-templates")).data); }
-    catch { toast.error("Errore nel caricamento delle lezioni"); }
+    try {
+      const list = (await api.get("/lesson-templates")).data;
+      setLessons(list);
+      return list;
+    } catch { toast.error("Errore nel caricamento delle lezioni"); return []; }
     finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    // from the chat's "Apri la lezione": that lesson opened
+    const wanted = location.state?.lesson;
+    load().then((list) => {
+      const l = wanted && list.find((x) => x.id === wanted);
+      if (l) { setOpen(l); navigate(location.pathname, { replace: true, state: {} }); }
+    });
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sorted = useMemo(() => [...lessons].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")), [lessons]);
+  // favourites first, then the newest
+  const sorted = useMemo(() => [...lessons]
+    .filter((l) => !onlyFav || l.favorite)
+    .sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.created_at || "").localeCompare(a.created_at || "")), [lessons, onlyFav]);
+  const favCount = lessons.filter((l) => l.favorite).length;
+
+  const toggleFav = async (ls) => {
+    const favorite = !ls.favorite;
+    setLessons((xs) => xs.map((x) => (x.id === ls.id ? { ...x, favorite } : x)));
+    try { await api.patch(`/lesson-templates/${ls.id}`, { favorite }); }
+    catch (e) { toast.error(errMsg(e)); load(); }
+  };
+  const del = (ls) => confirmToast(`Eliminare la lezione "${ls.name}"?`, "Elimina", async () => {
+    try { await api.delete(`/lesson-templates/${ls.id}`); toast.success("Lezione eliminata"); load(); }
+    catch (e) { toast.error(errMsg(e)); }
+  });
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div className="text-sm text-white/60 min-w-0">Chiedi la lezione (es. “10 persone, livello medio, gambe”): l'agente la compone con le regole del tipo, i tuoi esercizi e i tuoi attrezzi.</div>
-        <div className="flex items-center gap-2">
-          <button data-testid="lesson-rules-btn" onClick={() => setShowRules(true)} className="pill-btn text-sm bg-white/10 text-white">
-            <ListChecks size={14} /> Regole
-          </button>
-          <button data-testid="generate-lesson-btn" onClick={() => setCreating(true)} className="pill-btn text-sm">
-            <Sparkles size={14} /> Crea lezione
-          </button>
-        </div>
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <button data-testid="generate-lesson-btn" onClick={() => setCreating(true)} className="pill-btn text-sm">
+          <Sparkles size={14} /> Crea lezione
+        </button>
+        <button data-testid="lesson-rules-btn" onClick={() => setShowRules(true)} className="pill-btn text-sm bg-white/10 text-white">
+          <ListChecks size={14} /> Regole
+        </button>
+        {favCount > 0 && (
+          <Chip on={onlyFav} onClick={() => setOnlyFav((v) => !v)} testid="lesson-only-fav">
+            <Star size={12} className="mr-1" fill={onlyFav ? "currentColor" : "none"} /> Preferite
+          </Chip>
+        )}
       </div>
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}
@@ -164,10 +201,19 @@ function LessonsTab() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {sorted.map((ls) => (
-          <button key={ls.id} type="button" onClick={() => setOpen(ls)} data-testid="lesson-card" className="card-soft p-4 rounded-2xl text-left min-w-0">
-            <div className="flex items-start justify-between gap-2 mb-1.5">
-              <div className="font-semibold break-words min-w-0">{ls.name}</div>
-              {ls.visibility === "org" ? <UsersIcon size={13} className="text-white/40 shrink-0" /> : <Lock size={13} className="text-white/25 shrink-0" />}
+          <div key={ls.id} role="button" tabIndex={0} onClick={() => setOpen(ls)} onKeyDown={(e) => e.key === "Enter" && setOpen(ls)}
+            data-testid="lesson-card" className="card-soft p-4 rounded-2xl text-left min-w-0 cursor-pointer">
+            <div className="flex items-start gap-1 mb-1.5">
+              <div className="font-semibold break-words min-w-0 flex-1 pt-1">{ls.name}</div>
+              <button type="button" onClick={(e) => { e.stopPropagation(); toggleFav(ls); }} data-testid="lesson-fav"
+                aria-label={ls.favorite ? "Togli dalle preferite" : "Aggiungi alle preferite"} aria-pressed={!!ls.favorite}
+                className={`p-1.5 rounded-full shrink-0 ${ls.favorite ? "text-amber-300" : "text-white/45 hover:text-white"}`}>
+                <Star size={16} fill={ls.favorite ? "currentColor" : "none"} />
+              </button>
+              <button type="button" onClick={(e) => { e.stopPropagation(); del(ls); }} data-testid="lesson-trash" aria-label="Elimina la lezione"
+                className="p-1.5 -mr-1.5 rounded-full shrink-0 text-white/45 hover:text-white">
+                <Trash2 size={16} />
+              </button>
             </div>
             {ls.kind === "v2" ? (
               <>
@@ -186,9 +232,10 @@ function LessonsTab() {
                 <Tag>{(ls.exercises || []).length} esercizi</Tag>
               </div>
             )}
-          </button>
+          </div>
         ))}
       </div>
+      {!loading && onlyFav && sorted.length === 0 && <div className="text-center text-white/40 py-16 kicker">nessuna lezione preferita</div>}
 
       {creating && <CreateLessonSheet onClose={() => setCreating(false)} onCreated={async (l) => { setCreating(false); await load(); setOpen(l); }} />}
       {showRules && <RulesSheet onClose={() => setShowRules(false)} />}
@@ -544,23 +591,22 @@ function ExercisesTab() {
   const toggle = (setter, cur, v) => setter(cur === v ? "" : v);
   return (
     <div>
-      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <div className="text-sm text-white/60">Gli esercizi con cui l'agente compone le lezioni: quelli di base e i tuoi.</div>
-        <button data-testid="new-exercise" onClick={() => setEditing({})} className="pill-btn text-sm"><Plus size={14} /> Nuovo esercizio</button>
-      </div>
-      <div className="relative mb-2.5">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/45" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cerca un esercizio" data-testid="exercise-search" className={`${field} pl-9`} />
-      </div>
-      <div className="space-y-1.5 mb-4" data-testid="exercise-filters">
-        <div className="flex gap-1.5 overflow-x-auto pb-0.5">{ROLES.map((r) => <Chip key={r.value} on={role === r.value} onClick={() => toggle(setRole, role, r.value)} testid={`f-role-${r.value}`}>{r.label}</Chip>)}</div>
-        {parts.length > 0 && <div className="flex gap-1.5 overflow-x-auto pb-0.5">{parts.map((p) => <Chip key={p} on={part === p} onClick={() => toggle(setPart, part, p)} testid={`f-part-${p}`}>{cap(p)}</Chip>)}</div>}
-        <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-          {LEVELS.map((l) => <Chip key={l.value} on={level === l.value} onClick={() => toggle(setLevel, level, l.value)}>{l.label}</Chip>)}
-          <span className="w-px bg-white/15 mx-0.5 shrink-0" />
-          <Chip on={tool === "-"} onClick={() => toggle(setTool, tool, "-")}>Senza attrezzi</Chip>
-          {tools.map((t) => <Chip key={t} on={tool === t} onClick={() => toggle(setTool, tool, t)}>{cap(t)}</Chip>)}
+      <div className="flex items-center gap-2.5 mb-2.5">
+        <RoundBtn icon={Plus} label="Nuovo esercizio" testid="new-exercise" onClick={() => setEditing({})} />
+        <div className="relative flex-1 min-w-0">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/45" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cerca un esercizio" data-testid="exercise-search" className={`${field} pl-9`} />
         </div>
+      </div>
+      <div className="flex gap-1.5 overflow-x-auto pb-1 mb-4 -mx-4 px-4 md:mx-0 md:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="exercise-filters">
+        {ROLES.map((r) => <Chip key={r.value} on={role === r.value} onClick={() => toggle(setRole, role, r.value)} testid={`f-role-${r.value}`}>{r.label}</Chip>)}
+        {parts.length > 0 && <span className="w-px bg-white/15 mx-0.5 shrink-0" />}
+        {parts.map((p) => <Chip key={p} on={part === p} onClick={() => toggle(setPart, part, p)} testid={`f-part-${p}`}>{cap(p)}</Chip>)}
+        <span className="w-px bg-white/15 mx-0.5 shrink-0" />
+        {LEVELS.map((l) => <Chip key={l.value} on={level === l.value} onClick={() => toggle(setLevel, level, l.value)}>{l.label}</Chip>)}
+        <span className="w-px bg-white/15 mx-0.5 shrink-0" />
+        <Chip on={tool === "-"} onClick={() => toggle(setTool, tool, "-")}>Senza attrezzi</Chip>
+        {tools.map((t) => <Chip key={t} on={tool === t} onClick={() => toggle(setTool, tool, t)}>{cap(t)}</Chip>)}
       </div>
 
       {loading && <div className="text-center text-white/40 py-16 kicker">caricamento…</div>}

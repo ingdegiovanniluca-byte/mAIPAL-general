@@ -214,3 +214,34 @@ def parse_request_fallback(text: str) -> dict:
     elif "ripetizion" in low:
         p["mode"] = "ripetizioni"
     return p
+
+
+PHASE_TITLES = {"inizio": "Inizio", "centrale": "Parte centrale", "fine": "Fine"}
+
+
+def dose(b: dict) -> str:
+    return f"{b['sets']} × {b['reps']} rip." if b.get("mode") == "ripetizioni" else f"{b['sets']} × {b.get('seconds')}\""
+
+
+def lesson_message(lesson: dict, changed: bool = False) -> str:
+    """The lesson as a chat answer: the summary line, the phases with each exercise's dose,
+    the equipment to prepare and what was left out."""
+    head = [f"{round((lesson.get('total_sec') or 0) / 60)} min", f"{lesson.get('participants')} persone"]
+    if lesson.get("level"):
+        head.append(f"livello {lesson['level']}")
+    if lesson.get("body_parts"):
+        head.append(", ".join(lesson["body_parts"]))
+    lines = [f"🏋️ {'Lezione modificata' if changed else 'Lezione creata'}: {lesson.get('name')}", " · ".join(head)]
+    for ph in ("inizio", "centrale", "fine"):
+        rows = [b for b in lesson.get("blocks") or [] if b.get("phase") == ph]
+        if rows:
+            lines += ["", PHASE_TITLES[ph]]
+            lines += [f"• {b['name']} — {dose(b)}" + (f" ({b['equipment']})" if b.get("equipment") else "") for b in rows]
+    need = lesson.get("equipment_needed") or {}
+    if need:
+        lines += ["", "Attrezzi da preparare: " + ", ".join(f"{q} × {k}" for k, q in need.items())]
+    if lesson.get("excluded_equipment"):
+        lines.append("Esclusi perché gli attrezzi non bastano per tutti: " + ", ".join(lesson["excluded_equipment"]))
+    if lesson.get("notes"):
+        lines += ["", lesson["notes"]]
+    return "\n".join(lines)

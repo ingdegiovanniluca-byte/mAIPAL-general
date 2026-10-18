@@ -4681,6 +4681,7 @@ async def set_lesson_guidelines(payload: LessonGuidelinesPayload, current: User 
 class GenerateLessonV2Payload(BaseModel):
     prompt: str
     type_id: Optional[str] = None
+    replace_id: Optional[str] = None     # a change to this lesson ("fallo per 15 persone"): rebuilt in its place
 
 
 async def _lesson_llm(system: str, prompt: str, current: User, model: str, feature: str = "creazione_lezioni") -> str:
@@ -4701,7 +4702,9 @@ def _json_in(raw: str) -> dict:
 async def _read_lesson_request(current: User, prompt: str, type_names: list) -> dict:
     """The request's parameters: the model reads them (types, level words, body parts said in
     other words); the numbers it gives are checked against the ones in the text."""
-    found = fx.parse_request_fallback(prompt)
+    found = {}
+    for line in prompt.split("\n"):   # a change asked later ("Modifiche richieste: ...") wins over the request
+        found.update(fx.parse_request_fallback(line))
     system = (
         "Leggi la richiesta di un istruttore di fitness che vuole creare una lezione ed estrai i parametri. "
         f"Tipi di lezione disponibili: {', '.join(type_names) or 'nessuno'}.\n"
@@ -4741,15 +4744,24 @@ def _exercise_line(e: dict, participants: int) -> str:
 
 @api_router.post("/fitness/generate-lesson")
 async def generate_lesson(payload: GenerateLessonV2Payload, current: User = Depends(get_current_user)):
-    return await _generate_lesson(current, payload.prompt, payload.type_id)
+    return await _generate_lesson(current, payload.prompt, payload.type_id, payload.replace_id)
 
 
-async def _generate_lesson(current: User, prompt: str, type_id: Optional[str] = None) -> dict:
+async def _generate_lesson(current: User, prompt: str, type_id: Optional[str] = None, replace_id: Optional[str] = None) -> dict:
     """The lesson from the request + the rules of its type + the exercises and the equipment
-    the studio has (see fitness.py for what is decided here and what the model chooses)."""
+    the studio has (see fitness.py for what is decided here and what the model chooses).
+    With replace_id the request is a change to that lesson: its request + the change, rebuilt
+    in its place (same id, still a favorite if it was)."""
     prompt = (prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Descrivi la lezione che vuoi creare")
+    old = None
+    if replace_id:
+        old = await db.lesson_templates.find_one({"id": replace_id, **_editable_query(current)}, {"_id": 0})
+        if not old:
+            raise HTTPException(status_code=404, detail="Lezione non trovata")
+        prompt = f"{(old.get('request') or old.get('name') or '').strip()}\nModifiche richieste: {prompt}"[:3000]
+        type_id = type_id or old.get("type_id")
     await _ensure_fitness_base(current)
     owner = _fitness_owner_key(current)
     types = await db.lesson_types.find({"owner_key": owner}, {"_id": 0}).sort("created_at", 1).to_list(100)
@@ -4791,6 +4803,7 @@ async def _generate_lesson(current: User, prompt: str, type_id: Optional[str] = 
         + (f"Regole generali dello studio: {guidelines}\n" if guidelines else "")
         + "Alterna le parti del corpo e varia gli esercizi; per ogni esercizio resta dentro i limiti di serie, secondi e "
         "ripetizioni indicati. Gli esercizi con [inizio] vanno all'inizio, [fine] alla fine, [centrale] nel corpo della lezione.\n"
+        "Se la richiesta contiene \"Modifiche richieste\", quelle valgono sopra la richiesta iniziale.\n"
         f"Esercizi disponibili:\n{listing}\n\n"
         "Rispondi SOLO con JSON: {\"title\": \"nome breve della lezione\", \"notes\": \"indicazioni per l'istruttore (breve)\", "
         "\"blocks\": [{\"phase\": \"inizio|centrale|fine\", \"exercise_id\": \"...\", \"mode\": \"tempo|ripetizioni\", "
@@ -4833,9 +4846,13 @@ async def _generate_lesson(current: User, prompt: str, type_id: Optional[str] = 
         "visibility": "org" if current.org_id else "private", "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _stamp_owner_fields(lesson, current)
+    if old:   # the same lesson, changed: its id, date, sharing and star are kept
+        lesson.update({k: old[k] for k in ("id", "created_at", "visibility", "org_id", "favorite") if k in old})
+        lesson["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await db.lesson_templates.delete_one({"id": old["id"]})
     await db.lesson_templates.insert_one(lesson)
     lesson.pop("_id", None)
-    return {"lesson": lesson, "new_exercises_created": 0}
+    return {"lesson": lesson, "new_exercises_created": 0, "replaced": bool(old), "message": fx.lesson_message(lesson, changed=bool(old))}
 
 
 # ============ VETERINARIO: REPORT VISITA ============
