@@ -415,7 +415,7 @@ async def _cmd_help(update: Update, ctx):
         "  /task <task>\n"
         "  /journal <racconto> — per gli artigiani: diario di commessa (cosa avete fatto, ore, materiali, "
         "problemi; le foto mandate subito dopo vanno nella stessa voce)\n"
-        "  /report — genera un report (referto veterinario o, per gli artigiani, primo sopralluogo): "
+        "  /report — genera un report (referto veterinario o, per gli artigiani, sopralluogo, intervento, SAL, fine lavori, variante): "
         "scegli il tipo, poi detta\n"
         "  /lista <richiesta> — aggiungi/modifica/rimuovi un elemento da una lista, es. "
         "\"/lista aggiungi Mario Rossi alla lista clienti\"\n"
@@ -664,7 +664,7 @@ async def _cmd_report(update: Update, ctx):
         for t in await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(20):
             buttons.append([InlineKeyboardButton(t["name"], callback_data=f"wrkrep:{t['id']}")])
         await update.message.reply_text(
-            "📋 Che report? Scegli il tipo, poi mandami il resoconto (testo o vocale): cliente, indirizzo, cosa hai visto e cosa proponi.",
+            "📋 Che report? Scegli il tipo, poi mandami il resoconto (testo o vocale): cliente, commessa e cosa c'è da scrivere.",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
@@ -1012,8 +1012,12 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(chat_id=chat_id, text="✏️ Cosa cambio nel report? Scrivilo o mandami un vocale "
                                    "(es. «togli la stima economica», «nei tempi metti 3 giorni»).")
     elif data.startswith("wrkrep:"):
-        await _set_state(db, chat_id, user["user_id"], pending_report_type="work:" + data.split(":", 1)[1])
-        await ctx.bot.send_message(chat_id=chat_id, text="👷 Ok. Ora scrivi o manda un vocale con il resoconto del sopralluogo.")
+        key = data.split(":", 1)[1]
+        await _set_state(db, chat_id, user["user_id"], pending_report_type="work:" + key)
+        import work_reports as wr
+        tpl = wr.BUILTIN_TEMPLATES.get(key) or {}
+        await ctx.bot.send_message(chat_id=chat_id, text=f"👷 Ok, {(tpl.get('name') or 'report').lower()}. Ora scrivi o manda un vocale con il resoconto"
+                                   + (f", es. «{tpl['hint']}»" if tpl.get("hint") else "") + ".")
     elif data.startswith("wrkcli:"):
         target = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)

@@ -151,6 +151,12 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Anche ogni **report** generato con l'agente **Report** per una commessa resta scritto nel suo diario: il tipo di report, chi l'ha fatto e un breve riassunto, con il link **Scarica il report**. Se poi modifichi il report, nel diario compare anche la nuova versione con i campi cambiati. Toccando la riga puoi toglierla dal diario (il report resta tra i documenti).
 - Il **tasto chat** tondo sul lato apre una chat per interrogare la commessa: "quante ore abbiamo fatto?", "cosa manca da comprare?".
 
+**Contatti utili**
+- Il riquadro **Contatti** in alto apre i contatti della commessa: gli altri artigiani e le persone del lavoro (idraulico, elettricista, direttore lavori, fornitori, amministratore…), con ruolo, telefono, email e una nota. Tocca il numero per chiamare, l'email per scrivere.
+- **Aggiungi** un contatto: se il nome è già usato su un'altra commessa, ruolo, telefono ed email si compilano da soli.
+- Gli stessi contatti li vedi (e li aggiungi) anche nella scheda della commessa della lista Clienti, aprendola con la freccia.
+- La chat della commessa e l'agente Cerca li conoscono ("qual è il numero dell'idraulico dei Rossi?").
+
 **Milestone**
 - Nella sezione **Milestone** segni le tappe del lavoro: cosa va completato, **chi la esegue** e la **scadenza** (Nuova milestone).
 - Il **pallino** la segna come fatta (con la data di oggi); toccandola puoi cambiare la data di esecuzione, la scadenza, chi la esegue, oppure eliminarla.
@@ -178,14 +184,19 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 
 ## Report di lavoro
 <!-- id: report-lavoro · verticale: artigiano -->
-L'agente **Report** genera il report di un sopralluogo in Word, con lo spazio per le firme.
-- Detta o scrivi com'è andato: "Sopralluogo dal signor Mario Rossi in via Roma 5 a Torino: impianto della cucina da rifare…".
+L'agente **Report** genera report in Word, con lo spazio per le firme. Con l'icona sotto il nome scegli il tipo:
+- **Primo sopralluogo**: stato attuale, rilievi, lavori proposti, tempi e stima indicativa.
+- **Rapporto di intervento**: un intervento (riparazione, manutenzione, installazione): orario, attività svolte, materiali, ore, esito.
+- **Stato avanzamento lavori (SAL)**: percentuale di avanzamento, lavori del periodo, problemi, prossime attività e previsione di fine lavori. Ore, materiali, problemi e milestone del periodo (dall'ultimo SAL, o dall'inizio) li prende **dal diario della commessa** se non li detti.
+- **Verbale di fine lavori**: lavori eseguiti, verifiche e collaudi, documentazione consegnata, garanzia; data di inizio e ore complessive dal diario.
+- **Lavori extra / variante**: lavori aggiunti o cambiati, con tempi e costo indicativo, da far approvare al cliente.
+- Oppure **carica un tuo modello** Word.
+- Detta o scrivi com'è andato: l'esempio nella casella cambia con il tipo di report scelto.
 - mAIPAL riconosce il cliente nella lista Clienti e la commessa; se non ci sono li crea. Se ci sono più clienti simili, te lo chiede.
 - Il report si salva su Drive/OneDrive nella cartella del cliente e della commessa (mAIPAL/Clienti/cliente/commessa) e si scarica dalla chat.
 - **Modificare il report**: nella stessa chat scrivi la correzione ("nei tempi metti 3 giorni"): mAIPAL crea la versione successiva cambiando solo quello che hai detto.
 - **Nel diario della commessa** resta scritto ogni report generato (tipo, autore e un breve riassunto) e ogni sua nuova versione.
-- Con l'icona sotto il nome scegli il tipo di report o carichi un tuo modello.
-- Da Telegram: comando `/report`.
+- Da Telegram: comando `/report`, poi scegli il tipo.
 
 ## Referto veterinario
 <!-- id: referto · verticale: veterinario, nessuno -->
@@ -219,7 +230,7 @@ Le liste tengono in ordine elenchi strutturati: clienti, fornitori, esercizi, sp
 Per gli artigiani c'è la lista **Clienti**, già pronta, con le **commesse** di ogni cliente.
 - La scheda del cliente mostra nome e indirizzo; con la **freccia** si espande e mostra telefono, email e gli altri dati, con **Modifica** ed **Elimina cliente** (elimina anche le sue commesse e il loro diario).
 - Tocca il cliente per vedere le sue commesse: in alto il numero di commesse **totali** e **attive** (tutte tranne le chiuse), e il **+** per aggiungerne una.
-- La scheda commessa mostra Commessa, Via e Stato (preventivo, in corso, sospesa, chiusa); con la freccia vedi gli altri dati e i tasti Diario, Modifica, Elimina.
+- La scheda commessa mostra Commessa, Via e Stato (preventivo, in corso, sospesa, chiusa); con la freccia vedi gli altri dati, i **contatti utili** della commessa (con **Aggiungi**) e i tasti Diario, Modifica, Elimina.
 - Tocca la commessa per aprirne il **diario di commessa**.
 - L'icona della **cartella** sulla commessa crea (o apre) su Drive/OneDrive la cartella mAIPAL/Clienti/cliente/commessa, dove finiscono anche report e foto del diario.
 - Clienti e commesse si creano anche da soli quando detti un report o una voce di diario per un cliente nuovo.

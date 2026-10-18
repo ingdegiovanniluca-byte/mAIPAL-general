@@ -3616,6 +3616,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_milestones.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_contacts.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_economics.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.collaborators.update_many({"commesse": {"$in": commessa_ids}}, {"$pull": {"commesse": {"$in": commessa_ids}}})
 
@@ -4798,7 +4799,7 @@ async def _find_or_create_commessa(clienti: dict, client: dict, job_title: str, 
 @api_router.get("/work/templates")
 async def list_work_templates(current: User = Depends(get_current_user)):
     custom = await db.work_templates.find(_visible_query(current), {"_id": 0}).sort("created_at", -1).to_list(200)
-    builtin = [{"key": k, "name": v["name"]} for k, v in work_reports.BUILTIN_TEMPLATES.items()]
+    builtin = [{"key": k, "name": v["name"], "hint": v.get("hint", "")} for k, v in work_reports.BUILTIN_TEMPLATES.items()]
     return {"builtin": builtin, "custom": custom}
 
 
@@ -4881,7 +4882,8 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         client = matches[0] if matches else None
 
     try:
-        interpreted = await work_reports.interpret(text, skeleton, user_name=current.name or "", user_id=current.user_id, channel=channel)
+        interpreted = await work_reports.interpret(text, skeleton, user_name=current.name or "", user_id=current.user_id, channel=channel,
+                                                   report_name=template_name)
     except Exception as e:
         logger.exception("work report interpretation failed")
         raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
@@ -4943,6 +4945,8 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         work_reports.set_field(sections, "Indirizzo del cantiere", _sysval(client.get("data"), fmap, "indirizzo"), overwrite=False)
     work_reports.set_field(sections, "Eseguito da", current.name or "", overwrite=False)
     work_reports.set_field(sections, "Data", datetime.now(work_reports.LOCAL_TZ).strftime("%d/%m/%Y"), overwrite=False)
+    if commessa and not commessa_created and report_type in ("sal", "fine_lavori"):
+        await _fill_report_from_diary(sections, report_type, commessa["id"], _sysval(commessa.get("data"), smap, "data_inizio"))
 
     company = ""
     if current.org_id:
@@ -5012,6 +5016,44 @@ async def _log_report_event(current: User, rep: dict, text: str, channel: str = 
         await db.job_logs.insert_one(log)
     except Exception:
         logger.exception("report diary line failed")   # the report itself is made: never lose it for this
+
+
+async def _fill_report_from_diary(sections: list, report_type: str, cid: str, data_inizio: str = "") -> None:
+    """SAL and fine lavori: what the diary already knows goes in the fields the dictation left
+    empty - for a SAL the period since the last SAL (or the whole job): hours, materials,
+    problems, milestones; for the end of works the dates and the total hours."""
+    fmt = lambda iso: datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
+    since = None
+    if report_type == "sal":
+        prev = await db.work_reports.find({"commessa_id": cid, "report_type": "sal"}, {"_id": 0, "created_at": 1}).to_list(200)
+        if prev:
+            since = (datetime.fromisoformat(max(p["created_at"] for p in prev)).astimezone(LOCAL_TZ).date() + timedelta(days=1)).isoformat()
+    q = {"commessa_id": cid, "kind": None}
+    if since:
+        q["date"] = {"$gte": since}
+    logs = await db.job_logs.find(q, {"_id": 0, "date": 1, "hours": 1, "materials": 1, "problems": 1}).to_list(20000)
+    tot = jl.totals(logs)
+    days = sorted(lg["date"] for lg in logs if lg.get("date"))
+    hours = f"{jl._fmt_num(tot['hours_total'])} h" if tot["hours_total"] else ""
+    if report_type == "sal":
+        start = since or (days[0] if days else None)
+        if start:
+            work_reports.set_field(sections, "Periodo di riferimento",
+                                   f"dal {fmt(start)} al {datetime.now(LOCAL_TZ).strftime('%d/%m/%Y')}", overwrite=False)
+        work_reports.set_field(sections, "Ore impiegate", hours, overwrite=False)
+        work_reports.set_field(sections, "Materiali impiegati", "\n".join(f"- {m}" for m in jl.materials_line(tot["materials"]).split(", ") if m), overwrite=False)
+        work_reports.set_field(sections, "Problemi riscontrati", "\n".join(f"- {p['text']}" for p in tot["problems"][:15]), overwrite=False)
+        ms = await _commessa_milestones(cid)
+        def ms_line(v):
+            return (f"- {v['title']}: " + (f"completata il {fmt(v['done_date'])}" if v["status"] == "done" else
+                    f"in ritardo (prevista il {fmt(v['due_date'])})" if v["status"] == "late" else f"prevista entro il {fmt(v['due_date'])}"))
+        work_reports.set_field(sections, "Milestone", "\n".join(ms_line(v) for v in ms[:15]), overwrite=False)
+    else:
+        start = (data_inizio or "")[:10] or (days[0] if days else None)
+        if start:
+            work_reports.set_field(sections, "Data inizio lavori", fmt(start[:10]), overwrite=False)
+        work_reports.set_field(sections, "Data fine lavori", datetime.now(LOCAL_TZ).strftime("%d/%m/%Y"), overwrite=False)
+        work_reports.set_field(sections, "Ore complessive", hours, overwrite=False)
 
 
 def _really_said(said: dict, text: str) -> dict:
@@ -5648,6 +5690,7 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "todos": todos, "team": await _team_first_names(current),
             "milestones": milestones, "milestones_summary": _milestones_summary(milestones),
+            "contacts": await _commessa_contacts(commessa_id),
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
@@ -5971,6 +6014,100 @@ async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
             except Exception:
                 logger.exception("milestone reminder failed")
     return sent
+
+
+# ---- the commessa's USEFUL CONTACTS: the other trades and people of the job (plumber,
+# electrician, site manager, supplier...), with role, phone, e-mail. A contact used on other
+# commesse is suggested again (the directory), so it is written once.
+
+JOB_CONTACT_ROLES = ["Idraulico", "Elettricista", "Muratore", "Imbianchino", "Serramentista", "Piastrellista",
+                     "Direttore lavori", "Geometra", "Fornitore", "Amministratore di condominio", "Referente del cliente"]
+
+
+class JobContactPayload(BaseModel):
+    role: Optional[str] = ""
+    name: str
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    note: Optional[str] = ""
+
+
+def _clean_contact(payload: JobContactPayload) -> dict:
+    name = " ".join((payload.name or "").split())[:80]
+    if not name:
+        raise HTTPException(status_code=400, detail="Scrivi il nome del contatto")
+    email = (payload.email or "").strip()[:120]
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=400, detail="Email non valida")
+    return {"role": " ".join((payload.role or "").split())[:60], "name": name,
+            "phone": " ".join((payload.phone or "").split())[:40], "email": email, "note": (payload.note or "").strip()[:300]}
+
+
+async def _commessa_contacts(commessa_id: str) -> list:
+    out = await db.job_contacts.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(200)
+    return sorted(out, key=lambda c: ((c.get("role") or "~").lower(), c["name"].lower()))
+
+
+def contacts_line(contacts: list) -> str:
+    """For the commessa's chat."""
+    return " | ".join(", ".join(x for x in (c.get("role"), c["name"], c.get("phone"), c.get("email"), c.get("note")) if x) for c in contacts)
+
+
+async def _job_contact_or_404(current: User, contact_id: str) -> dict:
+    c = await db.job_contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Contatto non trovato")
+    await _commessa_or_404(current, c["commessa_id"])
+    return c
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/contacts")
+async def list_job_contacts(commessa_id: str, current: User = Depends(get_current_user)):
+    await _commessa_or_404(current, commessa_id)
+    return await _commessa_contacts(commessa_id)
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/contacts")
+async def create_job_contact(commessa_id: str, payload: JobContactPayload, current: User = Depends(get_current_user)):
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    doc = {"id": f"jct_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
+           "user_id": current.user_id, "org_id": current.org_id, **_clean_contact(payload),
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.job_contacts.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/jobs/contacts/{contact_id}")
+async def update_job_contact(contact_id: str, payload: JobContactPayload, current: User = Depends(get_current_user)):
+    c = await _job_contact_or_404(current, contact_id)
+    upd = _clean_contact(payload)
+    await db.job_contacts.update_one({"id": contact_id}, {"$set": upd})
+    return {**c, **upd}
+
+
+@api_router.delete("/jobs/contacts/{contact_id}")
+async def delete_job_contact(contact_id: str, current: User = Depends(get_current_user)):
+    await _job_contact_or_404(current, contact_id)
+    await db.job_contacts.delete_one({"id": contact_id})
+    return {"ok": True}
+
+
+@api_router.get("/jobs/contacts/directory")
+async def job_contacts_directory(current: User = Depends(get_current_user)):
+    """The contacts already used on the commesse the user sees (one per name and phone, the most
+    recent), and the usual roles: to fill a new contact with a tap."""
+    clienti = await _clienti_list(current)
+    seen, out = set(), []
+    if clienti:
+        rows = await db.job_contacts.find({"collection_id": clienti["id"]}, {"_id": 0}).to_list(5000)
+        for c in sorted(rows, key=lambda x: x.get("created_at") or "", reverse=True):
+            key = (c["name"].lower(), re.sub(r"\D", "", c.get("phone") or ""))
+            if key not in seen:
+                seen.add(key)
+                out.append({k: c.get(k, "") for k in ("role", "name", "phone", "email", "note")})
+    roles = list(dict.fromkeys(JOB_CONTACT_ROLES + [c["role"] for c in out if c.get("role")]))
+    return {"contacts": out[:500], "roles": roles}
 
 
 # ============ COSTI E MARGINI della commessa ============
@@ -6389,7 +6526,8 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
     for r in reports:
         for sec in r.get("sections") or []:
             sec["fields"] = {f: v for f, v in (sec.get("fields") or {}).items() if not hide.search(f)}
-    view = {**view, "milestones_line": milestones_line(await _commessa_milestones(view["id"]))}
+    view = {**view, "milestones_line": milestones_line(await _commessa_milestones(view["id"])),
+            "contacts_line": contacts_line(await _commessa_contacts(view["id"]))}   # the job's trades: useful to them too
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
 
@@ -6493,6 +6631,7 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
     view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))   # never for collaborators
     view["milestones_line"] = milestones_line(await _commessa_milestones(commessa_id))
+    view["contacts_line"] = contacts_line(await _commessa_contacts(commessa_id))
     try:
         out = await jl.answer(view, logs, reports, question, payload.history[-8:], user_id=current.user_id)
     except Exception as e:
@@ -9164,6 +9303,8 @@ async def start_services():
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])
         await db.job_milestones.create_index([("commessa_id", 1)])
+        await db.job_contacts.create_index([("commessa_id", 1)])
+        await db.job_contacts.create_index([("collection_id", 1)])
         await db.job_milestones.create_index([("done", 1), ("due_date", 1)])
         await db.job_economics.create_index([("commessa_id", 1)], unique=True)
         await db.delete_codes.create_index([("user_id", 1)])

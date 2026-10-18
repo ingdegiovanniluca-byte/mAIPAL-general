@@ -744,6 +744,12 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                         bits.append("Economia: " + jl.economics_line(e) + ".")
                 except Exception:
                     logger.exception("economics in the commessa summary failed")
+                try:   # the job's useful contacts (plumber, electrician, site manager...)
+                    cts = await db.job_contacts.find({"commessa_id": cid}, {"_id": 0}).to_list(50)
+                    if cts:
+                        bits.append("Contatti utili: " + "; ".join(", ".join(x for x in (c.get("role"), c.get("name"), c.get("phone"), c.get("email")) if x) for c in cts) + ".")
+                except Exception:
+                    logger.exception("contacts in the commessa summary failed")
                 summaries.append({"text": "", "source": "summary", "meta": {"commessa_id": cid},
                                   "display": f"[Riepilogo diario commessa «{lgs[0].get('commessa_title') or ''}» · "
                                              f"{lgs[0].get('client_name') or ''}] " + " ".join(b for b in bits if b)})

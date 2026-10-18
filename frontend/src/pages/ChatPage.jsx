@@ -368,7 +368,12 @@ export default function ChatPage() {
   const tplSel = isWork ? workType : visitType;
   const setTplSel = isWork ? setWorkType : setVisitType;
 
-  const activeAction = useMemo(() => (active === "help" ? HELP_ACTION : ACTIONS.find((a) => a.id === active) || ACTIONS[0]), [ACTIONS, active]);
+  const activeAction = useMemo(() => {
+    const a = active === "help" ? HELP_ACTION : ACTIONS.find((x) => x.id === active) || ACTIONS[0];
+    // Report: the example in the box follows the kind of report chosen
+    const hint = a.id === "work_report" && (workTemplates.builtin || []).find((t) => t.key === workType)?.hint;
+    return hint ? { ...a, placeholder: `Es. "${hint}"` } : a;
+  }, [ACTIONS, active, workTemplates, workType]);
   // Help asked again while already in the chat (avatar menu -> Help): a fresh Help chat
   useEffect(() => {
     if (location.state?.action !== "help" || !location.state?.nonce) return;

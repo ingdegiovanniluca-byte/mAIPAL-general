@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { List, Plus, Trash2, Pencil, ArrowLeft, Users, Lock, X, ChevronRight, Settings2, Share2, Check, UserRound, Repeat, Rows3, FolderOpen, FolderPlus, NotebookPen, ChevronDown, MapPin, Phone, Mail, Briefcase, Activity } from "lucide-react";
 import { toast } from "sonner";
 import DeleteWithCode from "@/components/DeleteWithCode";
+import CommessaContacts from "@/components/CommessaContacts";
 
 // a value as shown on a card: dates as dd/mm/yyyy, lists joined
 const fmtVal = (f, v) => {
@@ -898,6 +899,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                   {!(coll.sub_item_fields || []).some((f) => !mainSubKeys.includes(f.key) && filled(sub.data?.[f.key])) && (
                     <div className="text-xs text-white/45">Nessun altro dato: aggiungili con Modifica.</div>
                   )}
+                  {isCommesse && <div className="pt-1.5 pb-0.5 border-t border-white/10"><CommessaContacts commessaId={sub.id} /></div>}
                   {/* the commands' row also takes the space kept on the right for the arrow, which is at the top */}
                   <div className="flex flex-wrap items-center gap-2 pt-1.5 text-xs -mr-8">
                     <button type="button" data-testid="open-commessa-diary" onClick={() => openDiary(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">

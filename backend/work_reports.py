@@ -37,8 +37,55 @@ SOPRALLUOGO_SECTIONS = [
     {"title": "Note", "fields": ["Note e prescrizioni", "Prossimi passi"]},
 ]
 
+CLIENT_SECTION = {"title": "Dati del cliente", "fields": ["Cliente", "Telefono", "Email", "Indirizzo del cantiere"]}
+
+# Rapporto di intervento: one visit (a repair, a maintenance, an installation)
+INTERVENTO_SECTIONS = [
+    CLIENT_SECTION,
+    {"title": "Intervento", "fields": ["Data", "Eseguito da", "Orario", "Tipo di intervento", "Motivo della richiesta"]},
+    {"title": "Lavori eseguiti", "fields": ["Attività svolte", "Materiali utilizzati", "Ore di lavoro", "Esito"]},
+    {"title": "Note", "fields": ["Anomalie riscontrate", "Consigli al cliente", "Prossimi passi"]},
+]
+
+# Stato avanzamento lavori (SAL): where the job is - hours, materials, problems and milestones
+# of the period also come from the commessa's diary when the dictation doesn't say them
+SAL_SECTIONS = [
+    CLIENT_SECTION,
+    {"title": "Avanzamento", "fields": ["Data", "Eseguito da", "Periodo di riferimento", "Percentuale di avanzamento"]},
+    {"title": "Lavori del periodo", "fields": ["Lavori eseguiti", "Ore impiegate", "Materiali impiegati", "Milestone"]},
+    {"title": "Criticità e prossimi passi", "fields": ["Problemi riscontrati", "Varianti o lavori extra", "Prossime attività",
+                                                      "Previsione di fine lavori"]},
+    {"title": "Note", "fields": ["Note"]},
+]
+
+# Verbale di fine lavori e consegna
+FINE_LAVORI_SECTIONS = [
+    CLIENT_SECTION,
+    {"title": "Lavori", "fields": ["Data", "Eseguito da", "Oggetto dei lavori", "Data inizio lavori", "Data fine lavori", "Ore complessive"]},
+    {"title": "Consegna", "fields": ["Lavori eseguiti", "Verifiche e collaudi", "Documentazione consegnata", "Garanzia"]},
+    {"title": "Note", "fields": ["Riserve o lavori da completare", "Istruzioni per il cliente"]},
+]
+
+# Lavori extra / variante: what was added or changed, to be approved by the client
+VARIANTE_SECTIONS = [
+    CLIENT_SECTION,
+    {"title": "Variante", "fields": ["Data", "Eseguito da", "Oggetto", "Motivo della variante"]},
+    {"title": "Lavori aggiuntivi", "fields": ["Descrizione dei lavori", "Materiali", "Tempi aggiuntivi", "Costo aggiuntivo indicativo"]},
+    {"title": "Note", "fields": ["Note e condizioni"]},
+]
+
+# at most five ready models (plus the user's own uploaded ones)
 BUILTIN_TEMPLATES = {
-    "sopralluogo": {"name": "Primo sopralluogo", "sections": SOPRALLUOGO_SECTIONS},
+    "sopralluogo": {"name": "Primo sopralluogo", "sections": SOPRALLUOGO_SECTIONS,
+                    "hint": "Sopralluogo dal signor Rossi in via Roma 5: impianto della cucina da rifare…"},
+    "intervento": {"name": "Rapporto di intervento", "sections": INTERVENTO_SECTIONS,
+                   "hint": "Oggi dai Rossi dalle 9 alle 11: sostituito il miscelatore della doccia, perdita risolta…"},
+    "sal": {"name": "Stato avanzamento lavori", "sections": SAL_SECTIONS,
+            "hint": "SAL del bagno dei Rossi: fatto il 60%, impianti finiti, la prossima settimana le piastrelle…"},
+    "fine_lavori": {"name": "Verbale di fine lavori", "sections": FINE_LAVORI_SECTIONS,
+                    "hint": "Fine lavori del bagno dei Rossi: tutto collaudato, consegnata la dichiarazione di conformità…"},
+    "variante": {"name": "Lavori extra / variante", "sections": VARIANTE_SECTIONS,
+                 "hint": "Variante per i Rossi: chiedono una presa in più in bagno, mezza giornata, circa 150 euro…"},
 }
 
 # report label <- Clienti list base field
@@ -74,14 +121,16 @@ def find_matching_clients(text: str, clients: list, name_key: str) -> list:
     return full or partial
 
 
-async def interpret(text: str, sections: list, user_name: str = "", user_id: Optional[str] = None, channel: str = "web") -> dict:
+async def interpret(text: str, sections: list, user_name: str = "", user_id: Optional[str] = None, channel: str = "web",
+                    report_name: str = "") -> dict:
     """{"sections": [{"title", "fields": {label: value}}], "client": {...}, "job_title": "..."}"""
     today = datetime.now(LOCAL_TZ)
     skeleton = json.dumps([{"title": s["title"], "fields": s["fields"]} for s in sections], ensure_ascii=False)
     system = (
         "Sei l'assistente di un'impresa artigiana (impianti elettrici, idraulici, edilizia, manutenzioni). Ricevi "
         "il resoconto dettato o scritto di un intervento o di un sopralluogo e lo strutturi in un report "
-        f"professionale da consegnare al cliente. Oggi è {today.strftime('%d/%m/%Y')}; il report lo firma {user_name or 'il titolare'}.\n\n"
+        f"professionale da consegnare al cliente. Oggi è {today.strftime('%d/%m/%Y')}; il report lo firma {user_name or 'il titolare'}.\n"
+        + (f"Tipo di report: {report_name}.\n" if report_name else "") + "\n"
         f"Schema da compilare (rispetta ESATTAMENTE titoli e nomi dei campi):\n{skeleton}\n\n"
         "Regole:\n"
         "1. Compila SOLO con ciò che è detto nel testo. Se un'informazione manca lascia la stringa vuota: NON inventare "

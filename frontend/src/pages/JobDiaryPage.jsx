@@ -3,10 +3,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
+import CommessaContacts from "@/components/CommessaContacts";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
@@ -853,6 +854,7 @@ export default function JobDiaryPage() {
   const [editing, setEditing] = useState(null);
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
+  const [contactsOpen, setContactsOpen] = useState(false);
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
   const [period, setPeriod] = useState({ key: "30" });
@@ -1074,6 +1076,9 @@ export default function JobDiaryPage() {
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
         <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti" ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
+        <InfoCard icon={Contact} label="Contatti" value={String((detail.contacts || []).length)} testid="glance-contatti"
+          ariaLabel="Contatti utili della commessa" onClick={() => setContactsOpen(true)}
+          note={(detail.contacts || []).slice(0, 2).map((x) => x.role || x.name).join(", ")} />
         <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} testid="info-cantiere"
           href={c.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}` : undefined} external ariaLabel="Apri il cantiere sulla mappa" />
         <InfoCard icon={CalendarDays} label="Date" testid="info-date"
@@ -1273,6 +1278,12 @@ export default function JobDiaryPage() {
           onClick={() => setChatOpen(true)} />
       )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
+      {contactsOpen && c && (
+        <GlassBottomSheet onClose={() => setContactsOpen(false)} testid="contacts-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
+          <div className="text-lg font-semibold text-white mb-3">Contatti · {c.title}</div>
+          <CommessaContacts commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+        </GlassBottomSheet>
+      )}
       {msEditing && c && (
         <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} onClose={() => setMsEditing(null)}
           onSaved={async () => { setMsEditing(null); await loadDetail(selectedId); }} />

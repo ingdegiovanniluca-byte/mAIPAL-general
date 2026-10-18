@@ -120,7 +120,7 @@ server._storage_save = fake_save
 
 CALLS = []
 def interp(client, job, fields=None, summary=None):
-    async def f(text, sections, user_name="", user_id=None, channel="web"):
+    async def f(text, sections, user_name="", user_id=None, channel="web", report_name=""):
         CALLS.append(text)
         out = [{"title": s["title"], "fields": {k: (fields or {}).get(k, "") for k in s["fields"]}} for s in sections]
         res = {"sections": out, "client": {"name": "", "phone": "", "email": "", "address": "", **client}, "job_title": job}
@@ -217,7 +217,7 @@ async def main():
     resp = await server.download_work_report(lst[0]["id"], me)
     assert resp.body[:2] == b"PK" and "filename*=UTF-8''" in resp.headers["content-disposition"]
     t = await server.list_work_templates(me)
-    assert t["builtin"] == [{"key": "sopralluogo", "name": "Primo sopralluogo"}]
+    assert [x["key"] for x in t["builtin"]] == ["sopralluogo", "intervento", "sal", "fine_lavori", "variante"] and t["builtin"][0]["name"] == "Primo sopralluogo"
     # 6) folder names Drive/OneDrive accept
     assert server._drive_safe('Bagno 2/3: "nuovo"') == "Bagno 2 3 nuovo"
     # 7) Telegram: /report for an artigiano -> work templates; ambiguity -> buttons with "cliente nuovo"
