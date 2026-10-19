@@ -163,9 +163,16 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Il **pallino** la segna come fatta (con la data di oggi); toccandola puoi cambiare la data di esecuzione, la scadenza, chi la esegue, oppure eliminarla.
 - **Ritardi**: la prima scadenza resta salvata. Vedi se una milestone è **in ritardo** (e di quanti giorni), se è stata fatta in tempo o con quanti giorni di ritardo, e di quanto è stata spostata. In alto: quante sono fatte, quante in ritardo, quante in tempo e il ritardo medio. Cambiare la scadenza prima che sia scaduta è una nuova pianificazione, non un ritardo.
 - **Azioni correttive**: su una milestone in ritardo (o a rischio) scrivi cosa fai per recuperare e, se serve, la nuova scadenza. Restano nella milestone e nel diario.
-- **Promemoria su Telegram**, dalle 8 del mattino: il giorno prima della scadenza, il giorno stesso e quando va in ritardo (ti chiede di segnarla fatta o di scrivere l'azione correttiva). Li ricevono chi l'ha creata e chi la esegue, se è un collega del team o un collaboratore abilitato sulla commessa con Telegram collegato (riconosciuto dal nome).
+- **Promemoria su Telegram**, dalle 8 del mattino: il giorno prima della scadenza, il giorno stesso e quando va in ritardo (ti chiede di segnarla fatta o di scrivere l'azione correttiva). Li ricevono chi l'ha creata e chi la esegue, se è un collega del team o un collaboratore abilitato sulla commessa con Telegram collegato.
 - Le milestone completate e le azioni correttive restano scritte nel diario; il **riepilogo del lunedì** elenca quelle in ritardo e quelle della settimana; la chat della commessa risponde anche su di loro ("quali milestone sono in ritardo?").
 - Il riquadro **Milestone** in alto mostra quante sono fatte e quante in ritardo.
+
+**Attività e milestone ai collaboratori (Telegram)**
+- In **chi se ne occupa** (To Do) e **chi la esegue** (Milestone) puoi scegliere un collega del team o un **collaboratore abilitato sulla commessa** (quelli con l'aeroplanino hanno collegato Telegram). Puoi anche scriverne il nome.
+- Il collaboratore la riceve subito su Telegram, con il pulsante **✅ Fatto**; poi riceve i promemoria (il giorno prima, il giorno stesso e quando è in ritardo — per i To Do serve una data) e un avviso se la scadenza cambia.
+- Quando tocca **✅ Fatto**, l'attività o la milestone risulta fatta, nel diario compare la riga "segnata da … su Telegram" e tu ricevi l'avviso (notifica dell'app e Telegram).
+- Il collaboratore può anche chiedere al bot "cosa devo ancora fare?": risponde con le attività e le milestone aperte della commessa.
+- Se il collaboratore non ha ancora collegato Telegram, l'attività è sua ma non riceve avvisi.
 
 **Costi e margini**
 - Nella sezione **Costi** della commessa:
@@ -302,7 +309,7 @@ Con l'app mAIPAL per **Galaxy Watch** parli con gli agenti e guardi task, to-do 
 ## Notifiche
 <!-- id: notifiche · verticale: tutti -->
 mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anche con l'app chiusa.
-- **Cosa arriva**: i **promemoria dei task** e, per gli artigiani, le **voci scritte dai collaboratori** nel diario delle commesse (testo, ore, problemi o foto). Toccando la notifica si apre la pagina giusta.
+- **Cosa arriva**: i **promemoria dei task** e, per gli artigiani, le **voci scritte dai collaboratori** nel diario delle commesse (testo, ore, problemi o foto) e le attività o milestone che segnano come fatte. Toccando la notifica si apre la pagina giusta.
 - **Attivarle**: Impostazioni → **Notifiche** → **Attiva su questo dispositivo**, poi consenti le notifiche quando il telefono lo chiede. Ogni dispositivo si attiva per conto suo; con **Manda una prova** controlli che arrivino, con **Disattiva** le spegni.
 - **iPhone**: le notifiche arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home) e con iOS 16.4 o successivo.
 - **Non arriva una notifica?** In Impostazioni → Notifiche, sotto **Ultima notifica**, vedi l'ultima mandata e com'è andata: a quanti dispositivi è arrivata, "nessun dispositivo con le notifiche attive" (attivale su quel dispositivo), un dispositivo non più iscritto (riattivale lì) o l'errore del servizio di notifiche. Se risulta arrivata ma non la vedi, controlla che le notifiche di mAIPAL (o del browser) siano permesse nelle impostazioni del telefono e che non sia attiva la modalità Non disturbare / Full immersion.

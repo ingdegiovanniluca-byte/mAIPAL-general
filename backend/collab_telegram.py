@@ -32,7 +32,8 @@ HISTORY_KEEP = 8
 HELP = ("Qui puoi fare due cose, sulle commesse che ti sono state abilitate:\n"
         "📒 scrivere cosa avete fatto (ore, materiali, problemi), anche a voce o con le foto;\n"
         "🔎 chiedere informazioni sulla commessa (es. «cosa manca da fare?», «quante ore abbiamo fatto?»).\n"
-        "Se lavori su più commesse, nomina il cliente o i lavori, oppure scegli la commessa dai pulsanti.")
+        "Se lavori su più commesse, nomina il cliente o i lavori, oppure scegli la commessa dai pulsanti.\n"
+        "📌 Qui ti arrivano anche le attività e le milestone affidate a te, con i promemoria: quando sono fatte tocca ✅ Fatto.")
 
 
 def _now() -> datetime:
@@ -299,6 +300,21 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             return
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": cid, "at": _now().isoformat()}}})
         await _reply(update, f"Ok, «{target[2]['title']}»: scrivimi (anche a voce) cosa avete fatto, o cosa vuoi sapere.")
+        return
+    if data.startswith("cldone:"):   # "✅ Fatto" under a To Do / milestone given to them
+        from server import _collab_mark_done, COLLAB_NOT_YOURS as NOT_YOURS
+        _, kind, item_id = (data.split(":", 2) + ["", ""])[:3]
+        answer = NOT_YOURS
+        for r in active:   # the record (owner) the item belongs to
+            answer = await _collab_mark_done(r, kind, item_id)
+            if answer != NOT_YOURS:
+                break
+        if answer != NOT_YOURS:
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await _reply(update, answer)
         return
     if data.startswith("clu:"):
         log = await db.job_logs.find_one({"id": data[4:]}, {"_id": 0, "id": 1, "collaborator_id": 1, "created_at": 1,

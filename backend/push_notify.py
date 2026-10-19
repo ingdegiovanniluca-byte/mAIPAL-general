@@ -70,7 +70,8 @@ def _send_one(sub: dict, payload: str, private_pem: str, claims_sub: str):
     from pywebpush import webpush
     from py_vapid import Vapid02   # RFC 8292 ("vapid t=..., k=..."), what Apple and the others expect
     return webpush(subscription_info={"endpoint": sub["endpoint"], "keys": sub["keys"]}, data=payload,
-                   vapid_private_key=Vapid02.from_pem(private_pem.encode()), vapid_claims={"sub": claims_sub}, ttl=6 * 3600)
+                   vapid_private_key=Vapid02.from_pem(private_pem.encode()), vapid_claims={"sub": claims_sub}, ttl=6 * 3600,
+                   headers={"Urgency": "high"})   # delivered at once, also with the phone saving battery
 
 
 async def _record(db, user_id: str, title: str, devices: int, sent: int, errors: list) -> None:

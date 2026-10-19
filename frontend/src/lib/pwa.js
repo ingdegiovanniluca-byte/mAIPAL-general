@@ -86,6 +86,15 @@ export async function currentPushSubscription() {
   try { return await (await registration()).pushManager.getSubscription(); } catch { return null; }
 }
 
+// was this subscription made with the server's current key? true / false / null (the browser
+// doesn't say). One made with another key is refused by the push service: nothing arrives.
+export function pushKeyMatches(sub, publicKey) {
+  const k = sub?.options?.applicationServerKey;
+  if (!k || !publicKey) return null;
+  const a = new Uint8Array(k), b = keyBytes(publicKey);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
 // asks the permission (only after a tap) and subscribes with the server's public key
 export async function enablePush(publicKey) {
   const perm = await Notification.requestPermission();
@@ -93,7 +102,10 @@ export async function enablePush(publicKey) {
   const reg = await registration();
   await navigator.serviceWorker.ready;
   const old = await reg.pushManager.getSubscription();
-  if (old) return old;
+  if (old) {
+    if (pushKeyMatches(old, publicKey) === true) return old;
+    await old.unsubscribe().catch(() => {});   // another key (or unknown): a fresh one, surely valid
+  }
   return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
 }
 

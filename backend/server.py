@@ -5555,6 +5555,7 @@ class JobTodoPayload(BaseModel):
     text: str
     who: Optional[str] = ""                   # who takes care of it
     due_date: Optional[str] = None            # by when (YYYY-MM-DD), optional
+    collaborator_id: Optional[str] = None     # assigned to an external collaborator: told on Telegram
 
 
 class JobTodoPatch(BaseModel):
@@ -5562,6 +5563,7 @@ class JobTodoPatch(BaseModel):
     who: Optional[str] = None
     due_date: Optional[str] = None            # "" clears it
     done: Optional[bool] = None
+    collaborator_id: Optional[str] = None     # "" = no longer a collaborator's
 
 
 class JobLogPatch(BaseModel):
@@ -6015,6 +6017,7 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     milestones = await _commessa_milestones(commessa_id)
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "todos": todos, "team": await _team_first_names(current),
+            "collaborators": await _assignable_collaborators(commessa_id),
             "milestones": milestones, "milestones_summary": _milestones_summary(milestones),
             "contacts": await _commessa_contacts(commessa_id),
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
@@ -6050,6 +6053,154 @@ def _valid_due(d: Optional[str]) -> Optional[str]:
         raise HTTPException(status_code=400, detail="Data non valida")
 
 
+# ---- To Do and milestones given to an external COLLABORATOR (one enabled on the commessa): they
+# hear it on Telegram - when it is given to them, when its date moves, the day before, the day
+# itself and when late - with a "✅ Fatto" button. Marked done from there: the diary says it and
+# the owner hears it (app notification and Telegram).
+
+async def _assignable_collaborators(commessa_id: str) -> list:
+    docs = await db.collaborators.find({"commesse": {"$in": [commessa_id]}}, {"_id": 0}).to_list(200)
+    return [{"id": c["id"], "name": _collab_name(c), "first_name": c.get("first_name") or "", "company": c.get("company") or "",
+             "telegram": bool(c.get("telegram_chat_id")) and c.get("status") == "active"}
+            for c in docs if c.get("status") in ("active", "invited")]
+
+
+async def _resolve_assignee(current: User, commessa_id: str, who: Optional[str], collaborator_id: Optional[str],
+                            keep: Optional[str] = None) -> tuple:
+    """-> (who, collaborator_id): the collaborator chosen (their name becomes the who), none
+    ("" given), or - when only a name is given - the collaborator with that name, if one only."""
+    collabs = await _assignable_collaborators(commessa_id)
+    if collaborator_id:
+        c = next((x for x in collabs if x["id"] == collaborator_id), None)
+        if not c:
+            raise HTTPException(status_code=400, detail="Il collaboratore non è abilitato su questa commessa")
+        return c["name"], c["id"]
+    if collaborator_id == "" or who is None:
+        return who, (None if collaborator_id == "" else keep)
+    name = who.strip().lower()
+    full = [c for c in collabs if c["name"].lower() == name]
+    first = [c for c in collabs if c["first_name"].lower() == name] if name != _first_name(current.name).lower() else []
+    hit = full if len(full) == 1 else first if len(first) == 1 else []
+    return (hit[0]["name"] if hit else who), (hit[0]["id"] if hit else None)
+
+
+async def _tell_collaborator(collab: dict, text: str, done_data: Optional[str] = None) -> bool:
+    """A message to a collaborator's Telegram, with the "✅ Fatto" button when given."""
+    if not collab.get("telegram_chat_id") or collab.get("status") != "active" or not tg.bot_token():
+        return False
+    from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Fatto", callback_data=done_data)]]) if done_data else None
+    bot = Bot(token=tg.bot_token())
+    for mode in ("Markdown", None):
+        try:
+            await bot.send_message(chat_id=collab["telegram_chat_id"], text=text, reply_markup=kb, **({"parse_mode": mode} if mode else {}))
+            return True
+        except Exception:
+            if mode is None:
+                logger.exception(f"message to collaborator {collab.get('id')} failed")
+    return False
+
+
+def _assignment_text(kind: str, item: dict, view: dict, change: str, old_due: Optional[str] = None) -> str:
+    what = item.get("text") if kind == "todo" else item.get("title")
+    where = f"«{view.get('title')}» — {view.get('client_name')}"
+    due = item.get("due_date")
+    if change == "date":
+        head = f"📅 Nuova scadenza per {'l’attività' if kind == 'todo' else 'la milestone'} *{what}*"
+        return f"{head}\n{where} · {'entro ' + _short_it_date(due) if due else 'senza data'}" + (f" (era {_short_it_date(old_due)})" if old_due else "")
+    head = f"📌 Nuova attività per te: *{what}*" if kind == "todo" else f"🚩 Milestone affidata a te: *{what}*"
+    return (f"{head}\n{where}" + (f" · {'entro' if kind == 'todo' else 'scadenza'} {_short_it_date(due)}" if due else "")
+            + "\nQuando è fatta tocca ✅ Fatto.")
+
+
+async def _notify_assignee(kind: str, item: dict, view: dict, change: str = "new", old_due: Optional[str] = None) -> bool:
+    if not item.get("collaborator_id") or item.get("done"):
+        return False
+    c = await db.collaborators.find_one({"id": item["collaborator_id"]}, {"_id": 0})
+    if not c or item["commessa_id"] not in (c.get("commesse") or []):
+        return False
+    return await _tell_collaborator(c, _assignment_text(kind, item, view, change, old_due), f"cldone:{kind[0]}:{item['id']}")
+
+
+COLLAB_NOT_YOURS = "Questa attività non è più tra le tue."
+
+
+async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
+    """The "✅ Fatto" of a collaborator: the To Do / milestone done, a line in the diary, the
+    owner told. -> the answer for the collaborator."""
+    coll = db.job_todos if kind == "t" else db.job_milestones
+    item = await coll.find_one({"id": item_id}, {"_id": 0})
+    if not item or item["commessa_id"] not in (collab.get("commesse") or []) \
+            or (item.get("collaborator_id") and item["collaborator_id"] != collab["id"]):
+        return COLLAB_NOT_YOURS
+    what = item.get("text") if kind == "t" else item.get("title")
+    if item.get("done"):
+        return f"«{what}» era già segnata come fatta 👍"
+    today = jl.today_local().isoformat()
+    if kind == "t":
+        await coll.update_one({"id": item_id}, {"$set": {"done": True, "done_at": datetime.now(timezone.utc).isoformat(), "done_by": _collab_name(collab)}})
+    else:
+        await coll.update_one({"id": item_id}, {"$set": {"done": True, "done_date": today, "done_by": _collab_name(collab)}})
+    owner_doc = await db.users.find_one({"user_id": collab["owner_user_id"]}, {"_id": 0})
+    sub = await db.collection_sub_items.find_one({"id": item["commessa_id"]}, {"_id": 0})
+    clienti = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0}) if sub else None
+    if not owner_doc or not sub or not clienti:
+        return f"✅ «{what}» segnata come fatta."
+    owner = User(**owner_doc)
+    client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+    view = _commessa_view(sub, client, clienti)
+    who = _collab_name(collab) + (f" ({collab['company']})" if collab.get("company") else "")
+    if kind == "t":
+        line = f"Attività «{what}» fatta (segnata da {who} su Telegram)."
+    else:
+        m = _milestone_view({**item, "done": True, "done_date": today}, today)
+        late = f", {m['delay_days']} {'giorno' if m['delay_days'] == 1 else 'giorni'} di ritardo" if m["delay_days"] else ", in tempo"
+        line = f"Milestone «{what}» completata il {_short_it_date(today)}{late} (segnata da {who} su Telegram)."
+    await _log_commessa_event(owner, view, "todo" if kind == "t" else "milestone", line,
+                              {"todo_id" if kind == "t" else "milestone_id": item_id}, author_name=collab.get("first_name") or _collab_name(collab))
+    push.fire_and_forget(db, owner.user_id, f"✅ {_collab_name(collab)} · {view.get('title')}", f"Fatta: «{what}»",
+                         f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}")
+    try:
+        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la milestone'} «{what}» su «{view['title']}» — {view['client_name']}.")
+    except Exception:
+        logger.exception("owner notice failed")
+    return f"✅ Fatto! «{what}» è segnata come fatta, {owner.name.split(' ')[0] if owner.name else 'il titolare'} lo vede nel diario."
+
+
+async def _todo_reminders(now_utc: Optional[datetime] = None) -> int:
+    """To Do given to a collaborator, with a date: from 8:00 the day before, the day itself and
+    the first day late, once each (like the milestones). -> how many sent."""
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_local.strftime("%H:%M") < "08:00":
+        return 0
+    today = now_local.date().isoformat()
+    tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
+    sent = 0
+    for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}}, {"_id": 0}).to_list(5000):
+        if not t.get("collaborator_id") or not t.get("due_date"):
+            continue
+        kind = "before" if t["due_date"] == tomorrow else "due" if t["due_date"] == today else "late"
+        if (t.get("reminded") or {}).get(kind) == t["due_date"]:
+            continue
+        await db.job_todos.update_one({"id": t["id"]}, {"$set": {"reminded": {**(t.get("reminded") or {}), kind: t["due_date"]}}})
+        c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
+        sub = await db.collection_sub_items.find_one({"id": t["commessa_id"]}, {"_id": 0})
+        if not c or not sub or t["commessa_id"] not in (c.get("commesse") or []):
+            continue
+        client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+        coll = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0})
+        view = _commessa_view(sub, client, coll or {})
+        head = ("⏰ Domani va fatta" if kind == "before" else "⏰ Oggi va fatta" if kind == "due"
+                else f"🔴 In ritardo di {_days(today, t['due_date'])} giorni")
+        text = f"{head}: *{t['text']}*\n«{view['title']}» — {view['client_name']} · entro {_short_it_date(t['due_date'])}\nQuando è fatta tocca ✅ Fatto."
+        try:
+            if await _tell_collaborator(c, text, f"cldone:t:{t['id']}"):
+                sent += 1
+        except Exception:
+            logger.exception("to do reminder failed")
+    return sent
+
+
 async def _job_todo_or_404(current: User, todo_id: str) -> dict:
     todo = await db.job_todos.find_one({"id": todo_id}, {"_id": 0})
     if not todo:
@@ -6060,19 +6211,22 @@ async def _job_todo_or_404(current: User, todo_id: str) -> dict:
 
 @api_router.post("/jobs/commesse/{commessa_id}/todos")
 async def create_job_todo(commessa_id: str, payload: JobTodoPayload, current: User = Depends(get_current_user)):
-    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
     text = " ".join((payload.text or "").split())
     if not text:
         raise HTTPException(status_code=400, detail="Scrivi l'attività da fare")
+    who, collab_id = await _resolve_assignee(current, commessa_id, (payload.who or "").strip()[:60], payload.collaborator_id)
     doc = {
         "id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
         "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
-        "text": text[:500], "who": (payload.who or "").strip()[:60] or _first_name(current.name),
-        "due_date": _valid_due(payload.due_date), "done": False, "done_at": None,
+        "text": text[:500], "who": who or _first_name(current.name), "collaborator_id": collab_id,
+        "due_date": _valid_due(payload.due_date), "done": False, "done_at": None, "reminded": {},
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.job_todos.insert_one(doc)
     doc.pop("_id", None)
+    doc.pop("reminded", None)
+    doc["notified"] = await _notify_assignee("todo", doc, _commessa_view(sub, client, clienti))
     return doc
 
 
@@ -6085,16 +6239,29 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
         if not text:
             raise HTTPException(status_code=400, detail="Scrivi l'attività da fare")
         upd["text"] = text[:500]
-    if payload.who is not None:
-        upd["who"] = payload.who.strip()[:60] or todo.get("who") or _first_name(current.name)
+    if payload.who is not None or payload.collaborator_id is not None:
+        who, collab_id = await _resolve_assignee(current, todo["commessa_id"], payload.who.strip()[:60] if payload.who is not None else None,
+                                                 payload.collaborator_id, keep=todo.get("collaborator_id"))
+        if who is not None:
+            upd["who"] = who or todo.get("who") or _first_name(current.name)
+        upd["collaborator_id"] = collab_id
     if payload.due_date is not None:
         upd["due_date"] = _valid_due(payload.due_date)
+        if upd["due_date"] != todo.get("due_date"):
+            upd["reminded"] = {}
     if payload.done is not None:
         upd["done"] = payload.done
         upd["done_at"] = datetime.now(timezone.utc).isoformat() if payload.done else None
     if upd:
         await db.job_todos.update_one({"id": todo_id}, {"$set": upd})
-    return {**todo, **upd}
+    out = {k: v for k, v in {**todo, **upd}.items() if k != "reminded"}
+    new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != todo.get("collaborator_id")
+    moved = "reminded" in upd and out.get("collaborator_id") and not new_collab
+    if new_collab or moved:
+        clienti, sub, client = await _commessa_or_404(current, todo["commessa_id"])
+        out["notified"] = await _notify_assignee("todo", out, _commessa_view(sub, client, clienti),
+                                                 "new" if new_collab else "date", todo.get("due_date"))
+    return out
 
 
 @api_router.delete("/jobs/todos/{todo_id}")
@@ -6113,6 +6280,7 @@ class MilestonePayload(BaseModel):
     title: str
     who: Optional[str] = ""
     due_date: str                             # scadenza, YYYY-MM-DD
+    collaborator_id: Optional[str] = None
 
 
 class MilestonePatch(BaseModel):
@@ -6121,6 +6289,7 @@ class MilestonePatch(BaseModel):
     due_date: Optional[str] = None
     done: Optional[bool] = None
     done_date: Optional[str] = None           # the day it was done (default today)
+    collaborator_id: Optional[str] = None     # "" = no longer a collaborator's
 
 
 class MilestoneActionPayload(BaseModel):
@@ -6183,10 +6352,11 @@ async def _milestone_or_404(current: User, ms_id: str) -> tuple:
     return m, _commessa_view(sub, client, clienti)
 
 
-async def _log_commessa_event(current: User, view: dict, kind: str, text: str, extra: Optional[dict] = None) -> None:
+async def _log_commessa_event(current: User, view: dict, kind: str, text: str, extra: Optional[dict] = None,
+                              author_name: Optional[str] = None) -> None:
     """A line of the commessa's diary that is not work done (a milestone reached, an action)."""
     log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "kind": kind, **(extra or {}),
-           "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+           "user_id": current.user_id, "org_id": current.org_id, "author_name": author_name or _first_name(current.name),
            "collection_id": view.get("collection_id"), "client_item_id": view.get("client_item_id"), "client_name": view.get("client_name"),
            "commessa_id": view["id"], "commessa_title": view.get("title"), "date": jl.today_local().isoformat(),
            "raw_text": text, "text": text, "hours": [], "materials": [], "problems": [], "photos": [],
@@ -6203,22 +6373,24 @@ async def list_milestones(commessa_id: str, current: User = Depends(get_current_
 
 @api_router.post("/jobs/commesse/{commessa_id}/milestones")
 async def create_milestone(commessa_id: str, payload: MilestonePayload, current: User = Depends(get_current_user)):
-    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
     title = " ".join((payload.title or "").split())
     if not title:
         raise HTTPException(status_code=400, detail="Scrivi la milestone")
     due = _valid_due(payload.due_date)
     if not due:
         raise HTTPException(status_code=400, detail="Indica la scadenza")
+    who, collab_id = await _resolve_assignee(current, commessa_id, (payload.who or "").strip()[:60], payload.collaborator_id)
     doc = {"id": f"jms_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
            "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
-           "title": title[:200], "who": (payload.who or "").strip()[:60] or _first_name(current.name),
+           "title": title[:200], "who": who or _first_name(current.name), "collaborator_id": collab_id,
            "due_date": due, "original_due_date": due, "done": False, "done_date": None, "corrective_actions": [],
            "reminded": {}, "created_at": datetime.now(timezone.utc).isoformat()}
     await db.job_milestones.insert_one(doc)
     doc.pop("_id", None)
     doc.pop("reminded", None)
-    return _milestone_view(doc)
+    notified = await _notify_assignee("milestone", doc, _commessa_view(sub, client, clienti))
+    return {**_milestone_view(doc), "notified": notified}
 
 
 @api_router.patch("/jobs/milestones/{ms_id}")
@@ -6231,8 +6403,12 @@ async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = 
         if not title:
             raise HTTPException(status_code=400, detail="Scrivi la milestone")
         upd["title"] = title[:200]
-    if payload.who is not None:
-        upd["who"] = payload.who.strip()[:60] or m.get("who")
+    if payload.who is not None or payload.collaborator_id is not None:
+        who, collab_id = await _resolve_assignee(current, m["commessa_id"], payload.who.strip()[:60] if payload.who is not None else None,
+                                                 payload.collaborator_id, keep=m.get("collaborator_id"))
+        if who is not None:
+            upd["who"] = who or m.get("who")
+        upd["collaborator_id"] = collab_id
     if payload.due_date is not None:
         due = _valid_due(payload.due_date)
         if not due:
@@ -6250,6 +6426,10 @@ async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = 
     if upd:
         await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
     out = _milestone_view({k: v for k, v in {**m, **upd}.items() if k != "reminded"}, today)
+    new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != m.get("collaborator_id")
+    moved = upd.get("due_date") and upd["due_date"] != m["due_date"] and out.get("collaborator_id") and not new_collab
+    if new_collab or moved:
+        out["notified"] = await _notify_assignee("milestone", out, view, "new" if new_collab else "date", m["due_date"])
     if upd.get("done"):
         late = f", {out['delay_days']} {'giorno' if out['delay_days'] == 1 else 'giorni'} di ritardo" if out["delay_days"] else ", in tempo"
         await _log_commessa_event(current, view, "milestone", f"Milestone «{out['title']}» completata il {_short_it_date(out['done_date'])}{late}.",
@@ -6272,6 +6452,8 @@ async def add_milestone_action(ms_id: str, payload: MilestoneActionPayload, curr
     if new_due:
         upd.update({"due_date": new_due, "reminded": {}})
     await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
+    if new_due and new_due != m["due_date"]:
+        await _notify_assignee("milestone", {**m, **upd}, view, "date", m["due_date"])
     await _log_commessa_event(current, view, "milestone",
                               f"Milestone «{m['title']}»: azione correttiva — {text}"
                               + (f" Nuova scadenza {_short_it_date(new_due)} (era {_short_it_date(m['due_date'])})." if new_due else ""),
@@ -6299,11 +6481,21 @@ async def _milestone_recipients(m: dict) -> list:
             for u in await db.users.find({"org_id": m["org_id"]}, {"_id": 0, "name": 1, "telegram_chat_id": 1}).to_list(200):
                 if u.get("telegram_chat_id") and who in {(u.get("name") or "").strip().lower(), _first_name(u.get("name")).lower()}:
                     chats.append(u["telegram_chat_id"])
-        for c in await db.collaborators.find({"commesse": {"$in": [m["commessa_id"]]}, "status": "active"}, {"_id": 0}).to_list(200):
-            names = {(c.get("first_name") or "").lower(), f"{c.get('first_name', '')} {c.get('last_name', '')}".strip().lower()}
-            if c.get("telegram_chat_id") and who in names:
-                chats.append(c["telegram_chat_id"])
     return list(dict.fromkeys(chats))
+
+
+async def _milestone_collaborator(m: dict) -> Optional[dict]:
+    """The collaborator who has to do it: the one it was given to, or (older ones) by name."""
+    if m.get("collaborator_id"):
+        c = await db.collaborators.find_one({"id": m["collaborator_id"]}, {"_id": 0})
+        return c if c and m["commessa_id"] in (c.get("commesse") or []) else None
+    who = (m.get("who") or "").strip().lower()
+    if not who:
+        return None
+    for c in await db.collaborators.find({"commesse": {"$in": [m["commessa_id"]]}, "status": "active"}, {"_id": 0}).to_list(200):
+        if who in {(c.get("first_name") or "").lower(), _collab_name(c).lower()}:
+            return c
+    return None
 
 
 async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
@@ -6339,6 +6531,15 @@ async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
                     sent += 1
             except Exception:
                 logger.exception("milestone reminder failed")
+        c = await _milestone_collaborator(m)
+        if c:
+            try:
+                ctext = text.replace("\nSe è fatta segnala come fatta; se no scrivi un'azione correttiva con la nuova data "
+                                     "(diario della commessa → Milestone).", "") + "\nQuando è fatta tocca ✅ Fatto."
+                if await _tell_collaborator(c, ctext, f"cldone:m:{m['id']}"):
+                    sent += 1
+            except Exception:
+                logger.exception("milestone reminder to collaborator failed")
     return sent
 
 
@@ -6856,7 +7057,10 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
     for r in reports:
         for sec in r.get("sections") or []:
             sec["fields"] = {f: v for f, v in (sec.get("fields") or {}).items() if not hide.search(f)}
+    open_todos = [t for t in await db.job_todos.find({"commessa_id": view["id"], "done": False}, {"_id": 0}).to_list(300)]
     view = {**view, "milestones_line": milestones_line(await _commessa_milestones(view["id"])),
+            "todos_line": " | ".join(f"«{t['text']}» ({t.get('who') or '-'})" + (f" entro {t['due_date']}" if t.get("due_date") else "")
+                                     for t in _sort_job_todos(open_todos)),
             "contacts_line": contacts_line(await _commessa_contacts(view["id"]))}   # the job's trades: useful to them too
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
@@ -6897,6 +7101,7 @@ async def _collab_reminder_loop():
             if tg.bot_token():
                 await _collab_remind_due()
                 await _milestone_reminders()
+                await _todo_reminders()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)

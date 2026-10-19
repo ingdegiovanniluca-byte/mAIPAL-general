@@ -111,6 +111,12 @@ NOTICES = []
 async def fake_send(chat_id, text):
     NOTICES.append((chat_id, text)); return True
 server._send_telegram_text = fake_send
+TOLD = []
+async def fake_tell(c, text, done_data=None):   # a collaborator's message (with the "Fatto" button)
+    if c.get("status") != "active" or not c.get("telegram_chat_id"):
+        return False
+    NOTICES.append((c["telegram_chat_id"], text)); TOLD.append((c["id"], text, done_data)); return True
+server._tell_collaborator = fake_tell
 async def no_emb(q): raise RuntimeError("offline")
 emb.embed_query = no_emb
 def said(hours=None, materials=None, problems=None, date=None):
@@ -200,7 +206,7 @@ async def main():
         ANS.append(commessa); return {"answer": "ok", "is_entry": False}
     jl.answer = cap
     await server.ask_job_commessa("s_bagno", server.CommessaAskPayload(question="a che punto siamo con le milestone?", history=[]), me)
-    assert "«Impianto elettrico» (Gino)" in ANS[-1]["milestones_line"] and "2 giorni di ritardo" in ANS[-1]["milestones_line"]
+    assert "«Impianto elettrico» (Gino Neri)" in ANS[-1]["milestones_line"] and "2 giorni di ritardo" in ANS[-1]["milestones_line"]
     assert "azioni correttive: Squadra in più da lunedì" in ANS[-1]["milestones_line"]
 
     # 6) the Monday summary: late ones and this week's

@@ -366,6 +366,7 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         f"Economia: {commessa.get('economics_line')}" if commessa.get("economics_line") else "",
         f"Milestone: {commessa.get('milestones_line')}" if commessa.get("milestones_line") else "",
         f"Contatti utili: {commessa.get('contacts_line')}" if commessa.get("contacts_line") else "",
+        f"Attività da fare (To Do): {commessa.get('todos_line')}" if commessa.get("todos_line") else "",
     ] if x)
     totals_s = (f"Voci di diario: {tot['entries']}. Ore totali: {_fmt_num(tot['hours_total'])} h" + (f" ({per})" if per else "")
                 + ". Materiali: " + (materials_line(tot["materials"]) or "nessuno") + ".")

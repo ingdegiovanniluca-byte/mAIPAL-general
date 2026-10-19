@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -143,7 +143,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
     <div data-testid={isReport ? "job-report-event" : isEvent ? "job-stato-event" : "job-entry"}>
       <button type="button" onClick={() => onOpen(log)} className="w-full text-left">
         <span className="flex items-center gap-[5px] text-white/50">
-          {isEvent && (isReport ? <FileText size={11} strokeWidth={2} /> : log.kind === "milestone" ? <Flag size={11} strokeWidth={2} /> : <RefreshCw size={11} strokeWidth={2} />)}
+          {isEvent && (isReport ? <FileText size={11} strokeWidth={2} /> : log.kind === "milestone" ? <Flag size={11} strokeWidth={2} /> : log.kind === "todo" ? <ListChecks size={11} strokeWidth={2} /> : <RefreshCw size={11} strokeWidth={2} />)}
           {full && !isEvent && log.hours?.length > 0 && <Clock size={11} strokeWidth={2} />}
           {full && !isEvent && log.problems?.length > 0 && <AlertTriangle size={11} strokeWidth={2} />}
           {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
@@ -414,7 +414,8 @@ function TodoRow({ todo, onToggle, onOpen }) {
       </button>
       <button type="button" onClick={() => onOpen(todo)} className="min-w-0 text-left">
         <span className={`flex items-center gap-x-3.5 gap-y-0.5 flex-wrap text-[12.5px] font-medium ${todo.done ? "text-white/50" : "text-white"}`}>
-          <span className="inline-flex items-center gap-1" data-testid="job-todo-who"><UserRound size={12} strokeWidth={2} /> {todo.who}</span>
+          <span className="inline-flex items-center gap-1" data-testid="job-todo-who"><UserRound size={12} strokeWidth={2} /> {todo.who}
+            {todo.collaborator_id && <Send size={10} strokeWidth={2} className="text-white/55" aria-label="collaboratore, avvisato su Telegram" />}</span>
           {todo.due_date && (
             <span className="inline-flex items-center gap-1" data-testid="job-todo-due">
               <CalendarDays size={12} strokeWidth={2} /> entro {shortDay(todo.due_date)}{overdue && <span className="text-white/55 font-normal">· scaduta</span>}
@@ -427,18 +428,49 @@ function TodoRow({ todo, onToggle, onOpen }) {
   );
 }
 
-function TodoDialog({ todo, commessaId, team, onClose, onSaved }) {
+// Who does it: a team mate or a collaborator enabled on the commessa (chips, or the name
+// typed). A collaborator's To Do / milestone reaches them on Telegram, with the reminders.
+function AssigneePicker({ who, setWho, collabId, setCollabId, team, collaborators, testid }) {
+  const byName = (v) => collaborators.find((c) => c.name.toLowerCase() === v.trim().toLowerCase());
+  const pick = (name, id) => { setWho(name); setCollabId(id || ""); };
+  const chosen = collaborators.find((c) => c.id === collabId);
+  const chip = (on) => `shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs ${on ? "lg-bubble text-white font-medium" : "bg-white/10 text-white/75 hover:bg-white/15"}`;
+  return (
+    <div data-testid={testid}>
+      <input value={who} onChange={(e) => { setWho(e.target.value); setCollabId(byName(e.target.value)?.id || ""); }} placeholder="Nome"
+        data-testid={`${testid}-input`} className="h-9 rounded-lg bg-white/10 px-2.5 text-sm text-white placeholder:text-white/40 outline-none w-full" />
+      <div className="flex gap-1.5 overflow-x-auto mt-2 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {team.map((n) => <button key={`t-${n}`} type="button" onClick={() => pick(n, "")} className={chip(!collabId && who === n)}>{n}</button>)}
+        {collaborators.map((c) => (
+          <button key={c.id} type="button" onClick={() => pick(c.name, c.id)} data-testid={`${testid}-collab-${c.id}`} className={chip(collabId === c.id)}>
+            {c.telegram && <Send size={10} strokeWidth={2} />} {c.name}{c.company ? ` · ${c.company}` : ""}
+          </button>
+        ))}
+      </div>
+      {chosen && (
+        <div className="text-[11.5px] text-white/60 mt-1.5" data-testid={`${testid}-hint`}>
+          {chosen.telegram ? `${chosen.first_name || chosen.name} lo riceve su Telegram, con i promemoria e il pulsante ✅ Fatto.`
+            : `${chosen.first_name || chosen.name} non ha ancora collegato Telegram: non riceverà avvisi.`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TodoDialog({ todo, commessaId, team, collaborators = [], onClose, onSaved }) {
   const isNew = !todo.id;
   const [text, setText] = useState(todo.text || "");
   const [who, setWho] = useState(todo.who || team[0] || "");
+  const [collabId, setCollabId] = useState(todo.collaborator_id || "");
   const [due, setDue] = useState(todo.due_date || "");
   const [saving, setSaving] = useState(false);
   const save = async () => {
     if (!text.trim()) { toast.error("Scrivi l'attività da fare"); return; }
     setSaving(true);
     try {
-      if (isNew) await api.post(`/jobs/commesse/${commessaId}/todos`, { text, who, due_date: due || null });
-      else await api.patch(`/jobs/todos/${todo.id}`, { text, who, due_date: due || "" });
+      const r = isNew ? await api.post(`/jobs/commesse/${commessaId}/todos`, { text, who, collaborator_id: collabId, due_date: due || null })
+        : await api.patch(`/jobs/todos/${todo.id}`, { text, who, collaborator_id: collabId, due_date: due || "" });
+      if (r.data?.notified) toast.success(`Mandata a ${r.data.who} su Telegram`);
       onSaved();
     } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
     finally { setSaving(false); }
@@ -460,8 +492,7 @@ function TodoDialog({ todo, commessaId, team, onClose, onSaved }) {
           </div>
           <div>
             <div className="kicker mb-1">chi se ne occupa</div>
-            <input value={who} onChange={(e) => setWho(e.target.value)} list="job-todo-team" data-testid="job-todo-who-input" placeholder="Nome" className={`${field} w-full`} />
-            <datalist id="job-todo-team">{team.map((n) => <option key={n} value={n} />)}</datalist>
+            <AssigneePicker who={who} setWho={setWho} collabId={collabId} setCollabId={setCollabId} team={team} collaborators={collaborators} testid="job-todo-assignee" />
           </div>
           <div>
             <div className="kicker mb-1">entro quando (facoltativo)</div>
@@ -509,7 +540,8 @@ function MilestoneRow({ m, onToggle, onOpen }) {
       </button>
       <button type="button" onClick={() => onOpen(m)} className="min-w-0 text-left">
         <span className={`flex items-center gap-x-3.5 gap-y-0.5 flex-wrap text-[12.5px] font-medium ${done ? "text-white/50" : "text-white"}`}>
-          <span className="inline-flex items-center gap-1"><UserRound size={12} strokeWidth={2} /> {m.who}</span>
+          <span className="inline-flex items-center gap-1"><UserRound size={12} strokeWidth={2} /> {m.who}
+            {m.collaborator_id && <Send size={10} strokeWidth={2} className="text-white/55" aria-label="collaboratore, avvisato su Telegram" />}</span>
           <span className="inline-flex items-center gap-1" data-testid="job-milestone-due"><Flag size={12} strokeWidth={2} /> {shortDay(m.due_date)}</span>
         </span>
         <span className={`block mt-[3px] text-[14px] leading-[1.45] ${done ? "text-white/45" : "text-white/90"}`}>{m.title}</span>
@@ -525,10 +557,11 @@ function MilestoneRow({ m, onToggle, onOpen }) {
   );
 }
 
-function MilestoneSheet({ m, commessaId, team, onClose, onSaved }) {
+function MilestoneSheet({ m, commessaId, team, collaborators = [], onClose, onSaved }) {
   const isNew = !m.id;
   const [title, setTitle] = useState(m.title || "");
   const [who, setWho] = useState(m.who || team[0] || "");
+  const [collabId, setCollabId] = useState(m.collaborator_id || "");
   const [due, setDue] = useState(m.due_date || "");
   const [doneDate, setDoneDate] = useState(m.done_date || "");
   const [action, setAction] = useState("");
@@ -540,9 +573,10 @@ function MilestoneSheet({ m, commessaId, team, onClose, onSaved }) {
     if (!due) { toast.error("Indica la scadenza"); return; }
     setBusy(true);
     try {
-      if (isNew) await api.post(`/jobs/commesse/${commessaId}/milestones`, { title, who, due_date: due });
-      else await api.patch(`/jobs/milestones/${m.id}`, { title, who, ...(due !== m.due_date ? { due_date: due } : {}),
-        ...(m.status === "done" && doneDate && doneDate !== m.done_date ? { done_date: doneDate } : {}) });
+      const r = isNew ? await api.post(`/jobs/commesse/${commessaId}/milestones`, { title, who, collaborator_id: collabId, due_date: due })
+        : await api.patch(`/jobs/milestones/${m.id}`, { title, who, collaborator_id: collabId, ...(due !== m.due_date ? { due_date: due } : {}),
+          ...(m.status === "done" && doneDate && doneDate !== m.done_date ? { done_date: doneDate } : {}) });
+      if (r.data?.notified) toast.success(`Mandata a ${r.data.who} su Telegram`);
       onSaved();
     } catch (e) { fail(e); } finally { setBusy(false); }
   };
@@ -567,16 +601,13 @@ function MilestoneSheet({ m, commessaId, team, onClose, onSaved }) {
           <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus={isNew} data-testid="job-milestone-title"
             placeholder="Es. Impianto elettrico completato" className={`${field} w-full`} />
         </div>
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="min-w-0">
-            <div className="kicker mb-1">chi la esegue</div>
-            <input value={who} onChange={(e) => setWho(e.target.value)} list="job-ms-team" data-testid="job-milestone-who" placeholder="Nome" className={`${field} w-full`} />
-            <datalist id="job-ms-team">{team.map((n) => <option key={n} value={n} />)}</datalist>
-          </div>
-          <div className="min-w-0">
-            <div className="kicker mb-1">scadenza</div>
-            <input type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="job-milestone-due-input" className={`${field} w-full`} />
-          </div>
+        <div className="min-w-0">
+          <div className="kicker mb-1">chi la esegue</div>
+          <AssigneePicker who={who} setWho={setWho} collabId={collabId} setCollabId={setCollabId} team={team} collaborators={collaborators} testid="job-ms-assignee" />
+        </div>
+        <div className="min-w-0">
+          <div className="kicker mb-1">scadenza</div>
+          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="job-milestone-due-input" className={`${field} w-full`} />
         </div>
         {!isNew && m.original_due_date && m.original_due_date !== m.due_date && (
           <div className="text-[12px] text-white/55">Prima scadenza: {shortDay(m.original_due_date)}</div>
@@ -1285,11 +1316,11 @@ export default function JobDiaryPage() {
         </GlassBottomSheet>
       )}
       {msEditing && c && (
-        <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} onClose={() => setMsEditing(null)}
+        <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} onClose={() => setMsEditing(null)}
           onSaved={async () => { setMsEditing(null); await loadDetail(selectedId); }} />
       )}
       {todoEditing && c && (
-        <TodoDialog todo={todoEditing} commessaId={c.id} team={detail?.team || []} onClose={() => setTodoEditing(null)}
+        <TodoDialog todo={todoEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} onClose={() => setTodoEditing(null)}
           onSaved={async () => { setTodoEditing(null); await loadDetail(selectedId); }} />
       )}
       {editing && (

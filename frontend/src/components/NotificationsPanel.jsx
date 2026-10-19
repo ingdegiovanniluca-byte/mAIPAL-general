@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Bell, BellOff, Loader2, NotebookPen, AlarmClock } from "lucide-react";
 import { api } from "@/lib/api";
-import { pushSupported, currentPushSubscription, enablePush, disablePush, isIos, isStandalone } from "@/lib/pwa";
+import { pushSupported, currentPushSubscription, enablePush, disablePush, isIos, isStandalone, pushKeyMatches } from "@/lib/pwa";
 
 /* Impostazioni > Notifiche: the app's notifications on THIS device, also with mAIPAL closed.
    Only two kinds: what external collaborators write in a commessa's diary, and the tasks'
@@ -11,6 +11,7 @@ export default function NotificationsPanel() {
   const [state, setState] = useState("checking");   // checking | unsupported | ios_home | denied | off | on
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState(null);   // the last notification sent to this account
+  const [stale, setStale] = useState(false);  // this device subscribed with an old key: nothing would arrive
 
   // this device's state + the last notification sent (shown whatever the state: it says why one didn't arrive)
   const status = async (endpoint) => {
@@ -21,8 +22,13 @@ export default function NotificationsPanel() {
     if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); status(); return; }
     if (Notification.permission === "denied") { setState("denied"); status(); return; }
     const sub = await currentPushSubscription();
+    let old = false;
+    if (sub) {
+      try { old = pushKeyMatches(sub, (await api.get("/push/key")).data.public_key) === false; } catch { /* can't tell */ }
+    }
+    setStale(old);
     const r = await status(sub?.endpoint);
-    setState(sub && r?.subscribed ? "on" : "off");
+    setState(sub && r?.subscribed && !old ? "on" : "off");
   };
   useEffect(() => { check(); }, []);
 
@@ -33,6 +39,7 @@ export default function NotificationsPanel() {
       const sub = await enablePush(key);
       await api.post("/push/subscribe", { subscription: sub.toJSON() });
       setState("on");
+      setStale(false);
       status(sub.endpoint);
       toast.success("Notifiche attive su questo dispositivo");
     } catch (e) {
@@ -72,6 +79,9 @@ export default function NotificationsPanel() {
         <p className="text-sm text-white/70" data-testid="push-denied">
           Le notifiche di mAIPAL sono bloccate su questo dispositivo: riattivale dalle impostazioni del browser (icona del lucchetto accanto all'indirizzo) o del telefono, poi torna qui.
         </p>
+      )}
+      {state === "off" && stale && (
+        <p className="text-sm text-amber-300 mb-3" data-testid="push-stale">Su questo dispositivo le notifiche erano attivate con una chiave che non vale più: riattivale.</p>
       )}
       {state === "off" && (
         <button onClick={turnOn} disabled={busy} data-testid="push-enable" className="pill-btn inline-flex items-center gap-2 disabled:opacity-60">
