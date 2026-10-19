@@ -35,6 +35,11 @@ const shortDay = (iso) => {
   const [, m, d] = iso.split("-").map(Number);
   return `${d} ${IT_MONTHS[m - 1].slice(0, 3)}`;
 };
+// presence on site (collaborators, Telegram): how far from the site the start / end were
+const ON_SITE_M = 300;
+const distText = (m) => (m === null || m === undefined ? "" : m < 50 ? "in cantiere" : m < 1000 ? `a ${m} m` : `a ${(m / 1000).toFixed(1).replace(".", ",")} km`);
+const mapsAt = (loc) => (loc ? `https://maps.google.com/?q=${loc.lat},${loc.lon}` : null);
+const hhmmOf = (iso) => new Date(iso).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
 const fmtNum = (x) => (x === null || x === undefined || x === "" ? "" : Number.isInteger(+x) ? String(+x) : String(+(+x).toFixed(2)).replace(".", ","));
 const matLabel = (m) => [fmtNum(m.qty), m.unit, m.name].filter(Boolean).join(" ");
 const photoUrl = (id) => `${API}/jobs/photos/${id}`;
@@ -128,6 +133,51 @@ function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaL
   return <div data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</div>;
 }
 
+// The site: its address on the map and its position for the collaborators' presences (found
+// from the address, or set from the phone when on site).
+function SiteSheet({ commessa, geo, onClose, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [g, setG] = useState(geo || null);
+  const known = g && g.lat !== null && g.lat !== undefined;
+  const save = async (body) => {
+    setBusy(true);
+    try { const r = await api.put(`/jobs/commesse/${commessa.id}/geo`, body); setG(r.data); toast.success("Posizione del cantiere salvata"); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); } finally { setBusy(false); }
+  };
+  const here = () => {
+    if (!navigator.geolocation) { toast.error("Questo dispositivo non dà la posizione"); return; }
+    setBusy(true);
+    navigator.geolocation.getCurrentPosition((p) => save({ lat: p.coords.latitude, lon: p.coords.longitude }),
+      () => { setBusy(false); toast.error("Posizione non disponibile: consenti la posizione a mAIPAL"); }, { enableHighAccuracy: true, timeout: 15000 });
+  };
+  return (
+    <GlassBottomSheet onClose={onClose} testid="site-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-lg font-semibold text-white mb-1">Cantiere</div>
+      <div className="text-sm text-white/85 break-words">{commessa.address || "Indirizzo non indicato"}</div>
+      {commessa.address && (
+        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(commessa.address)}`} target="_blank" rel="noreferrer"
+          className="mt-1 inline-flex items-center gap-1 text-[12.5px] text-white/75 underline-offset-2 hover:underline"><MapPin size={12} /> Apri sulla mappa</a>
+      )}
+      <div className="mt-4 rounded-2xl bg-white/[0.06] px-3.5 py-3">
+        <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1">posizione per le presenze</div>
+        <div className="text-[13px] text-white/85" data-testid="site-geo-state">
+          {known ? (g.source === "manual" ? "Impostata da te" : "Trovata dall'indirizzo") : "Non trovata: le presenze dei collaboratori non mostrano la distanza dal cantiere"}
+          {known && <a href={mapsAt(g)} target="_blank" rel="noreferrer" className="ml-2 underline-offset-2 hover:underline text-white/65">vedi</a>}
+        </div>
+        <div className="text-[11.5px] text-white/50 mt-1">Quando un collaboratore tocca 📍 su Telegram all'arrivo e alla fine, vedi a che distanza dal cantiere era.</div>
+        <div className="flex flex-wrap gap-2 mt-3">
+          <button onClick={here} disabled={busy} data-testid="site-geo-here" className="px-3.5 py-1.5 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50 inline-flex items-center gap-1.5">
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <MapPin size={13} />} Sono in cantiere: usa questa posizione
+          </button>
+          {commessa.address && (
+            <button onClick={() => save({})} disabled={busy} data-testid="site-geo-address" className="px-3.5 py-1.5 rounded-full text-sm bg-white/10 text-white disabled:opacity-50">Ritrova dall'indirizzo</button>
+          )}
+        </div>
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
 // a line of the diary: who (grey) with a small icon when it carries hours / problems /
 // materials, the text, the photos; tap to change or delete it
 // A report made for the commessa is an event too: its type and summary, and (for who made it)
@@ -167,6 +217,17 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
           className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-white/75 underline-offset-2 hover:underline">
           <FileText size={12} /> Scarica il report
         </a>
+      )}
+      {full && log.presence && (log.presence.start_loc || log.presence.end_loc) && (
+        <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-white/60" data-testid="job-presence">
+          <MapPin size={12} className="shrink-0" />
+          {[["inizio", log.presence.start_loc, log.presence.start_m], ["fine", log.presence.end_loc, log.presence.end_m]].map(([k, loc, m]) => (loc ? (
+            <a key={k} href={mapsAt(loc)} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline"
+              style={m > ON_SITE_M ? { color: "#FFB199" } : undefined}>
+              {k} {m === null || m === undefined ? "(cantiere senza posizione)" : distText(m)}
+            </a>
+          ) : <span key={k}>{k} senza posizione</span>))}
+        </span>
       )}
       {full && log.photos?.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
@@ -886,6 +947,7 @@ export default function JobDiaryPage() {
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [contactsOpen, setContactsOpen] = useState(false);
+  const [siteOpen, setSiteOpen] = useState(false);
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
   const [period, setPeriod] = useState({ key: "30" });
@@ -1096,6 +1158,11 @@ export default function JobDiaryPage() {
       <div className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
           ariaLabel="Cambia lo stato della commessa" onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
+        {(detail.on_site || []).length > 0 && (
+          <InfoCard icon={HardHat} label="In cantiere ora" testid="glance-on-site" ariaLabel="Chi sta lavorando ora in cantiere"
+            value={detail.on_site.map((x) => x.name.split(" ")[0]).join(", ")}
+            note={`dalle ${hhmmOf(detail.on_site[0].since)}${detail.on_site.some((x) => x.far) ? " · ⚠️ lontano" : ""}`} />
+        )}
         <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")} />
         {detail.economics && (
           <InfoCard icon={Euro} label="Costi" value={eur(detail.economics.cost_total)} testid="glance-costi" ariaLabel="Mostra costi e margine"
@@ -1111,7 +1178,7 @@ export default function JobDiaryPage() {
           ariaLabel="Contatti utili della commessa" onClick={() => setContactsOpen(true)}
           note={(detail.contacts || []).slice(0, 2).map((x) => x.role || x.name).join(", ")} />
         <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} testid="info-cantiere"
-          href={c.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}` : undefined} external ariaLabel="Apri il cantiere sulla mappa" />
+          onClick={() => setSiteOpen(true)} ariaLabel="Il cantiere: indirizzo e posizione per le presenze" />
         <InfoCard icon={CalendarDays} label="Date" testid="info-date"
           value={c.data_inizio ? `${shortDay(c.data_inizio)} → ${c.data_fine ? shortDay(c.data_fine) : "in corso"}` : "non indicate"} />
         {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
@@ -1315,6 +1382,7 @@ export default function JobDiaryPage() {
           <CommessaContacts commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
         </GlassBottomSheet>
       )}
+      {siteOpen && c && <SiteSheet commessa={c} geo={detail?.geo} onClose={() => setSiteOpen(false)} onChanged={() => loadDetail(selectedId)} />}
       {msEditing && c && (
         <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} onClose={() => setMsEditing(null)}
           onSaved={async () => { setMsEditing(null); await loadDetail(selectedId); }} />

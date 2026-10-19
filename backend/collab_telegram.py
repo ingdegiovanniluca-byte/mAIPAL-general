@@ -24,6 +24,8 @@ from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
                       ReplyKeyboardRemove, Update)
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
+import site_presence as sp
+
 logger = logging.getLogger(__name__)
 
 TARGET_FRESH = timedelta(hours=2)   # the commessa of the conversation, for the next messages
@@ -33,7 +35,25 @@ HELP = ("Qui puoi fare due cose, sulle commesse che ti sono state abilitate:\n"
         "📒 scrivere cosa avete fatto (ore, materiali, problemi), anche a voce o con le foto;\n"
         "🔎 chiedere informazioni sulla commessa (es. «cosa manca da fare?», «quante ore abbiamo fatto?»).\n"
         "Se lavori su più commesse, nomina il cliente o i lavori, oppure scegli la commessa dai pulsanti.\n"
-        "📌 Qui ti arrivano anche le attività e le milestone affidate a te, con i promemoria: quando sono fatte tocca ✅ Fatto.")
+        "📌 Qui ti arrivano anche le attività e le milestone affidate a te, con i promemoria: quando sono fatte tocca ✅ Fatto.\n"
+        "⏱️ Quando arrivi in cantiere tocca 📍 Sono arrivato, quando hai finito 📍 Ho finito: le ore vanno nel diario da sole "
+        "(oppure scrivi «sono arrivato» / «ho finito alle 17:30»).")
+PRIVACY_PLACE = ("📍 La tua posizione viene salvata solo quando tocchi il pulsante 📍 (all'arrivo e alla fine), "
+                 "per segnare che eri in cantiere: non vieni seguito.")
+
+
+def presence_keyboard(working: bool) -> ReplyKeyboardMarkup:
+    """The button under the chat: it sends the phone's position, which starts or ends the work."""
+    label = "📍 Ho finito" if working else "📍 Sono arrivato in cantiere"
+    return ReplyKeyboardMarkup([[KeyboardButton(label, request_location=True)]], resize_keyboard=True, is_persistent=True)
+
+
+async def _keyboard_for(recs: list) -> ReplyKeyboardMarkup:
+    from server import _open_presence
+    for r in recs:
+        if await _open_presence(r["id"]):
+            return presence_keyboard(True)
+    return presence_keyboard(False)
 
 
 def _now() -> datetime:
@@ -113,8 +133,8 @@ async def _complete_link(update: Update, c: dict, chat_id: int):
     await _reply(update,
                  f"✅ Ciao {c.get('first_name', '')}, sei collegato a mAIPAL.\n\n{HELP}\n\nLe tue commesse:\n{jobs}\n\n"
                  "ℹ️ Quello che scrivi qui viene salvato nel diario delle commesse con il tuo nome, ed è visibile a chi ti ha "
-                 "invitato. Per correggere o cancellare i tuoi dati rivolgiti a lui.",
-                 reply_markup=ReplyKeyboardRemove())
+                 f"invitato. {PRIVACY_PLACE} Per correggere o cancellare i tuoi dati rivolgiti a lui.",
+                 reply_markup=presence_keyboard(False))
     owner = targets[0][0] if targets else None
     if owner is None:
         from server import User
@@ -228,14 +248,20 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         return
     rec = active[0]
     text = (msg.text or "").strip()
-    if text.startswith("/"):
+    if text.startswith("/") and text.split()[0].lower() not in ("/inizio", "/fine"):
         cmd = text.split()[0].lower()
-        await _reply(update, HELP if cmd in ("/help", "/start", "/aiuto") else
+        await _reply(update, (HELP if cmd in ("/help", "/start", "/aiuto") else
                      "Qui puoi solo scrivere nel diario delle tue commesse o chiedere informazioni su di esse.\n\n" + HELP)
+                     + "\n\n" + PRIVACY_PLACE, reply_markup=await _keyboard_for(active))
         return
     targets = [t for r in active for t in await _collab_targets(r)]
     if not targets:
         await _reply(update, "Al momento non hai commesse abilitate (o sono chiuse): rivolgiti a chi ti ha invitato.")
+        return
+    command = sp.parse_command(text) if text else None
+    place = getattr(msg, "location", None)
+    if place or command:
+        await presence(update, active, targets, command, {"lat": place.latitude, "lon": place.longitude} if place else None)
         return
     if await _over_limit(db, rec):
         await _reply(update, "Hai raggiunto il numero massimo di messaggi per oggi: riprova domani.")
@@ -274,6 +300,60 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
     await process(update, rec, target, content, images)
 
 
+def _pause_buttons(log_id: str) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(f"⏸️ −{sp.fmt_duration(m)}", callback_data=f"cpz:{log_id}:{m}") for m in sp.PAUSES]
+    return InlineKeyboardMarkup([row + [InlineKeyboardButton("Nessuna pausa", callback_data=f"cpz:{log_id}:0")]])
+
+
+async def presence(update: Update, active: list, targets: list, command: Optional[dict], loc: Optional[dict]):
+    """"Sono arrivato" / "ho finito" (said, or the 📍 button that sends the position): the start
+    or the end of the work. Without a word, the position starts when nothing is open, ends otherwise."""
+    from server import db, _open_presence, _presence_start, _presence_stop, _commessa_geo, LOCAL_TZ
+    now = _now()
+    at = now
+    if command and command.get("at"):
+        at = datetime.combine(now.astimezone(LOCAL_TZ).date(), command["at"], tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+        if at > now + timedelta(minutes=5):
+            await _reply(update, f"Le {command['at'].strftime('%H:%M')} non sono ancora arrivate: scrivimi l'ora giusta.")
+            return
+    open_rec = None
+    for r in active:
+        if await _open_presence(r["id"]):
+            open_rec = r
+            break
+    action = command["action"] if command else ("stop" if open_rec else "start")
+    if action == "stop":
+        rec = open_rec or active[0]
+        answer, log_id = await _presence_stop(rec, at, loc)
+        await _reply(update, answer, reply_markup=await _keyboard_for(active))
+        if log_id:
+            await _reply(update, "Hai fatto pause?", reply_markup=_pause_buttons(log_id))
+        return
+    if open_rec:   # already started: said (whatever the commessa)
+        await _reply(update, await _presence_start(open_rec, None, None, at, loc), reply_markup=await _keyboard_for(active))
+        return
+    # start: the commessa - the only one, the nearest to the position, the one named, or asked
+    target = targets[0] if len(targets) == 1 else None
+    if not target and loc:
+        sites = []
+        for t in targets[:12]:
+            geo = await _commessa_geo(t[2]["id"], t[2])
+            if geo:
+                sites.append((t[2]["id"], geo))
+        hit = sp.nearest(loc, sites)
+        target = next((t for t in targets if hit and t[2]["id"] == hit[0]), None)
+    if not target and command and command.get("rest"):
+        target = _choose({}, command["rest"], targets)
+    rec = next((r for r in active if target and target[0].user_id == r["owner_user_id"]), active[0])
+    if not target:
+        await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_checkin": {"at": at.isoformat(), "loc": loc}}})
+        await _reply(update, "⏱️ Su quale commessa inizi?", reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton(f"{v['title']} · {v['client_name']}"[:60], callback_data=f"cin:{v['id']}")] for _o, _cl, v in targets[:10]]))
+        return
+    answer = await _presence_start(rec, target[0], target[2], at, loc)
+    await _reply(update, answer, reply_markup=await _keyboard_for(active))
+
+
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: list):
     from server import db, _collab_targets, COLLAB_UNDO_MINUTES
     q = update.callback_query
@@ -300,6 +380,37 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             return
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": cid, "at": _now().isoformat()}}})
         await _reply(update, f"Ok, «{target[2]['title']}»: scrivimi (anche a voce) cosa avete fatto, o cosa vuoi sapere.")
+        return
+    if data.startswith("cin:"):   # the commessa of a start
+        from server import _presence_start
+        targets = [t for r in active for t in await _collab_targets(r)]
+        target = next((t for t in targets if t[2]["id"] == data[4:]), None)
+        rec_for = next((r for r in active if target and target[0].user_id == r["owner_user_id"]), rec)
+        pend = rec_for.get("pending_checkin") or rec.get("pending_checkin")
+        if not target or not pend:
+            await _reply(update, "Riprova: tocca 📍 Sono arrivato in cantiere o scrivi «sono arrivato».")
+            return
+        await db.collaborators.update_one({"id": rec_for["id"]}, {"$set": {"pending_checkin": None}})
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        answer = await _presence_start(rec_for, target[0], target[2], datetime.fromisoformat(pend["at"]), pend.get("loc"))
+        await _reply(update, answer, reply_markup=await _keyboard_for(active))
+        return
+    if data.startswith("cpz:"):   # a pause taken out of the hours just counted
+        from server import _presence_pause, PRESENCE_GONE
+        _, log_id, minutes = (data.split(":") + ["", "0"])[:3]
+        answer = PRESENCE_GONE
+        for r in active:
+            answer = await _presence_pause(r, log_id, int(minutes or 0))
+            if answer != PRESENCE_GONE:
+                break
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await _reply(update, answer)
         return
     if data.startswith("cldone:"):   # "✅ Fatto" under a To Do / milestone given to them
         from server import _collab_mark_done, COLLAB_NOT_YOURS as NOT_YOURS

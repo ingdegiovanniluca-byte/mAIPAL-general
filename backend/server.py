@@ -54,6 +54,7 @@ import agent_guard
 import help_guide
 import verticals as vx
 import push_notify as push
+import site_presence as sp
 import fitness as fx
 
 ROOT_DIR = Path(__file__).parent
@@ -3630,6 +3631,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_milestones.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_contacts.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.work_sessions.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_economics.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.collaborators.update_many({"commesse": {"$in": commessa_ids}}, {"$pull": {"commesse": {"$in": commessa_ids}}})
 
@@ -6018,6 +6020,7 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "todos": todos, "team": await _team_first_names(current),
             "collaborators": await _assignable_collaborators(commessa_id),
+            "on_site": await _on_site(commessa_id), "geo": sub.get("geo"),
             "milestones": milestones, "milestones_summary": _milestones_summary(milestones),
             "contacts": await _commessa_contacts(commessa_id),
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
@@ -7009,6 +7012,28 @@ async def commessa_collaborators(commessa_id: str, current: User = Depends(get_c
              "status": c.get("status"), "enabled": commessa_id in (c.get("commesse") or [])} for c in docs]
 
 
+class CommessaGeoPayload(BaseModel):
+    lat: Optional[float] = None
+    lon: Optional[float] = None               # none: found again from the address
+
+
+@api_router.put("/jobs/commesse/{commessa_id}/geo")
+async def set_commessa_geo(commessa_id: str, payload: CommessaGeoPayload, current: User = Depends(get_current_user)):
+    """The site's position for the presences: set here (e.g. from the phone, on site) or from the address."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    if payload.lat is not None and payload.lon is not None:
+        if not (-90 <= payload.lat <= 90 and -180 <= payload.lon <= 180):
+            raise HTTPException(status_code=400, detail="Posizione non valida")
+        geo = {"lat": payload.lat, "lon": payload.lon, "source": "manual", "address": None}
+        await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"geo": geo}})
+        return geo
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"geo": None}})
+    found = await _commessa_geo(commessa_id, _commessa_view(sub, client, clienti))
+    if not found:
+        raise HTTPException(status_code=400, detail="Non trovo l'indirizzo del cantiere sulla mappa: controlla l'indirizzo o imposta la posizione quando sei sul posto.")
+    return found
+
+
 class CollabEnablePayload(BaseModel):
     enabled: bool
 
@@ -7077,6 +7102,13 @@ async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
     sent = 0
     for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}, "reminded_on": {"$ne": today}}, {"_id": 0}).to_list(2000):
         await db.collaborators.update_one({"id": c["id"]}, {"$set": {"reminded_on": today}})
+        open_ = await _open_presence(c["id"])
+        if open_:
+            if await _tell_collaborator(c, f"⏱️ Hai ancora il tempo aperto su «{open_['commessa_title']}» dalle "
+                                           f"{sp.hhmm(_local(open_['start_at']))}: quando hai finito tocca 📍 Ho finito "
+                                           "(o scrivi «ho finito alle 17:30»)."):
+                sent += 1
+            continue
         if await db.job_logs.find_one({"collaborator_id": c["id"], "date": today}, {"_id": 1}):
             continue
         targets = await _collab_targets(c)
@@ -7095,6 +7127,183 @@ async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
     return sent
 
 
+# ---- PRESENCE ON SITE (see site_presence.py): "sono arrivato" / "ho finito" on Telegram, with
+# the position sent by the button; the time in between is the collaborator's hours in the diary.
+
+async def _commessa_geo(commessa_id: str, view: dict) -> Optional[dict]:
+    """The site's position: the one set by the owner, or found from the commessa's address
+    (looked up once per address, kept on the commessa)."""
+    sub = await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0, "geo": 1})
+    geo = (sub or {}).get("geo") or {}
+    if geo.get("source") == "manual" and geo.get("lat") is not None:
+        return geo
+    addr = (view.get("address") or "").strip()
+    if not addr:
+        return None
+    if geo.get("address") != addr:
+        found = await sp.geocode(addr)
+        geo = {"address": addr, "source": "address", "lat": (found or {}).get("lat"), "lon": (found or {}).get("lon")}
+        await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"geo": geo}})
+    return geo if geo.get("lat") is not None else None
+
+
+async def _open_presence(collab_id: str) -> Optional[dict]:
+    return await db.work_sessions.find_one({"collaborator_id": collab_id, "end_at": None}, {"_id": 0})
+
+
+def _local(iso: str) -> datetime:
+    return datetime.fromisoformat(iso).astimezone(LOCAL_TZ)
+
+
+async def _presence_start(collab: dict, owner: Optional[User], view: Optional[dict], at: datetime, loc: Optional[dict]) -> str:
+    """The start of the work on a commessa (an open one is only recalled). -> the answer for the collaborator."""
+    open_ = await _open_presence(collab["id"])
+    if open_:
+        return (f"Hai già il tempo aperto su «{open_['commessa_title']}» dalle {sp.hhmm(_local(open_['start_at']))}: "
+                "quando hai finito tocca 📍 Ho finito (o scrivi «ho finito»).")
+    geo = await _commessa_geo(view["id"], view) if loc else None
+    d = sp.distance_m(loc, geo)
+    doc = {"id": f"ws_{uuid.uuid4().hex[:12]}", "collaborator_id": collab["id"], "owner_user_id": collab["owner_user_id"],
+           "org_id": owner.org_id, "commessa_id": view["id"], "commessa_title": view.get("title"), "client_name": view.get("client_name"),
+           "start_at": at.astimezone(timezone.utc).isoformat(), "start_loc": loc, "start_m": d, "site_known": geo is not None,
+           "end_at": None, "end_loc": None, "end_m": None, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.work_sessions.insert_one(doc)
+    where = f"«{view.get('title')}» — {view.get('client_name')}"
+    msg = f"🟢 Inizio alle {sp.hhmm(at.astimezone(LOCAL_TZ))} su {where}"
+    msg += f" ({sp.distance_text(d)})." if d is not None else "." if loc else " (senza posizione)."
+    if sp.far(d):
+        msg += f"\n⚠️ Risulti {sp.distance_text(d)}: se sei nel posto giusto va bene così, la distanza resta segnata."
+        push.fire_and_forget(db, owner.user_id, f"⚠️ {_collab_name(collab)} · {view.get('title')}",
+                             f"Inizio lavoro {sp.distance_text(d)}", f"/dashboard/journal?commessa={view['id']}", f"ws-{doc['id']}")
+    if loc and geo is None:
+        msg += "\n(La posizione del cantiere non è nota: la tua resta salvata.)"
+    return msg + "\nQuando hai finito tocca 📍 Ho finito (o scrivi «ho finito»)." + ("" if loc else "\nCon il pulsante 📍 si registra anche la posizione.")
+
+
+async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict]) -> tuple:
+    """The end: the hours in the diary of that commessa. -> (answer, diary entry id or None)."""
+    s_ = await _open_presence(collab["id"])
+    if not s_:
+        return ("Non hai un inizio aperto: quando arrivi in cantiere tocca 📍 Sono arrivato (o scrivi «sono arrivato»). "
+                "Per le ore di oggi puoi anche scriverle, es. «oggi 8 ore».", None)
+    start = datetime.fromisoformat(s_["start_at"])
+    minutes = int((at - start).total_seconds() // 60)
+    if minutes <= 0:
+        return (f"L'orario di fine è prima dell'inizio ({sp.hhmm(_local(s_['start_at']))}): scrivimi l'ora giusta, es. «ho finito alle 17:30».", None)
+    if minutes > sp.FORGOTTEN_HOURS * 60:
+        return (f"Dall'inizio ({_short_it_date(_local(s_['start_at']).date().isoformat())} alle {sp.hhmm(_local(s_['start_at']))}) sono passate "
+                f"più di {sp.FORGOTTEN_HOURS} ore: scrivimi a che ora hai finito, es. «ho finito alle 17:30».", None)
+    sub = await db.collection_sub_items.find_one({"id": s_["commessa_id"]}, {"_id": 0})
+    clienti = await db.collections.find_one({"id": (sub or {}).get("collection_id")}, {"_id": 0}) if sub else None
+    owner_doc = await db.users.find_one({"user_id": collab["owner_user_id"]}, {"_id": 0})
+    if not sub or not clienti or not owner_doc:
+        await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": at.astimezone(timezone.utc).isoformat(), "orphan": True}})
+        return ("La commessa non c'è più: non ho potuto registrare le ore.", None)
+    owner = User(**owner_doc)
+    client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+    view = _commessa_view(sub, client, clienti)
+    geo = await _commessa_geo(view["id"], view) if loc else None
+    d_end = sp.distance_m(loc, geo)
+    hours = sp.round_hours(minutes)
+    log = _presence_log(collab, owner, view, s_, at, minutes, 0, loc, d_end)
+    await db.job_logs.insert_one(log)
+    log.pop("_id", None)
+    await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": at.astimezone(timezone.utc).isoformat(), "end_loc": loc,
+                                                                  "end_m": d_end, "minutes": minutes, "log_id": log["id"]}})
+    await db.collaborators.update_one({"id": collab["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": datetime.now(timezone.utc).isoformat()}}})
+    author = {"id": collab["id"], "first_name": collab.get("first_name") or "", "name": _collab_name(collab), "company": collab.get("company") or ""}
+    _push_collab_entry(owner, log, author)
+    if hours:
+        asyncio.create_task(_check_budget_alert(clienti, view["id"]))
+    msg = (f"🔴 Fine alle {sp.hhmm(at.astimezone(LOCAL_TZ))}: {sp.fmt_duration(minutes)} su «{view['title']}» → "
+           f"{jl._fmt_num(hours)} h nel diario" + (f" ({sp.distance_text(d_end)})." if d_end is not None else "."))
+    if sp.far(d_end):
+        msg += f"\n⚠️ Risulti {sp.distance_text(d_end)}: la distanza resta segnata."
+    return msg + "\nSe hai fatto pause toglile con i pulsanti; poi, se vuoi, scrivimi cosa avete fatto oggi.", log["id"]
+
+
+def _presence_log(collab: dict, owner: User, view: dict, s_: dict, end: datetime, minutes: int, pause: int,
+                  end_loc: Optional[dict], end_m: Optional[int]) -> dict:
+    """The diary entry of a presence: the times, the hours (pauses out) and how far from the site."""
+    start_l, end_l = _local(s_["start_at"]), end.astimezone(LOCAL_TZ)
+    worked = max(0, minutes - pause)
+    warn = [f"inizio {sp.distance_text(s_.get('start_m'))}"] if sp.far(s_.get("start_m")) else []
+    if sp.far(end_m):
+        warn.append(f"fine {sp.distance_text(end_m)}")
+    text = (f"In cantiere dalle {sp.hhmm(start_l)} alle {sp.hhmm(end_l)} ({sp.fmt_duration(worked)}"
+            + (f", pausa {sp.fmt_duration(pause)} esclusa" if pause else "") + ")" + (f" · ⚠️ {', '.join(warn)}" if warn else ""))
+    return {
+        "id": f"jlog_{uuid.uuid4().hex[:12]}", "user_id": owner.user_id, "org_id": owner.org_id,
+        "author_name": collab.get("first_name") or _collab_name(collab), "collaborator_id": collab["id"],
+        "author_company": collab.get("company") or "",
+        "collection_id": view["collection_id"], "client_item_id": view["client_item_id"], "client_name": view["client_name"],
+        "commessa_id": view["id"], "commessa_title": view["title"], "date": start_l.date().isoformat(),
+        "raw_text": text, "text": text, "hours": [{"who": collab.get("first_name") or _collab_name(collab), "hours": sp.round_hours(worked)}],
+        "materials": [], "problems": [], "photos": [], "channel": "telegram", "conv_id": None,
+        "created_at": datetime.now(timezone.utc).isoformat(), "embedding": None,
+        "presence": {"session_id": s_["id"], "start_at": s_["start_at"], "end_at": end.astimezone(timezone.utc).isoformat(),
+                     "minutes": minutes, "pause_min": pause, "start_m": s_.get("start_m"), "end_m": end_m,
+                     "start_loc": s_.get("start_loc"), "end_loc": end_loc, "site_known": s_.get("site_known")},
+    }
+
+
+PRESENCE_GONE = "Non trovo più quella voce."
+
+
+async def _presence_pause(collab: dict, log_id: str, pause: int) -> str:
+    """A pause taken out of a presence's hours (the last choice counts; 0 = none)."""
+    log = await db.job_logs.find_one({"id": log_id}, {"_id": 0})
+    if not log or log.get("collaborator_id") != collab["id"] or not log.get("presence"):
+        return PRESENCE_GONE
+    pr = log["presence"]
+    pause = max(0, min(int(pause), pr["minutes"] - 1))
+    owner = User(**(await db.users.find_one({"user_id": collab["owner_user_id"]}, {"_id": 0})))
+    view = {"id": log["commessa_id"], "title": log["commessa_title"], "client_name": log["client_name"],
+            "collection_id": log["collection_id"], "client_item_id": log["client_item_id"]}
+    s_ = {"id": pr["session_id"], "start_at": pr["start_at"], "start_m": pr.get("start_m"), "start_loc": pr.get("start_loc"),
+          "site_known": pr.get("site_known")}
+    new = _presence_log(collab, owner, view, s_, datetime.fromisoformat(pr["end_at"]), pr["minutes"], pause, pr.get("end_loc"), pr.get("end_m"))
+    upd = {k: new[k] for k in ("text", "raw_text", "hours", "presence")}
+    await db.job_logs.update_one({"id": log_id}, {"$set": {**upd, "embedding": None}})
+    if not pause:
+        return f"👍 Nessuna pausa: {jl._fmt_num(upd['hours'][0]['hours'])} h nel diario."
+    return f"⏸️ Pausa di {sp.fmt_duration(pause)} tolta: {jl._fmt_num(upd['hours'][0]['hours'])} h nel diario."
+
+
+async def _presence_forgotten(now_utc: Optional[datetime] = None) -> int:
+    """A start never ended, after FORGOTTEN_HOURS: closed without hours; the collaborator and the
+    owner told (the hours can still be written in the diary). -> how many closed."""
+    now = now_utc or datetime.now(timezone.utc)
+    limit = (now - timedelta(hours=sp.FORGOTTEN_HOURS)).isoformat()
+    n = 0
+    for s_ in await db.work_sessions.find({"end_at": None, "start_at": {"$lt": limit}}, {"_id": 0}).to_list(500):
+        await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": s_["start_at"], "forgotten": True}})
+        n += 1
+        c = await db.collaborators.find_one({"id": s_["collaborator_id"]}, {"_id": 0})
+        when = f"{_short_it_date(_local(s_['start_at']).date().isoformat())} alle {sp.hhmm(_local(s_['start_at']))}"
+        if c:
+            try:
+                await _tell_collaborator(c, f"⏱️ Non hai segnato la fine del lavoro su «{s_['commessa_title']}» (iniziato {when}): "
+                                            "non ho contato le ore. Scrivimele, es. «ieri 8 ore».")
+            except Exception:
+                logger.exception("forgotten presence notice failed")
+        owner_doc = await db.users.find_one({"user_id": s_["owner_user_id"]}, {"_id": 0})
+        if owner_doc and c:
+            await _notify_owner(User(**owner_doc), f"⏱️ {_collab_name(c)} ha iniziato su «{s_['commessa_title']}» {when} "
+                                                   "ma non ha segnato la fine: quelle ore non sono state contate.")
+    return n
+
+
+async def _on_site(commessa_id: str) -> list:
+    """Who is working on the commessa now (a start not ended yet)."""
+    out = []
+    for s_ in await db.work_sessions.find({"commessa_id": commessa_id, "end_at": None}, {"_id": 0}).to_list(50):
+        c = await db.collaborators.find_one({"id": s_["collaborator_id"]}, {"_id": 0})
+        out.append({"name": _collab_name(c) if c else "?", "since": s_["start_at"], "start_m": s_.get("start_m"),
+                    "far": sp.far(s_.get("start_m"))})
+    return out
+
+
 async def _collab_reminder_loop():
     while True:
         try:
@@ -7102,6 +7311,7 @@ async def _collab_reminder_loop():
                 await _collab_remind_due()
                 await _milestone_reminders()
                 await _todo_reminders()
+                await _presence_forgotten()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
@@ -9846,6 +10056,8 @@ async def start_services():
         await db.push_subscriptions.create_index([("user_id", 1)])
         await db.push_subscriptions.create_index([("endpoint", 1)])
         await db.collaborators.create_index([("telegram_chat_id", 1)])
+        await db.work_sessions.create_index([("collaborator_id", 1), ("end_at", 1)])
+        await db.work_sessions.create_index([("commessa_id", 1), ("end_at", 1)])
         await db.collaborators.create_index([("code", 1)])
         await db.collaborators.create_index([("owner_user_id", 1)])
         await db.work_reports.create_index([("commessa_id", 1)])
