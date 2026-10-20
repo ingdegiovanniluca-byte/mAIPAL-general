@@ -837,11 +837,19 @@ function CommessaChat({ commessa, onClose, onSaved }) {
     }
   };
 
-  const saveEntry = async (body, images, fromIdx = null) => {
-    const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id });
-    const ok = r.data.status === "ok";   // a question or an unclear entry is not saved
-    setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false } : m)), { role: "assistant", content: r.data.message, saved: ok }]);
+  // a question or an unclear entry is not saved; materials to take make a reminder ("planned");
+  // "usati o da prendere?" is asked with two buttons
+  const saveEntry = async (body, images, fromIdx = null, materialChoice = null) => {
+    const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id, ...(materialChoice ? { material_choice: materialChoice } : {}) });
+    const ok = r.data.status === "ok" || r.data.status === "planned";
+    const ask = r.data.status === "material_doubt" ? { body, images } : null;
+    setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false, matAsk: null } : m)),
+      { role: "assistant", content: r.data.message, saved: ok, matAsk: ask }]);
     if (ok) onSaved();
+  };
+  const answerMat = (i, ask, choice) => {
+    setBusy(true);
+    saveEntry(ask.body, ask.images, i, choice).catch((e) => toast.error(e.response?.data?.detail || "Errore")).finally(() => setBusy(false));
   };
 
   const send = async () => {
@@ -880,6 +888,14 @@ function CommessaChat({ commessa, onClose, onSaved }) {
           {messages.map((m, i) => (
             <div key={i} className={m.role === "user" ? "self-end max-w-[85%]" : "self-start max-w-[92%]"}>
               <div className={`text-sm whitespace-pre-wrap ${m.role === "user" ? "px-3.5 py-2 rounded-2xl bg-white/20 text-white" : "text-white/95"}`}>{m.content}</div>
+              {m.matAsk && (
+                <div className="mt-1.5 flex flex-wrap gap-2" data-testid="chat-mat-choices">
+                  <button onClick={() => answerMat(i, m.matAsk, "usato")} disabled={busy} data-testid="chat-mat-used"
+                    className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">🧰 Usati oggi</button>
+                  <button onClick={() => answerMat(i, m.matAsk, "da_prendere")} disabled={busy} data-testid="chat-mat-plan"
+                    className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">📌 Da prendere</button>
+                </div>
+              )}
               {m.offerSave && (
                 <button onClick={() => { setBusy(true); saveEntry(m.offerSave, [], i).catch((e) => toast.error(e.response?.data?.detail || "Errore")).finally(() => setBusy(false)); }}
                   disabled={busy} data-testid="chat-save-entry"

@@ -264,6 +264,28 @@ async def main():
     assert await server._material_reminders(eve) == 1 and PUSHED[p][0] == "u1" and "Domani da prendere" in PUSHED[p][1]
     assert any("3 sacchi di cemento" in t_ for c_, t_ in NOTICES if c_ == 77)
 
+    # 5b) "ricorda a Mario di prendere…" written in the app: the reminder is Mario's (a collaborator),
+    # told at once on Telegram, reminded to him; one not on Telegram: the writer is reminded
+    db.collaborators.docs.append({"id": "k2", "owner_user_id": "u1", "first_name": "Mario", "last_name": "Bianchi", "company": "",
+                                  "status": "active", "telegram_chat_id": 901, "commesse": ["s_bagno"]})
+    model(text="", materials=[{"name": "scatole 503", "qty": 10, "unit": "pz", "status": "da_prendere", "for_date": tomorrow, "who": "Mario"}])
+    n = len(TOLD)
+    r = await server.create_job_log(server.JobLogPayload(text="ricorda a Mario di prendere domani 10 scatole 503", commessa_id="s_bagno"), me)
+    t = r["todos"][0]
+    print(r["message"])
+    assert r["status"] == "planned" and t["collaborator_id"] == "k2" and t["who"] == "Mario Bianchi" and t["assignee_user_id"] is None and t["notified"]
+    assert TOLD[n][0] == "k2" and "📌 Nuova attività per te: *Da prendere: 10 pz scatole 503*" in TOLD[n][1] and TOLD[n][2] == f"cldone:t:{t['id']}"
+    assert "(Mario Bianchi)" in r["message"] and "Mandato su Telegram a Mario Bianchi" in r["message"]
+    db.job_todos.docs[-1]["reminded"] = {}
+    n, p = len(TOLD), len(PUSHED)
+    assert await server._material_reminders(eve) == 1 and TOLD[n][0] == "k2" and len(PUSHED) == p
+    # the model missing the name: found in the words ("Mario deve prendere"); not on Telegram -> the writer
+    next(c for c in db.collaborators.docs if c["id"] == "k2")["telegram_chat_id"] = None
+    model(text="", materials=[{"name": "flessibile", "qty": None, "unit": "", "status": "da_prendere", "for_date": tomorrow}])
+    r = await server.create_job_log(server.JobLogPayload(text="domani Mario deve prendere il flessibile", commessa_id="s_bagno"), me)
+    t = r["todos"][0]
+    assert t["collaborator_id"] == "k2" and t["assignee_user_id"] == "u1" and not t["notified"]
+
     # 6) an entry already saved with a material to take: moved out, into a reminder
     model(text="Montato il lavabo, serve il sifone", materials=[{"name": "lavabo", "qty": 1, "unit": "pz", "status": "usato"},
                                                                 {"name": "sifone", "qty": 1, "unit": "pz", "status": "usato"}])

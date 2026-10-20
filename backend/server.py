@@ -5826,29 +5826,83 @@ def _mat_reminder_times(due: str) -> tuple:
     return eve, morning
 
 
+async def _plan_people(current: User, commessa_id: str) -> list:
+    """Who a material to take can be for: the collaborators enabled on the commessa and the team."""
+    people = [{"kind": "collab", "id": c["id"], "name": c["name"], "first": c["first_name"]}
+              for c in await _assignable_collaborators(commessa_id)]
+    team = await db.users.find({"org_id": current.org_id}, {"_id": 0, "user_id": 1, "name": 1}).to_list(200) if current.org_id else []
+    if not any(u["user_id"] == current.user_id for u in team):
+        team.append({"user_id": current.user_id, "name": current.name})
+    people += [{"kind": "user", "id": u["user_id"], "name": u.get("name") or "", "first": _first_name(u.get("name"))} for u in team]
+    return [p for p in people if p["first"]]
+
+
+def _plan_person(m: dict, raw: str, people: list) -> Optional[dict]:
+    """Who has to take it: the name the model read ("ricorda a Mario…"), else one of the people
+    named in the message - only when it is one person and not ambiguous."""
+    def by_name(name: str) -> Optional[dict]:
+        n = " ".join(name.lower().split())
+        full = [p for p in people if p["name"].lower() == n]
+        first = [p for p in people if p["first"].lower() == n.split(" ")[0]] if n else []
+        return full[0] if len(full) == 1 else first[0] if len(first) == 1 else None
+    if m.get("who"):
+        hit = by_name(m["who"])
+        if hit:
+            return hit
+    low = jl._norm(raw)
+    def given_to(first: str) -> bool:   # "a Mario", "per Gino", "Gino porta / deve prendere"
+        f = re.escape(jl._norm(first))
+        return bool(re.search(rf"\b(?:a|ad|per)\s+{f}\b|\b{f}\s+(?:deve|dovrebbe|porta|prende|passa|compra|ordina|recupera)\b", low))
+    named = {p["id"]: p for p in people if given_to(p["first"])}
+    return next(iter(named.values())) if len(named) == 1 else None
+
+
 async def _plan_materials(current: User, target: dict, clienti: dict, planned: list, author: Optional[dict],
-                          from_log_id: Optional[str] = None) -> list:
-    """Materials to take -> one To Do "Da prendere" per day needed, for who wrote them (the
-    collaborator, or the user), reminded the evening before and that morning."""
-    by_day: dict = {}
+                          from_log_id: Optional[str] = None, raw: str = "") -> list:
+    """Materials to take -> one To Do "Da prendere" per day needed and person: the one named
+    ("ricorda a Mario…", a collaborator of the commessa or a team mate), else who wrote it.
+    Reminded the evening before and that morning; a collaborator named by someone else hears it
+    at once on Telegram (one without Telegram: the writer is reminded instead)."""
+    people = await _plan_people(current, target["id"])
+    groups: dict = {}
     for m in planned:
-        by_day.setdefault(m.get("for_date") or (jl.today_local() + timedelta(days=1)).isoformat(), []).append(m)
+        due = m.get("for_date") or (jl.today_local() + timedelta(days=1)).isoformat()
+        person = _plan_person(m, raw, people)
+        groups.setdefault((due, (person or {}).get("kind"), (person or {}).get("id")), {"person": person, "ms": []})["ms"].append(m)
     now = datetime.now(timezone.utc)
     out = []
-    for due, ms in sorted(by_day.items()):
+    for (due, _k, _i), g in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][2] or "")):
+        ms, person = g["ms"], g["person"]
         eve, morning = _mat_reminder_times(due)
+        if person and person["kind"] == "collab":
+            collab_doc = await db.collaborators.find_one({"id": person["id"]}, {"_id": 0}) or {}
+            on_tg = bool(collab_doc.get("telegram_chat_id")) and collab_doc.get("status") == "active"
+            who, collab_id = person["name"], person["id"]
+            assignee = None if on_tg or author else current.user_id   # not on Telegram: the writer is reminded
+        elif person:
+            who, collab_id, assignee = person["first"], None, person["id"]
+        else:
+            who, collab_id = (author or {}).get("name") or _first_name(current.name), (author or {}).get("id")
+            assignee = None if author else current.user_id
         doc = {"id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": target["id"], "collection_id": clienti["id"],
                "user_id": current.user_id, "org_id": current.org_id, "author_name": (author or {}).get("first_name") or _first_name(current.name),
                "kind": "materiale", "text": "Da prendere: " + ", ".join(jl.mat_label(m) for m in ms),
                "materials": [{k: m.get(k) for k in ("name", "qty", "unit")} for m in ms],
-               "who": (author or {}).get("name") or _first_name(current.name), "collaborator_id": (author or {}).get("id"),
-               "assignee_user_id": None if author else current.user_id, "due_date": due, "done": False, "done_at": None,
+               "who": who, "collaborator_id": collab_id,
+               "assignee_user_id": assignee, "due_date": due, "done": False, "done_at": None,
                "from_log_id": from_log_id, "created_at": now.isoformat(),
                # a time already gone when it is written is not reminded (it was just said)
                "reminded": {**({"eve": due} if now >= eve else {}), **({"morning": due} if now >= morning else {})}}
         await db.job_todos.insert_one(doc)
         doc.pop("_id", None)
-        out.append({k: v for k, v in doc.items() if k != "reminded"})
+        view_doc = {k: v for k, v in doc.items() if k != "reminded"}
+        mine = person is None or (person["kind"] == "collab" and person["id"] == (author or {}).get("id")) \
+            or (person["kind"] == "user" and not author and person["id"] == current.user_id)
+        view_doc["for_other"] = not mine   # (for the answer: whose it is, when not the writer's)
+        # given to a collaborator by someone else: told now (the writer was just answered)
+        if collab_id and collab_id != (author or {}).get("id"):
+            view_doc["notified"] = await _notify_assignee("todo", view_doc, target)
+        out.append(view_doc)
     return out
 
 
@@ -5857,19 +5911,23 @@ def _plan_message(target: dict, todos: list, short: bool = False) -> str:
     def when(due):
         d = date.fromisoformat(due)
         return "domani" if d == today + timedelta(days=1) else "oggi" if d == today else _short_it_date(due)
-    lines = [f"📌 Da prendere {when(t['due_date'])}: {t['text'].removeprefix('Da prendere: ')}" for t in todos]
+    lines = [f"📌 Da prendere {when(t['due_date'])}" + (f" ({t['who']})" if t.get("for_other") else "") + f": {t['text'].removeprefix('Da prendere: ')}"
+             for t in todos]
     if short:
         return "\n".join(lines)
     head = f"📌 Promemoria per «{target.get('title')}»" + (f" — {target['client_name']}" if target.get("client_name") else "")
     now = datetime.now(timezone.utc)
     times = []
     eve, morning = _mat_reminder_times(todos[0]["due_date"])
+    say = lambda hm: hm.lstrip("0").replace(":00", "").replace(":", ".")   # "07:00" -> "7", "19:30" -> "19.30"
     if now < eve:
-        times.append(f"la sera prima alle {MAT_EVE_AT.replace(':', '.')}")
+        times.append(f"la sera prima alle {say(MAT_EVE_AT)}")
     if now < morning:
-        times.append(f"la mattina alle {MAT_MORNING_AT.replace(':', '.')}")
+        times.append(f"la mattina alle {say(MAT_MORNING_AT)}")
+    told = [t["who"] for t in todos if t.get("notified")]
+    remind = ("Lo ricordo " + " e ".join(times) + "." if times else "")
     return "\n".join([head, *[ln.replace("📌 ", "") for ln in lines],
-                      ("Te lo ricordo " + " e ".join(times) + "." if times else "") + " Non l'ho messo tra i materiali usati."]).strip()
+                      (f"Mandato su Telegram a {', '.join(told)}. " if told else "") + remind + " Non l'ho messo tra i materiali usati."]).strip()
 
 
 async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
@@ -5899,7 +5957,7 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
                 c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
                 if c and t["commessa_id"] in (c.get("commesse") or []) and await _tell_collaborator(c, text + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
                     sent += 1
-            elif t.get("assignee_user_id"):
+            if t.get("assignee_user_id"):
                 u = await db.users.find_one({"user_id": t["assignee_user_id"]}, {"_id": 0, "telegram_chat_id": 1})
                 push.fire_and_forget(db, t["assignee_user_id"], head + f" · {view['title']}", what,
                                      f"/dashboard/journal?commessa={view['id']}", f"mat-{t['id']}-{kind}")
@@ -6046,7 +6104,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         parsed["text"] = jl.without_plans(parsed["text"], planned)
     if planned and not parsed["hours"] and not parsed["materials"] and not parsed["problems"] and not images \
             and not parsed["text"]:
-        todos = await _plan_materials(current, target, clienti, planned, author)
+        todos = await _plan_materials(current, target, clienti, planned, author, raw=text)
         ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
         return {"status": "planned", "todos": todos, "commessa": target, "client_created": bool(created.get("client")),
                 "commessa_created": bool(created.get("commessa")), "message": _plan_message(target, todos)}
@@ -6064,7 +6122,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
             asyncio.create_task(_check_budget_alert(clienti, target["id"]))
         n = len(photo_entry.get("photos") or [])
         msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
-        todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"]) if planned else []
+        todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"], raw=text) if planned else []
         if todos:
             msg += "\n" + _plan_message(target, todos, short=True)
         if author:
@@ -6092,7 +6150,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if log["hours"] or log["materials"]:
         asyncio.create_task(_check_budget_alert(clienti, target["id"]))
     msg = _job_log_message(log, created)
-    todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"]) if planned else []
+    todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"], raw=text) if planned else []
     if todos:
         msg += "\n" + _plan_message(target, todos, short=True)
     return {"status": "ok", "log": _public_log(log), "commessa": target, "client_created": bool(created.get("client")),

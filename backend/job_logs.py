@@ -85,7 +85,7 @@ def clean_materials(rows) -> list:
         st = str(r.get("status") or "usato").strip().lower().replace(" ", "_")
         out.append({"name": str(r["name"]).strip()[:120], "qty": _num(r.get("qty")),
                     "unit": str(r.get("unit") or "").strip()[:20], "status": st if st in MAT_STATUS else "usato",
-                    "for_date": str(r.get("for_date") or "")[:10] or None})
+                    "for_date": str(r.get("for_date") or "")[:10] or None, "who": str(r.get("who") or "").strip()[:60]})
     return out
 
 
@@ -284,7 +284,8 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "\"status\": \"usato\" se è stato usato/posato/montato (già successo); \"da_prendere\" se va preso, portato, "
         "comprato o ordinato per dopo (\"domani porto\", \"serve\", \"da prendere\"); \"dubbio\" se non si capisce "
         "(es. solo un elenco di materiali senza verbo). \"for_date\": per i da_prendere il giorno in cui servono "
-        "(YYYY-MM-DD, \"domani\" = il giorno dopo oggi), altrimenti null.\n"
+        "(YYYY-MM-DD, \"domani\" = il giorno dopo oggi), altrimenti null. \"who\": per i da_prendere chi li deve prendere "
+        "se è detto (\"ricorda a Mario di prendere…\" -> \"Mario\", \"Gino porta…\" -> \"Gino\"), altrimenti \"\".\n"
         "5. \"problems\": problemi, imprevisti, cose mancanti o da rifare, frasi brevi. Nessuno: [].\n"
         "6. \"client\" e \"commessa\": il cliente e i lavori/cantiere come li nomina il testo (\"dai Rossi\" -> "
         "\"Rossi\"), stringa vuota se non li nomina.\n"
