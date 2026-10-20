@@ -48,6 +48,19 @@ def presence_keyboard(working: bool) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[KeyboardButton(label, request_location=True)]], resize_keyboard=True, is_persistent=True)
 
 
+async def _still_working(update: Update, recs: list):
+    """After a reply that carries its own buttons (Annulla...): the 📍 Ho finito button can't ride
+    on it, and phones often keep it folded away - with the time open it is sent again, under a
+    line that says so."""
+    from server import _open_presence, _local
+    for r in recs:
+        s_ = await _open_presence(r["id"])
+        if s_:
+            await _reply(update, f"⏱️ Tempo in cantiere aperto dalle {sp.hhmm(_local(s_['start_at']))} su «{s_['commessa_title']}»: "
+                                 "quando hai finito tocca 📍 Ho finito.", reply_markup=presence_keyboard(True))
+            return
+
+
 async def _keyboard_for(recs: list) -> ReplyKeyboardMarkup:
     from server import _open_presence
     for r in recs:
@@ -222,6 +235,7 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         ids = ",".join(t["id"] for t in res["todos"][:2])
         await _reply(update, res["message"], reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clt:{ids}")]]))
+        await _still_working(update, [rec])
         return
     if res["status"] == "material_doubt":   # "10 scatole 503": used today or to take? asked
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_material": {"text": content, "images": images or [], "commessa_id": view["id"]}}})
@@ -232,6 +246,7 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         log = res["log"]
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clu:{log['id']}")]])
         await _reply(update, res["message"], reply_markup=kb)
+        await _still_working(update, [rec])
         if log.get("problems"):
             who = _collab_name(rec) + (f" ({rec['company']})" if rec.get("company") else "")
             await _notify_owner(owner, f"⚠️ {who} segnala su «{view['title']}» — {view['client_name']}:\n"
@@ -246,9 +261,9 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
             answer = "Non sono riuscito a rispondere, riprova tra poco."
         history = (history + [{"role": "user", "content": content}, {"role": "assistant", "content": answer}])[-HISTORY_KEEP:]
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_history": history}})
-        await _reply(update, f"🔎 «{view['title']}» — {view['client_name']}\n{answer}")
+        await _reply(update, f"🔎 «{view['title']}» — {view['client_name']}\n{answer}", reply_markup=await _keyboard_for([rec]))
         return
-    await _reply(update, "📒 " + (res.get("message") or "Non l'ho salvato: riscrivilo, per favore."))
+    await _reply(update, "📒 " + (res.get("message") or "Non l'ho salvato: riscrivilo, per favore."), reply_markup=await _keyboard_for([rec]))
 
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: list):
@@ -289,7 +304,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         if not content:
             await _reply(update, "🎙️ Non ho capito l'audio, riprova.")
             return
-        await _reply(update, f"🎙️ {content}")
+        await _reply(update, f"🎙️ {content}", reply_markup=await _keyboard_for(active))
     elif msg.photo:
         try:
             raw = await (await ctx.bot.get_file(msg.photo[-1].file_id)).download_as_bytearray()
@@ -305,6 +320,14 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         await _reply(update, "Mandami un testo, un messaggio vocale o una foto.")
         return
     target = _choose(rec, content, targets)
+    if not target:   # working on a commessa (time open): a message naming no other goes there
+        from server import _open_presence
+        for r in active:
+            s_ = await _open_presence(r["id"])
+            target = next((t for t in targets if s_ and t[2]["id"] == s_["commessa_id"]), None)
+            if target:
+                rec = r
+                break
     if not target:
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending": {"text": content, "images": images}}})
         await _reply(update, "📒 Di quale commessa si tratta?", reply_markup=_target_buttons(targets))

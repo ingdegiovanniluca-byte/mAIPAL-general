@@ -7298,6 +7298,8 @@ async def _presence_start(collab: dict, owner: Optional[User], view: Optional[di
            "start_at": at.astimezone(timezone.utc).isoformat(), "start_loc": loc, "start_m": d, "site_known": geo is not None,
            "end_at": None, "end_loc": None, "end_m": None, "created_at": datetime.now(timezone.utc).isoformat()}
     await db.work_sessions.insert_one(doc)
+    # the conversation is about this commessa now: what they write next goes there
+    await db.collaborators.update_one({"id": collab["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": datetime.now(timezone.utc).isoformat()}}})
     where = f"«{view.get('title')}» — {view.get('client_name')}"
     msg = f"🟢 Inizio alle {sp.hhmm(at.astimezone(LOCAL_TZ))} su {where}"
     msg += f" ({sp.distance_text(d)})." if d is not None else "." if loc else " (senza posizione)."

@@ -164,9 +164,13 @@ class CbUpd:
 
 def recs():
     return [c for c in db.collaborators.docs if c.get("telegram_chat_id") == 900]
+class _Bot:
+    async def send_chat_action(s, **kw): pass
+class Ctx:
+    bot = _Bot()
 async def say(text=None, loc=None):
     m = Msg(text, Loc(*loc) if loc else None)
-    await ct.handle_message(Upd(m), None, recs())
+    await ct.handle_message(Upd(m), Ctx(), recs())
     return m.replies
 async def tap(data):
     u = CbUpd(data)
@@ -203,6 +207,15 @@ async def main():
     # again: already open
     r = await say("sono arrivato")
     assert "Hai già il tempo aperto su «Bagno»" in r[-1][0] and len(ws) == 1
+
+    # a diary message while working: saved with its Annulla, then the 📍 Ho finito button again
+    jl.interpret = said(hours=[], materials=[{"name": "corrugato", "qty": 20, "unit": "m"}])
+    next(c for c in db.collaborators.docs if c["id"] == "k1")["tg_state"] = None   # hours later: only the open time tells
+    r = await say("posato 20 metri di corrugato")
+    assert next(x for x in db.job_logs.docs if x.get("materials"))["commessa_id"] == "s_bagno"
+    assert "📒 Diario" in r[-2][0] and r[-2][1].inline_keyboard[0][0].callback_data.startswith("clu:")
+    assert r[-1][0].startswith("⏱️ Tempo in cantiere aperto dalle") and "«Bagno»" in r[-1][0] and kb_label(r[-1][1]) == "📍 Ho finito"
+    assert len([x for x in db.work_sessions.docs if x["end_at"] is None]) == 1
 
     # 3) the end (2 h 37 min ago started): the hours in the diary, quarter-rounded; the owner hears it
     ws[0]["start_at"] = (datetime.now(timezone.utc) - timedelta(minutes=157)).isoformat()
