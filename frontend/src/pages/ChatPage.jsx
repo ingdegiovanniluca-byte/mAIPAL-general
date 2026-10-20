@@ -713,6 +713,16 @@ export default function ChatPage() {
       }] }));
       return;
     }
+    if (res.status === "planned") {   // only materials to take: a reminder, nothing in the diary
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, jobCommessaId: res.commessa?.id }] }));
+      return;
+    }
+    if (res.status === "material_doubt") {   // used today or to take? asked
+      setThread((th) => ({ ...th, messages: [...th.messages, {
+        role: "assistant", content: res.message, jobMat: { text: res.text, images: images || [], commessa_id: res.commessa_id },
+      }] }));
+      return;
+    }
     if (res.status !== "ok") {   // a question, or an entry not clear enough: nothing saved
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "📒 " + res.message }] }));
       return;
@@ -755,6 +765,19 @@ export default function ChatPage() {
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a salvare la voce");
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+
+  const resolveJobMat = async (mat, choice) => {
+    setStreaming(true);
+    try {
+      const r = await api.post("/jobs/logs", { text: mat.text, images: mat.images, commessa_id: mat.commessa_id, material_choice: choice });
+      setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.jobMat === mat ? { ...m, jobMat: { ...mat, done: true } } : m)) }));
+      appendJobLogResult(r.data, mat.images);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Non sono riuscito a salvare la voce");
     } finally {
       setStreaming(false);
     }
@@ -2312,6 +2335,14 @@ export default function ChatPage() {
                       >
                         <NotebookPen size={12} /> Apri il diario della commessa
                       </button>
+                    )}
+                    {m.jobMat && !m.jobMat.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="job-mat-choices">
+                        <button onClick={() => resolveJobMat(m.jobMat, "usato")} disabled={streaming} data-testid="job-mat-used"
+                          className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">🧰 Usati oggi</button>
+                        <button onClick={() => resolveJobMat(m.jobMat, "da_prendere")} disabled={streaming} data-testid="job-mat-plan"
+                          className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">📌 Da prendere</button>
+                      </div>
                     )}
                     {m.jobPick && !m.jobPick.done && (
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="job-pick-choices">

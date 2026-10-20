@@ -72,14 +72,88 @@ def clean_hours(rows, speaker: str) -> list:
     return out
 
 
+MAT_STATUS = ("usato", "da_prendere", "dubbio")
+
+
 def clean_materials(rows) -> list:
+    """[{name, qty, unit, status, for_date}] - status: used on site, to take/buy later, or not
+    clear (asked); for_date: the day it is needed (only for the ones to take)."""
     out = []
     for r in rows if isinstance(rows, list) else []:
         if not isinstance(r, dict) or not str(r.get("name") or "").strip():
             continue
+        st = str(r.get("status") or "usato").strip().lower().replace(" ", "_")
         out.append({"name": str(r["name"]).strip()[:120], "qty": _num(r.get("qty")),
-                    "unit": str(r.get("unit") or "").strip()[:20]})
+                    "unit": str(r.get("unit") or "").strip()[:20], "status": st if st in MAT_STATUS else "usato",
+                    "for_date": str(r.get("for_date") or "")[:10] or None})
     return out
+
+
+def mat_label(m: dict) -> str:
+    return " ".join(x for x in (_fmt_num(m.get("qty")), m.get("unit") or "", m["name"]) if x).strip()
+
+
+# ---- materials used vs to take: "domani porto 10 scatole 503" is not material used. The model
+# says it; the words around the material confirm it (a plan word wins over the model's "usato",
+# a use word over its "da_prendere"; neither: the model's call).
+_PLAN_CUE = re.compile(
+    r"\b(domani|dopodomani|stasera|prossim\w*|porto|portiamo|portare|porta|porti|prendo|prendiamo|prendere|prendi|"
+    r"comprar\w*|compro|compriamo|ordin\w*|serv(e|ono|ira|iranno|irebbe|irebbero)|bisogna|occorr\w*|ricord\w*|"
+    r"procurar\w*|recuperar\w*|da\s+prendere|da\s+portare|da\s+comprare|da\s+ordinare)\b")
+_USE_CUE = re.compile(
+    r"\b(posat\w*|montat\w*|usat\w*|utilizzat\w*|messo|messi|messa|messe|installat\w*|consumat\w*|stes[oaie]|"
+    r"gettat\w*|applicat\w*|fissat\w*|collegat\w*|murat\w*|cambiat\w*|sostituit\w*|finit[oaie]|impiegat\w*)\b")
+_CLAUSE_SPLIT = re.compile(r"[.;!?\n,]+|\s+(?:e|ma|poi)\s+(?=domani|dopodomani|stasera|poi|porto|portiamo|prendo|prendiamo|compro|ordino)")
+
+
+def material_status(m: dict, raw: str) -> str:
+    """The status of a material from the words of the part of the message that names it."""
+    names = _words(m.get("name") or "")
+    if not names:
+        return m.get("status") or "usato"
+    for clause in _CLAUSE_SPLIT.split(_norm(raw)):
+        if not clause or not any(_said(w, set(_words(clause))) for w in names[:2]):
+            continue
+        plan, use = bool(_PLAN_CUE.search(clause)), bool(_USE_CUE.search(clause))
+        if plan and not use:
+            return "da_prendere"
+        if use and not plan:
+            return "usato"
+    whole = _norm(raw)   # its own part says nothing: the whole message, if it is all about later
+    if _PLAN_CUE.search(whole) and not _USE_CUE.search(whole):
+        return "da_prendere"
+    return m.get("status") or "usato"
+
+
+def without_plans(text: str, planned: list) -> str:
+    """The text without its parts about the materials to take ("domani porto 10 scatole 503"):
+    what is left is what was done; "" when the message was only about those."""
+    names = [w for m in planned for w in _words(m.get("name") or "")[:2]]
+    keep = []
+    for part in re.split(r"(?<=[.;!?])\s+|[;\n]+|,\s+", text or ""):
+        p = part.strip(" .,;")
+        if not p:
+            continue
+        words = set(_words(p))
+        if any(_said(w, words) for w in names):
+            continue
+        if _PLAN_CUE.search(_norm(p)) and len(words) <= 3:   # "e anche per domani"
+            continue
+        keep.append(p)
+    out = ", ".join(keep).strip()
+    return (out[0].upper() + out[1:] + ("" if out.endswith((".", "!", "?")) else ".")) if out else ""
+
+
+def plan_date(m: dict, raw: str, day: date) -> str:
+    """The day a material to take is needed: the one said (not past), "dopodomani", else tomorrow."""
+    try:
+        d = date.fromisoformat(str(m.get("for_date") or "")[:10])
+        if day <= d <= day + timedelta(days=60):
+            return d.isoformat()
+    except ValueError:
+        pass
+    n = _norm(raw)
+    return (day + timedelta(days=2 if re.search(r"\bdopodomani\b", n) else 0 if re.search(r"\b(stasera|oggi pomeriggio)\b", n) else 1)).isoformat()
 
 
 def clean_problems(rows) -> list:
@@ -188,7 +262,8 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         f"colleghi del team: {team_s}.\n{job_s}\n"
         "Compiti:\n"
         "0. \"kind\": cosa ha scritto l'utente.\n"
-        "   - \"nota\": racconta lavori fatti o da fare, ore, materiali, problemi, cose successe in cantiere.\n"
+        "   - \"nota\": racconta lavori fatti o da fare, ore, materiali, problemi, cose successe in cantiere, "
+        "anche solo materiali da prendere o portare (\"domani porto 10 scatole 503\").\n"
         "   - \"domanda\": CHIEDE informazioni invece di raccontare (\"com'è messa la commessa dei Rossi?\", "
         "\"cosa abbiamo fatto ieri?\", \"quante ore abbiamo fatto?\", \"mancano materiali?\").\n"
         "   - \"non_chiara\": non si capisce cosa annotare (troppo vaga, frasi senza senso, saluti, \"ok\", "
@@ -196,14 +271,20 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "   Con \"domanda\" o \"non_chiara\" lascia vuoti tutti gli altri campi. Con \"non_chiara\" scrivi in "
         "\"doubt\" una domanda breve per chiarire (es. \"Cosa avete fatto e da quale cliente?\").\n"
         "1. \"text\": il testo sistemato (grammatica, punteggiatura, termini tecnici corretti), stessa persona "
-        "e stessi fatti. NON aggiungere nulla che non sia detto.\n"
+        "e stessi fatti. NON aggiungere nulla che non sia detto. NON metterci i materiali da prendere/portare/"
+        "comprare/ordinare (vanno solo in materials con status da_prendere): se il messaggio parla solo di quelli, "
+        "\"text\" è vuoto.\n"
         "2. \"date\": il giorno a cui si riferisce (\"ieri\", \"lunedì\", \"il 3\") in formato YYYY-MM-DD; se non "
         "lo dice, oggi.\n"
         "3. \"hours\": ore lavorate PER PERSONA, [{\"who\": nome, \"hours\": numero}]. \"Io e Gino 4 ore\" = 4 "
         "a testa (due righe). \"Dalle 8 alle 12\" = 4. Un collega senza nome: \"who\": \"collega\". Se le ore "
         "non sono dette: [] (MAI stimarle).\n"
-        "4. \"materials\": materiali usati o posati, [{\"name\", \"qty\": numero o null, \"unit\": \"m|pz|kg|l|"
-        "sacchi|...\" o \"\"}]. Solo quelli detti, con le quantità dette; niente attrezzi.\n"
+        "4. \"materials\": materiali nominati, [{\"name\", \"qty\": numero o null, \"unit\": \"m|pz|kg|l|"
+        "sacchi|...\" o \"\", \"status\", \"for_date\"}]. Solo quelli detti, con le quantità dette; niente attrezzi. "
+        "\"status\": \"usato\" se è stato usato/posato/montato (già successo); \"da_prendere\" se va preso, portato, "
+        "comprato o ordinato per dopo (\"domani porto\", \"serve\", \"da prendere\"); \"dubbio\" se non si capisce "
+        "(es. solo un elenco di materiali senza verbo). \"for_date\": per i da_prendere il giorno in cui servono "
+        "(YYYY-MM-DD, \"domani\" = il giorno dopo oggi), altrimenti null.\n"
         "5. \"problems\": problemi, imprevisti, cose mancanti o da rifare, frasi brevi. Nessuno: [].\n"
         "6. \"client\" e \"commessa\": il cliente e i lavori/cantiere come li nomina il testo (\"dai Rossi\" -> "
         "\"Rossi\"), stringa vuota se non li nomina.\n"
@@ -224,13 +305,19 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
     m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
     parsed = json.loads(m.group(0)) if m else {}
     kind = str(parsed.get("kind") or "nota").strip().lower().replace(" ", "_")
+    mats = clean_materials(parsed.get("materials"))
+    for m in mats:
+        m["status"] = material_status(m, text)
+        m["for_date"] = plan_date(m, text, today) if m["status"] == "da_prendere" else None
+    only_plan = bool(mats) and all(m["status"] == "da_prendere" for m in mats) \
+        and not str(parsed.get("text") or "").strip() and not parsed.get("hours") and not parsed.get("problems")
     return {
         "kind": kind if kind in KINDS else "nota",
         "doubt": str(parsed.get("doubt") or "").strip()[:200],
         "date": valid_day(parsed.get("date"), today),
-        "text": str(parsed.get("text") or "").strip() or text.strip(),
+        "text": "" if only_plan else (str(parsed.get("text") or "").strip() or text.strip()),
         "hours": clean_hours(parsed.get("hours"), speaker),
-        "materials": clean_materials(parsed.get("materials")),
+        "materials": mats,
         "problems": clean_problems(parsed.get("problems")),
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),

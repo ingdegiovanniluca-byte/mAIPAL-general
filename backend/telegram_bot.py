@@ -330,8 +330,10 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     conv = None if new_conv else await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "job_commessa_id": 1})
     res = await _save_job_log(_to_user_pydantic(user_doc), content, images=images,
                               hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
-    if res["status"] in ("ok", "question", "unclear"):
+    if res["status"] in ("ok", "question", "unclear", "planned"):
         answer = res["message"]
+    elif res["status"] == "material_doubt":
+        answer = f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."
     else:
         opts = "\n".join(f"• {c['title']} — {c['client_name']}" for c in res.get("candidates") or [])
         answer = (f"Non l'ho salvato: {res['message']}" + (f"\n{opts}" if opts else "")
@@ -342,6 +344,8 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     fields = {"updated_at": now_iso}
     if res["status"] == "ok":
         fields["job_commessa_id"] = res["log"]["commessa_id"]
+    elif res["status"] == "planned":
+        fields["job_commessa_id"] = res["commessa"]["id"]
     if new_conv:
         await db.conversations.insert_one({"conv_id": conv_id, "user_id": user_doc["user_id"], "action": "journal", "channel": channel,
                                            "created_at": now_iso, "messages": turn, "title": content[:60], "summary": answer[:140], **fields})
@@ -442,7 +446,7 @@ PHOTO_ONLY = "[foto allegata, nessun testo]"
 
 
 async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None, commessa_id=None,
-                            client_item_id=None, new_client_name=None):
+                            client_item_id=None, new_client_name=None, material_choice=None):
     """Artigiano: a diary message goes to the diario di commessa. The commessa of the last
     entry in this chat is the one meant when the message names none; if it can't be told,
     buttons to choose it (the message waits in the state)."""
@@ -464,7 +468,8 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
     text = "Foto dal cantiere" if content == PHOTO_ONLY else content
     try:
         res = await _save_job_log(current, text, images=images, commessa_id=commessa_id, hint_commessa_id=hint,
-                                  new_client_name=new_client_name, client_item_id=client_item_id, channel="telegram")
+                                  new_client_name=new_client_name, client_item_id=client_item_id, channel="telegram",
+                                  material_choice=material_choice)
     except Exception as e:
         logger.exception("tg job log failed")
         await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Non ho salvato la voce: {str(getattr(e, 'detail', e))[:200]}")
@@ -474,6 +479,17 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
                          job_commessa_id=res["log"]["commessa_id"], job_log_id=res["log"]["id"],
                          pending_job_context=None, last_user_message=content)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+        return
+    if res["status"] == "planned":   # only materials to take: a reminder, no entry
+        await _set_state(db, chat_id, user["user_id"], current_action="journal", job_commessa_id=res["commessa"]["id"],
+                         pending_job_context=None)
+        await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+        return
+    if res["status"] == "material_doubt":   # used today or to take? asked, the entry waits
+        await _set_state(db, chat_id, user["user_id"], current_action="journal",
+                         pending_job_context={"text": text, "images": images or [], "commessa_id": res["commessa_id"]})
+        await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🧰 Usati oggi", callback_data="jobm:usato"), InlineKeyboardButton("📌 Da prendere", callback_data="jobm:da_prendere")]]))
         return
     if res["status"] in ("question", "unclear"):   # nothing saved, nothing waiting
         await _set_state(db, chat_id, user["user_id"], current_action="journal", pending_job_context=None)
@@ -995,6 +1011,15 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         visit_type = data.split(":", 1)[1]
         await _set_state(db, chat_id, user["user_id"], pending_report_type=visit_type)
         await ctx.bot.send_message(chat_id=chat_id, text="🩺 Ok. Ora scrivi o manda un vocale con il resoconto della visita.")
+    elif data.startswith("jobm:"):
+        state = await _get_state(db, user["user_id"], chat_id)
+        pctx = state.get("pending_job_context") or {}
+        if not pctx.get("text") or not pctx.get("commessa_id"):
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso la voce di diario: rimandala.")
+            return
+        await _set_state(db, chat_id, user["user_id"], pending_job_context=None)
+        await _run_job_log_flow(q, ctx, db, user, pctx["text"], images=pctx.get("images") or None,
+                                commessa_id=pctx["commessa_id"], material_choice=data.split(":", 1)[1])
     elif data.startswith(("jobc:", "jobk:", "jobn:")):
         state = await _get_state(db, user["user_id"], chat_id)
         pctx = state.get("pending_job_context") or {}

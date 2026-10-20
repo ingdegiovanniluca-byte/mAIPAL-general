@@ -203,7 +203,8 @@ async def _over_limit(db, rec: dict) -> bool:
     return n > COLLAB_DAILY_LIMIT
 
 
-async def process(update: Update, rec: dict, target: tuple, content: str, images: Optional[list]):
+async def process(update: Update, rec: dict, target: tuple, content: str, images: Optional[list],
+                  material_choice: Optional[str] = None):
     """Write in the commessa's diary, or answer the question about it."""
     from server import db, _save_job_log, _collab_answer, _collab_name, _notify_owner, COLLAB_UNDO_MINUTES
     owner, _clienti, view = target
@@ -211,10 +212,21 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
     await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": _now().isoformat()},
                                                                     "pending": None}})
     try:
-        res = await _save_job_log(owner, content, images=images or None, commessa_id=view["id"], channel="telegram", author=author)
+        res = await _save_job_log(owner, content, images=images or None, commessa_id=view["id"], channel="telegram", author=author,
+                                  material_choice=material_choice)
     except Exception as e:
         logger.exception("collaborator job log failed")
         await _reply(update, f"⚠️ Non sono riuscito a salvarlo: {str(getattr(e, 'detail', e))[:200]}")
+        return
+    if res["status"] == "planned":   # only things to take: a reminder, nothing in the diary
+        ids = ",".join(t["id"] for t in res["todos"][:2])
+        await _reply(update, res["message"], reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clt:{ids}")]]))
+        return
+    if res["status"] == "material_doubt":   # "10 scatole 503": used today or to take? asked
+        await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_material": {"text": content, "images": images or [], "commessa_id": view["id"]}}})
+        await _reply(update, res["message"], reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🧰 Usati oggi", callback_data="cmat:usato"), InlineKeyboardButton("📌 Da prendere", callback_data="cmat:da_prendere")]]))
         return
     if res["status"] == "ok":
         log = res["log"]
@@ -427,6 +439,37 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
                 pass
         await _reply(update, answer)
         return
+    if data.startswith("cmat:"):   # the answer to "usati oggi o da prendere?"
+        choice = data[5:]
+        pend = rec.get("pending_material") or {}
+        targets = [t for r in active for t in await _collab_targets(r)]
+        target = next((t for t in targets if t[2]["id"] == pend.get("commessa_id")), None)
+        if not pend.get("text") or not target or choice not in ("usato", "da_prendere"):
+            await _reply(update, "Riscrivimelo, per favore.")
+            return
+        await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_material": None}})
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await process(update, rec, target, pend["text"], pend.get("images") or [], material_choice=choice)
+        return
+    if data.startswith("clt:"):   # a reminder "Da prendere" undone
+        limit = (_now() - timedelta(minutes=COLLAB_UNDO_MINUTES)).isoformat()
+        mine = {r["id"] for r in recs}
+        gone = 0
+        for tid in data[4:].split(","):
+            t = await db.job_todos.find_one({"id": tid}, {"_id": 0, "collaborator_id": 1, "created_at": 1})
+            if t and t.get("collaborator_id") in mine and t.get("created_at", "") >= limit:
+                await db.job_todos.delete_one({"id": tid})
+                gone += 1
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await _reply(update, "↩️ Promemoria annullato." if gone else
+                     f"Sono passati più di {COLLAB_UNDO_MINUTES} minuti: per correggerlo rivolgiti a chi ti ha invitato.")
+        return
     if data.startswith("clu:"):
         log = await db.job_logs.find_one({"id": data[4:]}, {"_id": 0, "id": 1, "collaborator_id": 1, "created_at": 1,
                                                             "described_at": 1, "before_description": 1})
@@ -451,6 +494,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             return
         await db.job_logs.delete_one({"id": log["id"]})
         await db.job_photos.delete_many({"log_id": log["id"]})
+        await db.job_todos.delete_many({"from_log_id": log["id"]})   # the reminder written with it, too
         try:
             await q.edit_message_reply_markup(reply_markup=None)
         except Exception:

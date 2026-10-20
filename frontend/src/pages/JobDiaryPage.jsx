@@ -244,10 +244,17 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
 const hoursLineOf = (log) => (log.hours || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ");
 
 function EditDialog({ log, onClose, onSaved, onDelete }) {
+  const toTake = async (i) => {
+    try {
+      const r = await api.post(`/jobs/logs/${log.id}/plan-material`, { index: i });
+      toast.success(`Spostato in «Da prendere» per ${shortDay(r.data.todo.due_date)}`);
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
   const [text, setText] = useState(log.text || "");
   const [date, setDate] = useState(log.date || "");
   const [hours, setHours] = useState((log.hours || []).map((h) => ({ ...h, hours: fmtNum(h.hours) })));
-  const [materials, setMaterials] = useState((log.materials || []).map((m) => ({ ...m, qty: fmtNum(m.qty) })));
+  const [materials, setMaterials] = useState((log.materials || []).map((m, i) => ({ ...m, qty: fmtNum(m.qty), orig: i })));
   const [problems, setProblems] = useState((log.problems || []).join("\n"));
   const [saving, setSaving] = useState(false);
   const num = (v) => (String(v).trim() === "" ? null : Number(String(v).replace(",", ".")));
@@ -296,6 +303,10 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
                 <input value={m.qty} onChange={(e) => setMaterials((xs) => xs.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))} placeholder="Q.tà" inputMode="decimal" className={`${field} w-16`} />
                 <input value={m.unit} onChange={(e) => setMaterials((xs) => xs.map((x, j) => (j === i ? { ...x, unit: e.target.value } : x)))} placeholder="u.m." className={`${field} w-16`} />
                 <input value={m.name} onChange={(e) => setMaterials((xs) => xs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Materiale" className={`${field} flex-1`} />
+                {m.orig !== undefined && (
+                  <button onClick={() => toTake(m.orig)} title="Non usato: da prendere" aria-label={`${m.name}: non usato, da prendere`} data-testid="material-to-take"
+                    className="p-2 text-white/60 hover:text-white"><CalendarDays size={14} /></button>
+                )}
                 <button onClick={() => setMaterials((xs) => xs.filter((_, j) => j !== i))} className="p-2 text-white/60 hover:text-white"><X size={14} /></button>
               </div>
             ))}
@@ -475,6 +486,7 @@ function TodoRow({ todo, onToggle, onOpen }) {
       </button>
       <button type="button" onClick={() => onOpen(todo)} className="min-w-0 text-left">
         <span className={`flex items-center gap-x-3.5 gap-y-0.5 flex-wrap text-[12.5px] font-medium ${todo.done ? "text-white/50" : "text-white"}`}>
+          {todo.kind === "materiale" && <Package size={12} strokeWidth={2} aria-label="materiale da prendere" />}
           <span className="inline-flex items-center gap-1" data-testid="job-todo-who"><UserRound size={12} strokeWidth={2} /> {todo.who}
             {todo.collaborator_id && <Send size={10} strokeWidth={2} className="text-white/55" aria-label="collaboratore, avvisato su Telegram" />}</span>
           {todo.due_date && (
@@ -1137,6 +1149,7 @@ export default function JobDiaryPage() {
   };
   const todos = detail?.todos || [];
   const openTodos = todos.filter((x) => !x.done).length;
+  const toTake = todos.filter((x) => x.kind === "materiale" && !x.done);
   const toggleTodo = async (todo) => {
     try { await api.patch(`/jobs/todos/${todo.id}`, { done: !todo.done }); await loadDetail(selectedId); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -1249,6 +1262,12 @@ export default function JobDiaryPage() {
           </div>
         </>
       ) : (<>
+      {section === "materiali" && toTake.length > 0 && (
+        <div className="mt-1 mb-4" data-testid="materials-to-take">
+          <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">da prendere</div>
+          {toTake.map((x) => <TodoRow key={x.id} todo={x} onToggle={toggleTodo} onOpen={setTodoEditing} />)}
+        </div>
+      )}
       {/* the period */}
       <div className="mt-1.5 flex items-center justify-center gap-2.5">
         <button type="button" onClick={() => setMenu((m) => (m === "periodo" ? null : "periodo"))} data-testid="period-btn" aria-label="Scegli il periodo"

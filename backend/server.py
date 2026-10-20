@@ -16,7 +16,7 @@ import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Any
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import bcrypt
 
@@ -5551,6 +5551,7 @@ class JobLogPayload(BaseModel):
     new_client_name: Optional[str] = None     # "è un cliente nuovo": client + commessa created
     client_item_id: Optional[str] = None      # chosen among namesakes: its open commessa, or a new one
     conv_id: Optional[str] = None
+    material_choice: Optional[str] = None     # answer to "usati o da prendere?": usato | da_prendere
 
 
 class JobTodoPayload(BaseModel):
@@ -5815,6 +5816,101 @@ def _job_log_message(log: dict, created: dict) -> str:
     return "\n".join(lines)
 
 
+MAT_EVE_AT, MAT_MORNING_AT = "19:30", "07:00"   # materials to take: the evening before and that morning
+
+
+def _mat_reminder_times(due: str) -> tuple:
+    d = date.fromisoformat(due)
+    eve = datetime.combine(d - timedelta(days=1), datetime.strptime(MAT_EVE_AT, "%H:%M").time(), tzinfo=LOCAL_TZ)
+    morning = datetime.combine(d, datetime.strptime(MAT_MORNING_AT, "%H:%M").time(), tzinfo=LOCAL_TZ)
+    return eve, morning
+
+
+async def _plan_materials(current: User, target: dict, clienti: dict, planned: list, author: Optional[dict],
+                          from_log_id: Optional[str] = None) -> list:
+    """Materials to take -> one To Do "Da prendere" per day needed, for who wrote them (the
+    collaborator, or the user), reminded the evening before and that morning."""
+    by_day: dict = {}
+    for m in planned:
+        by_day.setdefault(m.get("for_date") or (jl.today_local() + timedelta(days=1)).isoformat(), []).append(m)
+    now = datetime.now(timezone.utc)
+    out = []
+    for due, ms in sorted(by_day.items()):
+        eve, morning = _mat_reminder_times(due)
+        doc = {"id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": target["id"], "collection_id": clienti["id"],
+               "user_id": current.user_id, "org_id": current.org_id, "author_name": (author or {}).get("first_name") or _first_name(current.name),
+               "kind": "materiale", "text": "Da prendere: " + ", ".join(jl.mat_label(m) for m in ms),
+               "materials": [{k: m.get(k) for k in ("name", "qty", "unit")} for m in ms],
+               "who": (author or {}).get("name") or _first_name(current.name), "collaborator_id": (author or {}).get("id"),
+               "assignee_user_id": None if author else current.user_id, "due_date": due, "done": False, "done_at": None,
+               "from_log_id": from_log_id, "created_at": now.isoformat(),
+               # a time already gone when it is written is not reminded (it was just said)
+               "reminded": {**({"eve": due} if now >= eve else {}), **({"morning": due} if now >= morning else {})}}
+        await db.job_todos.insert_one(doc)
+        doc.pop("_id", None)
+        out.append({k: v for k, v in doc.items() if k != "reminded"})
+    return out
+
+
+def _plan_message(target: dict, todos: list, short: bool = False) -> str:
+    today = jl.today_local()
+    def when(due):
+        d = date.fromisoformat(due)
+        return "domani" if d == today + timedelta(days=1) else "oggi" if d == today else _short_it_date(due)
+    lines = [f"📌 Da prendere {when(t['due_date'])}: {t['text'].removeprefix('Da prendere: ')}" for t in todos]
+    if short:
+        return "\n".join(lines)
+    head = f"📌 Promemoria per «{target.get('title')}»" + (f" — {target['client_name']}" if target.get("client_name") else "")
+    now = datetime.now(timezone.utc)
+    times = []
+    eve, morning = _mat_reminder_times(todos[0]["due_date"])
+    if now < eve:
+        times.append(f"la sera prima alle {MAT_EVE_AT.replace(':', '.')}")
+    if now < morning:
+        times.append(f"la mattina alle {MAT_MORNING_AT.replace(':', '.')}")
+    return "\n".join([head, *[ln.replace("📌 ", "") for ln in lines],
+                      ("Te lo ricordo " + " e ".join(times) + "." if times else "") + " Non l'ho messo tra i materiali usati."]).strip()
+
+
+async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
+    """To Do "Da prendere": the evening before (19:30) and that morning (7:00), once each - on
+    Telegram to the collaborator (with ✅ Fatto), or to the user (app notification + Telegram)."""
+    now = now_utc or datetime.now(timezone.utc)
+    today = now.astimezone(LOCAL_TZ).date()
+    days = [today.isoformat(), (today + timedelta(days=1)).isoformat()]
+    sent = 0
+    for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$in": days}}, {"_id": 0}).to_list(2000):
+        eve, morning = _mat_reminder_times(t["due_date"])
+        kind = "morning" if now >= morning else "eve" if now >= eve else None
+        if not kind or (t.get("reminded") or {}).get(kind) == t["due_date"]:
+            continue
+        await db.job_todos.update_one({"id": t["id"]}, {"$set": {"reminded": {**(t.get("reminded") or {}), kind: t["due_date"]}}})
+        sub = await db.collection_sub_items.find_one({"id": t["commessa_id"]}, {"_id": 0})
+        if not sub:
+            continue
+        client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+        coll = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0})
+        view = _commessa_view(sub, client, coll or {})
+        what = t["text"].removeprefix("Da prendere: ")
+        head = "🧰 Domani da prendere" if kind == "eve" else "🧰 Oggi da prendere"
+        text = f"{head} per «{view['title']}» — {view['client_name']}:\n{what}"
+        try:
+            if t.get("collaborator_id"):
+                c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
+                if c and t["commessa_id"] in (c.get("commesse") or []) and await _tell_collaborator(c, text + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
+                    sent += 1
+            elif t.get("assignee_user_id"):
+                u = await db.users.find_one({"user_id": t["assignee_user_id"]}, {"_id": 0, "telegram_chat_id": 1})
+                push.fire_and_forget(db, t["assignee_user_id"], head + f" · {view['title']}", what,
+                                     f"/dashboard/journal?commessa={view['id']}", f"mat-{t['id']}-{kind}")
+                if u and u.get("telegram_chat_id"):
+                    await _send_telegram_text(u["telegram_chat_id"], text)
+                sent += 1
+        except Exception:
+            logger.exception("materials reminder failed")
+    return sent
+
+
 def _public_log(log: dict) -> dict:
     return {k: v for k, v in log.items() if k not in ("embedding", "_id")}
 
@@ -5844,12 +5940,14 @@ JOB_LOG_QUESTION_MSG = ("Il Diario serve solo a scrivere note sulle commesse, qu
 async def _save_job_log(current: User, text: str, images: Optional[List[str]] = None, commessa_id: Optional[str] = None,
                         hint_commessa_id: Optional[str] = None, new_client_name: Optional[str] = None,
                         conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None,
-                        author: Optional[dict] = None) -> dict:
+                        author: Optional[dict] = None, material_choice: Optional[str] = None) -> dict:
     """Shared by the chat agent, the commessa page, @diario and Telegram. `author`: a
     collaborator writing on Telegram ({"id", "first_name", "name", "company"}) - the entry is
     theirs, in the account (`current`) that enabled them on that commessa.
     -> {"status": "ok", "log", "message", ...} | {"status": "pick_commessa", "candidates", "message", "text"}
-       | {"status": "question" | "unclear", "message"} - nothing saved"""
+       | {"status": "question" | "unclear", "message"} - nothing saved
+       | {"status": "planned", "todos", "message"} - only materials to take: a reminder, no entry
+       | {"status": "material_doubt", "materials", "commessa_id", "message", "text"} - asked: used or to take?"""
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Racconta cosa è stato fatto in cantiere")
@@ -5929,6 +6027,30 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
                     "clients": res.get("clients") or [], "new_commessa_for": nc,
                     "new_client_name": res.get("client_said") or "", "text": text}
 
+    # materials used vs to take ("domani porto 10 scatole 503"): the ones to take become a reminder
+    # (To Do "Da prendere"), never material used; when it can't be told, asked
+    mats = parsed.get("materials") or []
+    if material_choice in ("usato", "da_prendere"):
+        for m in mats:
+            if m.get("status") == "dubbio":
+                m["status"] = material_choice
+                m["for_date"] = jl.plan_date(m, text, jl.today_local()) if material_choice == "da_prendere" else None
+    doubtful = [m for m in mats if m.get("status") == "dubbio"]
+    if doubtful:
+        names = [jl.mat_label(m) for m in doubtful]
+        return {"status": "material_doubt", "materials": names, "commessa_id": target["id"], "commessa": target, "text": text,
+                "message": f"🧰 {', '.join(names)}: li avete usati oggi o sono da prendere?"}
+    planned = [m for m in mats if m.get("status") == "da_prendere"]
+    parsed["materials"] = [{k: m.get(k) for k in ("name", "qty", "unit")} for m in mats if m.get("status") != "da_prendere"]
+    if planned:   # the entry's text keeps only what was done
+        parsed["text"] = jl.without_plans(parsed["text"], planned)
+    if planned and not parsed["hours"] and not parsed["materials"] and not parsed["problems"] and not images \
+            and not parsed["text"]:
+        todos = await _plan_materials(current, target, clienti, planned, author)
+        ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
+        return {"status": "planned", "todos": todos, "commessa": target, "client_created": bool(created.get("client")),
+                "commessa_created": bool(created.get("commessa")), "message": _plan_message(target, todos)}
+
     now = datetime.now(timezone.utc).isoformat()
     if photo_entry and photo_entry["commessa_id"] == target["id"]:
         # the description goes into the photo's entry (what it was is kept, to undo it)
@@ -5942,10 +6064,13 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
             asyncio.create_task(_check_budget_alert(clienti, target["id"]))
         n = len(photo_entry.get("photos") or [])
         msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
+        todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"]) if planned else []
+        if todos:
+            msg += "\n" + _plan_message(target, todos, short=True)
         if author:
             _push_collab_entry(current, log, author)
         return {"status": "ok", "log": _public_log({k: v for k, v in log.items() if k != "before_description"}), "commessa": target,
-                "client_created": False, "commessa_created": False, "described_photo": True, "message": msg}
+                "client_created": False, "commessa_created": False, "described_photo": True, "message": msg, "todos": todos}
     log = {
         "id": f"jlog_{uuid.uuid4().hex[:12]}",
         "user_id": current.user_id, "org_id": current.org_id, "author_name": speaker,
@@ -5966,14 +6091,19 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
     if log["hours"] or log["materials"]:
         asyncio.create_task(_check_budget_alert(clienti, target["id"]))
+    msg = _job_log_message(log, created)
+    todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"]) if planned else []
+    if todos:
+        msg += "\n" + _plan_message(target, todos, short=True)
     return {"status": "ok", "log": _public_log(log), "commessa": target, "client_created": bool(created.get("client")),
-            "commessa_created": bool(created.get("commessa")), "message": _job_log_message(log, created)}
+            "commessa_created": bool(created.get("commessa")), "message": msg, "todos": todos}
 
 
 @api_router.post("/jobs/logs")
 async def create_job_log(payload: JobLogPayload, current: User = Depends(get_current_user)):
     return await _save_job_log(current, payload.text, payload.images, payload.commessa_id, payload.hint_commessa_id,
-                               payload.new_client_name, payload.conv_id, client_item_id=payload.client_item_id)
+                               payload.new_client_name, payload.conv_id, client_item_id=payload.client_item_id,
+                               material_choice=payload.material_choice)
 
 
 @api_router.get("/jobs/commesse")
@@ -6180,7 +6310,7 @@ async def _todo_reminders(now_utc: Optional[datetime] = None) -> int:
     tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
     sent = 0
     for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}}, {"_id": 0}).to_list(5000):
-        if not t.get("collaborator_id") or not t.get("due_date"):
+        if not t.get("collaborator_id") or not t.get("due_date") or t.get("kind") == "materiale":
             continue
         kind = "before" if t["due_date"] == tomorrow else "due" if t["due_date"] == today else "late"
         if (t.get("reminded") or {}).get(kind) == t["due_date"]:
@@ -7311,6 +7441,7 @@ async def _collab_reminder_loop():
                 await _collab_remind_due()
                 await _milestone_reminders()
                 await _todo_reminders()
+                await _material_reminders()
                 await _presence_forgotten()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
@@ -7391,6 +7522,32 @@ async def _job_log_or_404(current: User, log_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Voce non trovata")
     await _commessa_or_404(current, log["commessa_id"])   # the user can see that commessa
     return log
+
+
+class PlanMaterialPayload(BaseModel):
+    index: int                                # which material of the entry
+    due_date: Optional[str] = None            # when it is needed (default tomorrow)
+
+
+@api_router.post("/jobs/logs/{log_id}/plan-material")
+async def plan_material_from_log(log_id: str, payload: PlanMaterialPayload, current: User = Depends(get_current_user)):
+    """A material written as used that was only to take: out of the entry, into a reminder
+    "Da prendere" for who wrote it (the collaborator, or the user)."""
+    log = await _job_log_or_404(current, log_id)
+    mats = list(log.get("materials") or [])
+    if log.get("kind") or not 0 <= payload.index < len(mats):
+        raise HTTPException(status_code=400, detail="Materiale non trovato")
+    m = mats.pop(payload.index)
+    clienti, sub, client = await _commessa_or_404(current, log["commessa_id"])
+    author = None
+    if log.get("collaborator_id"):
+        c = await db.collaborators.find_one({"id": log["collaborator_id"]}, {"_id": 0})
+        if c:
+            author = {"id": c["id"], "first_name": c.get("first_name") or "", "name": _collab_name(c), "company": c.get("company") or ""}
+    due = _valid_due(payload.due_date) or (jl.today_local() + timedelta(days=1)).isoformat()
+    todos = await _plan_materials(current, _commessa_view(sub, client, clienti), clienti, [{**m, "for_date": due}], author)
+    await db.job_logs.update_one({"id": log_id}, {"$set": {"materials": mats, "embedding": None}})
+    return {"log": _public_log({**log, "materials": mats}), "todo": todos[0]}
 
 
 @api_router.patch("/jobs/logs/{log_id}")
@@ -9863,6 +10020,11 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             if res["status"] == "ok":
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"],
                         "commessa_id": res["log"]["commessa_id"]}
+            if res["status"] == "planned":
+                return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"], "commessa_id": res["commessa"]["id"]}
+            if res["status"] == "material_doubt":
+                return {**base, "label": "Diario commessa", "status": "error",
+                        "message": f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."}
             if res["status"] in ("question", "unclear"):
                 return {**base, "label": "Diario commessa", "status": "error", "message": res["message"]}
             opts = "; ".join(f"«{c['title']}» ({c['client_name']})" for c in res.get("candidates") or [])
