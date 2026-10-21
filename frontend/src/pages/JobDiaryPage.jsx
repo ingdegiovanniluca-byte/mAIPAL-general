@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, LayoutTemplate, BookmarkPlus, Copy } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -131,6 +131,152 @@ function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaL
   if (href) return <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</a>;
   if (onClick) return <button type="button" onClick={onClick} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</button>;
   return <div data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</div>;
+}
+
+// ===== Milestone templates: the steps of a kind of job (ready-made, or saved from a commessa),
+// each due N working days after the start; applied to a commessa from a start date.
+const tplSpan = (t) => Math.max(0, ...t.steps.map((x) => x.day));
+const nextWorkday = (iso) => { const d = new Date(`${iso}T12:00:00`); while ([0, 6].includes(d.getDay())) d.setDate(d.getDate() + 1); return d; };
+function addWorkdays(iso, n) {
+  const d = nextWorkday(iso);
+  for (let left = n; left > 0;) { d.setDate(d.getDate() + 1); if (![0, 6].includes(d.getDay())) left -= 1; }
+  return d.toISOString().slice(0, 10);
+}
+
+function MilestoneTemplatesSheet({ commessa, onClose, onApplied }) {
+  const [lists, setLists] = useState(null);
+  const [open, setOpen] = useState(null);   // the template looked at
+  const load = async () => {
+    try { const r = await api.get("/jobs/milestone-templates"); setLists(r.data); return r.data; }
+    catch { setLists({ builtin: [], custom: [] }); return null; }
+  };
+  useEffect(() => { load(); }, []);
+  const row = (t) => (
+    <button key={t.id} type="button" onClick={() => setOpen(t)} data-testid="ms-tpl-row" className="w-full text-left py-2.5 border-b border-white/[0.08] last:border-b-0">
+      <div className="text-sm text-white font-medium">{t.name}</div>
+      <div className="text-[11.5px] text-white/55">{t.steps.length} milestone · circa {tplSpan(t)} giorni lavorativi</div>
+    </button>
+  );
+  return (
+    <GlassBottomSheet onClose={onClose} testid="ms-tpl-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
+      {open ? (
+        <TemplateDetail key={open.id} t={open} commessa={commessa} onBack={() => setOpen(null)} onApplied={onApplied}
+          onChanged={async (keepId) => { const l = await load(); setOpen(keepId && l ? [...l.custom].find((x) => x.id === keepId) || null : null); }} />
+      ) : (
+        <>
+          <div className="text-lg font-semibold text-white mb-1">Milestone da modello</div>
+          <div className="text-xs text-white/55 mb-3">Scegli un modello: le milestone partono dal giorno di inizio che indichi, in giorni lavorativi.</div>
+          {lists === null ? <div className="kicker py-2">caricamento…</div> : (
+            <>
+              {lists.custom.length > 0 && (<><div className="text-[10px] uppercase tracking-widest text-white/50 mt-1">i tuoi modelli</div>{lists.custom.map(row)}</>)}
+              <div className="text-[10px] uppercase tracking-widest text-white/50 mt-3">modelli pronti</div>
+              {lists.builtin.map(row)}
+            </>
+          )}
+        </>
+      )}
+    </GlassBottomSheet>
+  );
+}
+
+function TemplateDetail({ t, commessa, onBack, onApplied, onChanged }) {
+  const today = todayIso();
+  const [start, setStart] = useState(commessa.data_inizio && commessa.data_inizio >= today ? commessa.data_inizio : today);
+  const [steps, setSteps] = useState(t.steps.map((x) => ({ ...x })));
+  const [name, setName] = useState(t.name);
+  const [busy, setBusy] = useState(false);
+  const mine = !t.builtin;
+  const dirty = mine && (name !== t.name || JSON.stringify(steps) !== JSON.stringify(t.steps));
+  const fail = (e) => toast.error(e.response?.data?.detail || "Errore");
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/jobs/commesse/${commessa.id}/milestones/from-template`, { template_id: t.id, start_date: start });
+      toast.success(`${r.data.created} milestone aggiunte${r.data.skipped.length ? ` (${r.data.skipped.length} c'erano già)` : ""}`);
+      onApplied();
+    } catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const save = async () => {
+    setBusy(true);
+    try { await api.patch(`/jobs/milestone-templates/${t.id}`, { name, steps: steps.map((x) => ({ title: x.title, day: Number(x.day) || 0 })) }); toast.success("Modello salvato"); await onChanged(t.id); }
+    catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const copy = async () => {
+    setBusy(true);
+    try { const r = await api.post("/jobs/milestone-templates", { name: `${t.name} (mio)`, steps: t.steps }); toast.success("Copiato tra i tuoi modelli: ora puoi modificarlo"); await onChanged(r.data.id); }
+    catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const del = () => toast(`Eliminare il modello "${t.name}"?`, {
+    action: { label: "Elimina", onClick: async () => { try { await api.delete(`/jobs/milestone-templates/${t.id}`); await onChanged(null); } catch (e) { fail(e); } } },
+    cancel: { label: "Annulla", onClick: () => {} }, duration: 6000,
+  });
+  const field = "h-9 rounded-lg bg-white/10 px-2.5 text-sm text-white placeholder:text-white/40 outline-none";
+  return (
+    <div data-testid="ms-tpl-detail">
+      <button type="button" onClick={onBack} className="text-xs text-white/70 inline-flex items-center gap-1 mb-2"><ArrowLeft size={12} /> Modelli</button>
+      {mine ? <input value={name} onChange={(e) => setName(e.target.value)} className={`${field} w-full text-base font-semibold mb-2`} data-testid="ms-tpl-name" />
+        : <div className="text-lg font-semibold text-white mb-2">{t.name}</div>}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="kicker">inizio</span>
+        <input type="date" value={start} onChange={(e) => setStart(e.target.value)} data-testid="ms-tpl-start" className={`${field} flex-1`} />
+      </div>
+      <div className="mb-3" data-testid="ms-tpl-steps">
+        {steps.map((x, i) => (
+          <div key={i} className="flex items-center gap-2 py-1.5 border-b border-white/[0.08] last:border-b-0">
+            {mine ? (
+              <>
+                <input value={x.title} onChange={(e) => setSteps((xs) => xs.map((y, j) => (j === i ? { ...y, title: e.target.value } : y)))} className={`${field} flex-1 min-w-0`} />
+                <input value={x.day} onChange={(e) => setSteps((xs) => xs.map((y, j) => (j === i ? { ...y, day: e.target.value.replace(/\D/g, "") } : y)))}
+                  inputMode="numeric" aria-label="giorni lavorativi dall'inizio" className={`${field} w-14 text-center`} />
+                <button type="button" onClick={() => setSteps((xs) => xs.filter((_, j) => j !== i))} aria-label="Togli" className="p-1.5 text-white/55 hover:text-white"><X size={13} /></button>
+              </>
+            ) : <span className="text-sm text-white/90 flex-1 min-w-0">{x.title}</span>}
+            <span className="text-[11.5px] text-white/55 w-[58px] text-right shrink-0">{shortDay(addWorkdays(start || today, Number(x.day) || 0))}</span>
+          </div>
+        ))}
+        {mine && <button type="button" onClick={() => setSteps((xs) => [...xs, { title: "", day: (xs.at(-1)?.day ?? 0) }])} className="mt-1.5 text-xs text-white/75 inline-flex items-center gap-1"><Plus size={12} /> aggiungi</button>}
+        {mine && <div className="text-[11px] text-white/45 mt-1">Il numero è la scadenza in giorni lavorativi dall'inizio.</div>}
+      </div>
+      <div className="flex flex-wrap justify-end gap-2">
+        {mine ? (
+          <>
+            <button onClick={del} className="mr-auto px-3 py-2 rounded-full text-sm text-white/75 hover:bg-white/10 inline-flex items-center gap-1.5"><Trash2 size={14} /> Elimina</button>
+            {dirty && <button onClick={save} disabled={busy} data-testid="ms-tpl-save" className="px-4 py-2 rounded-full text-sm bg-white/15 text-white disabled:opacity-50">Salva modifiche</button>}
+          </>
+        ) : (
+          <button onClick={copy} disabled={busy} data-testid="ms-tpl-copy" className="mr-auto px-3 py-2 rounded-full text-sm text-white/80 hover:bg-white/10 inline-flex items-center gap-1.5"><Copy size={14} /> Copia e modifica</button>
+        )}
+        <button onClick={apply} disabled={busy || dirty} data-testid="ms-tpl-apply" className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">
+          {busy ? "…" : "Aggiungi alla commessa"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SaveTemplateSheet({ commessa, onClose }) {
+  const [name, setName] = useState(commessa.title || "");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/jobs/commesse/${commessa.id}/milestone-templates`, { name });
+      toast.success(`Modello «${r.data.name}» salvato: lo trovi in «Da modello» in tutte le commesse`);
+      onClose();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); } finally { setBusy(false); }
+  };
+  return (
+    <GlassBottomSheet onClose={onClose} testid="ms-tpl-save-sheet" className="max-h-[60vh] md:left-1/2 md:right-auto md:w-[440px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-lg font-semibold text-white mb-1">Salva come modello</div>
+      <div className="text-xs text-white/55 mb-3">Le milestone di questa commessa diventano un modello da riusare: le scadenze diventano giorni lavorativi dall'inizio.</div>
+      <input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="Nome (es. Bagno chiavi in mano)" data-testid="ms-tpl-save-name"
+        className="h-10 w-full rounded-xl bg-white/10 px-3 text-sm text-white placeholder:text-white/40 outline-none" />
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-white/80 hover:bg-white/10">Annulla</button>
+        <button onClick={save} disabled={busy || !name.trim()} data-testid="ms-tpl-save-confirm" className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">{busy ? "Salvo…" : "Salva"}</button>
+      </div>
+    </GlassBottomSheet>
+  );
 }
 
 // The site: its address on the map and its position for the collaborators' presences (found
@@ -976,6 +1122,7 @@ export default function JobDiaryPage() {
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [contactsOpen, setContactsOpen] = useState(false);
   const [siteOpen, setSiteOpen] = useState(false);
+  const [tplOpen, setTplOpen] = useState(null);   // "apply" | "save"
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
   const [period, setPeriod] = useState({ key: "30" });
@@ -1241,6 +1388,16 @@ export default function JobDiaryPage() {
               <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova milestone</span>
             </button>
           </div>
+          <div className="mt-0.5 flex items-center justify-center gap-4 text-[12px] text-white/75">
+            <button type="button" onClick={() => setTplOpen("apply")} data-testid="ms-tpl-apply-btn" className="inline-flex items-center gap-1.5 active:opacity-70">
+              <LayoutTemplate size={13} /> Da modello
+            </button>
+            {msSum.total > 0 && (
+              <button type="button" onClick={() => setTplOpen("save")} data-testid="ms-tpl-save-btn" className="inline-flex items-center gap-1.5 active:opacity-70">
+                <BookmarkPlus size={13} /> Salva come modello
+              </button>
+            )}
+          </div>
           {msSum.total > 0 && (
             <div className="mt-0.5 text-center text-[11.5px] text-white/60" data-testid="job-milestone-count">
               {msSum.done}/{msSum.total} fatte
@@ -1417,6 +1574,8 @@ export default function JobDiaryPage() {
           <CommessaContacts commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
         </GlassBottomSheet>
       )}
+      {tplOpen === "apply" && c && <MilestoneTemplatesSheet commessa={c} onClose={() => setTplOpen(null)} onApplied={() => { setTplOpen(null); loadDetail(selectedId); }} />}
+      {tplOpen === "save" && c && <SaveTemplateSheet commessa={c} onClose={() => setTplOpen(null)} />}
       {siteOpen && c && <SiteSheet commessa={c} geo={detail?.geo} onClose={() => setSiteOpen(false)} onChanged={() => loadDetail(selectedId)} />}
       {msEditing && c && (
         <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} onClose={() => setMsEditing(null)}

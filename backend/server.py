@@ -55,6 +55,7 @@ import help_guide
 import verticals as vx
 import push_notify as push
 import site_presence as sp
+import milestone_templates as mtpl
 import fitness as fx
 
 ROOT_DIR = Path(__file__).parent
@@ -6668,6 +6669,123 @@ async def delete_milestone(ms_id: str, current: User = Depends(get_current_user)
     await db.job_milestones.delete_one({"id": ms_id})
     _day_pin_touch(await _ms_collab_id(m))
     return {"ok": True}
+
+
+# ---- MILESTONE TEMPLATES (see milestone_templates.py): the ready-made ones and the ones saved
+# from a commessa (shared by the team); applied to a commessa from a start date.
+
+class MilestoneTemplatePayload(BaseModel):
+    name: Optional[str] = None
+    steps: Optional[list] = None              # [{"title", "day"}] - day: working days from the start
+
+
+class SaveMilestoneTemplatePayload(BaseModel):
+    name: str
+
+
+class ApplyMilestoneTemplatePayload(BaseModel):
+    template_id: str
+    start_date: Optional[str] = None          # default: today
+
+
+def _tpl_owner(current: User) -> str:
+    return current.org_id or current.user_id
+
+
+async def _milestone_template_or_404(current: User, tpl_id: str) -> dict:
+    t = await db.milestone_templates.find_one({"id": tpl_id, "owner_key": _tpl_owner(current)}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Modello non trovato")
+    return t
+
+
+async def _new_milestone_template(current: User, name: str, steps: list, source: Optional[str] = None) -> dict:
+    name = " ".join((name or "").split())[:80]
+    steps = mtpl.clean_steps(steps)
+    if not name:
+        raise HTTPException(status_code=400, detail="Scrivi il nome del modello")
+    if not steps:
+        raise HTTPException(status_code=400, detail="Il modello non ha milestone")
+    doc = {"id": f"mtpl_{uuid.uuid4().hex[:12]}", "owner_key": _tpl_owner(current), "name": name, "steps": steps,
+           "source": source, "created_by": current.user_id, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.milestone_templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/jobs/milestone-templates")
+async def list_milestone_templates(current: User = Depends(get_current_user)):
+    custom = await db.milestone_templates.find({"owner_key": _tpl_owner(current)}, {"_id": 0}).sort("name", 1).to_list(200)
+    return {"builtin": mtpl.builtin_list(), "custom": custom}
+
+
+@api_router.post("/jobs/milestone-templates")
+async def create_milestone_template(payload: MilestoneTemplatePayload, current: User = Depends(get_current_user)):
+    """A template of their own (e.g. a ready-made one copied, to change it)."""
+    return await _new_milestone_template(current, payload.name or "", payload.steps or [])
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/milestone-templates")
+async def save_milestone_template(commessa_id: str, payload: SaveMilestoneTemplatePayload, current: User = Depends(get_current_user)):
+    """The commessa's milestones as a template: each first planned date as working days from
+    the start (the commessa's start date, or its first milestone)."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    ms = await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(500)
+    if not ms:
+        raise HTTPException(status_code=400, detail="La commessa non ha milestone da salvare")
+    first = min(date.fromisoformat((m.get("original_due_date") or m["due_date"])[:10]) for m in ms)
+    begin = _commessa_view(sub, client, clienti).get("data_inizio")
+    try:
+        start = min(first, date.fromisoformat(str(begin)[:10])) if begin else first
+    except ValueError:
+        start = first
+    return await _new_milestone_template(current, payload.name, mtpl.from_milestones(ms, start), source=commessa_id)
+
+
+@api_router.patch("/jobs/milestone-templates/{tpl_id}")
+async def update_milestone_template(tpl_id: str, payload: MilestoneTemplatePayload, current: User = Depends(get_current_user)):
+    t = await _milestone_template_or_404(current, tpl_id)
+    upd = {}
+    if payload.name is not None:
+        upd["name"] = " ".join(payload.name.split())[:80]
+        if not upd["name"]:
+            raise HTTPException(status_code=400, detail="Scrivi il nome del modello")
+    if payload.steps is not None:
+        upd["steps"] = mtpl.clean_steps(payload.steps)
+        if not upd["steps"]:
+            raise HTTPException(status_code=400, detail="Il modello non ha milestone")
+    if upd:
+        await db.milestone_templates.update_one({"id": tpl_id}, {"$set": upd})
+    return {**t, **upd}
+
+
+@api_router.delete("/jobs/milestone-templates/{tpl_id}")
+async def delete_milestone_template(tpl_id: str, current: User = Depends(get_current_user)):
+    await _milestone_template_or_404(current, tpl_id)
+    await db.milestone_templates.delete_one({"id": tpl_id})
+    return {"ok": True}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/milestones/from-template")
+async def apply_milestone_template(commessa_id: str, payload: ApplyMilestoneTemplatePayload, current: User = Depends(get_current_user)):
+    """The template's milestones on the commessa, from the start date (working days); the ones
+    the commessa already has (same title) are left as they are."""
+    await _commessa_or_404(current, commessa_id)
+    t = mtpl.builtin(payload.template_id) if payload.template_id.startswith("builtin:") \
+        else await _milestone_template_or_404(current, payload.template_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Modello non trovato")
+    start = date.fromisoformat(_valid_due(payload.start_date) or jl.today_local().isoformat())
+    have = {" ".join((m.get("title") or "").lower().split())
+            for m in await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0, "title": 1}).to_list(500)}
+    created, skipped = [], []
+    for st in t["steps"]:
+        if " ".join(st["title"].lower().split()) in have:
+            skipped.append(st["title"])
+            continue
+        due = mtpl.add_workdays(start, st["day"]).isoformat()
+        created.append(await create_milestone(commessa_id, MilestonePayload(title=st["title"], due_date=due), current))
+    return {"created": len(created), "skipped": skipped, "milestones": created, "template": t["name"]}
 
 
 async def _milestone_recipients(m: dict) -> list:
