@@ -5902,6 +5902,7 @@ async def _plan_materials(current: User, target: dict, clienti: dict, planned: l
         # given to a collaborator by someone else: told now (the writer was just answered)
         if collab_id and collab_id != (author or {}).get("id"):
             view_doc["notified"] = await _notify_assignee("todo", view_doc, target)
+        _day_pin_touch(collab_id)
         out.append(view_doc)
     return out
 
@@ -5955,7 +5956,9 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
         try:
             if t.get("collaborator_id"):
                 c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
-                if c and t["commessa_id"] in (c.get("commesse") or []) and await _tell_collaborator(c, text + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
+                pinned_today = kind == "morning" and ((c or {}).get("day_pin") or {}).get("date") == t["due_date"] \
+                    and (c or {}).get("day_pin", {}).get("message_id")
+                if c and not pinned_today and t["commessa_id"] in (c.get("commesse") or []) and await _tell_collaborator(c, text + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
                     sent += 1
             if t.get("assignee_user_id"):
                 u = await db.users.find_one({"user_id": t["assignee_user_id"]}, {"_id": 0, "telegram_chat_id": 1})
@@ -6349,6 +6352,7 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
         line = f"Milestone «{what}» completata il {_short_it_date(today)}{late} (segnata da {who} su Telegram)."
     await _log_commessa_event(owner, view, "todo" if kind == "t" else "milestone", line,
                               {"todo_id" if kind == "t" else "milestone_id": item_id}, author_name=collab.get("first_name") or _collab_name(collab))
+    _day_pin_touch(collab["id"])
     push.fire_and_forget(db, owner.user_id, f"✅ {_collab_name(collab)} · {view.get('title')}", f"Fatta: «{what}»",
                          f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}")
     try:
@@ -6418,6 +6422,7 @@ async def create_job_todo(commessa_id: str, payload: JobTodoPayload, current: Us
     doc.pop("_id", None)
     doc.pop("reminded", None)
     doc["notified"] = await _notify_assignee("todo", doc, _commessa_view(sub, client, clienti))
+    _day_pin_touch(collab_id)
     return doc
 
 
@@ -6446,6 +6451,7 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
     if upd:
         await db.job_todos.update_one({"id": todo_id}, {"$set": upd})
     out = {k: v for k, v in {**todo, **upd}.items() if k != "reminded"}
+    _day_pin_touch(todo.get("collaborator_id"), out.get("collaborator_id"))
     new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != todo.get("collaborator_id")
     moved = "reminded" in upd and out.get("collaborator_id") and not new_collab
     if new_collab or moved:
@@ -6457,8 +6463,9 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
 
 @api_router.delete("/jobs/todos/{todo_id}")
 async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user)):
-    await _job_todo_or_404(current, todo_id)
+    todo = await _job_todo_or_404(current, todo_id)
     await db.job_todos.delete_one({"id": todo_id})
+    _day_pin_touch(todo.get("collaborator_id"))
     return {"ok": True}
 
 
@@ -6581,6 +6588,7 @@ async def create_milestone(commessa_id: str, payload: MilestonePayload, current:
     doc.pop("_id", None)
     doc.pop("reminded", None)
     notified = await _notify_assignee("milestone", doc, _commessa_view(sub, client, clienti))
+    _day_pin_touch(await _ms_collab_id(doc))
     return {**_milestone_view(doc), "notified": notified}
 
 
@@ -6617,6 +6625,7 @@ async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = 
     if upd:
         await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
     out = _milestone_view({k: v for k, v in {**m, **upd}.items() if k != "reminded"}, today)
+    _day_pin_touch(await _ms_collab_id(m), await _ms_collab_id(out))
     new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != m.get("collaborator_id")
     moved = upd.get("due_date") and upd["due_date"] != m["due_date"] and out.get("collaborator_id") and not new_collab
     if new_collab or moved:
@@ -6645,6 +6654,7 @@ async def add_milestone_action(ms_id: str, payload: MilestoneActionPayload, curr
     await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
     if new_due and new_due != m["due_date"]:
         await _notify_assignee("milestone", {**m, **upd}, view, "date", m["due_date"])
+        _day_pin_touch(await _ms_collab_id(m))
     await _log_commessa_event(current, view, "milestone",
                               f"Milestone «{m['title']}»: azione correttiva — {text}"
                               + (f" Nuova scadenza {_short_it_date(new_due)} (era {_short_it_date(m['due_date'])})." if new_due else ""),
@@ -6654,8 +6664,9 @@ async def add_milestone_action(ms_id: str, payload: MilestoneActionPayload, curr
 
 @api_router.delete("/jobs/milestones/{ms_id}")
 async def delete_milestone(ms_id: str, current: User = Depends(get_current_user)):
-    await _milestone_or_404(current, ms_id)
+    m, _view = await _milestone_or_404(current, ms_id)
     await db.job_milestones.delete_one({"id": ms_id})
+    _day_pin_touch(await _ms_collab_id(m))
     return {"ok": True}
 
 
@@ -6673,6 +6684,10 @@ async def _milestone_recipients(m: dict) -> list:
                 if u.get("telegram_chat_id") and who in {(u.get("name") or "").strip().lower(), _first_name(u.get("name")).lower()}:
                     chats.append(u["telegram_chat_id"])
     return list(dict.fromkeys(chats))
+
+
+async def _ms_collab_id(m: dict) -> Optional[str]:
+    return (await _milestone_collaborator(m) or {}).get("id")
 
 
 async def _milestone_collaborator(m: dict) -> Optional[dict]:
@@ -7494,12 +7509,158 @@ async def _on_site(commessa_id: str) -> list:
     return out
 
 
+# ---- THE DAY'S PINNED MESSAGE (collaborators, Telegram): at 6:00 one message "📋 Oggi" with,
+# commessa by commessa (address + map link), the To Do, milestones and materials to bring due
+# that day for them, with a ✅ button each - pinned on top of the chat. It is edited when
+# something changes (done, added) and replaced the next day; a day with nothing gets none.
+
+DAY_PIN_AT = "06:00"
+
+
+async def _day_pin_send(chat_id, text: str, kb) -> Optional[int]:
+    from telegram import Bot
+    bot = Bot(token=tg.bot_token())
+    msg = await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+    await bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
+    return msg.message_id
+
+
+async def _day_pin_edit(chat_id, message_id: int, text: str, kb) -> None:
+    from telegram import Bot
+    await Bot(token=tg.bot_token()).edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML",
+                                                      reply_markup=kb, disable_web_page_preview=True)
+
+
+async def _day_pin_unpin(chat_id, message_id: int) -> None:
+    from telegram import Bot
+    await Bot(token=tg.bot_token()).unpin_chat_message(chat_id=chat_id, message_id=message_id)
+
+
+async def _collab_day_items(collab: dict, day: str) -> list:
+    """[(commessa view, [(kind "t"|"m", id, label, done)]), ...] - what is theirs for that day."""
+    out = []
+    for _owner, _cl, view in await _collab_targets(collab):
+        rows = []
+        for t in await db.job_todos.find({"commessa_id": view["id"], "collaborator_id": collab["id"], "due_date": day}, {"_id": 0}).to_list(100):
+            label = ("🧰 Da portare: " + t["text"].removeprefix("Da prendere: ")) if t.get("kind") == "materiale" else t["text"]
+            rows.append((0 if t.get("kind") != "materiale" else 2, "t", t["id"], label, bool(t.get("done"))))
+        for m in await db.job_milestones.find({"commessa_id": view["id"], "due_date": day}, {"_id": 0}).to_list(100):
+            c = await _milestone_collaborator(m)
+            if c and c["id"] == collab["id"]:
+                rows.append((1, "m", m["id"], f"🚩 {m['title']} (milestone)", bool(m.get("done"))))
+        if rows:
+            out.append((view, [r[1:] for r in sorted(rows, key=lambda r: r[0])]))
+    return out
+
+
+def _day_pin_body(day: str, items: list) -> tuple:
+    """-> (HTML text, inline keyboard with a ✅ per open item)"""
+    import html
+    from urllib.parse import quote
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    lines = [f"📋 <b>Oggi, {jl.IT_WEEKDAYS[date.fromisoformat(day).weekday()]} {html.escape(_short_it_date(day))}</b>"]
+    buttons = []
+    for view, rows in items:
+        lines += ["", f"🏗️ <b>{html.escape(view.get('title') or '')}</b> — {html.escape(view.get('client_name') or '')}"]
+        if view.get("address"):
+            url = html.escape(f"https://www.google.com/maps/search/?api=1&query={quote(view['address'])}", quote=True)
+            lines.append(f"📍 <a href=\"{url}\">{html.escape(view['address'])}</a>")
+        for kind, item_id, label, done in rows:
+            lines.append(f"✅ <s>{html.escape(label)}</s>" if done else f"• {html.escape(label)}")
+            if not done:
+                buttons.append([InlineKeyboardButton(f"✅ {label}"[:60], callback_data=f"cldone:{kind}:{item_id}")])
+    open_n = sum(1 for _v, rows in items for r in rows if not r[3])
+    lines += ["", "Quando una cosa è fatta tocca il suo ✅." if open_n else "🎉 Tutto fatto per oggi!"]
+    return "\n".join(lines), (InlineKeyboardMarkup(buttons) if buttons else None)
+
+
+async def _day_pin_refresh(collab_id: str, now_utc: Optional[datetime] = None) -> str:
+    """Brings the collaborator's pinned message up to date: sent and pinned (the 6:00 one, or the
+    first thing of the day added later), edited, or - a new day - the old one unpinned.
+    -> "sent" | "edited" | "same" | "none" | "skip" """
+    c = await db.collaborators.find_one({"id": collab_id}, {"_id": 0})
+    if not c or c.get("status") != "active" or not c.get("telegram_chat_id") or not tg.bot_token():
+        return "skip"
+    now_l = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_l.strftime("%H:%M") < DAY_PIN_AT:
+        return "skip"
+    day = now_l.date().isoformat()
+    pin = c.get("day_pin") or {}
+    if pin.get("date") != day:
+        if pin.get("message_id"):
+            try:
+                await _day_pin_unpin(c["telegram_chat_id"], pin["message_id"])
+            except Exception:
+                logger.warning("unpin of yesterday's message failed for %s", collab_id)
+        pin = {"date": day, "message_id": None}
+        await db.collaborators.update_one({"id": collab_id}, {"$set": {"day_pin": pin}})
+    items = await _collab_day_items(c, day)
+    if not items and not pin.get("message_id"):
+        return "none"
+    text, kb = _day_pin_body(day, items)
+    if pin.get("message_id"):
+        if pin.get("text") == text:
+            return "same"
+        try:
+            await _day_pin_edit(c["telegram_chat_id"], pin["message_id"], text, kb)
+            await db.collaborators.update_one({"id": collab_id}, {"$set": {"day_pin": {**pin, "text": text}}})
+            return "edited"
+        except Exception:
+            logger.warning("edit of the pinned message failed for %s: a new one is sent", collab_id)
+    try:
+        mid = await _day_pin_send(c["telegram_chat_id"], text, kb)
+    except Exception:
+        logger.exception(f"day message to {collab_id} failed")
+        return "skip"
+    await db.collaborators.update_one({"id": collab_id}, {"$set": {"day_pin": {"date": day, "message_id": mid, "text": text}}})
+    return "sent"
+
+
+async def _collab_day_briefs(now_utc: Optional[datetime] = None) -> int:
+    """From 6:00, once a day: every linked collaborator's message of the day (or yesterday's
+    unpinned when today has nothing). -> how many sent."""
+    now_l = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_l.strftime("%H:%M") < DAY_PIN_AT:
+        return 0
+    day = now_l.date().isoformat()
+    n = 0
+    for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}}, {"_id": 0}).to_list(2000):
+        if (c.get("day_pin") or {}).get("date") == day:
+            continue
+        try:
+            if await _day_pin_refresh(c["id"], now_utc) == "sent":
+                n += 1
+        except Exception:
+            logger.exception(f"day brief for {c['id']} failed")
+    return n
+
+
+def _day_pin_touch(*collab_ids) -> None:
+    """Something of theirs changed: their pinned message follows (in the background)."""
+    for cid in {x for x in collab_ids if x}:
+        async def run(cid=cid):
+            try:
+                await _day_pin_refresh(cid)
+            except Exception:
+                logger.exception("day message refresh failed")
+        try:
+            task = asyncio.get_running_loop().create_task(run())
+            _DAY_PIN_TASKS.add(task)
+            task.add_done_callback(_DAY_PIN_TASKS.discard)
+        except RuntimeError:
+            pass
+
+
+_DAY_PIN_TASKS: set = set()
+
+
 async def _collab_reminder_loop():
     while True:
         try:
             if tg.bot_token():
                 await _collab_remind_due()
                 await _milestone_reminders()
+                await _collab_day_briefs()
                 await _todo_reminders()
                 await _material_reminders()
                 await _presence_forgotten()

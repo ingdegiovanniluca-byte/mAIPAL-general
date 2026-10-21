@@ -455,7 +455,9 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             answer = await _collab_mark_done(r, kind, item_id)
             if answer != NOT_YOURS:
                 break
-        if answer != NOT_YOURS:
+        pressed_on = getattr(q.message, "message_id", None)
+        pinned = bool(pressed_on) and any((r.get("day_pin") or {}).get("message_id") == pressed_on for r in active)
+        if answer != NOT_YOURS and not pinned:   # the pinned message of the day keeps its other buttons (it is edited)
             try:
                 await q.edit_message_reply_markup(reply_markup=None)
             except Exception:
