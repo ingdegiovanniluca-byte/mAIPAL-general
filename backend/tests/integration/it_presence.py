@@ -194,6 +194,8 @@ async def main():
 
     # 1) the commands are recognized; a diary entry is not
     assert sp.parse_command("sono arrivato")["action"] == "start" and sp.parse_command("ho finito il massetto") is None
+    # the hours to the half hour: past it, more than 15 minutes up, up to 15 down
+    assert [sp.round_hours(m) for m in (60, 70, 75, 76, 90, 105, 106, 15, 16)] == [1.0, 1.0, 1.0, 1.5, 1.5, 1.5, 2.0, 0.0, 0.5]
 
     # 2) the 📍 button: the position picks the nearest commessa; the start is told, with the distance
     r = await say(loc=loc(0.0004))
@@ -217,7 +219,7 @@ async def main():
     assert r[-1][0].startswith("⏱️ Tempo in cantiere aperto dalle") and "«Bagno»" in r[-1][0] and kb_label(r[-1][1]) == "📍 Ho finito"
     assert len([x for x in db.work_sessions.docs if x["end_at"] is None]) == 1
 
-    # 3) the end (2 h 37 min ago started): the hours in the diary, quarter-rounded; the owner hears it
+    # 3) the end (2 h 37 min ago started): the hours in the diary, to the half hour (2 h 37 -> 2,5); the owner hears it
     ws[0]["start_at"] = (datetime.now(timezone.utc) - timedelta(minutes=157)).isoformat()
     n_push = len(PUSHED)
     r = await say(loc=loc(0.0003))

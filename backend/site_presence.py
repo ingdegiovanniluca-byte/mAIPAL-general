@@ -79,8 +79,10 @@ def far(m: Optional[int]) -> bool:
 
 
 def round_hours(minutes: int) -> float:
-    """Worked minutes -> hours to the quarter (8 h 07 -> 8, 8 h 08 -> 8.25)."""
-    return round(max(0, minutes) / 15) * 0.25
+    """Worked minutes -> hours to the half hour: past the last half hour, more than 15 minutes
+    go up, up to 15 go down (1 h 15 -> 1, 1 h 16 -> 1.5, 1 h 45 -> 1.5, 1 h 46 -> 2)."""
+    halves, rest = divmod(max(0, int(minutes)), 30)
+    return (halves + (1 if rest > 15 else 0)) * 0.5
 
 
 def fmt_duration(minutes: int) -> str:
@@ -138,7 +140,8 @@ def _selftest():
     assert parse_command("Finito!")["action"] == "stop" and parse_command("arrivato")["action"] == "start"
     assert parse_command("sono arrivato dai Rossi alle 8:15") == {"action": "start", "at": time(8, 15), "rest": "dai Rossi"}
     assert parse_command("/fine")["action"] == "stop" and parse_command("ho finito alle 25") is None
-    assert round_hours(487) == 8.0 and round_hours(488) == 8.25 and fmt_duration(255) == "4 h 15 min"
+    assert [round_hours(m) for m in (60, 75, 76, 90, 105, 106, 10, 16)] == [1.0, 1.0, 1.5, 1.5, 1.5, 2.0, 0.0, 0.5]
+    assert fmt_duration(255) == "4 h 15 min"
     assert 1100 < distance_m({"lat": 45.0703, "lon": 7.6869}, {"lat": 45.0703, "lon": 7.7019}) < 1200
 
 
