@@ -58,12 +58,12 @@ La chat è il cuore di mAIPAL: scegli un **agente**, poi scrivi o detta il messa
 - **Lezioni** (fitness): chiedi la lezione (es. "lezione funzionale per 10 persone, livello medio, gambe") e la compongo con le regole del tipo, i tuoi esercizi e i tuoi attrezzi; la trovi poi in Fitness → Lezioni. Nella stessa chat puoi chiedere modifiche ("fallo per 15 persone", "togli gli affondi"): cambio quella lezione. Per una lezione nuova scrivi "nuova lezione…" o "crea…".
 - **Azioni**: comandi che mAIPAL esegue da solo con una cadenza (es. ogni venerdì).
 
-Sul telefono gli agenti sono in fila sotto la casella di scrittura: toccane uno per sceglierlo, con **Altri** li vedi tutti. Sopra la casella c'è l'agente scelto, come una **goccia animata** con il suo colore e il suo carattere (Cerca ha gli occhiali, Report il caschetto, Azioni la mascherina): si guarda intorno quando aspetta, ti ascolta mentre scrivi o registri un vocale e si mette al lavoro quando invii. **Tocca la goccia** per sapere cosa fa l'agente, cosa significano le sue icone e qualche esempio (toccandone uno lo scrive nella casella). Sul computer, e sui telefoni che non mostrano il 3D, al posto della goccia c'è il nome dell'agente con la **ⓘ** accanto.
+Sul telefono gli agenti sono in fila sotto la casella di scrittura: toccane uno per sceglierlo, con **Altri** li vedi tutti. La **ⓘ accanto al nome dell'agente** spiega cosa fa, cosa significano le sue icone e propone esempi (toccandone uno lo scrive nella casella).
 
 **Scrivere, dettare, allegare**
 - **Microfono**: toccalo per dettare e di nuovo per fermare; la trascrizione va nella casella (con la ✕ annulli la registrazione). Il lato del microfono si sceglie dal popup del profilo.
 - **Graffetta**: allega foto e documenti (Salva li legge e li mette nella tua base di conoscenza).
-- **Icone sotto l'agente** (la goccia, o il nome sul computer): opzioni dell'agente, es. salvare anche su Drive/OneDrive, mettere i task nel calendario, attivare il promemoria.
+- **Icone sotto il nome dell'agente**: opzioni dell'agente, es. salvare anche su Drive/OneDrive, mettere i task nel calendario, attivare il promemoria.
 
 **Più agenti in un messaggio: i tag @**
 Scrivi `@task`, `@salva`, `@cerca`, `@diario`, `@lista` o `@azione` dentro il messaggio: il testo dopo il tag va a quell'agente. Es. "Visita di Fester, tutto bene @task richiamare la signora giovedì". Si può anche dettare "agente task …" o "chiocciola task …".

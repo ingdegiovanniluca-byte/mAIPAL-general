@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, Dumbbell } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -17,12 +17,6 @@ import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
-import { DROP_FOR_AGENT } from "@/components/agentDrop/config";
-
-// the agent as an animated 3D drop over the composer (phone only): Three.js comes in its own
-// chunk, loaded when the chat first shows it
-const AgentDrop = lazy(() => import("@/components/agentDrop/AgentDrop"));
-const DROP_SIZE = 132;
 
 const ACTION_LABELS_IT = { help: "Help", info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", lesson: "Lezione", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
@@ -260,8 +254,6 @@ export default function ChatPage() {
   // desktop split: the chat in the left column, always in its mobile layout
   const pane = useChatPane();
   const isMobile = useIsMobile() || !!pane;
-  const onPhone = isMobile && !pane;              // not the chat column of the desktop split
-  const [dropFailed, setDropFailed] = useState(false);   // no WebGL: the agent's name, as before
   const { user: authUser } = useAuth();
   const vertical = authUser?.business_vertical || null;
   const ACTIONS = useMemo(() => actionsFor(vertical), [vertical]);
@@ -1754,30 +1746,6 @@ export default function ChatPage() {
       {!compactHero && <SuggestionsTicker onSelect={runSuggestion} />}
       <div className={`flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
         <div className="flex items-center gap-2">
-          {onPhone && !dropFailed ? (<>
-            <h1 data-testid="agent-name" className="sr-only">{activeAction.short}</h1>
-            {/* the drop replaces the name: it shows who is listening, a tap tells what it does */}
-            <button
-              type="button"
-              data-testid="agent-info-btn"
-              onClick={() => setInfoOpen(true)}
-              title={`Cosa fa ${activeAction.short}`}
-              aria-label={`${activeAction.short}: cosa fa`}
-              className="relative overflow-visible transition-[height] duration-200"
-              style={{ height: compactHero ? Math.round(DROP_SIZE * .62) : DROP_SIZE, width: DROP_SIZE }}
-            >
-              <div className="absolute left-0 top-0 origin-top transition-transform duration-200" style={{ transform: `scale(${compactHero ? .62 : 1})` }}>
-                <Suspense fallback={<div style={{ width: DROP_SIZE, height: DROP_SIZE }} />}>
-                  <AgentDrop
-                    agent={DROP_FOR_AGENT[activeAction.key] || "cerca"}
-                    state={streaming || transcribing ? "think" : recording || text.trim() ? "listen" : "idle"}
-                    size={DROP_SIZE}
-                    onFail={() => setDropFailed(true)}
-                  />
-                </Suspense>
-              </div>
-            </button>
-          </>) : (<>
           <h1
             data-testid="agent-name"
             className={`font-semibold tracking-tight leading-tight text-white [text-shadow:0_2px_16px_rgba(60,10,60,0.25)] transition-all duration-200 ${compactHero ? "text-[30px]" : "text-[42px]"}`}
@@ -1794,7 +1762,6 @@ export default function ChatPage() {
           >
             i
           </button>
-          </>)}
           {active === "help" && (
             <button type="button" data-testid="exit-help" onClick={exitHelp} title="Esci da Help" aria-label="Esci da Help"
               className="h-[22px] w-[22px] rounded-full bg-white/15 flex items-center justify-center text-white/85">
