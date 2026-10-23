@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, Dumbbell } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -17,6 +17,14 @@ import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
+import { DROP_FOR_AGENT } from "@/components/agentDrop/config";
+
+// the agent as a small animated 3D drop beside its name (phone only): Three.js comes in its own
+// chunk, loaded when the chat first shows it. The drop is drawn on a fixed small canvas and
+// scaled to the name; in that canvas the drop takes ~3/4 of the height, with ~1/10 below it.
+const AgentDrop = lazy(() => import("@/components/agentDrop/AgentDrop"));
+const DROP_PX = 64, DROP_BODY = .75, DROP_FOOT = .095;
+const MIC_COLUMN = 32;   // the mic's centre from the composer's edge (h-16), left or right alike
 
 const ACTION_LABELS_IT = { help: "Help", info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", lesson: "Lezione", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
@@ -254,6 +262,11 @@ export default function ChatPage() {
   // desktop split: the chat in the left column, always in its mobile layout
   const pane = useChatPane();
   const isMobile = useIsMobile() || !!pane;
+  const onPhone = isMobile && !pane;              // not the chat column of the desktop split
+  const [dropFailed, setDropFailed] = useState(false);   // no WebGL: just the name, as before
+  const heroRef = useRef(null);
+  const agentNameRef = useRef(null);
+  const [dropBox, setDropBox] = useState(null);   // {h, bottom}: as tall as the name's 2nd letter
   const { user: authUser } = useAuth();
   const vertical = authUser?.business_vertical || null;
   const ACTIONS = useMemo(() => actionsFor(vertical), [vertical]);
@@ -1726,6 +1739,33 @@ export default function ChatPage() {
   const visitTypes = [...(tplList.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(tplList.custom || []).map((t) => ({ id: t.id, name: t.name }))];
 
   const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
+  // where the drop goes: the height of the name's second letter in the name's font, and that
+  // letter's bottom (baseline + descent) from the top of the hero - measured again when the
+  // agent changes, when the name shrinks while typing (after its 200 ms transition) and once
+  // the font has loaded
+  const agentShort = activeAction.short;
+  useLayoutEffect(() => {
+    if (!onPhone || dropFailed) return undefined;
+    const measure = () => {
+      const el = agentNameRef.current, hero = heroRef.current;
+      if (!el || !hero) return;
+      const cs = getComputedStyle(el);
+      const ctx = document.createElement("canvas").getContext("2d");
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const ch = agentShort[1] || agentShort[0] || "a";
+      const m = ctx.measureText(ch), f = ctx.measureText("Hg");
+      const fa = m.fontBoundingBoxAscent ?? f.actualBoundingBoxAscent, fd = m.fontBoundingBoxDescent ?? f.actualBoundingBoxDescent;
+      const r = el.getBoundingClientRect(), hr = hero.getBoundingClientRect();
+      const lineH = parseFloat(cs.lineHeight) || r.height;
+      const baseline = r.top - hr.top + (lineH - (fa + fd)) / 2 + fa;
+      const h = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+      if (h > 0) setDropBox({ h, bottom: baseline + m.actualBoundingBoxDescent });
+    };
+    measure();
+    const t = setTimeout(measure, 260);
+    document.fonts?.ready?.then(measure);
+    return () => clearTimeout(t);
+  }, [onPhone, dropFailed, agentShort, compactHero]);
   const composerOpen = composerGrown || attachments.length > 0 || uploadingFiles.length > 0 || !!pendingVoice || transcribing
     || mentionMatches.length > 0 || typedTags.length > 0 || typedPeople.length > 0 || !!pendingDriveUpload;
   const canSend = !(streaming || transcribing || uploadingFiles.length > 0 || (!text.trim() && attachments.length === 0 && !pendingVoice && !recording));
@@ -1744,9 +1784,30 @@ export default function ChatPage() {
   // are shown (the composer moves under the messages), the hero and the agents disappear.
   const mobileHero = (<>
       {!compactHero && <SuggestionsTicker onSelect={runSuggestion} />}
-      <div className={`flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
+      <div ref={heroRef} className={`relative flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
+        {onPhone && !dropFailed && dropBox && (() => {
+          // the drop: left of the name, centred on the mic's column, its body as tall as the
+          // name's second letter and standing on the same baseline
+          const d = dropBox.h / DROP_BODY;
+          return (
+            <div aria-hidden="true" data-testid="agent-drop" className="absolute pointer-events-none"
+              style={{ left: MIC_COLUMN - d / 2, top: dropBox.bottom + DROP_FOOT * d - d, width: d, height: d }}>
+              <div className="origin-top-left" style={{ transform: `scale(${d / DROP_PX})` }}>
+                <Suspense fallback={null}>
+                  <AgentDrop
+                    agent={DROP_FOR_AGENT[activeAction.key] || "cerca"}
+                    state={streaming || transcribing ? "think" : recording || text.trim() ? "listen" : "idle"}
+                    size={DROP_PX} segments={64}
+                    onFail={() => setDropFailed(true)}
+                  />
+                </Suspense>
+              </div>
+            </div>
+          );
+        })()}
         <div className="flex items-center gap-2">
           <h1
+            ref={agentNameRef}
             data-testid="agent-name"
             className={`font-semibold tracking-tight leading-tight text-white [text-shadow:0_2px_16px_rgba(60,10,60,0.25)] transition-all duration-200 ${compactHero ? "text-[30px]" : "text-[42px]"}`}
           >
