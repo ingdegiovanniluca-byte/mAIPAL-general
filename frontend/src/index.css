@@ -339,6 +339,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 /* (the desktop split has the same panels and background as the phone: no web-only veil) */
 
+/* On a wide screen the wine shape fills far more of the window than on the phone (a 760 px
+   patch in the middle of a landscape window) and the desktop reads deep purple: there it is
+   smaller, lighter and more blurred, with the pink grown around it, so the mix stays the
+   phone's - a soft wine patch among pink, orange and powder blue. */
+@media (min-width: 1100px) {
+    .liquid-blob { filter: blur(80px); }
+    .liquid-blob-1 { left: 38vw; top: 4vh; width: 34vw; height: 34vw; opacity: 0.55; }
+    .liquid-blob-4 { opacity: 0.6; }
+    .liquid-blob-5 { left: 50vw; top: 30vh; width: 40vw; height: 40vw; opacity: 0.7; }
+    .liquid-tint { opacity: 0.75; }
+}
+
 .liquid-glass-btn {
     position: relative;
     overflow: hidden;
