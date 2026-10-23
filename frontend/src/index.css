@@ -337,19 +337,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     .liquid-blob { animation: none; }
 }
 
-/* Web (>=1100px, the desktop split): every panel is a frosted glass on the blurred shapes - a whitish veil,
-   a soft blur, no border, a soft drop shadow. */
-@media (min-width: 1100px) {
-    .liquid-blob { filter: blur(70px); }
-    :root:not([data-theme="light"]) .card-soft,
-    :root:not([data-theme="light"]) .bg-white\/5.backdrop-blur-xl {
-        background: linear-gradient(170deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
-        backdrop-filter: blur(18px) saturate(120%);
-        -webkit-backdrop-filter: blur(18px) saturate(120%);
-        border-color: transparent;
-        box-shadow: 0 14px 36px rgba(60, 10, 40, 0.16);
-    }
-}
+/* (the desktop split has the same panels and background as the phone: no web-only veil) */
 
 .liquid-glass-btn {
     position: relative;

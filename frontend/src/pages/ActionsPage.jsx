@@ -201,7 +201,7 @@ export default function ActionsPage() {
   // ===== an action's card =====
   if (openId) {
     return (
-      <div className="w-full max-w-2xl mx-auto settings-page" data-testid="action-detail">
+      <div className="w-full settings-page" data-testid="action-detail">
         <button onClick={closeAction} data-testid="action-back" className="flex items-center gap-1.5 text-sm text-white/70 mb-4">
           <ArrowLeft size={16} /> Azioni
         </button>
@@ -223,7 +223,7 @@ export default function ActionsPage() {
 
   // ===== the list: one tile per row, like Impostazioni =====
   return (
-    <div className="w-full max-w-2xl mx-auto settings-page" data-testid="actions-page">
+    <div className="w-full settings-page" data-testid="actions-page">
       <div className="flex items-center gap-3 mb-5">
         <button data-testid="new-action-btn" onClick={newAction} title="Nuova azione" aria-label="Nuova azione"
           className="lg-glass h-9 w-9 shrink-0 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">

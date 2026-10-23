@@ -105,7 +105,7 @@ export default function DocumentsPage() {
   const totalChars = useMemo(() => docs.reduce((s, d) => s + (d.chars || 0), 0), [docs]);
 
   return (
-    <div className="max-w-6xl">
+    <div className="w-full">
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center"><FolderOpen size={18} /></div>
         <div>

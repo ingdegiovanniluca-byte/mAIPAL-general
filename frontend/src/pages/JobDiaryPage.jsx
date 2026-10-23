@@ -1321,7 +1321,7 @@ export default function JobDiaryPage() {
   };
 
   const diaryView = !c ? loading : (
-    <div className="relative max-w-3xl mx-auto" data-testid="commessa-detail">
+    <div className="relative w-full" data-testid="commessa-detail">
       {/* only the commessa's name; the arrow goes back to its card */}
       <div className="flex items-center gap-2.5">
         <button onClick={() => setLevel("clients")} data-testid="job-back" aria-label="Torna ai clienti"

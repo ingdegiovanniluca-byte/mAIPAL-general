@@ -44,9 +44,9 @@ Help risponde alle domande su mAIPAL: cosa può fare, dove si trova una funzione
 La chat è il cuore di mAIPAL: scegli un **agente**, poi scrivi o detta il messaggio.
 
 **Sul computer: chat a sinistra, sezione a destra**
-- Con la finestra larga (da circa 1.100 pixel) la chat resta sempre nella colonna di sinistra, come sul telefono (nome dell'agente, casella, fila degli agenti, cronologia con il pulsante tondo), e a destra c'è la sezione scelta nell'header (Task, Diario, Liste...). Cambiando sezione cambia solo la parte destra: la conversazione resta aperta.
+- Con la finestra larga (da circa 1.100 pixel) la chat resta sempre nella colonna di sinistra, come sul telefono (nome dell'agente, casella, fila degli agenti, cronologia con il pulsante tondo), e a destra c'è la sezione scelta nell'header (Task, Diario, Liste...). Riquadri, colori ed effetti sono gli stessi del telefono. Cambiando sezione cambia solo la parte destra: la conversazione resta aperta.
 - **Chat** nell'header apre (o chiude) la cronologia delle conversazioni nella colonna di sinistra; **Help** dal menu del profilo e "Chiedi a Help" aprono l'Help lì.
-- Trascina il **bordo** tra le due colonne per allargare o stringere la chat; con **«** la nascondi (la sezione usa tutta la larghezza) e con **Chat** in alto a sinistra la riapri. Larghezza e scelta restano su quel computer.
+- Trascina il **bordo** tra le due colonne per allargare o stringere la chat (al massimo un terzo della finestra: la sezione a destra ha sempre almeno i due terzi e usa tutto lo spazio che ha); con **«** la nascondi (la sezione usa tutta la larghezza) e con **Chat** in alto a sinistra la riapri. Larghezza e scelta restano su quel computer.
 - Con la finestra più stretta mAIPAL si mostra come sul telefono.
 
 **Gli agenti**

@@ -582,7 +582,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-4xl settings-page">
+    <div className="w-full settings-page">
       <div className="kicker mb-2">· impostazioni</div>
       <h2 className="text-3xl font-bold tracking-tight">Profilo & integrazioni</h2>
       <p className="text-white/60 mt-2">Modifica il profilo con cui mAIPAL ti conosce e collega i servizi esterni.</p>

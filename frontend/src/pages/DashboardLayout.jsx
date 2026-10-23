@@ -113,8 +113,8 @@ export default function DashboardLayout() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  // the chat: from 360 px to half the window, always leaving the section at least 620 px
-  const clampW = useCallback((w) => Math.round(Math.max(CHAT_MIN_W, Math.min(winW * 0.5, winW - 620, w))), [winW]);
+  // the chat: from 360 px to a third of the window - the section has from 2/3 of it to all of it (chat hidden)
+  const clampW = useCallback((w) => Math.round(Math.max(Math.min(CHAT_MIN_W, winW / 3), Math.min(winW / 3, w))), [winW]);
   const chatW = clampW(chatWidth ?? winW / 3);
   const resizeChat = (w, done) => {
     if (w !== null) setChatWidth(clampW(w));
@@ -327,11 +327,11 @@ export default function DashboardLayout() {
         {split ? (
           <div className="flex-1 min-h-0 flex" data-testid="split">
             {!chatHidden && <ChatColumn width={chatW} intent={chatIntent} onResize={resizeChat} onHide={() => hideChat(true)} />}
-            {/* the section: centred in its space, scrolling by itself; its fixed elements (the
-                commessa's chat...) stay on this side */}
+            {/* the section: all the space left (2/3 of the window up to all of it), scrolling by
+                itself; its fixed elements (the commessa's chat...) stay on this side */}
             <div className="relative flex-1 min-w-0 h-full" style={{ transform: "translateZ(0)" }}>
               <div className="h-full overflow-y-auto" data-testid="split-right">
-                <main className="mx-auto w-full max-w-[1180px] px-10 pt-6 pb-10">
+                <main className="w-full px-8 pt-6 pb-10">
                   <MobileTitleContext.Provider value={setTitleSuffix}>
                     {location.pathname === CHAT_PATH ? null : <Outlet />}
                   </MobileTitleContext.Provider>
