@@ -8,6 +8,15 @@ module.exports = {
     "./public/index.html"
   ],
   theme: {
+    // one threshold for the whole app (see hooks/use-is-mobile.js): below it the mobile layout,
+    // from it the desktop split (chat on the left, the section on the right) - nothing in between
+    screens: {
+      sm: '640px',
+      md: '1100px',
+      lg: '1100px',
+      xl: '1440px',
+      '2xl': '1680px',
+    },
     extend: {
       borderRadius: {
         lg: 'var(--radius)',

@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useContext, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { SheetHostContext } from "@/lib/chatPane";
 
 /* The app's frosted sheet from the bottom (the "+" menu of the chat, the Help guide, the
    collaborators...). The bar on top closes it: pull it down (or, when the content is scrolled
@@ -9,6 +10,7 @@ const CLOSE_AT = 110;       // px pulled down that close it on release
 const FLICK = 0.6;          // px/ms: a fast flick closes it even when short
 
 export default function GlassBottomSheet({ onClose, testid, className = "max-h-[84vh]", children }) {
+  const host = useContext(SheetHostContext);   // the chat column on desktop, else the window
   const panel = useRef(null);
   const bar = useRef(null);
   const drag = useRef(null);
@@ -104,6 +106,6 @@ export default function GlassBottomSheet({ onClose, testid, className = "max-h-[
         {children}
       </div>
     </div>,
-    document.body,
+    host || document.body,
   );
 }

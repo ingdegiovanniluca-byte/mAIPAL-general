@@ -12,6 +12,7 @@ import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/Li
 import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { useAuth } from "@/auth/AuthContext";
+import { MOBILE_BREAKPOINT } from "@/hooks/use-is-mobile";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -1071,7 +1072,7 @@ function CommessaChat({ commessa, onClose, onSaved }) {
         </button>
         <div className="relative flex-1 min-w-0 min-h-[128px] flex flex-col pl-5 pr-3 pt-3 pb-3">
           <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} rows={1} data-testid="commessa-chat-text"
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia("(min-width: 768px)").matches) { e.preventDefault(); send(); } }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia(`(min-width: ${MOBILE_BREAKPOINT}px)`).matches) { e.preventDefault(); send(); } }}
             placeholder={mode === "ask" ? `Chiedi su «${commessa.title}»: ore, materiali, cosa manca…` : "Cosa avete fatto? Ore, materiali, problemi…"}
             className="w-full bg-transparent border-0 outline-none resize-none text-[15px] leading-relaxed py-1 text-white placeholder:text-white/70 no-scrollbar" />
           {photos.length > 0 && (
@@ -1169,7 +1170,8 @@ export default function JobDiaryPage() {
   useEffect(() => { loadList(); }, []);
   useEffect(() => { loadDetail(selectedId); }, [selectedId, period]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setSection("diario"); setMenu(null); setPeriod({ key: "30" }); }, [selectedId]);
-  useEffect(() => { window.scrollTo({ top: 0 }); }, [level, selectedId]);
+  // back on top: the page, or (desktop split) the right column, which scrolls by itself
+  useEffect(() => { (document.querySelector('[data-testid="split-right"]') || window).scrollTo({ top: 0 }); }, [level, selectedId]);
   useEffect(() => { if (level === "clients") setChatOpen(false); }, [level]);
 
   // one card per client, its commesse in state order (in corso first, chiuse last)
@@ -1319,7 +1321,7 @@ export default function JobDiaryPage() {
   };
 
   const diaryView = !c ? loading : (
-    <div className="relative max-w-xl" data-testid="commessa-detail">
+    <div className="relative max-w-3xl mx-auto" data-testid="commessa-detail">
       {/* only the commessa's name; the arrow goes back to its card */}
       <div className="flex items-center gap-2.5">
         <button onClick={() => setLevel("clients")} data-testid="job-back" aria-label="Torna ai clienti"

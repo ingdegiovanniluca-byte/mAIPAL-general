@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
@@ -90,12 +91,7 @@ export default function DocumentsPage() {
   // filters: one row that scrolls sideways on mobile
   const catRowRef = useRef(null);
   const [catEdges, setCatEdges] = useState({ start: true, end: true });
-  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+  const isMobile = useIsMobile();
   const onCatRowScroll = () => {
     const el = catRowRef.current;
     if (!el) return;

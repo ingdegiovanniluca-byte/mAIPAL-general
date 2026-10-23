@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import PageBackground from "@/components/PageBackground";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, ChevronsLeft,
 } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import { toast } from "sonner";
@@ -17,6 +17,8 @@ import LiquidDock from "@/components/LiquidDock";
 import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import HelpSheet from "@/components/HelpSheet";
+import ChatPage from "@/pages/ChatPage";
+import { ChatPaneContext, SheetHostContext } from "@/lib/chatPane";
 
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
@@ -36,6 +38,51 @@ const NAV_ITEMS = [
 const CHAT_PATH = "/dashboard/chat";
 const MAX_PINNED = 3;
 
+// Desktop split (from MOBILE_BREAKPOINT up): the chat column's width (px, dragged on its edge)
+// and whether it is hidden - kept on this device; the section shown on the right when the
+// route is the chat's (the last one opened there, the first time Task).
+const SPLIT_KEYS = { width: "maipal.split.chatWidth", hidden: "maipal.split.chatHidden", right: "maipal.split.right" };
+const CHAT_MIN_W = 360;
+const readLocal = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } };
+const writeLocal = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window: not kept */ } };
+
+/* The left column of the split: the chat (its mobile layout), with its sheets opening inside
+   it. The transform makes it the containing block of the chat's fixed elements (the round
+   history button, the sheets' shade), so they stay in the column. */
+function ChatColumn({ width, intent, onResize, onHide }) {
+  const [host, setHost] = useState(null);
+  const drag = useRef(null);
+  const onDown = (e) => {
+    drag.current = { x: e.clientX, w: width };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onMove = (e) => { if (drag.current) onResize(drag.current.w + e.clientX - drag.current.x, false); };
+  const onUp = () => { if (drag.current) { drag.current = null; onResize(null, true); } };
+  return (
+    <div className="relative shrink-0 h-full border-r border-white/15 bg-white/[0.05] backdrop-blur-xl" style={{ width, transform: "translateZ(0)" }}
+      data-testid="split-chat">
+      <div className="h-full overflow-y-auto overflow-x-hidden px-4 pt-12 pb-4" data-testid="split-chat-scroll">
+        <SheetHostContext.Provider value={host}>
+          <ChatPaneContext.Provider value={{ intent }}>
+            <ChatPage />
+          </ChatPaneContext.Provider>
+        </SheetHostContext.Provider>
+      </div>
+      <div ref={setHost} />
+      <button type="button" onClick={onHide} title="Nascondi la chat" aria-label="Nascondi la chat" data-testid="split-chat-hide"
+        className="absolute z-30 top-2.5 right-3 h-8 w-8 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center">
+        <ChevronsLeft size={16} />
+      </button>
+      {/* the edge: drag to make the chat wider or narrower */}
+      <div role="separator" aria-orientation="vertical" aria-label="Allarga o stringi la chat" data-testid="split-handle"
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
+        className="absolute z-30 top-0 bottom-0 -right-[5px] w-[10px] cursor-col-resize group touch-none">
+        <span className="absolute top-1/2 -translate-y-1/2 left-[2px] h-14 w-[6px] rounded-full bg-white/30 group-hover:bg-white/55 transition-colors" />
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
@@ -54,6 +101,50 @@ export default function DashboardLayout() {
   const isMobile = useIsMobile();      // the menu itself, portaled out of the header
   const avatarRef = useRef(null);
   const avatarRefMobile = useRef(null);
+  // ---- the desktop split: the chat on the left, the section on the right
+  const split = !isMobile;
+  const [chatWidth, setChatWidth] = useState(() => readLocal(SPLIT_KEYS.width, null));
+  const [chatHidden, setChatHidden] = useState(() => !!readLocal(SPLIT_KEYS.hidden, false));
+  const [chatIntent, setChatIntent] = useState(null);
+  const [winW, setWinW] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1440));
+  const headerRef = useRef(null);
+  useEffect(() => {
+    const onResize = () => setWinW(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // the chat: from 360 px to half the window, always leaving the section at least 620 px
+  const clampW = useCallback((w) => Math.round(Math.max(CHAT_MIN_W, Math.min(winW * 0.5, winW - 620, w))), [winW]);
+  const chatW = clampW(chatWidth ?? winW / 3);
+  const resizeChat = (w, done) => {
+    if (w !== null) setChatWidth(clampW(w));
+    if (done) setChatWidth((x) => { writeLocal(SPLIT_KEYS.width, x); return x; });
+  };
+  const hideChat = (v) => { setChatHidden(v); writeLocal(SPLIT_KEYS.hidden, v); };
+  // the header's height, for the chat's full-height conversation (CSS var --split-top)
+  useEffect(() => {
+    if (!split || !headerRef.current) return undefined;
+    const el = headerRef.current;
+    const set = () => document.documentElement.style.setProperty("--split-top", `${el.offsetHeight}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [split]);
+  // the route is the chat's: in the split the chat is the left column - what was asked of it
+  // goes there (the header's Chat: its history), the right keeps (or gets) a section
+  useEffect(() => {
+    if (!split) return;
+    if (location.pathname !== CHAT_PATH) {
+      if (visibleItems.some((i) => location.pathname.startsWith(i.to))) writeLocal(SPLIT_KEYS.right, location.pathname + (location.search || ""));
+      return;
+    }
+    const st = location.state;
+    if (st && Object.keys(st).length) { setChatIntent({ ...st, nonce: st.nonce || Date.now() }); hideChat(false); }
+    const back = readLocal(SPLIT_KEYS.right, null);
+    nav(back && !String(back).startsWith(CHAT_PATH) ? back : "/dashboard/tasks", { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [split, location.key]);
 
   useEffect(() => {
     const onClickOutside = (e) => {
@@ -110,15 +201,15 @@ export default function DashboardLayout() {
   const openHelpChat = () => { setMenuOpen(false); nav(CHAT_PATH, { state: { action: "help", nonce: Date.now() } }); };
 
   return (
-    <div className="min-h-screen relative">
+    <div className={split ? "h-screen overflow-hidden relative" : "min-h-screen relative"}>
       <PageBackground />
 
-      <div className="relative z-10">
-        {/* ===== Desktop / tablet header (>=768px) — unchanged content, now fixed in place
+      <div className={split ? "relative z-10 h-full flex flex-col" : "relative z-10"}>
+        {/* ===== Desktop header (>=1100px, above the split) — unchanged content, now fixed in place
             (see spec 3.1: the menu stays visible everywhere, not just on mobile). A subtle
             backdrop is required for that (a sticky header with no backing would let content
             show through as the page scrolls under it); nothing else about it changes. ===== */}
-        <header className="hidden md:block sticky top-0 z-40 px-8 md:px-14 pt-8 pb-8 bg-white/5 backdrop-blur-xl">
+        <header ref={headerRef} className="hidden md:block sticky top-0 z-40 shrink-0 px-8 md:px-14 pt-8 pb-8 bg-white/5 backdrop-blur-xl">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="h-12 w-12 rounded-full bg-white/10 flex items-center justify-center shrink-0 overflow-hidden">
               <div
@@ -133,7 +224,11 @@ export default function DashboardLayout() {
               {visibleItems.map((item, i) => (
                 <React.Fragment key={item.to}>
                   {i > 0 && <span className="text-white/25 text-xs select-none">•</span>}
-                  <TabLink to={item.to} label={item.label} testid={item.testid} />
+                  {split && item.to === CHAT_PATH ? (
+                    // the split: the chat is the left column - its history opens there
+                    <button type="button" data-testid={item.testid} onClick={() => { hideChat(false); setChatIntent({ history: true, toggle: true, nonce: Date.now() }); }}
+                      className="text-sm transition-colors duration-150 text-white/55 hover:text-white/80">{item.label}</button>
+                  ) : <TabLink to={item.to} label={item.label} testid={item.testid} />}
                   {currentItem?.to === item.to && <HelpDot label={item.label} onClick={() => setHelpOpen(true)} testid="section-help-btn" />}
                 </React.Fragment>
               ))}
@@ -175,7 +270,7 @@ export default function DashboardLayout() {
           </div>
         </header>
 
-        {/* ===== Mobile top bar (<768px): logo · section name · avatar, fixed, thin ===== */}
+        {/* ===== Mobile top bar (<1100px): logo · section name · avatar, fixed, thin ===== */}
         <header
           className="md:hidden sticky top-0 z-40 flex items-center justify-between gap-3 px-4 bg-white/5 backdrop-blur-xl"
           // Installed app on iPhone: the page runs under the status bar, so the bar grows by
@@ -229,16 +324,39 @@ export default function DashboardLayout() {
         {/* Mobile bottom padding clears the floating menu below, so the last element of a
             page can always be scrolled fully into view above it (content still passes
             under the glass while scrolling). */}
-        <main className="px-4 md:px-14 pt-4 md:pt-6 pb-[calc(env(safe-area-inset-bottom,0px)+5.5rem)] md:pb-8 w-full">
-          <MobileTitleContext.Provider value={setTitleSuffix}>
-            <Outlet />
-          </MobileTitleContext.Provider>
-        </main>
+        {split ? (
+          <div className="flex-1 min-h-0 flex" data-testid="split">
+            {!chatHidden && <ChatColumn width={chatW} intent={chatIntent} onResize={resizeChat} onHide={() => hideChat(true)} />}
+            {/* the section: centred in its space, scrolling by itself; its fixed elements (the
+                commessa's chat...) stay on this side */}
+            <div className="relative flex-1 min-w-0 h-full" style={{ transform: "translateZ(0)" }}>
+              <div className="h-full overflow-y-auto" data-testid="split-right">
+                <main className="mx-auto w-full max-w-[1180px] px-10 pt-6 pb-10">
+                  <MobileTitleContext.Provider value={setTitleSuffix}>
+                    {location.pathname === CHAT_PATH ? null : <Outlet />}
+                  </MobileTitleContext.Provider>
+                </main>
+              </div>
+              {chatHidden && (
+                <button type="button" onClick={() => hideChat(false)} title="Mostra la chat" aria-label="Mostra la chat" data-testid="split-chat-show"
+                  className="absolute z-30 left-3 top-3 h-9 pl-2.5 pr-3 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-medium inline-flex items-center gap-1.5">
+                  <MessageSquare size={14} /> Chat
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <main className="px-4 md:px-14 pt-4 md:pt-6 pb-[calc(env(safe-area-inset-bottom,0px)+5.5rem)] md:pb-8 w-full">
+            <MobileTitleContext.Provider value={setTitleSuffix}>
+              <Outlet />
+            </MobileTitleContext.Provider>
+          </main>
+        )}
 
         {!installApp.standalone && !keyboardOpen && <InstallBanner onInstall={installApp.install} />}
         {installApp.dialog}
 
-        {/* ===== Mobile bottom navigation (<768px): a floating liquid-glass pill with the four
+        {/* ===== Mobile bottom navigation (<1100px): a floating liquid-glass pill with the four
             sections and, joined to it by a liquid neck like two merging drops, the round "+"
             for everything else (News, Liste, Documenti, Impostazioni...). See LiquidDock. ===== */}
         {!keyboardOpen && (

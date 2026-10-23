@@ -9,16 +9,20 @@ export default function FloatingGlassButton({ icon: Icon, label, onClick, testid
   const [scrolling, setScrolling] = useState(false);
   const [typing, setTyping] = useState(false);
   const scrollingRef = useRef(false);
+  const btnRef = useRef(null);
 
   useEffect(() => {
     let timer = null;
-    const onScroll = () => {
+    // the page scrolling, or (desktop split) the column it is in - not the other column
+    const onScroll = (e) => {
+      const t = e.target;
+      if (t && t !== document && t.nodeType === 1 && !t.contains(btnRef.current)) return;
       if (!scrollingRef.current) { scrollingRef.current = true; setScrolling(true); }
       clearTimeout(timer);
       timer = setTimeout(() => { scrollingRef.current = false; setScrolling(false); }, 450);
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => { window.removeEventListener("scroll", onScroll); clearTimeout(timer); };
+    document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    return () => { document.removeEventListener("scroll", onScroll, { capture: true }); clearTimeout(timer); };
   }, []);
 
   useEffect(() => {
@@ -34,7 +38,7 @@ export default function FloatingGlassButton({ icon: Icon, label, onClick, testid
 
   const away = hidden || scrolling || typing;
   return (
-    <button type="button" onClick={onClick} data-testid={testid} data-hidden={away ? "1" : "0"} aria-pressed={active}
+    <button ref={btnRef} type="button" onClick={onClick} data-testid={testid} data-hidden={away ? "1" : "0"} aria-pressed={active}
       title={label} aria-label={label} tabIndex={away ? -1 : 0}
       className="fixed z-40 right-3.5 md:right-8 h-[52px] w-[52px] rounded-full flex items-center justify-center text-white active:scale-95"
       style={{

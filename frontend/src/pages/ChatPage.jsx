@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useChatPane } from "@/lib/chatPane";
 import { takeSharedPayload } from "@/lib/pwa";
 import SuggestionsTicker from "@/components/SuggestionsTicker";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
@@ -250,13 +251,18 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
 });
 
 export default function ChatPage() {
-  const isMobile = useIsMobile();
+  // desktop split: the chat in the left column, always in its mobile layout
+  const pane = useChatPane();
+  const isMobile = useIsMobile() || !!pane;
   const { user: authUser } = useAuth();
   const vertical = authUser?.business_vertical || null;
   const ACTIONS = useMemo(() => actionsFor(vertical), [vertical]);
   const navigate = useNavigate();
   const activeRef = useRef(null);
-  const location = useLocation();
+  const routeLocation = useLocation();
+  // in the column the route belongs to the section on the right: what is asked of the chat
+  // ("Chiedi a Help", "Nuova azione", a task's conversation) comes as the pane's intent
+  const location = pane ? { pathname: routeLocation.pathname, search: "", state: pane.intent || null } : routeLocation;
   // The Azioni section's "Nuova azione" opens the chat with that action already selected.
   // ...and the installed app's shortcuts (long-press on the icon) open it via ?action=
   const [active, setActive] = useState(() => {
@@ -511,9 +517,20 @@ export default function ChatPage() {
     const cid = location.state?.openConv;
     if (!cid) return;
     openThread(cid).catch(() => toast.error("Conversazione non più disponibile"));
-    navigate(location.pathname, { replace: true, state: null });
+    setMobileView("chat");
+    if (!pane) navigate(location.pathname, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [location.state?.openConv, location.state?.nonce]);
+  // the column: an agent asked by another page ("Nuova azione"), or the history (the header's Chat)
+  useEffect(() => {
+    if (!pane) return;
+    const st = location.state || {};
+    if (st.history) { setMobileView((v) => (v === "history" && st.toggle ? "chat" : "history")); return; }
+    if (st.action && st.action !== "help" && ACTIONS.some((a) => a.id === st.action)) {
+      setActive(st.action); setThread(null); setMobileReplyTo(null); setMobileView("chat");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state?.nonce]);
 
   const resumeMobileConversation = (conv) => {
     setMobileReplyTo({ conv_id: conv.conv_id, action: conv.action, label: formatReplyLabel(conv) });
@@ -1994,9 +2011,9 @@ export default function ChatPage() {
 
   return (
     <div className="relative w-full">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 w-full lg:h-[calc(100vh-15rem)]">
+      <div className={pane ? "grid grid-cols-1 gap-4 w-full" : "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 w-full lg:h-[calc(100vh-15rem)]"}>
         {/* LEFT 1/3 — action icons + input area */}
-        <aside className={`lg:col-span-1 flex flex-col lg:overflow-y-auto pr-1 ${focusMode || (isMobile && mobileView === "history") ? "hidden" : ""}`}>
+        <aside className={`${pane ? "" : "lg:col-span-1 lg:overflow-y-auto"} flex flex-col pr-1 ${focusMode || (isMobile && mobileView === "history") ? "hidden" : ""}`}>
           {isMobile ? mobileChat : (
           <>
           {/* Top block mirrors the right-side filter bar (same padding/height) so the input aligns with the first history card */}
@@ -2193,8 +2210,9 @@ export default function ChatPage() {
         {/* RIGHT 2/3 — scrolls. On mobile (spec v2 §3) this area is either the conversation
             on screen (chat view - nothing at all before the first message is sent) or the
             history of old conversations (history view), never both. */}
-        <section className={`${focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full ${isMobile ? "" : "overflow-hidden"} ${mobileChatView && !thread ? "hidden" : ""}`}
-          style={isMobile && thread && !mobileHistoryView ? { minHeight: "calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px) - 7rem - env(safe-area-inset-bottom, 0px))" } : undefined}>
+        <section className={`${pane ? "" : focusMode ? "lg:col-span-3" : "lg:col-span-2"} flex flex-col h-full ${isMobile ? "" : "overflow-hidden"} ${mobileChatView && !thread ? "hidden" : ""}`}
+          style={isMobile && thread && !mobileHistoryView ? { minHeight: pane ? "calc(100vh - var(--split-top, 0px) - 2rem)"
+            : "calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px) - 7rem - env(safe-area-inset-bottom, 0px))" } : undefined}>
           {/* Filters (hidden in focus mode when a thread is open; on mobile only in the history view) */}
           {(isMobile ? mobileHistoryView : !(focusMode && thread)) && (
             <div className="flex items-center gap-1.5 md:gap-2 flex-nowrap overflow-x-auto no-scrollbar p-3 md:p-3.5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm shrink-0">
@@ -2242,7 +2260,7 @@ export default function ChatPage() {
             <div className={isMobile ? "flex-1 flex flex-col" : "p-5 rounded-2xl bg-white/5  backdrop-blur-xl shadow-sm flex-1 flex flex-col mt-4 overflow-hidden"} data-testid="thread-card">
               {isMobile ? (
                 // only the way back to the chat's home, where a new conversation starts
-                <div className="sticky z-20 -mt-1 mb-3 pt-1" style={{ top: "calc(env(safe-area-inset-top, 0px) + 3.75rem)" }}>
+                <div className="sticky z-20 -mt-1 mb-3 pt-1" style={{ top: pane ? "0.25rem" : "calc(env(safe-area-inset-top, 0px) + 3.75rem)" }}>
                   <button data-testid="close-thread-btn" onClick={startNewMobileConversation} title="Indietro" aria-label="Indietro"
                     className="lg-glass h-9 w-9 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
                     <ArrowLeft size={18} />
@@ -2492,7 +2510,7 @@ export default function ChatPage() {
               </div>
               {/* mobile: the composer to carry on, kept at the bottom just above the menu */}
               {isMobile && (
-                <div className="sticky z-20 pt-4 mt-auto" style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 100px)" }} data-testid="thread-composer">
+                <div className="sticky z-20 pt-4 mt-auto" style={{ bottom: pane ? "12px" : "calc(env(safe-area-inset-bottom, 0px) + 100px)" }} data-testid="thread-composer">
                   {mobileComposer}
                 </div>
               )}
