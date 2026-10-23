@@ -5,6 +5,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import TodoFolders from "@/components/TodoFolders";
 
 const COLS = [
   { key: "da_fare", label: "Da fare", dot: "bg-neutral-400" },
@@ -15,6 +17,7 @@ const COLS = [
 export default function TodoBoardPage() {
   const [todos, setTodos] = useState([]);
   const [selected, setSelected] = useState(null);
+  const isMobile = useIsMobile();
 
   const load = async () => {
     const r = await api.get("/todos");
@@ -51,6 +54,17 @@ export default function TodoBoardPage() {
       duration: 6000,
     });
   };
+
+  // the phone: the three states as folders (TodoFolders); the desktop keeps the three columns
+  if (isMobile) {
+    return (
+      <>
+        <TodoFolders todos={todos} setTodos={setTodos} sortTodos={sortTodos} reload={load}
+          onOpenTodo={setSelected} onToggleFav={toggleFav} onDelete={del} />
+        {selected && <TodoDialog todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
+      </>
+    );
+  }
 
   return (
     <div>

@@ -125,7 +125,11 @@ La sezione Task mostra i tuoi impegni con una data.
 I to-do sono le cose da fare senza una data precisa.
 - Tre stati: **Da fare**, **In corso** (con la barra di avanzamento), **Fatti**.
 - Aprendo un to-do puoi aggiornarlo scrivendo ("a metà, manca solo la stampa"), cambiare stato, avanzamento e tag, aggiungere note, segnarlo come preferito o eliminarlo.
-- Li crei dalla chat con l'agente Task (se non c'è una data diventa un to-do).
+- **Sul telefono** i tre stati sono tre **cartelle**, una sotto l'altra, con il numero dei to-do e il **+**. Dalla cartella spuntano i primi to-do: passandoci sopra il dito la cartella si apre in avanti e i to-do escono a ventaglio (quello sotto il dito sale di più).
+- Tocca una cartella per l'**elenco** di tutti i suoi to-do: la stella li mette tra i preferiti (in cima), le frecce li **spostano** in un'altra cartella, il cerchio li segna come fatti (o li riapre), il cestino li elimina; toccando il titolo li apri. Con la freccia in alto (o il tasto indietro) torni alle cartelle.
+- Il **+** su una cartella crea un to-do già in quello stato: scrivi cosa c'è da fare, le note e la priorità.
+- Sul computer i tre stati restano tre colonne affiancate.
+- Li crei anche dalla chat con l'agente Task (se non c'è una data diventa un to-do).
 
 ## Diario
 <!-- id: diario · path: /dashboard/journal · verticale: !artigiano -->

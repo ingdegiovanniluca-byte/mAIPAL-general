@@ -3049,6 +3049,7 @@ async def create_todo(payload: TodoUpsert, current: User = Depends(get_current_u
 async def update_todo(todo_id: str, payload: dict, current: User = Depends(get_current_user)):
     payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None)
     _clear_cached_embedding(payload, {"title", "description", "notes"})
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()   # the To-Do folders say when they last changed
     await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": payload})
     doc = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
     return doc

@@ -613,6 +613,85 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 @media (prefers-reduced-motion: reduce) { .lg-bubble { transition: none; } }
 
+/* To-Do on the phone (TodoFolders): the three states as folders made of the app's glass - no
+   border, a soft wine shadow. --k is the folder's size (px per unit of its 318 x 255 shape).
+   The to dos inside peek out as small smoky cards; .fan (a finger on them) tilts the front
+   forward into the dark glass of the panels and fans the cards out, .hot rising most. */
+.todo-folder { position: relative; width: calc(318px * var(--k)); height: calc(255px * var(--k)); cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+.todo-folder > * { transition: transform .45s cubic-bezier(.2, .8, .2, 1), background .35s, opacity .3s; }
+.todo-folder .tf-shade { position: absolute; inset: 0; filter: blur(14px); transform: translateY(12px) scale(.94); transform-origin: 50% 100%; }
+.todo-folder .tf-shade i { position: absolute; inset: 0; clip-path: url(#todo-cp-back); background: rgba(60, 10, 40, .2); }
+.todo-folder .tf-back {
+    position: absolute; inset: 0; clip-path: url(#todo-cp-back); transform-origin: 50% 100%;
+    background: linear-gradient(160deg, rgba(255, 255, 255, .2) 0%, rgba(255, 255, 255, .1) 100%);
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+}
+.todo-folder .tf-back::after { content: ""; position: absolute; inset: 0; background: var(--tone); }
+.todo-folder .tf-sheet {
+    position: absolute; left: 0; top: 0; z-index: 1; overflow: hidden; color: #fff;
+    width: calc(232px * var(--k)); height: calc(180px * var(--k)); border-radius: calc(22px * var(--k));
+    padding: calc(14px * var(--k)) calc(16px * var(--k));
+    background: linear-gradient(170deg, rgba(80, 20, 55, .32), rgba(80, 20, 55, .18));
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 -4px 14px rgba(60, 10, 40, .16); transform-origin: 50% 100%;
+    transform: translate(calc(var(--x) * var(--k)), calc(var(--y) * var(--k))) rotate(var(--r)) scale(var(--s));
+}
+.todo-folder .tf-st { font-weight: 600; font-size: calc(15px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.todo-folder .tf-sm { display: flex; align-items: center; gap: calc(6px * var(--k)); font-size: calc(11.5px * var(--k)); color: rgba(255, 255, 255, .75); margin-top: calc(4px * var(--k)); white-space: nowrap; }
+.todo-folder .tf-sm i { width: calc(8px * var(--k)); height: calc(8px * var(--k)); border-radius: 50%; flex: none; }
+.todo-folder .tf-sheet.s0 { --x: 22px; --y: 46px; --r: 0deg; --s: 1; }
+.todo-folder .tf-sheet.s1 { --x: 48px; --y: 56px; --r: 0deg; --s: 1; }
+.todo-folder .tf-sheet.s2 { --x: 74px; --y: 66px; --r: 0deg; --s: 1; }
+.todo-folder .tf-front {
+    position: absolute; inset: 0; z-index: 3; clip-path: url(#todo-cp-front); transform-origin: 50% 100%;
+    background: linear-gradient(160deg, rgba(255, 255, 255, .16) 0%, rgba(255, 255, 255, .07) 100%);
+    backdrop-filter: blur(26px) saturate(105%); -webkit-backdrop-filter: blur(26px) saturate(105%);
+}
+.todo-folder .tf-lbl { position: absolute; z-index: 4; color: #fff; pointer-events: none; }
+.todo-folder .tf-n { font-weight: 700; letter-spacing: -.01em; font-size: calc(24px * var(--k)); line-height: 1.1; }
+.todo-folder .tf-c { display: flex; align-items: center; gap: 5px; color: rgba(255, 255, 255, .75); font-size: max(11px, calc(14px * var(--k))); margin-top: calc(5px * var(--k)); }
+.todo-folder .tf-c svg { width: max(11px, calc(15px * var(--k))); height: max(11px, calc(15px * var(--k))); }
+.todo-folder .tf-idle { left: calc(28px * var(--k)); bottom: calc(26px * var(--k)); }
+.todo-folder .tf-open { right: calc(26px * var(--k)); top: calc(124px * var(--k)); opacity: 0; text-align: right; }
+.todo-folder .tf-open .tf-c { justify-content: flex-end; }
+.todo-folder .tf-add {
+    position: absolute; z-index: 4; right: calc(22px * var(--k)); bottom: calc(24px * var(--k));
+    width: max(38px, calc(58px * var(--k))); height: max(38px, calc(58px * var(--k))); border-radius: 50%;
+    display: grid; place-items: center; color: #fff; background: rgba(255, 255, 255, .2);
+    backdrop-filter: blur(18px) saturate(120%); -webkit-backdrop-filter: blur(18px) saturate(120%);
+    box-shadow: 0 8px 22px rgba(60, 10, 40, .16);
+}
+.todo-folder .tf-add svg { width: 44%; height: 44%; }
+.todo-folder .tf-add:active { transform: scale(.94); }
+.todo-folder .tf-hit { position: absolute; left: 0; right: 0; top: calc(-40px * var(--k)); height: calc(140px * var(--k)); z-index: 5; touch-action: none; }
+.todo-folder.fan { z-index: 6; }
+.todo-folder.fan .tf-front {
+    transform: perspective(520px) rotateX(-17deg);
+    background: linear-gradient(160deg, rgba(255, 255, 255, .09) 0%, rgba(255, 255, 255, .02) 50%, rgba(255, 255, 255, .05) 100%), rgba(26, 6, 22, .5);
+    backdrop-filter: blur(36px) saturate(150%) brightness(.72); -webkit-backdrop-filter: blur(36px) saturate(150%) brightness(.72);
+}
+.todo-folder.fan .tf-back, .todo-folder.fan .tf-shade { transform: perspective(520px) rotateX(8deg); }
+.todo-folder.fan .tf-idle, .todo-folder.fan .tf-add { opacity: 0; }
+.todo-folder.fan .tf-open { opacity: 1; }
+.todo-folder.fan .tf-sheet { background: linear-gradient(170deg, rgba(80, 20, 55, .42), rgba(80, 20, 55, .28)); }
+.todo-folder.fan .tf-sheet.s0 { --x: 4px; --y: -74px; --r: -5deg; }
+.todo-folder.fan .tf-sheet.s1 { --x: 40px; --y: -54px; --r: -1deg; }
+.todo-folder.fan .tf-sheet.s2 { --x: 80px; --y: -32px; --r: 4deg; }
+.todo-folder.fan .tf-sheet.hot { --s: 1.04; z-index: 2; background: linear-gradient(170deg, rgba(255, 255, 255, .3), rgba(255, 255, 255, .16)); }
+.todo-folder.fan .tf-sheet.s0.hot { --y: -98px; }
+.todo-folder.fan .tf-sheet.s1.hot { --y: -80px; }
+.todo-folder.fan .tf-sheet.s2.hot { --y: -58px; }
+@media (prefers-reduced-motion: reduce) { .todo-folder > * { transition: none; } }
+/* light theme: grey glass on the white page, dark text */
+[data-theme="light"] .todo-folder .tf-back { background: rgba(33, 29, 40, .07); }
+[data-theme="light"] .todo-folder .tf-front { background: rgba(255, 255, 255, .78); box-shadow: inset 0 0 0 1px rgba(33, 29, 40, .06); }
+[data-theme="light"] .todo-folder .tf-sheet { background: #fff; color: #211D28; box-shadow: 0 0 0 1px rgba(33, 29, 40, .08), 0 -3px 12px rgba(33, 29, 40, .14); }
+[data-theme="light"] .todo-folder .tf-sm, [data-theme="light"] .todo-folder .tf-c { color: rgba(33, 29, 40, .6); }
+[data-theme="light"] .todo-folder .tf-lbl { color: #211D28; }
+[data-theme="light"] .todo-folder.fan .tf-lbl { color: #fff; }
+[data-theme="light"] .todo-folder.fan .tf-lbl .tf-c { color: rgba(255, 255, 255, .7); }
+[data-theme="light"] .todo-folder .tf-add { background: rgba(33, 29, 40, .08); color: #211D28; }
+
 /* a time field with its own clock on the left: the browser's picker icon stays, invisible, over
    the whole field so a tap anywhere opens it */
 .time-field::-webkit-calendar-picker-indicator {
