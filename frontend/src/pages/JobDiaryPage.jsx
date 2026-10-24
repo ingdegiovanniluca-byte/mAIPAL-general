@@ -1385,8 +1385,11 @@ export default function JobDiaryPage() {
         <InfoCard icon={Contact} label="Contatti" value={String((detail.contacts || []).length)} testid="glance-contatti"
           ariaLabel="Contatti utili della commessa" onClick={() => setContactsOpen(true)}
           note={(detail.contacts || []).slice(0, 2).map((x) => x.role || x.name).join(", ")} />
-        <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} testid="info-cantiere"
-          onClick={() => setSiteOpen(true)} ariaLabel="Il cantiere: indirizzo e posizione per le presenze" />
+        {/* the site is on the map below; only without a position (no map) it is here, to set it */}
+        {detail.geo?.lat == null && (
+          <InfoCard icon={MapPin} label="Cantiere" value={c.address || "non indicato"} testid="info-cantiere"
+            onClick={() => setSiteOpen(true)} ariaLabel="Il cantiere: indirizzo e posizione per le presenze" />
+        )}
         <InfoCard icon={CalendarDays} label="Date" testid="info-date"
           value={c.data_inizio ? `${shortDay(c.data_inizio)} → ${c.data_fine ? shortDay(c.data_fine) : "in corso"}` : "non indicate"} />
         {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
@@ -1398,7 +1401,7 @@ export default function JobDiaryPage() {
       </div>
 
       {/* the site on the map, across the page; its bar hides it or opens it more */}
-      <SiteMapBand geo={detail.geo} onSite={detail.on_site || []} address={c.address} className="mt-4 -mx-4 md:-mx-8" />
+      <SiteMapBand geo={detail.geo} onSite={detail.on_site || []} address={c.address} onEditSite={() => setSiteOpen(true)} className="mt-4 -mx-4 md:-mx-8" />
 
       {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
           tone, brighter than the two at its sides); swipe or tap a side one to change */}
