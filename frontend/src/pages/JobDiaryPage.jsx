@@ -482,8 +482,12 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
 }
 
 // ===== Costi: what the commessa has cost so far against its quote =====
-const eur = (x) => (x === null || x === undefined ? "—"
-  : new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", minimumFractionDigits: x % 1 ? 2 : 0, maximumFractionDigits: 2 }).format(x));
+// 2849.5 -> "2.849,50": the thousands' dot always (Italian formatting leaves it out on four digits)
+const groupIt = (x) => {
+  const [i, d] = Math.abs(x).toFixed(x % 1 ? 2 : 0).split(".");
+  return `${x < 0 ? "-" : ""}${i.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}${d ? `,${d}` : ""}`;
+};
+const eur = (x) => (x === null || x === undefined ? "—" : `${groupIt(x)}\u00a0€`);
 const parseMoney = (v) => {
   const t = String(v ?? "").replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
   if (t === "") return null;
@@ -491,9 +495,10 @@ const parseMoney = (v) => {
   return Number.isFinite(n) && n >= 0 ? n : NaN;
 };
 
-// A small amount field: saved when it loses focus (or Enter), only if it changed.
-function MoneyInput({ value, onSave, placeholder, testid, wide = false }) {
-  const shown = value === null || value === undefined ? "" : String(value).replace(".", ",");
+// A small amount field: saved when it loses focus (or Enter), only if it changed. The number is
+// shown with the thousands' dot; its unit (€, €/h, €/m...) stays beside the field, always.
+function MoneyInput({ value, onSave, placeholder, testid, unit = "€", wide = false }) {
+  const shown = value === null || value === undefined ? "" : groupIt(value);
   const [v, setV] = useState(shown);
   useEffect(() => { setV(shown); }, [shown]);
   const commit = () => {
@@ -502,13 +507,26 @@ function MoneyInput({ value, onSave, placeholder, testid, wide = false }) {
     if ((n ?? null) !== (value ?? null)) onSave(n);
   };
   return (
-    <input value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-      inputMode="decimal" placeholder={placeholder} data-testid={testid}
-      className={`h-8 ${wide ? "w-28" : "w-[72px]"} rounded-lg bg-white/10 px-2 text-right text-[13px] text-white placeholder:text-white/35 outline-none`} />
+    <span className="shrink-0 inline-flex items-center gap-1.5">
+      <input value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+        inputMode="decimal" placeholder={placeholder} data-testid={testid}
+        className={`h-8 ${wide ? "w-28" : "w-[72px]"} rounded-lg bg-white/10 px-2 text-right text-[13px] text-white placeholder:text-white/35 outline-none`} />
+      <span className="w-9 text-[12px] text-white/60 whitespace-nowrap" data-testid={testid ? `${testid}-unit` : undefined}>{unit}</span>
+    </span>
   );
 }
 
+// Costi: open / closed lists of manodopera and materiali, kept on this device
+const COSTS_OPEN_KEY = "maipal.costs.open";
+const readOpen = () => { try { return { labor: true, materials: true, ...JSON.parse(localStorage.getItem(COSTS_OPEN_KEY) || "{}") }; } catch { return { labor: true, materials: true }; } };
+
 function CostsView({ commessaId, onChanged }) {
+  const [open, setOpen] = useState(readOpen);
+  const toggle = (k) => setOpen((o) => {
+    const n = { ...o, [k]: !o[k] };
+    try { localStorage.setItem(COSTS_OPEN_KEY, JSON.stringify(n)); } catch { /* private mode */ }
+    return n;
+  });
   const [e, setE] = useState(null);
   const [label, setLabel] = useState("");
   const [amount, setAmount] = useState("");
@@ -529,21 +547,31 @@ function CostsView({ commessaId, onChanged }) {
   const pct = e.used_pct;
   const barColor = pct >= 100 ? "#E8663F" : pct >= 80 ? "#E8A03F" : "rgba(255,255,255,0.75)";
   const head = "text-[11px] font-medium tracking-[0.18em] uppercase text-white/60 pt-5 pb-1.5";
+  // a list's header with the arrow that closes / opens it
+  const fold = (k, title, total, n, testid) => (
+    <button type="button" onClick={() => toggle(k)} aria-expanded={open[k]} data-testid={testid}
+      className={`${head} w-full flex items-center gap-2 text-left`}>
+      <span className="flex-1">{title} · {eur(total)}{!open[k] && n ? <span className="normal-case tracking-normal text-white/45"> · {n} voc{n === 1 ? "e" : "i"}</span> : null}</span>
+      <ChevronDown size={15} className={`text-white/60 transition-transform duration-200 ${open[k] ? "rotate-180" : ""}`} />
+    </button>
+  );
   const row = "flex items-center gap-3 py-2.5 border-t border-white/[0.16]";
   return (
     <div className="mt-2" data-testid="costs-view">
       {/* the quote, the costs, the margin */}
       <div className={row}>
         <span className="flex-1 text-[14px] text-white/90">Preventivo</span>
-        <MoneyInput value={e.budget} onSave={setBudget} placeholder="€" testid="costs-budget" wide />
+        <MoneyInput value={e.budget} onSave={setBudget} placeholder="0" testid="costs-budget" wide />
       </div>
       <div className={row}>
         <span className="flex-1 text-[14px] text-white/90">Costi</span>
         <span className="text-[15px] font-medium text-white" data-testid="costs-total">{eur(e.cost_total)}</span>
+        <span className="w-9" />
       </div>
       <div className={row}>
         <span className="flex-1 text-[14px] text-white/90">Margine</span>
         <span className="text-[15px] font-medium text-white" data-testid="costs-margin">{e.budget ? eur(e.margin) : "—"}</span>
+        <span className="w-9" />
       </div>
       {e.budget ? (
         <div className="pt-1 pb-1">
@@ -561,28 +589,28 @@ function CostsView({ commessaId, onChanged }) {
         </div>
       )}
 
-      <div className={head}>manodopera · {eur(e.labor_total)}</div>
+      {fold("labor", "manodopera", e.labor_total, e.labor.length, "costs-labor-toggle")}
       <div className={row}>
         <span className="flex-1 min-w-0">
           <span className="block text-[14px] text-white/90">Tariffa standard</span>
           <span className="block text-[11.5px] text-white/50">per chi non ha una tariffa sua</span>
         </span>
-        <MoneyInput value={e.default_rate} onSave={(n) => costs(n === null ? { clear_default_rate: true } : { default_rate: n })} placeholder="€/h" testid="costs-default-rate" />
+        <MoneyInput value={e.default_rate} onSave={(n) => costs(n === null ? { clear_default_rate: true } : { default_rate: n })} unit="€/h" testid="costs-default-rate" />
       </div>
-      {e.labor.map((x) => (
+      {open.labor && e.labor.map((x) => (
         <div key={x.who} className={row} data-testid="costs-labor-row">
           <span className="flex-1 min-w-0">
             <span className="block text-[14px] text-white/90 truncate">{x.who}</span>
             <span className="block text-[11.5px] text-white/50">{fmtNum(x.hours)} h{x.cost !== null ? ` · ${eur(x.cost)}` : " · senza tariffa"}</span>
           </span>
-          <MoneyInput value={x.own_rate ? x.rate : null} placeholder={e.default_rate ? `${fmtNum(e.default_rate)} €/h` : "€/h"}
+          <MoneyInput value={x.own_rate ? x.rate : null} placeholder={e.default_rate ? groupIt(e.default_rate) : ""} unit="€/h"
             onSave={(n) => costs({ rates: { [x.who]: n } })} testid={`costs-rate-${x.who}`} />
         </div>
       ))}
-      {e.labor.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessuna ora registrata.</div>}
+      {open.labor && e.labor.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessuna ora registrata.</div>}
 
-      <div className={head}>materiali · {eur(e.materials_total)}</div>
-      {e.materials.map((m) => (
+      {fold("materials", "materiali", e.materials_total, e.materials.length, "costs-materials-toggle")}
+      {open.materials && e.materials.map((m) => (
         <div key={m.key} className={row} data-testid="costs-material-row">
           <span className="flex-1 min-w-0">
             <span className="block text-[14px] text-white/90 truncate">{m.name}</span>
@@ -590,11 +618,11 @@ function CostsView({ commessaId, onChanged }) {
               {m.qty !== null ? `${fmtNum(m.qty)} ${m.unit || ""}` : "quantità non indicata"}{m.cost !== null ? ` · ${eur(m.cost)}` : ""}
             </span>
           </span>
-          <MoneyInput value={m.price} placeholder={`€/${m.unit || "pz"}`} onSave={(n) => costs({ prices: [{ name: m.name, unit: m.unit || "", price: n }] })}
+          <MoneyInput value={m.price} unit={`€/${m.unit || "pz"}`} onSave={(n) => costs({ prices: [{ name: m.name, unit: m.unit || "", price: n }] })}
             testid={`costs-price-${m.key}`} />
         </div>
       ))}
-      {e.materials.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessun materiale registrato.</div>}
+      {open.materials && e.materials.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessun materiale registrato.</div>}
 
       <div className={head}>altre spese · {eur(e.extras_total)}</div>
       {e.extras.map((x) => (
@@ -610,9 +638,10 @@ function CostsView({ commessaId, onChanged }) {
       <div className="flex items-center gap-2 py-2.5 border-t border-white/[0.16]">
         <input value={label} onChange={(ev) => setLabel(ev.target.value)} placeholder="Es. noleggio ponteggio" data-testid="costs-extra-label"
           className="h-8 flex-1 min-w-0 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/35 outline-none" />
-        <input value={amount} onChange={(ev) => setAmount(ev.target.value)} placeholder="€" inputMode="decimal" data-testid="costs-extra-amount"
+        <input value={amount} onChange={(ev) => setAmount(ev.target.value)} placeholder="0" inputMode="decimal" data-testid="costs-extra-amount"
           onKeyDown={(ev) => { if (ev.key === "Enter") addExtra(); }}
           className="h-8 w-[72px] rounded-lg bg-white/10 px-2 text-right text-[13px] text-white placeholder:text-white/35 outline-none" />
+        <span className="text-[12px] text-white/60">€</span>
         {/* keeps the field focused: a blur would bring the tab bar back under the finger */}
         <button type="button" onMouseDown={(ev) => ev.preventDefault()} onClick={addExtra} data-testid="costs-extra-add" aria-label="Aggiungi la spesa" className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center text-white"><Plus size={15} /></button>
       </div>
