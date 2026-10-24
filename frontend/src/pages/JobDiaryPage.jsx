@@ -1369,7 +1369,7 @@ export default function JobDiaryPage() {
       </div>
 
       {/* the site on the map, across the page; its bar hides it or opens it more */}
-      <SiteMapBand geo={detail.geo} onSite={(detail.on_site || []).length} className="mt-4 -mx-4 md:-mx-8" />
+      <SiteMapBand geo={detail.geo} onSite={detail.on_site || []} address={c.address} className="mt-4 -mx-4 md:-mx-8" />
 
       {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
           tone, brighter than the two at its sides); swipe or tap a side one to change */}
