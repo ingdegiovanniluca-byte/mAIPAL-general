@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Navigation, X } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 /* The commessa's site on a colour map, as a band across the diary under its figures - never
    taller than that. The map is OpenFreeMap's "Liberty" style (OpenStreetMap's data drawn like
@@ -10,13 +11,13 @@ import { Navigation, X } from "lucide-react";
    many, when someone is on site now, orange otherwise: tapped, a small card says so (who, since
    when), with the address and a button to get there. */
 
-const BAND = 90;                                   // the band's height, its largest (px)
+const BAND_PHONE = 90, BAND_DESKTOP = 135;         // the band's height, its largest (px): half again on the computer
 const STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const ZOOM = 14.5;
 const KEY = "maipal.diary.map";                     // closed | band, kept on this device
 const read = () => { try { return localStorage.getItem(KEY) === "closed" ? "closed" : "band"; } catch { return "band"; } };
 const keep = (v) => { try { localStorage.setItem(KEY, v); } catch { /* private mode */ } };
-const heightOf = (mode) => (mode === "closed" ? 0 : BAND);
+const heightOf = (mode, band) => (mode === "closed" ? 0 : band);
 
 function paintPin(el, onSite) {
   const busy = onSite > 0;
@@ -35,7 +36,8 @@ export default function SiteMapBand({ geo, onSite: people = [], address = "", cl
   const map = useRef(null);
   const pin = useRef(null);
   const [mode, setMode] = useState(read);
-  const [h, setH] = useState(() => heightOf(read()));
+  const BAND = useIsMobile() ? BAND_PHONE : BAND_DESKTOP;
+  const [h, setH] = useState(() => heightOf(read(), BAND));
   const [dragging, setDragging] = useState(false);
   const drag = useRef(null);
   const lat = geo?.lat, lon = geo?.lon;
@@ -93,7 +95,13 @@ export default function SiteMapBand({ geo, onSite: people = [], address = "", cl
     map.current.jumpTo({ center: [lon, lat] });
   }, [lat, lon, onSite]);
 
-  const settle = (next) => { setMode(next); keep(next); setH(heightOf(next)); if (next === "closed") setInfo(false); };
+  const settle = (next) => { setMode(next); keep(next); setH(heightOf(next, BAND)); if (next === "closed") setInfo(false); };
+  // the window crossed the phone / computer width: the band and the map take the other height
+  useEffect(() => {
+    setH((cur) => (cur ? BAND : 0));
+    const t = setTimeout(() => map.current?.resize(), 50);
+    return () => clearTimeout(t);
+  }, [BAND]);
 
   // the bar: drag (up to the band's height at most, then it snaps open or closed) or tap
   const down = (e) => {
