@@ -511,36 +511,82 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 [data-theme="light"] .prose-answer,
 [data-theme="light"] .prose-answer code { color: #211D28; }
 
-[data-theme="light"] .text-white { color: #211D28 !important; }
-[data-theme="light"] .text-white\/90 { color: rgba(33, 29, 40, 0.90) !important; }
-[data-theme="light"] .text-white\/85 { color: rgba(33, 29, 40, 0.85) !important; }
-[data-theme="light"] .text-white\/80 { color: rgba(33, 29, 40, 0.80) !important; }
-[data-theme="light"] .text-white\/70 { color: rgba(33, 29, 40, 0.70) !important; }
-[data-theme="light"] .text-white\/65 { color: rgba(33, 29, 40, 0.65) !important; }
-[data-theme="light"] .text-white\/60 { color: rgba(33, 29, 40, 0.60) !important; }
-[data-theme="light"] .text-white\/55 { color: rgba(33, 29, 40, 0.55) !important; }
-[data-theme="light"] .text-white\/50 { color: rgba(33, 29, 40, 0.50) !important; }
-[data-theme="light"] .text-white\/45 { color: rgba(33, 29, 40, 0.45) !important; }
-[data-theme="light"] .text-white\/40 { color: rgba(33, 29, 40, 0.40) !important; }
-[data-theme="light"] .text-white\/35 { color: rgba(33, 29, 40, 0.35) !important; }
-[data-theme="light"] .text-white\/30 { color: rgba(33, 29, 40, 0.30) !important; }
-[data-theme="light"] .text-white\/25 { color: rgba(33, 29, 40, 0.25) !important; }
-[data-theme="light"] .placeholder\:text-white\/70::placeholder { color: rgba(33, 29, 40, 0.70) !important; }
-[data-theme="light"] .placeholder\:text-white\/60::placeholder { color: rgba(33, 29, 40, 0.60) !important; }
-[data-theme="light"] .placeholder\:text-white\/50::placeholder { color: rgba(33, 29, 40, 0.50) !important; }
-[data-theme="light"] .placeholder\:text-white\/55::placeholder { color: rgba(33, 29, 40, 0.55) !important; }
-
-[data-theme="light"] .bg-white\/5 { background-color: rgba(33, 29, 40, 0.04) !important; }
-[data-theme="light"] .bg-white\/10 { background-color: rgba(33, 29, 40, 0.06) !important; }
-[data-theme="light"] .bg-white\/15 { background-color: rgba(33, 29, 40, 0.08) !important; }
-[data-theme="light"] .bg-white\/20 { background-color: rgba(33, 29, 40, 0.10) !important; }
-[data-theme="light"] .bg-white\/25 { background-color: rgba(33, 29, 40, 0.12) !important; }
-[data-theme="light"] .bg-white\/30 { background-color: rgba(33, 29, 40, 0.14) !important; }
-
-[data-theme="light"] .border-white\/10 { border-color: rgba(33, 29, 40, 0.10) !important; }
-[data-theme="light"] .border-white\/15 { border-color: rgba(33, 29, 40, 0.15) !important; }
-[data-theme="light"] .border-white\/20 { border-color: rgba(33, 29, 40, 0.20) !important; }
-[data-theme="light"] .border-white\/35 { border-color: rgba(33, 29, 40, 0.35) !important; }
+/* Every white text / veil / border of the app (Tailwind's *-white utilities), re-inked for the
+   white page: text in the app's dark ink - the faint ones a little stronger, so they still read
+   on white -, veils as soft greys, borders visible. Not inside the dark popups (menus, cards,
+   sheets from the bottom, dialogs, tooltips): those keep the colour theme's smoky glass and
+   white text. Generated from the classes the app uses (see the light-theme review). */
+[data-theme="light"] .text-white:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: #211D28 !important; }
+[data-theme="light"] .bg-white\/10:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.055) !important; }
+[data-theme="light"] .text-white\/60:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.7) !important; }
+[data-theme="light"] .text-white\/50:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.62) !important; }
+[data-theme="light"] .text-white\/40:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.55) !important; }
+[data-theme="light"] .text-white\/70:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.77) !important; }
+[data-theme="light"] .text-white\/55:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.66) !important; }
+[data-theme="light"] .hover\:bg-white\/10:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.055) !important; }
+[data-theme="light"] .text-white\/80:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.85) !important; }
+[data-theme="light"] .text-white\/85:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.89) !important; }
+[data-theme="light"] .text-white\/45:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.59) !important; }
+[data-theme="light"] .bg-white\/15:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.068) !important; }
+[data-theme="light"] .hover\:bg-white\/15:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.068) !important; }
+[data-theme="light"] .text-white\/90:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.9) !important; }
+[data-theme="light"] .text-white\/75:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.81) !important; }
+[data-theme="light"] .hover\:text-white:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { color: #211D28 !important; }
+[data-theme="light"] .border-white\/10:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.1) !important; }
+[data-theme="light"] .bg-white\/5:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.042) !important; }
+[data-theme="light"] .hover\:bg-white\/20:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.08) !important; }
+[data-theme="light"] .hover\:text-white\/70:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { color: rgba(33, 29, 40, 0.77) !important; }
+[data-theme="light"] .bg-white\/20:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.08) !important; }
+[data-theme="light"] .placeholder\:text-white\/40:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.46) !important; }
+[data-theme="light"] .border-white\/\[0\.16\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.124) !important; }
+[data-theme="light"] .hover\:text-white\/80:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { color: rgba(33, 29, 40, 0.85) !important; }
+[data-theme="light"] .hover\:bg-white\/25:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.092) !important; }
+[data-theme="light"] .bg-white\/\[0\.07\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.048) !important; }
+[data-theme="light"] .bg-white\/55:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.086) !important; }
+[data-theme="light"] .border-white\/\[0\.08\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.092) !important; }
+[data-theme="light"] .border-white\/15:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.12) !important; }
+[data-theme="light"] .text-white\/65:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.74) !important; }
+[data-theme="light"] .bg-white\/30:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.105) !important; }
+[data-theme="light"] .text-white\/30:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.47) !important; }
+[data-theme="light"] .border-white\/\[0\.13\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.112) !important; }
+[data-theme="light"] .border-white\/20:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.14) !important; }
+[data-theme="light"] .bg-white\/\[0\.22\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.085) !important; }
+[data-theme="light"] .text-white\/25:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.44) !important; }
+[data-theme="light"] .placeholder\:text-white\/45:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.48) !important; }
+[data-theme="light"] .placeholder\:text-white\/35:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.44) !important; }
+[data-theme="light"] .focus\:border-white\/35:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):focus { border-color: rgba(33, 29, 40, 0.2) !important; }
+[data-theme="light"] .border-white\/30:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.18) !important; }
+[data-theme="light"] .bg-white\/\[0\.06\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.045) !important; }
+[data-theme="light"] .bg-white\/25:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.092) !important; }
+[data-theme="light"] .ring-white\/40:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { --tw-ring-color: rgba(33, 29, 40, 0.22) !important; }
+[data-theme="light"] .ring-white\/30:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { --tw-ring-color: rgba(33, 29, 40, 0.18) !important; }
+[data-theme="light"] .placeholder\:text-white\/70:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.58) !important; }
+[data-theme="light"] .placeholder\:text-white\/60:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.54) !important; }
+[data-theme="light"] .placeholder\:text-white\/50:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.5) !important; }
+[data-theme="light"] .hover\:text-white\/90:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { color: rgba(33, 29, 40, 0.9) !important; }
+[data-theme="light"] .border-white\/40:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.22) !important; }
+[data-theme="light"] .bg-white\/\[0\.12\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.06) !important; }
+[data-theme="light"] .bg-white\/80:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, .5) !important; }
+[data-theme="light"] .bg-white\/70:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.104) !important; }
+[data-theme="light"] .bg-white\/35:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.117) !important; }
+[data-theme="light"] .text-white\/\[0\.68\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.76) !important; }
+[data-theme="light"] .text-white\/95:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.95) !important; }
+[data-theme="light"] .ring-white\/70:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { --tw-ring-color: rgba(33, 29, 40, 0.22) !important; }
+[data-theme="light"] .ring-white\/60:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { --tw-ring-color: rgba(33, 29, 40, 0.22) !important; }
+[data-theme="light"] .placeholder\:text-white\/25:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *)::placeholder { color: rgba(33, 29, 40, 0.4) !important; }
+[data-theme="light"] .hover\:text-white\/75:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { color: rgba(33, 29, 40, 0.81) !important; }
+[data-theme="light"] .hover\:bg-white\/\[0\.12\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.06) !important; }
+[data-theme="light"] .hover\:bg-white\/90:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.128) !important; }
+[data-theme="light"] .hover\:bg-white\/35:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.117) !important; }
+[data-theme="light"] .hover\:bg-white\/30:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):hover { background-color: rgba(33, 29, 40, 0.105) !important; }
+[data-theme="light"] .group:hover .group-hover\:text-white\/40:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.55) !important; }
+[data-theme="light"] .group:hover .group-hover\:bg-white\/55:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.086) !important; }
+[data-theme="light"] .focus\:bg-white\/10:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):focus { background-color: rgba(33, 29, 40, 0.055) !important; }
+[data-theme="light"] .bg-white\/\[0\.08\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.05) !important; }
+[data-theme="light"] .bg-white\/\[0\.05\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.042) !important; }
+[data-theme="light"] .bg-white\/90:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.128) !important; }
+[data-theme="light"] .bg-white\/45:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, .25) !important; }
+[data-theme="light"] .accent-white:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { accent-color: #211D28 !important; }
 
 
 /* Impostazioni: text boxes without a border (the soft fill already marks the field) */
@@ -551,12 +597,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     box-shadow: none;
 }
 
-/* Light theme: the dark popovers (user menu, tooltips) turn light, so their text - which the
-   light theme already darkens - stays readable. */
-[data-theme="light"] .bg-\[\#403A3C\] {
-    background-color: #FFFFFF !important;
-    border-color: rgba(33, 29, 40, 0.10) !important;
-}
+/* Light theme: the dark popovers (tooltips) stay dark, like the menus and sheets (glass-panel):
+   on the white page they read as the same smoky glass as on the colours. The app's white
+   buttons (white with dark text) would vanish on white: there they turn ink with white text. */
+/* the dark popups keep white text for whatever only inherits the colour (titles, plain text) */
+[data-theme="light"] :is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) { color: #FFFFFF; }
+/* inline white fills: the cost bar's fill, the soft chips */
+[data-theme="light"] [style*="background: rgba(255, 255, 255, 0.75)"]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background: rgba(33, 29, 40, 0.55) !important; }
+[data-theme="light"] [style*="background: rgba(255, 255, 255, 0.22)"]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background: rgba(33, 29, 40, 0.1) !important; }
+/* inline white text with no fill of its own (the calendar's days and weekdays, its muted
+   numbers): ink, keeping the dark theme's hierarchy */
+[data-theme="light"] [style*="color: rgb(255, 255, 255)"]:is(:not([style*="background"]), [style*="background: transparent"]):not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: #211D28 !important; }
+[data-theme="light"] [style*="color: rgba(255, 255, 255"]:is(:not([style*="background"]), [style*="background: transparent"]):not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.6) !important; }
+[data-theme="light"] [style*="color: rgb(217, 217, 217)"]:is(:not([style*="background"]), [style*="background: transparent"]):not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.42) !important; }
+/* the small capital labels and the light-grey icon buttons, in ink */
+[data-theme="light"] :is(.kicker, .kicker-p):not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.62); }
+[data-theme="light"] .icon-btn:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: #211D28; opacity: 0.6; }
+/* a chip chosen with an inline light-grey fill and white text (Documenti, onboarding, a to do's
+   state) would read white on pale grey: there it is ink with white text */
+[data-theme="light"] [style*="background-color: rgb(206, 202, 208)"][style*="color: rgb(255, 255, 255)"]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: #2A1D27 !important; }
+[data-theme="light"] .bg-white.text-\[\#403A3C\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: #2A1D27 !important; color: #FFFFFF !important; }
+[data-theme="light"] .bg-white.text-\[\#403A3C\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) svg { color: #FFFFFF; }
 
 /* Liquid glass on the "Vinaccia" background: a frosted whitish veil, soft blur, no border
    or rim (header buttons, the bottom dock and the chat composer). */
@@ -581,6 +642,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     box-shadow: 0 10px 26px rgba(60, 10, 40, 0.16);
 }
 .lg-frost.card-hover:hover { box-shadow: 0 14px 34px rgba(60, 10, 40, 0.22); }   /* no ring: no borders */
+/* light theme: the same liquid glass, as a pearl-grey frosted veil with a light rim on top (on
+   white there is no colour behind to melt), and a neutral shadow instead of the wine one */
+[data-theme="light"] .lg-glass {
+    background: linear-gradient(170deg, rgba(250, 249, 251, 0.92), rgba(238, 236, 241, 0.86));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(33, 29, 40, 0.06), 0 6px 18px rgba(33, 29, 40, 0.10);
+}
+[data-theme="light"] .lg-goo {
+    background: linear-gradient(170deg, rgba(250, 249, 251, 0.94), rgba(236, 234, 239, 0.88));
+}
+[data-theme="light"] .lg-goo-shadow path { fill: rgba(33, 29, 40, 0.13); }
+[data-theme="light"] .lg-bubble { background: rgba(33, 29, 40, 0.09); }
 [data-theme="light"] .lg-frost {
     background: rgba(255, 255, 255, 0.85);
     box-shadow: 0 6px 18px rgba(33, 29, 40, 0.08);
@@ -742,10 +814,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
     background-position: top center;
     background-repeat: no-repeat;
 }
+/* light theme: the menus, cards and sheets keep the dark smoky glass of the colour theme; on
+   the white page there is no colour behind, so a touch more body */
 [data-theme="light"] .glass-panel {
-    background: linear-gradient(160deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.62));
-    box-shadow: inset 0 0 0 1px rgba(33, 29, 40, 0.08), 0 24px 60px rgba(30, 5, 40, 0.18);
-}
-[data-theme="light"] .glass-panel .glass-row + .glass-row {
-    background-image: linear-gradient(rgba(33, 29, 40, 0.1), rgba(33, 29, 40, 0.1));
+    background:
+        linear-gradient(160deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 50%, rgba(255, 255, 255, 0.05) 100%),
+        rgba(40, 22, 38, 0.86);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 24px 60px rgba(30, 5, 40, 0.28);
 }

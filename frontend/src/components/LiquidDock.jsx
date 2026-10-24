@@ -73,7 +73,7 @@ export function LiquidGlass({ d, width, height }) {
   return (
     <>
       <svg aria-hidden="true" width={width} height={height} viewBox={`0 0 ${width} ${height}`}
-           className="absolute left-0 top-0 overflow-visible pointer-events-none">
+           className="lg-goo-shadow absolute left-0 top-0 overflow-visible pointer-events-none">
         <defs>
           <filter id={`ls-${uid}`} x="-20%" y="-60%" width="140%" height="240%">
             <feGaussianBlur stdDeviation="11" />
