@@ -17,7 +17,7 @@ import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { MENTION_AGENTS, agentByKey, splitMentions, mentionQueryAt, buildPeopleDirectory, findPeople, tokenizeAll, PERSON_COLOR } from "@/lib/mentions";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
-import { DROP_FOR_AGENT } from "@/components/agentDrop/config";
+import { DROP_FOR_AGENT, AGENTS as DROP_AGENTS } from "@/components/agentDrop/config";
 
 // the agent as a small animated 3D drop beside its name (phone only): Three.js comes in its own
 // chunk, loaded when the chat first shows it. The drop is drawn on a fixed small canvas and
@@ -25,6 +25,14 @@ import { DROP_FOR_AGENT } from "@/components/agentDrop/config";
 const AgentDrop = lazy(() => import("@/components/agentDrop/AgentDrop"));
 const DROP_PX = 64, DROP_BODY = .75, DROP_FOOT = .095;
 const MIC_COLUMN = 32;   // the mic's centre from the composer's edge (h-16), left or right alike
+// a drop's height grows with its tip (2 + .27 x tip, in the shader's shape()): each one is scaled
+// to the height of Diario's (tip .7), so every agent stands exactly as tall - but Report, whose
+// hard hat already makes up for its short tip
+const dropNorm = (id) => {
+  const ag = DROP_AGENTS[id];
+  if (!ag || ag.acc === "caschetto") return 1;
+  return (2 + .27 * .7) / (2 + .27 * ag.tip);
+};
 
 const ACTION_LABELS_IT = { help: "Help", info_upload: "Caricamento", info_request: "Richiesta", task_todo: "Task/To-Do", journal: "Diario", job_log: "Diario commessa", vet_report: "Referto", work_report: "Report", lesson: "Lezione", list_update: "Modifica lista", scheduled_action: "Azione" };
 // Matches the backend's conversation_retention.RETENTION_DAYS.
@@ -266,7 +274,7 @@ export default function ChatPage() {
   const [dropFailed, setDropFailed] = useState(false);   // no WebGL: just the name, as before
   const heroRef = useRef(null);
   const agentNameRef = useRef(null);
-  const [dropBox, setDropBox] = useState(null);   // {h, bottom}: as tall as the name's 1st letter
+  const [dropBox, setDropBox] = useState(null);   // {h, bottom}: as tall as a capital D of the name
   const { user: authUser } = useAuth();
   const vertical = authUser?.business_vertical || null;
   const ACTIONS = useMemo(() => actionsFor(vertical), [vertical]);
@@ -1739,8 +1747,9 @@ export default function ChatPage() {
   const visitTypes = [...(tplList.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(tplList.custom || []).map((t) => ({ id: t.id, name: t.name }))];
 
   const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
-  // where the drop goes: the height of the name's first letter in the name's font, and that
-  // letter's bottom (baseline + descent) from the top of the hero - measured again when the
+  // where the drop goes: the height of a capital "D" in the name's font (Diario's first letter:
+  // the same for every agent - a round C or S would make Cerca's or Salva's drop a little
+  // taller), and its bottom (the baseline) from the top of the hero - measured again when the
   // agent changes, when the name shrinks while typing (after its 200 ms transition) and once
   // the font has loaded
   const agentShort = activeAction.short;
@@ -1752,7 +1761,7 @@ export default function ChatPage() {
       const cs = getComputedStyle(el);
       const ctx = document.createElement("canvas").getContext("2d");
       ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-      const ch = agentShort[0] || "A";
+      const ch = "D";
       const m = ctx.measureText(ch), f = ctx.measureText("Hg");
       const fa = m.fontBoundingBoxAscent ?? f.actualBoundingBoxAscent, fd = m.fontBoundingBoxDescent ?? f.actualBoundingBoxDescent;
       const r = el.getBoundingClientRect(), hr = hero.getBoundingClientRect();
@@ -1789,15 +1798,16 @@ export default function ChatPage() {
       <div ref={heroRef} className={`relative flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
         {onPhone && !dropFailed && dropBox && (() => {
           // the drop: left of the name, centred on the mic's column, its body as tall as the
-          // name's first letter and standing on the same baseline
-          const d = dropBox.h / DROP_BODY;
+          // name's capitals (a "D") and standing on the same baseline
+          const dropId = DROP_FOR_AGENT[activeAction.key] || "cerca";
+          const d = dropBox.h / DROP_BODY * dropNorm(dropId);
           return (
             <div aria-hidden="true" data-testid="agent-drop" className="absolute pointer-events-none"
               style={{ left: MIC_COLUMN - d / 2, top: dropBox.bottom + DROP_FOOT * d - d, width: d, height: d }}>
               <div className="origin-top-left" style={{ transform: `scale(${d / DROP_PX})` }}>
                 <Suspense fallback={null}>
                   <AgentDrop
-                    agent={DROP_FOR_AGENT[activeAction.key] || "cerca"}
+                    agent={dropId}
                     state={streaming || transcribing ? "think" : recording || text.trim() ? "listen" : "idle"}
                     size={DROP_PX} segments={64}
                     onFail={() => setDropFailed(true)}
