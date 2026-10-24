@@ -55,7 +55,7 @@ export default function SuggestionsTicker({ onSelect }) {
             onClick={() => onSelect(s)}
             className="snap-start shrink-0 w-full px-5 text-center"
           >
-            <span className="block text-[20px] leading-snug font-medium text-white line-clamp-2 min-h-[2.75em] [text-shadow:0_1px_8px_rgba(0,0,0,0.25)]">{s.text}</span>
+            <span className="block text-[18px] leading-snug font-medium text-white line-clamp-2 min-h-[2.75em] [text-shadow:0_1px_8px_rgba(0,0,0,0.25)]">{s.text}</span>
           </button>
         ))}
       </div>

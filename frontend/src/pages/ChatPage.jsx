@@ -266,7 +266,7 @@ export default function ChatPage() {
   const [dropFailed, setDropFailed] = useState(false);   // no WebGL: just the name, as before
   const heroRef = useRef(null);
   const agentNameRef = useRef(null);
-  const [dropBox, setDropBox] = useState(null);   // {h, bottom}: as tall as the name's 2nd letter
+  const [dropBox, setDropBox] = useState(null);   // {h, bottom}: as tall as the name's 1st letter
   const { user: authUser } = useAuth();
   const vertical = authUser?.business_vertical || null;
   const ACTIONS = useMemo(() => actionsFor(vertical), [vertical]);
@@ -1739,7 +1739,7 @@ export default function ChatPage() {
   const visitTypes = [...(tplList.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(tplList.custom || []).map((t) => ({ id: t.id, name: t.name }))];
 
   const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
-  // where the drop goes: the height of the name's second letter in the name's font, and that
+  // where the drop goes: the height of the name's first letter in the name's font, and that
   // letter's bottom (baseline + descent) from the top of the hero - measured again when the
   // agent changes, when the name shrinks while typing (after its 200 ms transition) and once
   // the font has loaded
@@ -1752,7 +1752,7 @@ export default function ChatPage() {
       const cs = getComputedStyle(el);
       const ctx = document.createElement("canvas").getContext("2d");
       ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-      const ch = agentShort[1] || agentShort[0] || "a";
+      const ch = agentShort[0] || "A";
       const m = ctx.measureText(ch), f = ctx.measureText("Hg");
       const fa = m.fontBoundingBoxAscent ?? f.actualBoundingBoxAscent, fd = m.fontBoundingBoxDescent ?? f.actualBoundingBoxDescent;
       const r = el.getBoundingClientRect(), hr = hero.getBoundingClientRect();
@@ -1762,9 +1762,11 @@ export default function ChatPage() {
       if (h > 0) setDropBox({ h, bottom: baseline + m.actualBoundingBoxDescent });
     };
     measure();
-    const t = setTimeout(measure, 260);
+    const t = setTimeout(measure, 400);
+    const nameEl = agentNameRef.current;
+    nameEl?.addEventListener("transitionend", measure);
     document.fonts?.ready?.then(measure);
-    return () => clearTimeout(t);
+    return () => { clearTimeout(t); nameEl?.removeEventListener("transitionend", measure); };
   }, [onPhone, dropFailed, agentShort, compactHero]);
   const composerOpen = composerGrown || attachments.length > 0 || uploadingFiles.length > 0 || !!pendingVoice || transcribing
     || mentionMatches.length > 0 || typedTags.length > 0 || typedPeople.length > 0 || !!pendingDriveUpload;
@@ -1787,7 +1789,7 @@ export default function ChatPage() {
       <div ref={heroRef} className={`relative flex flex-col items-center text-center ${compactHero ? "mt-1" : "mt-10"}`} data-testid="agent-hero">
         {onPhone && !dropFailed && dropBox && (() => {
           // the drop: left of the name, centred on the mic's column, its body as tall as the
-          // name's second letter and standing on the same baseline
+          // name's first letter and standing on the same baseline
           const d = dropBox.h / DROP_BODY;
           return (
             <div aria-hidden="true" data-testid="agent-drop" className="absolute pointer-events-none"
