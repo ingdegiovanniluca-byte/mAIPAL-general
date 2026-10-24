@@ -99,8 +99,9 @@ async def _pricing_for_model(model: Optional[str]) -> Optional[dict]:
     if exact:
         return exact[0]
     # fallback: prefix match (a pricing row's `model` may be a family prefix, e.g. "gpt-4o"
-    # matching a dated snapshot name like "gpt-4o-2024-08-06" the API sometimes echoes back)
-    prefix = [r for r in active if model.startswith(r.get("model", "\0"))]
+    # matching a dated snapshot name like "gpt-4o-2024-08-06" the API sometimes echoes back);
+    # the longest prefix wins, so "gpt-4o-mini-2024-07-18" gets gpt-4o-mini's price, not gpt-4o's
+    prefix = sorted((r for r in active if model.startswith(r.get("model", "\0"))), key=lambda r: -len(r["model"]))
     return prefix[0] if prefix else None
 
 

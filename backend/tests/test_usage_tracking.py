@@ -188,6 +188,15 @@ def test_pricing_for_model_prefix_fallback():
     assert pricing["model"] == "gpt-4o"
 
 
+def test_pricing_for_model_longest_prefix_wins():
+    db = _fresh_fake_db()
+    _seed_pricing(db, model="gpt-4o")
+    _seed_pricing(db, model="gpt-4o-mini")
+    pricing = asyncio.run(ut._pricing_for_model("gpt-4o-mini-2024-07-18"))
+    assert pricing["model"] == "gpt-4o-mini"   # not the (pricier) gpt-4o row that also prefixes it
+    assert asyncio.run(ut._pricing_for_model("gpt-4o-2024-08-06"))["model"] == "gpt-4o"
+
+
 def test_pricing_for_model_respects_valid_to():
     db = _fresh_fake_db()
     db.llm_pricing.docs.append({
