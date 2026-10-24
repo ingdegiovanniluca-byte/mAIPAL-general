@@ -13,6 +13,7 @@ import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { useAuth } from "@/auth/AuthContext";
 import { MOBILE_BREAKPOINT } from "@/hooks/use-is-mobile";
+import SiteMapBand from "@/components/SiteMapBand";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -1366,6 +1367,9 @@ export default function JobDiaryPage() {
             ariaLabel="Scegli i collaboratori abilitati su questa commessa" onClick={() => setMenu((m) => (m === "collab" ? null : "collab"))} />
         )}
       </div>
+
+      {/* the site on the map, across the page; its bar hides it or opens it more */}
+      <SiteMapBand geo={detail.geo} onSite={(detail.on_site || []).length} className="mt-4 -mx-4 md:-mx-8" />
 
       {/* the section, like the agent's name in the chat: the chosen one in the middle (tone on
           tone, brighter than the two at its sides); swipe or tap a side one to change */}
