@@ -613,10 +613,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 @media (prefers-reduced-motion: reduce) { .lg-bubble { transition: none; } }
 
-/* the site's map in the diary (SiteMapBand): a colour map, the dot pulsing green while someone
-   is on site, a small credit to OpenStreetMap */
-.sitemap.leaflet-container { background: #e9e5dc; font-family: inherit; }
-.sitemap .leaflet-control-attribution { font-size: 9px; line-height: 1.4; padding: 0 5px; background: rgba(255, 255, 255, .7); border-radius: 6px 0 0 0; color: #3A2433; }
+/* the site's map in the diary (SiteMapBand): the dot pulsing green while someone is on site, the
+   map's credits (the ⓘ) a little smaller */
+.sitemap { background: #f3f1ec; }
+.sitemap .maplibregl-ctrl-bottom-right { transform: scale(.8); transform-origin: bottom right; }
 .sitemap-pulse { position: absolute; inset: -6px; border-radius: 50%; background: rgba(47, 191, 113, .35); animation: sitemap-pulse 1.8s ease-out infinite; }
 @keyframes sitemap-pulse { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.5); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .sitemap-pulse { animation: none; } }
