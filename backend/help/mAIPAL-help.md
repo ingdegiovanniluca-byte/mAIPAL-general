@@ -215,6 +215,12 @@ L'agente **Report** genera report in Word, con lo spazio per le firme. Con l'ico
 - **Stato avanzamento lavori (SAL)**: percentuale di avanzamento, lavori del periodo, problemi, prossime attività e previsione di fine lavori. Ore, materiali, problemi e milestone del periodo (dall'ultimo SAL, o dall'inizio) li prende **dal diario della commessa** se non li detti.
 - **Verbale di fine lavori**: lavori eseguiti, verifiche e collaudi, documentazione consegnata, garanzia; data di inizio e ore complessive dal diario.
 - **Lavori extra / variante**: lavori aggiunti o cambiati, con tempi e costo indicativo, da far approvare al cliente.
+- **Report di commessa**: non si detta, si costruisce **dal diario della commessa**. Sotto il nome scegli **cosa inserire** (riassunto stato commessa, lavori svolti, ore lavorate, problematiche, materiali, milestone, costi) e il **periodo** (tutta la commessa, ultimi 7 o 30 giorni, mese scorso, oppure dal… al… con le date). Poi scrivi di quale commessa si tratta, ad esempio "Report del bagno dei Rossi, metti in evidenza i ritardi".
+  - Il periodo puoi anche scriverlo nel messaggio ("di ottobre", "dal 1 al 15/10", "ultime due settimane") quando hai scelto "Tutta la commessa".
+  - Ore, problemi, materiali, milestone e costi sono copiati dal diario così come sono. Il riassunto e i lavori svolti li scrive mAIPAL solo da quello che c'è nel diario del periodo.
+  - Se la commessa non è chiara mAIPAL ti chiede quale con i pulsanti. Non crea mai clienti o commesse nuovi.
+  - Le parti che hai scelto restano nel report anche quando nel periodo non c'è niente: in quel caso è scritto.
+  - Per un periodo i costi sono quelli di quei giorni; il preventivo e il margine compaiono solo per tutta la commessa.
 - Oppure **carica un tuo modello** Word.
 - Detta o scrivi com'è andato: l'esempio nella casella cambia con il tipo di report scelto.
 - mAIPAL riconosce il cliente nella lista Clienti e la commessa; se non ci sono li crea. Se ci sono più clienti simili, te lo chiede.

@@ -380,6 +380,15 @@ class GenerateWorkReportPayload(BaseModel):
     new_client: bool = False               # "è un cliente nuovo" anche se il nome somiglia a uno esistente
 
 
+class CommessaReportPayload(BaseModel):
+    text: str = ""                         # which commessa, and what to bring out ("evidenzia i ritardi")
+    commessa_id: Optional[str] = None      # chosen from the buttons when the text names none
+    include: List[str] = []                # work_reports.COMMESSA_PARTS keys; none -> named in the text, else the default ones
+    period: str = "all"                    # all (a period said in the text, else the whole job) | last7 | last30 | prev_month | custom
+    date_from: Optional[str] = None        # custom: YYYY-MM-DD
+    date_to: Optional[str] = None
+
+
 class GenerateVetReportPayload(BaseModel):
     text: str
     visit_type: str  # "imaging" | "general" | id di un template personalizzato
@@ -5130,6 +5139,9 @@ async def _find_or_create_commessa(clienti: dict, client: dict, job_title: str, 
 async def list_work_templates(current: User = Depends(get_current_user)):
     custom = await db.work_templates.find(_visible_query(current), {"_id": 0}).sort("created_at", -1).to_list(200)
     builtin = [{"key": k, "name": v["name"], "hint": v.get("hint", "")} for k, v in work_reports.BUILTIN_TEMPLATES.items()]
+    cr = work_reports.COMMESSA_REPORT   # not dictated: made from the diary, with its own options
+    builtin.append({"key": cr["key"], "name": cr["name"], "hint": cr["hint"], "commessa": True,
+                    "parts": [{"key": k, "name": n} for k, n in work_reports.COMMESSA_PARTS], "default_parts": work_reports.COMMESSA_DEFAULT})
     return {"builtin": builtin, "custom": custom}
 
 
@@ -5374,16 +5386,189 @@ async def _fill_report_from_diary(sections: list, report_type: str, cid: str, da
         work_reports.set_field(sections, "Materiali impiegati", "\n".join(f"- {m}" for m in jl.materials_line(tot["materials"]).split(", ") if m), overwrite=False)
         work_reports.set_field(sections, "Problemi riscontrati", "\n".join(f"- {p['text']}" for p in tot["problems"][:15]), overwrite=False)
         ms = await _commessa_milestones(cid)
-        def ms_line(v):
-            return (f"- {v['title']}: " + (f"completata il {fmt(v['done_date'])}" if v["status"] == "done" else
-                    f"in ritardo (prevista il {fmt(v['due_date'])})" if v["status"] == "late" else f"prevista entro il {fmt(v['due_date'])}"))
-        work_reports.set_field(sections, "Milestone", "\n".join(ms_line(v) for v in ms[:15]), overwrite=False)
+        work_reports.set_field(sections, "Milestone", "\n".join(_ms_report_line(v) for v in ms[:15]), overwrite=False)
     else:
         start = (data_inizio or "")[:10] or (days[0] if days else None)
         if start:
             work_reports.set_field(sections, "Data inizio lavori", fmt(start[:10]), overwrite=False)
         work_reports.set_field(sections, "Data fine lavori", datetime.now(LOCAL_TZ).strftime("%d/%m/%Y"), overwrite=False)
         work_reports.set_field(sections, "Ore complessive", hours, overwrite=False)
+
+
+def _ms_report_line(v: dict) -> str:
+    fmt = lambda iso: datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
+    return (f"- {v['title']}: " + (f"completata il {fmt(v['done_date'])}" if v["status"] == "done" else
+            f"in ritardo (prevista il {fmt(v['due_date'])})" if v["status"] == "late" else f"prevista entro il {fmt(v['due_date'])}"))
+
+
+def _report_period(payload: "CommessaReportPayload", today: date) -> Optional[tuple]:
+    """(from, to) of a report di commessa, or None for the whole job."""
+    p = payload.period or "all"
+    if p == "last7":
+        return today - timedelta(days=6), today
+    if p == "last30":
+        return today - timedelta(days=29), today
+    if p == "prev_month":
+        end = today.replace(day=1) - timedelta(days=1)
+        return end.replace(day=1), end
+    if p == "custom":
+        try:
+            a = date.fromisoformat((payload.date_from or "")[:10]) if payload.date_from else None
+            b = date.fromisoformat((payload.date_to or "")[:10]) if payload.date_to else today
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Date del periodo non valide")
+        if a and a > b:
+            a, b = b, a
+        return (a, b) if (a or payload.date_to) else None   # only "up to": from the job's first day
+    return work_reports.parse_period(payload.text, today)
+
+
+@api_router.post("/work/commessa-report")
+async def generate_commessa_report(payload: CommessaReportPayload, current: User = Depends(get_current_user)):
+    return await _generate_commessa_report(current, payload)
+
+
+async def _generate_commessa_report(current: User, payload: CommessaReportPayload, channel: str = "web") -> dict:
+    """A report of a commessa for a period, with the parts the user picked (state summary, work
+    done, hours, problems, materials, milestones, costs) - all from its diary: nothing dictated,
+    nothing created (no client, no commessa). Several commesse fit the text -> {"status":
+    "pick_commessa", "candidates"} and the caller re-calls with commessa_id."""
+    text = (payload.text or "").strip()
+    clienti = await _clienti_list(current)
+    if not clienti:
+        raise HTTPException(status_code=400, detail="Non hai ancora commesse: il report di commessa si fa dal loro diario")
+    if payload.commessa_id:
+        _, sub, client = await _commessa_or_404(current, payload.commessa_id)
+        view = _commessa_view(sub, client, clienti)
+    else:
+        res = await _resolve_commessa(clienti, text, "", "", None)
+        view = res.get("commessa")
+        if not view:
+            rows = res.get("pick") or []
+            if res.get("reason") == "clients":   # several clients with that name: all their commesse
+                ids = {c["item_id"] for c in res.get("clients") or []}
+                theirs = [c for c in (await _all_commesse(clienti))[0] if c["client_item_id"] in ids]
+                rows = _pick_rows(theirs, await _last_activity([c["id"] for c in theirs]))
+            if res.get("create_for"):
+                name = _sysval(res["create_for"].get("data"), clienti.get("system_map") or {}, "nome")
+                raise HTTPException(status_code=400, detail=f"{name} non ha ancora commesse: non c'è un diario da cui fare il report")
+            if not rows:
+                raise HTTPException(status_code=400, detail="Non hai ancora commesse: il report di commessa si fa dal loro diario")
+            return {"status": "pick_commessa", "message": "Di quale commessa faccio il report?", "candidates": rows, "text": text}
+    cid = view["id"]
+
+    today = jl.today_local()
+    period = _report_period(payload, today)
+    valid = {k for k, _ in work_reports.COMMESSA_PARTS}
+    wants = [k for k in payload.include if k in valid] or work_reports.parts_from_text(text) or list(work_reports.COMMESSA_DEFAULT)
+    q = {"commessa_id": cid}
+    if period:
+        q["date"] = {"$lte": period[1].isoformat(), **({"$gte": period[0].isoformat()} if period[0] else {})}
+    logs = await db.job_logs.find(q, {"_id": 0, "embedding": 0}).to_list(20000)
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
+    work = [lg for lg in logs if not lg.get("kind")]
+    tot = jl.totals(work)
+    start, end = period or (None, today)
+    if not start:   # the whole job: from its start date, or its first entry
+        firsts = [x for x in ((view.get("data_inizio") or "")[:10], tot["first_day"]) if x and re.fullmatch(r"\d{4}-\d{2}-\d{2}", x)]
+        start = min(date.fromisoformat(min(firsts)), end) if firsts else end
+    plabel = work_reports.period_label(start, end)
+    fmt = lambda iso: datetime.strptime(iso[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    none = "Nessun dato registrato nel periodo"
+
+    milestones = await _commessa_milestones(cid) if ("milestone" in wants or "stato" in wants) else []
+    hours = f"{jl._fmt_num(tot['hours_total'])} h" if tot["hours_total"] else ""
+    problems = "\n".join(f"- {fmt(p['date'])}: {p['text']}" if p.get("date") else f"- {p['text']}" for p in tot["problems"][:40])
+    materials = "\n".join(f"- {m}" for m in jl.materials_line(tot["materials"]).split(", ") if m)
+
+    written = {}
+    if "stato" in wants or "attivita" in wants:
+        facts = "; ".join(x for x in (
+            hours and f"ore lavorate {hours}", tot["problems"] and f"{len(tot['problems'])} problemi registrati",
+            milestones and "milestone: " + milestones_line(milestones)) if x)
+        diary = "\n".join(jl._ctx_line(lg) for lg in logs)[-14000:]
+        try:
+            written = await work_reports.commessa_summary(view, plabel, diary, facts, wants, request=text,
+                                                          user_id=current.user_id, channel=channel)
+        except Exception:
+            logger.exception("commessa report summary failed")
+            written = {}
+        if "attivita" in wants and not written.get("attivita"):   # the model failed: the diary's own lines
+            written["attivita"] = "\n".join(f"- {fmt(lg['date'])} · {lg.get('author_name') or ''}: {lg.get('text') or ''}"
+                                             for lg in work[:60] if lg.get("date"))
+
+    sections = [{"title": "Dati della commessa", "fields": {
+        "Cliente": view["client_name"], "Commessa": view["title"], "Indirizzo del cantiere": view["address"],
+        "Stato": view["stato"], "Periodo di riferimento": plabel, "Data": today.strftime("%d/%m/%Y"),
+        "Redatto da": current.name or ""}}]
+    titles = dict(work_reports.COMMESSA_PARTS)
+    for key in [k for k, _ in work_reports.COMMESSA_PARTS if k in wants]:
+        if key == "stato":
+            fields = {"Riassunto": written.get("stato") or none}
+        elif key == "attivita":
+            fields = {"Lavori del periodo": written.get("attivita") or none}
+        elif key == "ore":
+            people = "\n".join(f"- {who}: {jl._fmt_num(h)} h" for who, h in sorted(tot["by_person"].items(), key=lambda x: -x[1]))
+            days = len({lg["date"] for lg in work if lg.get("date") and lg.get("hours")})
+            fields = {"Ore totali": hours or "0 h", "Ore per persona": people or none,
+                      "Giorni con ore registrate": str(days) if days else "0"}
+        elif key == "problemi":
+            fields = {"Problemi riscontrati": problems or "Nessun problema registrato nel periodo"}
+        elif key == "materiali":
+            fields = {"Materiali impiegati": materials or none}
+        elif key == "milestone":
+            fields = {"Milestone": "\n".join(_ms_report_line(v) for v in milestones[:20]) or "Nessuna milestone sulla commessa"}
+        else:   # costi: the period's hours and materials at the list's rates, the other costs of those days
+            econ = await db.job_economics.find_one({"commessa_id": cid}, {"_id": 0}) or {}
+            extras = [x for x in econ.get("extras") or [] if not period or start.isoformat() <= (x.get("date") or "")[:10] <= end.isoformat()]
+            costs = clienti.get("costs") or {}
+            e = jl.economics(work, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), extras,
+                             econ.get("budget") if not period else None)
+            fields = {"Manodopera": jl._eur(e["labor_total"]), "Materiali": jl._eur(e["materials_total"]),
+                      "Altre spese": jl._eur(e["extras_total"]), "Totale costi": jl._eur(e["cost_total"])}
+            if e.get("budget"):
+                fields["Preventivo"] = jl._eur(e["budget"])
+                fields["Margine"] = f"{jl._eur(e['margin'])} ({e['used_pct']:.0f}% del preventivo speso)"
+            if not e["complete"]:
+                miss = ([f"{jl._fmt_num(e['unpriced_hours'])} h senza tariffa"] if e["unpriced_hours"] else []) + \
+                       ([f"{len(e['unpriced_materials'])} materiali senza prezzo"] if e["unpriced_materials"] else [])
+                fields["Non conteggiati"] = ", ".join(miss)
+        sections.append({"title": titles[key], "fields": fields})
+
+    template_name = work_reports.COMMESSA_REPORT["name"]
+    company = ""
+    if current.org_id:
+        org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
+        company = (org or {}).get("name") or ""
+    docx_bytes = work_reports.build_docx(template_name, view["client_name"] or None, view["title"] or None, sections, company=company)
+    stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
+    fname = f"{template_name} - {view['client_name'] or view['title']} - {stamp}.docx".replace("/", "-")
+    folder = clienti.get("name") or vx.CLIENTI_NAME
+    subs = [x for x in (view["client_name"], view["title"]) if x]
+    drive_link, drive_folder, telegram_sent = await _deliver_work_report(
+        current, docx_bytes, fname, folder, subs, f"📄 {template_name} — {view['title']}" + (f" ({view['client_name']})" if view["client_name"] else ""))
+
+    import base64 as _b64
+    summary = (written.get("stato") or "")[:400] or f"Periodo {plabel}" + (f", {hours}" if hours else "") + \
+        (f", {len(tot['problems'])} problemi" if tot["problems"] else "") + "."
+    report_doc = {
+        "id": f"wrep_{uuid.uuid4().hex[:12]}", "status": "ok", "user_id": current.user_id, "org_id": current.org_id,
+        "report_type": "commessa", "template_name": template_name, "collection_id": clienti["id"],
+        "client_item_id": view["client_item_id"], "client_name": view["client_name"] or None, "client_created": False,
+        "commessa_id": cid, "commessa_title": view["title"], "commessa_created": False,
+        "period_from": start.isoformat(), "period_to": end.isoformat(), "period_label": plabel, "include": wants,
+        "transcript": text, "sections": sections, "summary": summary, "company": company,
+        "drive_path": [folder] + subs, "version": 1,
+        "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"), "docx_filename": fname,
+        "drive_link": drive_link, "drive_folder": drive_folder, "telegram_sent": telegram_sent,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.work_reports.insert_one(report_doc)
+    ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_report", channel=channel, trigger="utente", org_id=current.org_id)
+    report_doc.pop("_id", None)
+    report_doc.pop("docx_b64", None)
+    await _log_report_event(current, report_doc, f"Report «{template_name}» ({plabel}) generato da {_first_name(current.name)}.", channel)
+    return report_doc
 
 
 def _really_said(said: dict, text: str) -> dict:

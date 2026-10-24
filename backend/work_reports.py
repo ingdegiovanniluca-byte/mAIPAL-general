@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -312,3 +312,142 @@ def build_docx(title: str, client_name: Optional[str], job_title: Optional[str],
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ---- report di commessa ----
+# Not dictated: made from the commessa's diary for a period, with the parts the user picks.
+# Hours, problems, materials, milestones and costs are copied from the data as they are; the
+# model only writes the summary of the job's state and of the work done, from those entries.
+
+COMMESSA_REPORT = {"key": "commessa", "name": "Report di commessa",
+                   "hint": "Report della commessa bagno dei Rossi di ottobre, metti in evidenza i ritardi"}
+# (key, section title) in the report's order
+COMMESSA_PARTS = [("stato", "Riassunto stato commessa"), ("attivita", "Lavori svolti"), ("ore", "Ore lavorate"),
+                  ("problemi", "Problematiche"), ("materiali", "Materiali"), ("milestone", "Milestone"), ("costi", "Costi")]
+COMMESSA_DEFAULT = ["stato", "ore", "problemi"]
+_PART_WORDS = {"stato": r"riassunt|\bstato (?:della|dei|del|commessa|lavori|avanzamento)|andamento|situazion", "attivita": r"lavori svolti|attivit|cosa (?:abbiamo|è stato) fatto",
+               "ore": r"\bore\b|orari|presenz", "problemi": r"problem|criticit|anomali", "materiali": r"material",
+               "milestone": r"milestone|scadenz|tappe", "costi": r"\bcost[oi]\b|\bspes[ae]\b|margin|preventiv"}
+
+MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre",
+          "novembre", "dicembre"]
+_NUM_WORDS = {"un": 1, "uno": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7, "otto": 8,
+              "nove": 9, "dieci": 10, "quindici": 15, "venti": 20, "trenta": 30}
+
+
+def parts_from_text(text: str) -> list:
+    """The parts named in the request ("solo ore e problemi"), in the report's order."""
+    low = (text or "").lower()
+    return [k for k, _ in COMMESSA_PARTS if re.search(_PART_WORDS[k], low)]
+
+
+def _month_end(y: int, m: int) -> date:
+    return (date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+
+
+def _day(d: str, m: str, y: Optional[str], today: date) -> Optional[date]:
+    try:
+        year = int(y) + (2000 if y and len(y) == 2 else 0) if y else today.year
+        out = date(year, int(m), int(d))
+    except ValueError:
+        return None
+    return out if y or out <= today else date(year - 1, int(m), int(d))   # "dal 20/12" in January: last year's
+
+
+def parse_period(text: str, today: date) -> Optional[tuple]:
+    """A period said in the request -> (from, to) dates, or None (the whole commessa).
+    "dal 1/10 al 15/10", "dal 3 al 20 ottobre", "dal 5 settembre", "ottobre", "di settembre 2026",
+    "ultima settimana", "ultimi 15 giorni", "ultimo mese", "mese scorso", "questo mese",
+    "settimana scorsa", "questa settimana", "oggi", "ieri"."""
+    low = " ".join((text or "").lower().split())
+    mon = "|".join(MONTHS)
+    m = re.search(r"\bdal(?:l')?\s*(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\s+al(?:l')?\s*(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?", low)
+    if m:
+        a, b = _day(m[1], m[2], m[3], today), _day(m[4], m[5], m[6] or m[3], today)
+        if a and b:
+            return (a, b) if a <= b else (b, a)
+    m = re.search(rf"\bdal(?:l')?\s*(\d{{1,2}})(?:\s+({mon}))?(?:\s+(\d{{4}}))?\s+al(?:l')?\s*(\d{{1,2}})\s+({mon})(?:\s+(\d{{4}}))?", low)
+    if m:
+        y = m[6] or m[3]
+        a = _day(m[1], str(MONTHS.index(m[2] or m[5]) + 1), y, today)
+        b = _day(m[4], str(MONTHS.index(m[5]) + 1), y, today)
+        if a and b:
+            return (a, b) if a <= b else (b, a)
+    m = re.search(rf"\bdal(?:l')?\s*(\d{{1,2}})(?:[/.-](\d{{1,2}})(?:[/.-](\d{{2,4}}))?|\s+({mon})(?:\s+(\d{{4}}))?)", low)
+    if m:
+        a = _day(m[1], m[2], m[3], today) if m[2] else _day(m[1], str(MONTHS.index(m[4]) + 1), m[5], today)
+        if a:
+            return (a, today)
+    if re.search(r"\boggi\b", low):
+        return (today, today)
+    if re.search(r"\bieri\b", low):
+        return (today - timedelta(days=1),) * 2
+    m = re.search(r"\bultim[ie]\s+(\d+|" + "|".join(_NUM_WORDS) + r")\s+(giorni|settimane|mesi)\b", low)
+    if m:
+        n = int(m[1]) if m[1].isdigit() else _NUM_WORDS[m[1]]
+        days = n * {"giorni": 1, "settimane": 7, "mesi": 30}[m[2]]
+        return (today - timedelta(days=days - 1), today)
+    if re.search(r"\b(?:settimana scorsa|scorsa settimana)\b", low):
+        start = today - timedelta(days=today.weekday() + 7)
+        return (start, start + timedelta(days=6))
+    if re.search(r"\b(?:questa settimana|settimana in corso)\b", low):
+        return (today - timedelta(days=today.weekday()), today)
+    if re.search(r"\bultima settimana\b", low):
+        return (today - timedelta(days=6), today)
+    if re.search(r"\b(?:mese scorso|scorso mese)\b", low):
+        end = today.replace(day=1) - timedelta(days=1)
+        return (end.replace(day=1), end)
+    if re.search(r"\b(?:questo mese|mese in corso)\b", low):
+        return (today.replace(day=1), today)
+    if re.search(r"\bultimo mese\b", low):
+        return (today - timedelta(days=29), today)
+    # a month on its own: "di ottobre", "ottobre 2026", "nel mese di settembre" (not "il 3 ottobre")
+    m = re.search(rf"(?<!\d\s)(?<!\d)\b({mon})\b(?:\s+(\d{{4}}))?", low)
+    if m:
+        mi = MONTHS.index(m[1]) + 1
+        y = int(m[2]) if m[2] else (today.year if mi <= today.month else today.year - 1)
+        return (date(y, mi, 1), min(_month_end(y, mi), today))
+    return None
+
+
+def period_label(start: date, end: date) -> str:
+    f = lambda d: d.strftime("%d/%m/%Y")
+    return f"il {f(start)}" if start == end else f"dal {f(start)} al {f(end)}"
+
+
+async def commessa_summary(commessa: dict, period: str, diary: str, facts: str, wants: list, request: str = "",
+                           user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """The two written parts of a report di commessa, from the diary only:
+    {"stato": "the job's state in the period", "attivita": "- the work done, one line each"}."""
+    keys = [k for k in ("stato", "attivita") if k in wants]
+    if not keys:
+        return {}
+    ask = {"stato": "\"stato\": riassunto dello stato della commessa nel periodo, 3-6 frasi: a che punto sono i lavori, "
+                    "cosa è stato fatto, problemi aperti e ritardi, cosa resta da fare (se il diario lo dice)",
+           "attivita": "\"attivita\": i lavori svolti nel periodo, una voce per riga preceduta da '- ', raggruppando i "
+                       "lavori simili; con la data (gg/mm) quando serve"}
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Scrivi parti di un REPORT DI COMMESSA da consegnare al cliente o da "
+        "tenere in archivio, usando SOLO i dati qui sotto (scheda della commessa e voci del suo diario di cantiere nel "
+        "periodo). Non inventare lavori, date, quantità, nomi o percentuali che non ci sono. Linguaggio professionale, "
+        "frasi impersonali e concise, niente prima persona. Se nel periodo non ci sono voci, dillo in una frase.\n"
+        + (f"L'utente chiede di tenere conto di questo (solo per cosa evidenziare, non è un dato): «{request[:500]}»\n" if request else "")
+        + f"\nCOMMESSA: {commessa.get('title')} · cliente {commessa.get('client_name') or '-'} · stato {commessa.get('stato') or '-'}"
+        + (f" · inizio {commessa['data_inizio']}" if commessa.get("data_inizio") else "")
+        + (f"\nDescrizione: {commessa['descrizione']}" if commessa.get("descrizione") else "")
+        + f"\nPERIODO DEL REPORT: {period}\nDATI DEL PERIODO: {facts or '-'}\nDIARIO DEL PERIODO:\n{diary or '(nessuna voce)'}\n\n"
+        "Rispondi SOLO con JSON: {" + ", ".join(ask[k] for k in keys) + "}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL, max_completion_tokens=2048, response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": "Scrivi le parti del report."}],
+        )
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    parsed = json.loads(m.group(0)) if m else {}
+    return {k: str(parsed.get(k) or "").strip() for k in keys}

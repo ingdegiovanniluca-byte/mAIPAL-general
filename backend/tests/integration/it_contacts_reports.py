@@ -179,7 +179,7 @@ async def main():
     assert list(wr.BUILTIN_TEMPLATES) == ["sopralluogo", "intervento", "sal", "fine_lavori", "variante"]
     t = await server.list_work_templates(me)
     assert [x["name"] for x in t["builtin"]] == ["Primo sopralluogo", "Rapporto di intervento", "Stato avanzamento lavori",
-                                                  "Verbale di fine lavori", "Lavori extra / variante"] and all(x["hint"] for x in t["builtin"])
+                                                  "Verbale di fine lavori", "Lavori extra / variante", "Report di commessa"] and all(x["hint"] for x in t["builtin"])
     # diary of the Bagno: entries, a milestone
     jl.interpret = said(hours=[{"who": "io", "hours": 6}, {"who": "Gino", "hours": 4}], materials=[{"name": "corrugato", "qty": 20, "unit": "m"}],
                         problems=["manca il miscelatore"], date="2026-10-10")

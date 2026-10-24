@@ -217,7 +217,7 @@ async def main():
     resp = await server.download_work_report(lst[0]["id"], me)
     assert resp.body[:2] == b"PK" and "filename*=UTF-8''" in resp.headers["content-disposition"]
     t = await server.list_work_templates(me)
-    assert [x["key"] for x in t["builtin"]] == ["sopralluogo", "intervento", "sal", "fine_lavori", "variante"] and t["builtin"][0]["name"] == "Primo sopralluogo"
+    assert [x["key"] for x in t["builtin"]] == ["sopralluogo", "intervento", "sal", "fine_lavori", "variante", "commessa"] and t["builtin"][0]["name"] == "Primo sopralluogo"
     # 6) folder names Drive/OneDrive accept
     assert server._drive_safe('Bagno 2/3: "nuovo"') == "Bagno 2 3 nuovo"
     # 7) Telegram: /report for an artigiano -> work templates; ambiguity -> buttons with "cliente nuovo"
