@@ -12,7 +12,9 @@ import usage_tracking as ut
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o"
+# the daily news only search and summarize: gpt-4o-mini does it for a small part of gpt-4o's
+# price. NEWS_MODEL in .env switches it back (e.g. NEWS_MODEL=gpt-4o) without touching the code.
+MODEL = os.environ.get("NEWS_MODEL") or "gpt-4o-mini"
 
 
 def _track(resp, user_id, status: str = "ok"):
