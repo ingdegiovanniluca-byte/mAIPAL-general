@@ -749,6 +749,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 /* cards kept up: the touch area covers them, a sideways slide follows the finger without delay */
 .todo-folder.pinned .tf-hit { top: calc(-120px * var(--k)); height: calc(240px * var(--k)); }
 .todo-folder.sliding .tf-sheet { transition: none; }
+/* while the cards are up they move every frame: no blur behind each of them (heavy on iPad),
+   a fuller fill in its place; the touch area never selects text nor opens the long-press menu */
+.todo-folder.fan.pinned .tf-sheet { backdrop-filter: none; -webkit-backdrop-filter: none; background: linear-gradient(170deg, rgba(96, 30, 70, .9), rgba(80, 22, 58, .84)); will-change: transform, opacity; }
+.todo-folder .tf-hit { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+[data-theme="light"] .todo-folder.fan.pinned .tf-sheet { background: #fff; }
 .todo-folder .tf-count { position: absolute; z-index: 4; left: calc(28px * var(--k)); top: calc(124px * var(--k)); font-size: 11px; color: rgba(255, 255, 255, .7); pointer-events: none; }
 .todo-folder.fan .tf-front {
     transform: perspective(520px) rotateX(-17deg);
