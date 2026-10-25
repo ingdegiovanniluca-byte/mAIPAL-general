@@ -43,7 +43,6 @@ import retrieval
 import news_service
 import vet_reports
 import work_reports
-import forecast as fc
 import job_logs as jl
 import list_updates as lu
 import scheduled_actions as sa
@@ -3650,7 +3649,6 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_contacts.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.work_sessions.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_economics.delete_many({"commessa_id": {"$in": commessa_ids}})
-        await db.job_forecasts.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.collaborators.update_many({"commesse": {"$in": commessa_ids}}, {"$pull": {"commesse": {"$in": commessa_ids}}})
 
 
@@ -6418,9 +6416,7 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
     econ = await _commessa_economics(clienti, commessa_id, light)
     milestones = await _commessa_milestones(commessa_id)
-    view = _commessa_view(sub, client, clienti)
-    return {"commessa": view, "logs": logs, "totals": jl.totals(light),
-            "forecast": await _commessa_forecast(view, milestones, light, econ),
+    return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "todos": todos, "team": await _team_first_names(current),
             "collaborators": await _assignable_collaborators(commessa_id),
             "on_site": await _on_site(commessa_id), "geo": sub.get("geo"),
@@ -7993,73 +7989,9 @@ async def _collab_reminder_loop():
                 await _todo_reminders()
                 await _material_reminders()
                 await _presence_forgotten()
-                await _forecast_alerts()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
-
-
-async def _commessa_forecast(view: dict, milestones: list, logs: list, econ: dict, today: Optional[date] = None) -> dict:
-    """Where the job is heading (forecast.py): progress, real end date, final cost, a site slowing
-    down - from its milestones, diary and costs; the last SAL's percentage when there are no
-    milestones."""
-    reports = await db.work_reports.find({"commessa_id": view["id"], "report_type": "sal"},
-                                         {"_id": 0, "report_type": 1, "sections": 1, "created_at": 1}).to_list(50)
-    work = [lg for lg in logs if not lg.get("kind")]
-    return fc.forecast(view, milestones, work, econ, reports, today or jl.today_local())
-
-
-FORECAST_COST_ALERT = 105    # % of the quote the final cost is heading to: told once (re-armed under 100)
-FORECAST_DELAY_ALERT = 3     # working days of forecast delay on the end: told once (re-armed when back on time)
-
-
-async def _forecast_alerts(now_utc: Optional[datetime] = None) -> int:
-    """Once a day (from 8:15), for every commessa "in corso": told to its owner on Telegram when
-    the forecast says it will end late or cost more than the quote - before it happens, once per
-    problem (told again only after it was solved and comes back). -> how many sent."""
-    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
-    if now_local.strftime("%H:%M") < "08:15":
-        return 0
-    today = now_local.date()
-    sent = 0
-    for coll in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(1000):
-        owner_doc = await db.users.find_one({"user_id": coll.get("user_id")}, {"_id": 0})
-        if not owner_doc:
-            continue
-        commesse, _ = await _all_commesse(coll)
-        for c in [c for c in commesse if c["stato"] == "in corso"]:
-            state = await db.job_forecasts.find_one({"commessa_id": c["id"]}, {"_id": 0}) or {}
-            if state.get("checked") == today.isoformat():
-                continue
-            try:
-                logs = await db.job_logs.find({"commessa_id": c["id"]}, {"_id": 0, "date": 1, "kind": 1, "hours": 1, "materials": 1,
-                                                                         "problems": 1}).to_list(20000)
-                f = await _commessa_forecast(c, await _commessa_milestones(c["id"]), logs,
-                                             await _commessa_economics(coll, c["id"], logs), today)
-                new = {"checked": today.isoformat(), "end_told": bool(state.get("end_told")), "cost_told": bool(state.get("cost_told"))}
-                notes = []
-                e = f.get("end")
-                if e and not e.get("finished"):
-                    late = e["delay_days"] >= FORECAST_DELAY_ALERT and e["confidence"] != "bassa"
-                    if late and not new["end_told"]:
-                        notes.append(f"🕒 Al ritmo attuale finisce il *{fc._it(e['date'])}*, {e['delay_days']} giorni lavorativi "
-                                     f"dopo il previsto ({fc._it(e['planned'])}).")
-                    new["end_told"] = late or (new["end_told"] and e["delay_days"] > 0)
-                k = f.get("cost")
-                if k and k.get("final") and k.get("pct") is not None:
-                    over = k["pct"] >= FORECAST_COST_ALERT and k["confidence"] != "bassa"
-                    if over and not new["cost_told"]:
-                        notes.append(f"📉 Al ritmo attuale costa circa *{fc._eur(k['final'])}* su {fc._eur(k['budget'])} di preventivo "
-                                     f"({k['pct']:.0f}%), avanzamento {round(f['progress']['value'] * 100)}%.")
-                    new["cost_told"] = over or (new["cost_told"] and k["pct"] >= 100)
-                await db.job_forecasts.update_one({"commessa_id": c["id"]}, {"$set": {"commessa_id": c["id"], **new}}, upsert=True)
-                if notes:
-                    await _notify_owner(User(**owner_doc), f"🔮 *Previsione* — «{c['title']}», {c['client_name']}\n" + "\n".join(notes)
-                                        + "\nI dettagli sono nel diario della commessa.")
-                    sent += 1
-            except Exception:
-                logger.exception("forecast alert failed")
-    return sent
 
 
 async def _notify_owner(owner: User, text: str) -> None:
@@ -8121,8 +8053,6 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
     view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))   # never for collaborators
     view["milestones_line"] = milestones_line(await _commessa_milestones(commessa_id))
-    view["forecast_line"] = (await _commessa_forecast(view, await _commessa_milestones(commessa_id), logs,
-                                                      await _commessa_economics(clienti, commessa_id, logs)))["line"]
     view["contacts_line"] = contacts_line(await _commessa_contacts(commessa_id))
     try:
         out = await jl.answer(view, logs, reports, question, payload.history[-8:], user_id=current.user_id)
@@ -10351,25 +10281,6 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
             still.append(f"«{c['title']}» ({'mai' if not last else 'ultima ' + _short_it_date(last)})")
     if still:
         lines.append("\n⏸ In corso ma senza voci da più di 7 giorni: " + ", ".join(still))
-    # where the sites "in corso" are heading: late end, cost over the quote, slowing down
-    ahead = []
-    for c in [c for c in open_c if c["stato"] == "in corso"]:
-        lgs = by.get(c["id"], [])
-        f = await _commessa_forecast(c, await _commessa_milestones(c["id"]), lgs,
-                                     econs.get(c["id"]) or await _commessa_economics(clienti, c["id"], lgs), now_local.date())
-        bits = []
-        e, k = f.get("end"), f.get("cost")
-        if e and not e.get("finished") and e["delay_days"] > 0:
-            bits.append(f"fine prevista {fc._it(e['date'])} (+{e['delay_days']} g)")
-        if k and k.get("pct") and k["pct"] >= 100:
-            bits.append(f"costo finale ~{fc._eur(k['final'])} ({k['pct']:.0f}% del preventivo)")
-        if f.get("stall") and c["title"] not in " ".join(still):
-            bits.append(f"a rilento: {f['stall']['reason']}")
-        if bits:
-            ahead.append(f"• «{c['title']}»: " + "; ".join(bits))
-    if ahead:
-        lines.append("\n🔮 Previsioni:")
-        lines += ahead[:15]
     # the commesse's To Do due this week
     today = now_local.date()
     due = await db.job_todos.find({"commessa_id": {"$in": [c["id"] for c in open_c]}, "done": False}, {"_id": 0}).to_list(2000) if open_c else []
