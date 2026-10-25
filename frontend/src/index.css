@@ -746,6 +746,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .todo-folder .tf-add:active { transform: scale(.94); }
 .todo-folder .tf-hit { position: absolute; left: 0; right: 0; top: calc(-40px * var(--k)); height: calc(140px * var(--k)); z-index: 5; touch-action: none; }
 .todo-folder.fan { z-index: 6; }
+/* cards kept up: the touch area covers them, a sideways slide follows the finger without delay */
+.todo-folder.pinned .tf-hit { top: calc(-120px * var(--k)); height: calc(240px * var(--k)); }
+.todo-folder.sliding .tf-sheet { transition: none; }
+.todo-folder .tf-count { position: absolute; z-index: 4; left: calc(28px * var(--k)); top: calc(124px * var(--k)); font-size: 11px; color: rgba(255, 255, 255, .7); pointer-events: none; }
 .todo-folder.fan .tf-front {
     transform: perspective(520px) rotateX(-17deg);
     background: linear-gradient(160deg, rgba(255, 255, 255, .09) 0%, rgba(255, 255, 255, .02) 50%, rgba(255, 255, 255, .05) 100%), rgba(26, 6, 22, .5);

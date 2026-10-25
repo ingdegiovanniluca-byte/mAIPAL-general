@@ -7,9 +7,11 @@ import GlassBottomSheet from "@/components/GlassBottomSheet";
 
 /* To-Do on the phone: the three states as folders of the app's glass, one under the other.
    The first to dos peek out of each folder as small cards; a finger (or the mouse) on them
-   tilts the front forward and fans them out, the one under the finger rising most. A tap on
-   the folder opens the list of all its to dos (cards like the task cards), its + a new one
-   already in that state. */
+   tilts the front forward and fans them out, the one under the finger rising most. Slid up,
+   the cards stay up when the finger lifts: then a sideways slide scrolls through all the
+   folder's to dos, a slide down puts them back, a tap on one opens it. A tap on the folder
+   opens the list of all its to dos (cards like the task cards), its + a new one already in
+   that state. */
 
 export const FOLDERS = [
   { key: "da_fare", label: "Da fare", tone: "linear-gradient(160deg, rgba(142,47,107,.18), rgba(142,47,107,.04))" },
@@ -79,38 +81,88 @@ function useFolderScale() {
   return k;
 }
 
-function Folder({ folder, items, k, fan, hot, onFan, onUnfan, onOpen, onAdd }) {
+const PIN_SLIDE = 24;    // px up (or down, once up) that keep the cards up (or put them back)
+const CARD_STEP = 64;    // px of sideways slide per card, with the cards up
+const PINNED_MAX = 40;   // cards drawn with the cards up (a long folder is opened as a list)
+
+// a card's place with the cards up, from its slot (0 = first on the left; fractions while sliding):
+// the fan's three places, continued on both sides and fading out there
+function slotStyle(p) {
+  const fade = p < 0 ? 1 + p : p > 2 ? 3 - p : 1;
+  return { "--x": `${4 + 38 * p}px`, "--y": `${-74 + 21 * p}px`, "--r": `${-5 + 4.5 * p}deg`, "--s": 1,
+           opacity: Math.max(0, Math.min(1, fade)), zIndex: 1 };
+}
+
+function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onUnpin, onOpen, onOpenTodo, onAdd }) {
   const hit = useRef(null);
   const press = useRef(null);
-  const sheets = items.slice(0, 3);
+  const [offset, setOffset] = useState(0);       // the first card's slot with the cards up (fractional while sliding)
+  const [sliding, setSliding] = useState(false);
+  const maxOffset = Math.max(0, Math.min(items.length, PINNED_MAX) - 3);
+  useEffect(() => { if (!pinned) setOffset(0); }, [pinned]);
+  const sheets = pinned ? items.slice(0, PINNED_MAX) : items.slice(0, 3);
   const hotAt = (e) => {
     const r = hit.current.getBoundingClientRect();
-    return Math.max(0, Math.min(Math.max(sheets.length, 1) - 1, Math.floor(((e.clientX - r.left) / r.width) * Math.max(sheets.length, 1))));
+    const n = Math.max(Math.min(items.length, 3), 1);
+    return Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) / r.width) * n)));
   };
   const down = (e) => {
     hit.current.setPointerCapture?.(e.pointerId);
-    press.current = { x: e.clientX, y: e.clientY, t: Date.now() };
-    onFan(hotAt(e));
+    press.current = { x: e.clientX, y: e.clientY, t: Date.now(), mode: null, offset };
+    if (!pinned) onFan(hotAt(e));
   };
-  const move = (e) => { if (e.pointerType === "mouse" || press.current) onFan(hotAt(e)); };
+  const move = (e) => {
+    const p = press.current;
+    if (!p) { if (e.pointerType === "mouse" && !pinned) onFan(hotAt(e)); return; }
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    if (!p.mode && Math.hypot(dx, dy) > 8) p.mode = Math.abs(dx) > Math.abs(dy) ? "side" : "updown";
+    if (!pinned) { onFan(hotAt(e)); return; }
+    if (p.mode === "side") {
+      // a little give past the ends, like a list scrolled too far
+      const raw = p.offset - dx / CARD_STEP;
+      const o = raw < 0 ? raw / 3 : raw > maxOffset ? maxOffset + (raw - maxOffset) / 3 : raw;
+      setSliding(true);
+      setOffset(o);
+    }
+  };
   const up = (e) => {
     const p = press.current;
     press.current = null;
-    // a quick tap on the cards opens the folder too; a slide only looks
-    if (p && Math.abs(e.clientX - p.x) < 8 && Math.abs(e.clientY - p.y) < 8 && Date.now() - p.t < 350) { onUnfan(); onOpen(); return; }
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    const tap = Math.abs(dx) < 8 && Math.abs(dy) < 8 && Date.now() - p.t < 350;
+    if (pinned) {
+      setSliding(false);
+      if (tap) {   // the card under the finger opens
+        // the topmost card there that can be seen (the faded ones at the sides don't count)
+        const card = document.elementsFromPoint(e.clientX, e.clientY)
+          .find((el) => el.dataset?.todoCard && parseFloat(getComputedStyle(el).opacity) > 0.5);
+        const todo = card && items.find((t) => t.id === card.dataset.todoCard);
+        if (todo) onOpenTodo(todo);
+        return;
+      }
+      if (p.mode === "side") { setOffset(Math.max(0, Math.min(maxOffset, Math.round(offset)))); return; }
+      if (p.mode === "updown" && dy > PIN_SLIDE) onUnpin();
+      return;
+    }
+    // a quick tap on the cards opens the folder too; slid up the cards stay up; a slide only looks
+    if (tap) { onUnfan(); onOpen(); return; }
+    if (p.mode === "updown" && dy < -PIN_SLIDE) { onPin(); return; }
     if (e.pointerType !== "mouse") onUnfan();
   };
   return (
     <div
-      className={`todo-folder ${fan ? "fan" : ""}`}
+      className={`todo-folder ${fan || pinned ? "fan" : ""} ${pinned ? "pinned" : ""} ${sliding ? "sliding" : ""}`}
       style={{ "--k": k, "--tone": folder.tone }}
       data-testid={`folder-${folder.key}`}
+      data-pinned={pinned ? "true" : undefined}
       onClick={(e) => { if (!e.target.closest(".tf-add, .tf-hit")) onOpen(); }}
     >
       <div className="tf-shade"><i /></div>
       <div className="tf-back" />
       {sheets.map((t, i) => (
-        <div key={t.id} className={`tf-sheet s${i} ${fan && hot === i ? "hot" : ""}`}>
+        <div key={t.id} data-todo-card={t.id} className={`tf-sheet s${Math.min(i, 2)} ${fan && !pinned && hot === i ? "hot" : ""}`}
+          style={pinned ? slotStyle(i - offset) : undefined}>
           <div className="tf-st">{t.title}</div>
           <div className="tf-sm">
             {PRIORITY[t.priority] && <i style={{ background: PRIORITY[t.priority].color }} />}
@@ -130,10 +182,15 @@ function Folder({ folder, items, k, fan, hot, onFan, onUnfan, onOpen, onAdd }) {
       <button type="button" className="tf-add" data-testid={`folder-add-${folder.key}`} onClick={onAdd} aria-label={`Nuovo to do in ${folder.label}`}>
         <Plus />
       </button>
+      {pinned && items.length > 3 && (
+        <div className="tf-count" data-testid={`folder-count-${folder.key}`}>
+          {Math.round(Math.max(0, Math.min(maxOffset, offset))) + 1}–{Math.min(items.length, Math.round(Math.max(0, Math.min(maxOffset, offset))) + 3)} di {items.length}
+        </div>
+      )}
       {sheets.length > 0 && (
-        <div ref={hit} className="tf-hit" onPointerDown={down} onPointerMove={move} onPointerUp={up}
-          onPointerCancel={() => { press.current = null; onUnfan(); }}
-          onPointerLeave={(e) => { if (e.pointerType === "mouse") onUnfan(); }} />
+        <div ref={hit} className="tf-hit" data-testid={`folder-cards-${folder.key}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
+          onPointerCancel={() => { press.current = null; setSliding(false); if (!pinned) onUnfan(); }}
+          onPointerLeave={(e) => { if (e.pointerType === "mouse" && !pinned) onUnfan(); }} />
       )}
     </div>
   );
@@ -233,6 +290,7 @@ export default function TodoFolders({ todos, sortTodos, reload, setTodos, onOpen
   const [params, setParams] = useSearchParams();
   const open = FOLDERS.find((f) => f.key === params.get("cartella")) || null;
   const [fan, setFan] = useState(null);           // {key, hot}
+  const [pinned, setPinned] = useState(null);     // the folder whose cards stay up
   const [adding, setAdding] = useState(null);     // a folder
   const k = useFolderScale();
   const byFolder = Object.fromEntries(FOLDERS.map((f) => [f.key, sortTodos(todos.filter((t) => t.status === f.key))]));
@@ -288,10 +346,12 @@ export default function TodoFolders({ todos, sortTodos, reload, setTodos, onOpen
       <ClipDefs />
       {FOLDERS.map((f) => (
         <Folder key={f.key} folder={f} items={byFolder[f.key]} k={k}
-          fan={fan?.key === f.key} hot={fan?.key === f.key ? fan.hot : -1}
-          onFan={(hot) => setFan((cur) => (cur?.key === f.key && cur.hot === hot ? cur : { key: f.key, hot }))}
+          fan={fan?.key === f.key} hot={fan?.key === f.key ? fan.hot : -1} pinned={pinned === f.key}
+          onFan={(hot) => { if (pinned && pinned !== f.key) setPinned(null); setFan((cur) => (cur?.key === f.key && cur.hot === hot ? cur : { key: f.key, hot })); }}
           onUnfan={() => setFan((cur) => (cur?.key === f.key ? null : cur))}
-          onOpen={() => openFolder(f)} onAdd={() => setAdding(f)} />
+          onPin={() => { setFan(null); setPinned(f.key); }}
+          onUnpin={() => setPinned((cur) => (cur === f.key ? null : cur))}
+          onOpen={() => { setPinned(null); openFolder(f); }} onOpenTodo={onOpenTodo} onAdd={() => setAdding(f)} />
       ))}
       {sheet}
     </div>
