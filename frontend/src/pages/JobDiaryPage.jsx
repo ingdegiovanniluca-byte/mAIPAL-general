@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks, LayoutTemplate, BookmarkPlus, Copy } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, LayoutTemplate, BookmarkPlus, Copy, TrendingUp } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -133,6 +133,102 @@ function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaL
   if (href) return <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</a>;
   if (onClick) return <button type="button" onClick={onClick} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</button>;
   return <div data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</div>;
+}
+
+// ===== Forecast: where the job is heading (backend forecast.py) - progress, real end date,
+// final cost, a site slowing down - each with how much it can be trusted.
+const longDay = (iso) => (iso ? new Date(`${iso}T12:00:00`).toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" }) : "");
+const TRUST = { alta: "Affidabile", media: "Abbastanza affidabile", bassa: "Poco affidabile: ancora pochi dati" };
+
+// the short sentence for the info bar and the banners of Costi / Milestone
+function forecastBits(f) {
+  if (!f) return {};
+  const e = f.end && !f.end.finished ? f.end : null;
+  const k = f.cost && f.cost.final ? f.cost : null;
+  return {
+    end: e ? `Fine prevista ${shortDay(e.date)}${e.delay_days > 0 ? ` (+${e.delay_days} g)` : e.delay_days < 0 ? ` (${e.delay_days} g)` : ", in linea"}` : "",
+    cost: k ? `Costo finale previsto ~${eur(Math.round(k.final))}${k.pct ? ` (${Math.round(k.pct)}% del preventivo)` : ""}` : "",
+    late: !!(e && e.delay_days > 0), over: !!(k && k.pct >= 100),
+  };
+}
+
+function ForecastBanner({ text, warn, onClick, testid }) {
+  if (!text) return null;
+  return (
+    <button type="button" onClick={onClick} data-testid={testid}
+      className="mt-2 mx-auto flex items-center gap-2 px-3.5 py-1.5 rounded-full lg-glass text-[12.5px] text-white/90 active:opacity-70">
+      <TrendingUp size={14} className={warn ? "text-[#FFB199]" : "text-white/70"} />
+      <span>{text}</span>
+    </button>
+  );
+}
+
+function ForecastSheet({ f, onClose, onMilestones }) {
+  const p = f.progress, e = f.end, k = f.cost, st = f.stall;
+  const Row = ({ title, children, testid }) => (
+    <div className="py-3 border-t border-white/10 first:border-t-0" data-testid={testid}>
+      <div className="kicker mb-1">{title}</div>
+      <div className="text-[14px] text-white/90 leading-snug">{children}</div>
+    </div>
+  );
+  return (
+    <GlassBottomSheet onClose={onClose} testid="forecast-sheet" className="max-h-[84vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
+      <div className="kicker">· Previsione</div>
+      <div className="text-2xl font-bold text-white mt-1 mb-2">Dove sta andando la commessa</div>
+      {!p ? (
+        <div className="text-[14px] text-white/80 leading-snug py-2">
+          Per prevedere fine lavori e costo finale servono le <b>milestone</b> (con le loro scadenze), oppure un report
+          <b> SAL</b> con la percentuale di avanzamento.
+          <button type="button" onClick={onMilestones} className="mt-3 block px-4 py-2 rounded-full bg-white text-[#403A3C] text-[13px] font-semibold">Vai alle milestone</button>
+        </div>
+      ) : (
+        <>
+          <Row title="Avanzamento" testid="fc-progress">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-1.5 rounded-full bg-white/15 overflow-hidden"><div className="h-full rounded-full bg-white/85" style={{ width: `${Math.round(p.value * 100)}%` }} /></div>
+              <span className="font-semibold">{Math.round(p.value * 100)}%</span>
+            </div>
+            <div className="text-[12px] text-white/60 mt-1">
+              {p.source === "sal" ? `dall'ultimo SAL (${shortDay(p.date)})` : `${p.done} milestone fatte su ${p.total}, pesate per i giorni previsti`}
+            </div>
+          </Row>
+          {e && (
+            <Row title="Fine lavori" testid="fc-end">
+              {e.finished ? "Tutte le milestone sono fatte." : (
+                <>
+                  Al ritmo attuale: <b>{longDay(e.date)}</b>
+                  {e.delay_days > 0 ? <span className="text-[#FFB199]"> · {e.delay_days} giorni lavorativi dopo il previsto ({longDay(e.planned)})</span>
+                    : e.delay_days < 0 ? <> · in anticipo di {-e.delay_days} giorni</> : <> · in linea con il previsto</>}
+                  <div className="text-[12px] text-white/60 mt-1">
+                    {e.pace > 1.05 ? `Le milestone fatte hanno richiesto il ${Math.round((e.pace - 1) * 100)}% di tempo in più del previsto. ` : e.pace < 0.95 ? "Le milestone fatte sono andate più veloci del previsto. " : ""}
+                    {TRUST[e.confidence]}.
+                  </div>
+                </>
+              )}
+            </Row>
+          )}
+          {k && (
+            <Row title="Costo finale" testid="fc-cost">
+              {k.final ? (
+                <>
+                  Al ritmo attuale circa <b>{eur(Math.round(k.final))}</b>
+                  {k.budget ? <span className={k.pct >= 100 ? "text-[#FFB199]" : ""}> su {eur(k.budget)} di preventivo ({Math.round(k.pct)}%)</span> : null}
+                  <div className="text-[12px] text-white/60 mt-1">
+                    Costo finora diviso l'avanzamento. {k.complete === false ? "Ore o materiali senza prezzo non sono contati. " : ""}{TRUST[k.confidence]}.
+                  </div>
+                </>
+              ) : <span className="text-white/70">{k.reason}</span>}
+            </Row>
+          )}
+          {st && <Row title="Cantiere" testid="fc-stall"><span className="text-[#FFB199]">A rilento:</span> {st.reason}</Row>}
+        </>
+      )}
+      <div className="text-[11.5px] text-white/50 mt-3 leading-snug">
+        Sono stime fatte sui dati del diario, delle milestone e dei costi: più sono aggiornati, più sono precise. Se la fine prevista slitta o
+        il costo supera il preventivo ti avviso su Telegram, una volta sola.
+      </div>
+    </GlassBottomSheet>
+  );
 }
 
 // ===== Milestone templates: the steps of a kind of job (ready-made, or saved from a commessa),
@@ -1159,6 +1255,7 @@ export default function JobDiaryPage() {
   const [period, setPeriod] = useState({ key: "30" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const [fcOpen, setFcOpen] = useState(false);   // the forecast's details
   const [menu, setMenu] = useState(null);       // "stato" | "periodo" | "collab"
   // Admin: the collaborators (Telegram only) enabled on this commessa
   const { user: me } = useAuth();
@@ -1379,6 +1476,14 @@ export default function JobDiaryPage() {
         <InfoCard icon={Flag} label="Milestone" value={msSum.total ? `${msSum.done}/${msSum.total}` : "nessuna"} testid="glance-milestone"
           ariaLabel="Mostra le milestone" onClick={() => pickSection("milestone")}
           note={msSum.late ? `${msSum.late} in ritardo` : msSum.next ? `prossima ${shortDay(msSum.next.due_date)}` : ""} />
+        {detail.forecast && (() => {
+          const f = detail.forecast, b = forecastBits(f);
+          const value = f.end && !f.end.finished ? shortDay(f.end.date) : f.progress ? `${Math.round(f.progress.value * 100)}% fatto` : "da impostare";
+          const note = [f.end && !f.end.finished && f.end.delay_days > 0 ? `+${f.end.delay_days} g` : "", b.over ? `costo ${Math.round(f.cost.pct)}%` : "",
+                        !f.progress ? "servono le milestone" : "", f.stall ? "a rilento" : ""].filter(Boolean).join(" · ");
+          return <InfoCard icon={TrendingUp} label="Previsione" value={value} note={note} testid="glance-previsione" ariaLabel="Previsione di fine lavori e costo finale"
+            onClick={() => setFcOpen(true)} />;
+        })()}
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
         <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti" ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
@@ -1416,9 +1521,13 @@ export default function JobDiaryPage() {
 
       {/* Costi, Milestone and To Do: their own content instead of the period and the days */}
       {section === "costi" ? (
-        <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+        <>
+          <ForecastBanner text={forecastBits(detail.forecast).cost} warn={forecastBits(detail.forecast).over} onClick={() => setFcOpen(true)} testid="fc-banner-cost" />
+          <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+        </>
       ) : section === "milestone" ? (
         <>
+          <ForecastBanner text={forecastBits(detail.forecast).end} warn={forecastBits(detail.forecast).late} onClick={() => setFcOpen(true)} testid="fc-banner-end" />
           <div className="mt-1.5 flex items-center justify-center gap-2.5">
             <button type="button" onClick={() => setMsEditing({})} data-testid="job-milestone-add" aria-label="Nuova milestone"
               className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 whitespace-nowrap">
@@ -1614,6 +1723,8 @@ export default function JobDiaryPage() {
       )}
       {tplOpen === "apply" && c && <MilestoneTemplatesSheet commessa={c} onClose={() => setTplOpen(null)} onApplied={() => { setTplOpen(null); loadDetail(selectedId); }} />}
       {tplOpen === "save" && c && <SaveTemplateSheet commessa={c} onClose={() => setTplOpen(null)} />}
+      {fcOpen && detail?.forecast && <ForecastSheet f={detail.forecast} onClose={() => setFcOpen(false)}
+        onMilestones={() => { setFcOpen(false); pickSection("milestone"); }} />}
       {siteOpen && c && <SiteSheet commessa={c} geo={detail?.geo} onClose={() => setSiteOpen(false)} onChanged={() => loadDetail(selectedId)} />}
       {msEditing && c && (
         <MilestoneSheet m={msEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} onClose={() => setMsEditing(null)}

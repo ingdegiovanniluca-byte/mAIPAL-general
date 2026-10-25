@@ -204,8 +204,18 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Quando una commessa arriva all'**80%** e quando **supera** il preventivo ricevi un avviso su Telegram, una sola volta per soglia.
 - Puoi chiedere i numeri anche alla chat della commessa ("quanto margine mi resta?") o all'agente Cerca. I collaboratori su Telegram non vedono mai costi e margini.
 
+**Previsioni**
+- Nella riga di informazioni in alto, la voce **Previsione** dice dove sta andando la commessa: la **fine lavori prevista** (con quanti giorni di ritardo rispetto al previsto), il **costo finale previsto** rispetto al preventivo e se il cantiere sta andando **a rilento**. Toccala per il dettaglio.
+- **Avanzamento**: le milestone fatte, pesate per i giorni che dovevano durare; se la commessa non ha milestone, la percentuale dell'ultimo **SAL**.
+- **Fine lavori**: il ritmo delle milestone già fatte (per esempio se hanno richiesto il 50% di tempo in più) applicato a quelle che restano.
+- **Costo finale**: il costo finora diviso l'avanzamento (con il 40% fatto e 2.400 € spesi, circa 6.000 € a fine lavori). Prima del 15% di avanzamento non viene stimato.
+- **A rilento**: nessuna voce da 5 giorni lavorativi, ore della settimana molto sotto il solito, oppure una milestone in scadenza e nessuno che scrive.
+- Ogni previsione dice quanto è affidabile (con pochi dati lo dice). Senza milestone né SAL non viene inventata: la voce ti chiede di aggiungere le milestone.
+- Le trovi anche in **Costi** (costo finale) e **Milestone** (fine prevista), nella **chat della commessa** ("quando finiamo?") e nel **riepilogo del lunedì**.
+- **Avvisi prima che succeda**: per le commesse **in corso**, dalle 8:15 ti arriva su Telegram un avviso quando la fine prevista slitta di 3 o più giorni lavorativi, o quando il costo finale previsto supera il preventivo del 5%. Arriva una volta sola per problema: di nuovo solo se il problema si risolve e poi ritorna.
+
 **Riepilogo cantieri del lunedì**
-- Con il verticale artigiano trovi già nelle **Azioni** il **Riepilogo cantieri**: ogni lunedì alle 8 ti arriva su Telegram la settimana passata (ore per persona e per commessa, materiali, problemi, situazione dei preventivi), le commesse in corso ferme da più di 7 giorni e le attività da fare in settimana.
+- Con il verticale artigiano trovi già nelle **Azioni** il **Riepilogo cantieri**: ogni lunedì alle 8 ti arriva su Telegram la settimana passata (ore per persona e per commessa, materiali, problemi, situazione dei preventivi), le commesse in corso ferme da più di 7 giorni, le attività da fare in settimana e le **previsioni** delle commesse in corso (fine lavori in ritardo, costo oltre il preventivo, cantieri a rilento).
 - Puoi metterlo in pausa, eseguirlo subito o eliminarlo come ogni altra azione; se lo elimini non viene ricreato.
 
 ## Report di lavoro

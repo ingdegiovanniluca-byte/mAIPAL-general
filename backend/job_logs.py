@@ -453,6 +453,7 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         f"Descrizione: {commessa.get('descrizione')}" if commessa.get("descrizione") else "",
         f"Economia: {commessa.get('economics_line')}" if commessa.get("economics_line") else "",
         f"Milestone: {commessa.get('milestones_line')}" if commessa.get("milestones_line") else "",
+        f"Previsioni (dai dati, non certezze): {commessa.get('forecast_line')}" if commessa.get("forecast_line") else "",
         f"Contatti utili: {commessa.get('contacts_line')}" if commessa.get("contacts_line") else "",
         f"Attività da fare (To Do): {commessa.get('todos_line')}" if commessa.get("todos_line") else "",
     ] if x)
