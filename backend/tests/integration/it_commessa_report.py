@@ -260,6 +260,26 @@ async def main():
     rv = await server._revise_work_report(me, r["id"], "scrivi che i lavori sono sospesi")
     assert rv["changed"] == ["Riassunto stato commessa › Riassunto"] and rv["version"] == 2
 
+    # 8b) the request written with "Primo sopralluogo" still selected: a report di commessa, never an empty sopralluogo
+    assert wr.asks_commessa_report("Fammi il report della commessa impianto elettrico") and wr.asks_commessa_report("report di cantiere")
+    assert not wr.asks_commessa_report("sopralluogo dai Rossi per la commessa del bagno")
+    assert P("per la settimana corrente") == (date(2026, 10, 19), T) and P("mese corrente") == (date(2026, 10, 1), T)
+    db.collection_items.docs.append({"id": "c_lucad", "collection_id": cl["id"], "data": {"nome": "Luca D"}})
+    db.collection_sub_items.docs.append({"id": "s_imp", "collection_id": cl["id"], "item_id": "c_lucad", "data": {"titolo": "Impianto elettrico", "stato": "in corso"}})
+    log("s_imp", "2026-10-20", hours=[("Luca", 8), ("Gino", 6)], mats=[("cavo 2,5", 50, "m")], text="passaggio cavi")
+    log("s_imp", "2026-10-12", hours=[("Luca", 5)], text="tracce (settimana prima)")
+    async def no_dictation(*a, **k): raise AssertionError("not a dictated report")
+    wr.interpret = no_dictation
+    nsubs = len(db.collection_sub_items.docs)
+    msg = ("Fammi il report della commessa impianto elettrico del cliente luca d per la settimana corrente. "
+           "includi attività fatte, materiali usati e ora lavoarate divise per lavoratore.")
+    r = await server._generate_work_report(me, msg)   # the type selected in the chat: Primo sopralluogo
+    assert r["report_type"] == "commessa" and r["commessa_id"] == "s_imp" and r["client_name"] == "Luca D"
+    assert r["include"] == ["attivita", "ore", "materiali"] and r["period_label"] == "dal 19/10/2026 al 24/10/2026"
+    sec = {s["title"]: s["fields"] for s in r["sections"]}
+    assert sec["Ore lavorate"]["Ore per persona"] == "- Luca: 8 h\n- Gino: 6 h" and sec["Materiali"]["Materiali impiegati"] == "- 50 m cavo 2,5"
+    assert "Lavori svolti" in sec and len(db.collection_sub_items.docs) == nsubs
+
     # 9) a client with no commessa / an unknown commessa
     db.collection_items.docs.append({"id": "c_verdi", "collection_id": cl["id"], "data": {"nome": "Paolo Verdi"}})
     try:

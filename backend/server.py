@@ -5196,6 +5196,10 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Descrivi il sopralluogo o l'intervento")
+    # "fammi il report della commessa ..." with a dictated type still selected: the report di
+    # commessa, from the diary (parts and period read from the request) - never an empty sopralluogo
+    if report_type in work_reports.BUILTIN_TEMPLATES and not client_item_id and not new_client and work_reports.asks_commessa_report(text):
+        return await _generate_commessa_report(current, CommessaReportPayload(text=text), channel)
     if report_type in work_reports.BUILTIN_TEMPLATES:
         template_name = work_reports.BUILTIN_TEMPLATES[report_type]["name"]
         skeleton = work_reports.BUILTIN_TEMPLATES[report_type]["sections"]

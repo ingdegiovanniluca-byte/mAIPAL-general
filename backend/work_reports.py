@@ -326,13 +326,20 @@ COMMESSA_PARTS = [("stato", "Riassunto stato commessa"), ("attivita", "Lavori sv
                   ("problemi", "Problematiche"), ("materiali", "Materiali"), ("milestone", "Milestone"), ("costi", "Costi")]
 COMMESSA_DEFAULT = ["stato", "ore", "problemi"]
 _PART_WORDS = {"stato": r"riassunt|\bstato (?:della|dei|del|commessa|lavori|avanzamento)|andamento|situazion", "attivita": r"lavori svolti|attivit|cosa (?:abbiamo|è stato) fatto",
-               "ore": r"\bore\b|orari|presenz", "problemi": r"problem|criticit|anomali", "materiali": r"material",
+               "ore": r"\bore\b|\bor[ae]\s+lavo|orari|presenz|per (?:lavorator|operai|persona)", "problemi": r"problem|criticit|anomali", "materiali": r"material",
                "milestone": r"milestone|scadenz|tappe", "costi": r"\bcost[oi]\b|\bspes[ae]\b|margin|preventiv"}
 
 MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre",
           "novembre", "dicembre"]
 _NUM_WORDS = {"un": 1, "uno": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7, "otto": 8,
               "nove": 9, "dieci": 10, "quindici": 15, "venti": 20, "trenta": 30}
+
+
+def asks_commessa_report(text: str) -> bool:
+    """The request is for a report di commessa ("fammi il report della commessa impianto elettrico"),
+    whatever type is selected: it is made from the diary, never as a dictated report."""
+    low = " ".join((text or "").lower().split())
+    return bool(re.search(r"\b(?:report|resoconto|riepilogo|relazione)\s+(?:di|della|dell[a']|del|sulla|sul)\s*(?:commess[ae]|cantier[ei])\b", low))
 
 
 def parts_from_text(text: str) -> list:
@@ -390,14 +397,14 @@ def parse_period(text: str, today: date) -> Optional[tuple]:
     if re.search(r"\b(?:settimana scorsa|scorsa settimana)\b", low):
         start = today - timedelta(days=today.weekday() + 7)
         return (start, start + timedelta(days=6))
-    if re.search(r"\b(?:questa settimana|settimana in corso)\b", low):
+    if re.search(r"\b(?:questa settimana|settimana (?:in corso|corrente|attuale))\b", low):
         return (today - timedelta(days=today.weekday()), today)
     if re.search(r"\bultima settimana\b", low):
         return (today - timedelta(days=6), today)
     if re.search(r"\b(?:mese scorso|scorso mese)\b", low):
         end = today.replace(day=1) - timedelta(days=1)
         return (end.replace(day=1), end)
-    if re.search(r"\b(?:questo mese|mese in corso)\b", low):
+    if re.search(r"\b(?:questo mese|mese (?:in corso|corrente|attuale))\b", low):
         return (today.replace(day=1), today)
     if re.search(r"\bultimo mese\b", low):
         return (today - timedelta(days=29), today)

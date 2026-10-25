@@ -702,13 +702,18 @@ async def _run_report_flow(update, ctx, db, user, content, pending_type):
         await _run_vet_report_flow(update, ctx, db, user, content, pending_type)
 
 
-async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_type, client_item_id=None, new_client=False):
-    from server import _generate_work_report
+async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_type, client_item_id=None, new_client=False,
+                                commessa_id=None):
+    """commessa_id: the report di commessa's commessa, picked from the buttons."""
+    from server import _generate_work_report, _generate_commessa_report, CommessaReportPayload
     chat_id = update_or_query.message.chat.id if hasattr(update_or_query, "message") and update_or_query.message else update_or_query.effective_chat.id
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
     current = _to_user_pydantic(user)
     try:
-        rep = await _generate_work_report(current, content, report_type, client_item_id, new_client, channel="telegram")
+        if commessa_id:
+            rep = await _generate_commessa_report(current, CommessaReportPayload(text=content, commessa_id=commessa_id), channel="telegram")
+        else:
+            rep = await _generate_work_report(current, content, report_type, client_item_id, new_client, channel="telegram")
     except Exception as e:
         logger.exception("tg work report failed")
         await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ Errore nella generazione del report: {str(getattr(e, 'detail', e))[:200]}")
@@ -723,6 +728,13 @@ async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_
         await ctx.bot.send_message(chat_id=chat_id, text="👷 Ho più clienti con questo nome. Quale intendi?",
                                    reply_markup=InlineKeyboardMarkup(buttons))
         return
+    if rep.get("status") == "pick_commessa":   # report di commessa: which one
+        buttons = [[InlineKeyboardButton(f"{c['title']} · {c.get('client_name') or ''}" + (" (chiusa)" if c.get("stato") == "chiusa" else ""),
+                                         callback_data=f"comrep:{c['commessa_id']}")] for c in rep["candidates"]]
+        await _set_state(db, chat_id, user["user_id"], pending_report_type=None,
+                         pending_report_context={"report_type": report_type, "text": content, "work": True})
+        await ctx.bot.send_message(chat_id=chat_id, text="🧱 " + rep["message"], reply_markup=InlineKeyboardMarkup(buttons))
+        return
     lines = [f"✅ Report generato: {rep['template_name']}"]
     if rep.get("client_name"):
         lines.append(f"👤 Cliente: {rep['client_name']}" + (" (nuovo, aggiunto alla lista Clienti)" if rep.get("client_created") else ""))
@@ -730,6 +742,8 @@ async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_
         lines.append("👤 Cliente non indicato: il report non è collegato a nessun cliente")
     if rep.get("commessa_title"):
         lines.append(f"🧱 Commessa: {rep['commessa_title']}" + (" (nuova, stato «preventivo»)" if rep.get("commessa_created") else ""))
+    if rep.get("period_label"):
+        lines.append(f"🗓 Periodo: {rep['period_label']}")
     if rep.get("drive_link"):
         lines.append(f"📁 Salvato in \"{rep['drive_folder']}\" (cloud)")
     lines.append("📄 Il file .docx è qui sopra." if rep.get("telegram_sent") else "⚠️ Non inviato come file: resta salvato in app/Drive.")
@@ -1043,6 +1057,13 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tpl = wr.BUILTIN_TEMPLATES.get(key) or {}
         await ctx.bot.send_message(chat_id=chat_id, text=f"👷 Ok, {(tpl.get('name') or 'report').lower()}. Ora scrivi o manda un vocale con il resoconto"
                                    + (f", es. «{tpl['hint']}»" if tpl.get("hint") else "") + ".")
+    elif data.startswith("comrep:"):
+        state = await _get_state(db, user["user_id"], chat_id)
+        pctx = state.get("pending_report_context") or {}
+        if not pctx.get("text") or not pctx.get("work"):
+            await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il contesto del report, rifai /report.")
+            return
+        await _run_work_report_flow(q, ctx, db, user, pctx["text"], pctx.get("report_type"), commessa_id=data.split(":", 1)[1])
     elif data.startswith("wrkcli:"):
         target = data.split(":", 1)[1]
         state = await _get_state(db, user["user_id"], chat_id)

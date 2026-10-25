@@ -216,6 +216,7 @@ L'agente **Report** genera report in Word, con lo spazio per le firme. Con l'ico
 - **Verbale di fine lavori**: lavori eseguiti, verifiche e collaudi, documentazione consegnata, garanzia; data di inizio e ore complessive dal diario.
 - **Lavori extra / variante**: lavori aggiunti o cambiati, con tempi e costo indicativo, da far approvare al cliente.
 - **Report di commessa**: non si detta, si costruisce **dal diario della commessa**. Sotto il nome scegli **cosa inserire** (riassunto stato commessa, lavori svolti, ore lavorate, problematiche, materiali, milestone, costi) e il **periodo** (tutta la commessa, ultimi 7 o 30 giorni, mese scorso, oppure dal… al… con le date). Poi scrivi di quale commessa si tratta, ad esempio "Report del bagno dei Rossi, metti in evidenza i ritardi".
+  - Basta anche scriverlo nel messaggio, qualunque tipo sia selezionato: "Fammi il report della commessa impianto elettrico di Luca D per la settimana corrente, con attività, materiali e ore per lavoratore". mAIPAL capisce che è un report di commessa e prende dal messaggio le parti e il periodo. Funziona anche da Telegram con `/report`.
   - Il periodo puoi anche scriverlo nel messaggio ("di ottobre", "dal 1 al 15/10", "ultime due settimane") quando hai scelto "Tutta la commessa".
   - Ore, problemi, materiali, milestone e costi sono copiati dal diario così come sono. Il riassunto e i lavori svolti li scrive mAIPAL solo da quello che c'è nel diario del periodo.
   - Se la commessa non è chiara mAIPAL ti chiede quale con i pulsanti. Non crea mai clienti o commesse nuovi.

@@ -734,7 +734,8 @@ export default function ChatPage() {
         return;
       }
       if (commessaReport) {
-        const opts = { include: comPartsOn, period: comPeriod, date_from: comPeriod === "custom" ? comFrom || null : null,
+        // chips never touched: the parts named in the message, else the default ones (the backend decides)
+        const opts = { include: comParts || [], period: comPeriod, date_from: comPeriod === "custom" ? comFrom || null : null,
                        date_to: comPeriod === "custom" ? comTo || null : null };
         const r = await api.post("/work/commessa-report", { text: workText || content, ...opts });
         appendWorkReportResult(r.data, opts);
