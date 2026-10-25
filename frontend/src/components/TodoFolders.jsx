@@ -85,11 +85,13 @@ const PIN_SLIDE = 24;    // px up (or down, once up) that keep the cards up (or 
 const CARD_STEP = 64;    // px of sideways slide per card, with the cards up
 const PINNED_MAX = 40;   // cards drawn with the cards up (a long folder is opened as a list)
 
-// a card's place with the cards up, from its slot (0 = first on the left; fractions while sliding):
-// the fan's three places, continued on both sides and fading out there
+// a card's place with the cards up, from its slot (0 = the one in front, on the left; fractions
+// while sliding): the fan's three places, continued on both sides and fading out there; the
+// one in front a little higher
 function slotStyle(p) {
   const fade = p < 0 ? 1 + p : p > 2 ? 3 - p : 1;
-  return { "--x": `${4 + 38 * p}px`, "--y": `${-74 + 21 * p}px`, "--r": `${-5 + 4.5 * p}deg`, "--s": 1,
+  const lift = Math.max(0, 1 - Math.abs(p)) * 22;
+  return { "--x": `${4 + 38 * p}px`, "--y": `${-74 + 21 * p - lift}px`, "--r": `${-5 + 4.5 * p}deg`, "--s": 1 + 0.04 * Math.max(0, 1 - Math.abs(p)),
            opacity: Math.max(0, Math.min(1, fade)), zIndex: 1 };
 }
 
@@ -98,7 +100,7 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
   const press = useRef(null);
   const [offset, setOffset] = useState(0);       // the first card's slot with the cards up (fractional while sliding)
   const [sliding, setSliding] = useState(false);
-  const maxOffset = Math.max(0, Math.min(items.length, PINNED_MAX) - 3);
+  const maxOffset = Math.max(0, Math.min(items.length, PINNED_MAX) - 1);   // up to the last one in front
   useEffect(() => { if (!pinned) setOffset(0); }, [pinned]);
   const sheets = pinned ? items.slice(0, PINNED_MAX) : items.slice(0, 3);
   const hotAt = (e) => {
@@ -115,7 +117,8 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
     const p = press.current;
     if (!p) { if (e.pointerType === "mouse" && !pinned) onFan(hotAt(e)); return; }
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
-    if (!p.mode && Math.hypot(dx, dy) > 8) p.mode = Math.abs(dx) > Math.abs(dy) ? "side" : "updown";
+    // with the cards up a slant slide counts as sideways (a finger never moves quite straight)
+    if (!p.mode && Math.hypot(dx, dy) > 8) p.mode = Math.abs(dx) >= Math.abs(dy) * (pinned ? 0.6 : 1) ? "side" : "updown";
     if (!pinned) { onFan(hotAt(e)); return; }
     if (p.mode === "side") {
       // a little give past the ends, like a list scrolled too far
@@ -182,9 +185,9 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
       <button type="button" className="tf-add" data-testid={`folder-add-${folder.key}`} onClick={onAdd} aria-label={`Nuovo to do in ${folder.label}`}>
         <Plus />
       </button>
-      {pinned && items.length > 3 && (
+      {pinned && items.length > 1 && (
         <div className="tf-count" data-testid={`folder-count-${folder.key}`}>
-          {Math.round(Math.max(0, Math.min(maxOffset, offset))) + 1}–{Math.min(items.length, Math.round(Math.max(0, Math.min(maxOffset, offset))) + 3)} di {items.length}
+          {Math.round(Math.max(0, Math.min(maxOffset, offset))) + 1} di {Math.min(items.length, PINNED_MAX)}
         </div>
       )}
       {sheets.length > 0 && (
