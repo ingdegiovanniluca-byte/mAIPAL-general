@@ -102,6 +102,7 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
   const n = items.length;
   const hit = useRef(null);
   const press = useRef(null);
+  const pendingOpen = useRef(null);   // a card tapped: opened once the tap is over (its click)
   // with the cards up: which one is in front, as a running index (it goes on past the last one,
   // the cards start again from the first), fractional while the cards move; drawn at most once
   // a frame, only the 4-5 cards that can be seen
@@ -137,6 +138,11 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
     anim.current = requestAnimationFrame(step);
   };
 
+  const openPending = () => {
+    const todo = pendingOpen.current;
+    pendingOpen.current = null;
+    if (todo) onOpenTodo(todo);
+  };
   const hotAt = (e) => {
     const r = hit.current.getBoundingClientRect();
     const m = Math.max(Math.min(n, 3), 1);
@@ -170,12 +176,18 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
     if (!p) return;
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
     const tap = Math.abs(dx) < 8 && Math.abs(dy) < 8 && Date.now() - p.t < 350;
+    try { hit.current?.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
     if (pinned) {
-      if (tap) {   // the card under the finger opens: the topmost one there that can be seen
+      if (tap) {
+        // the card under the finger opens: the topmost one there that can be seen - not now,
+        // in the middle of the touch, but on the click that ends it (or a moment later)
         const card = document.elementsFromPoint(e.clientX, e.clientY)
           .find((el) => el.dataset?.todoCard && parseFloat(getComputedStyle(el).opacity) > 0.5);
         const todo = card && items.find((t) => t.id === card.dataset.todoCard);
-        if (todo) onOpenTodo(todo);
+        if (todo) {
+          pendingOpen.current = todo;
+          setTimeout(openPending, 400);
+        }
         return;
       }
       if (p.mode === "side") {
@@ -243,6 +255,7 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
       )}
       {n > 0 && (
         <div ref={hit} className="tf-hit" data-testid={`folder-cards-${folder.key}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
+          onClick={openPending}
           onPointerCancel={() => { const was = press.current; press.current = null; if (pinned) { if (was?.mode === "side") snapTo(Math.round(pos.current)); } else onUnfan(); }}
           onPointerLeave={(e) => { if (e.pointerType === "mouse" && !pinned) onUnfan(); }} />
       )}

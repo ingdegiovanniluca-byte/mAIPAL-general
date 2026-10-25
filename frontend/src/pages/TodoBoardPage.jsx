@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import TodoFolders from "@/components/TodoFolders";
+import GlassBottomSheet from "@/components/GlassBottomSheet";
 
 const COLS = [
   { key: "da_fare", label: "Da fare", dot: "bg-neutral-400" },
@@ -61,7 +62,7 @@ export default function TodoBoardPage() {
       <>
         <TodoFolders todos={todos} setTodos={setTodos} sortTodos={sortTodos} reload={load}
           onOpenTodo={setSelected} onToggleFav={toggleFav} onDelete={del} />
-        {selected && <TodoDialog todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
+        {selected && <TodoDialog sheet todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
       </>
     );
   }
@@ -135,7 +136,10 @@ function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
   );
 }
 
-function TodoDialog({ todo, onClose, onUpdated }) {
+// sheet: on the phone and the iPad the to do opens in the app's glass sheet from the bottom
+// (like "Nuovo to do"), not in the centred dialog - that one could leave Safari with the whole
+// page unresponsive after opening it from the folders
+function TodoDialog({ todo, onClose, onUpdated, sheet = false }) {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [thread, setThread] = useState([]);
@@ -192,12 +196,8 @@ function TodoDialog({ todo, onClose, onUpdated }) {
     });
   };
 
-  return (
-    <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="todo-dialog">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold">{todo.title}</DialogTitle>
-        </DialogHeader>
+  const body = (
+      <>
         <div className="text-white/70 text-sm">{todo.description}</div>
 
         <div className="flex flex-wrap gap-2">
@@ -250,6 +250,26 @@ function TodoDialog({ todo, onClose, onUpdated }) {
             <button data-testid="todo-chat-send" onClick={send} disabled={busy} className="pill-btn">{busy ? "…" : "Invia a mAIPAL"}</button>
           </div>
         </div>
+      </>
+  );
+
+  if (sheet) {
+    return (
+      <GlassBottomSheet onClose={onClose} testid="todo-dialog" className="max-h-[88vh]">
+        <div role="dialog" aria-label={todo.title} className="space-y-4">
+          <div className="text-2xl font-bold text-white break-words pr-2">{todo.title}</div>
+          {body}
+        </div>
+      </GlassBottomSheet>
+    );
+  }
+  return (
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="todo-dialog">
+        <DialogHeader>
+          <DialogTitle className="text-2xl font-bold">{todo.title}</DialogTitle>
+        </DialogHeader>
+        {body}
       </DialogContent>
     </Dialog>
   );
