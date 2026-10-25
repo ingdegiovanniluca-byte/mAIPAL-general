@@ -342,6 +342,33 @@ def asks_commessa_report(text: str) -> bool:
     return bool(re.search(r"\b(?:report|resoconto|riepilogo|relazione)\s+(?:di|della|dell[a']|del|sulla|sul)\s*(?:commess[ae]|cantier[ei])\b", low))
 
 
+# which report the message asks for, whatever type is selected in the chat: the first cue
+# said wins ("sopralluogo dai Rossi per una variante" is a sopralluogo)
+_TYPE_CUES = [
+    ("sopralluogo", r"sopra+l+uog"),
+    ("intervento", r"\bintervent[oi]\b|riparazion|manutenzion|installazion|\bguast[oi]\b"),
+    ("sal", r"\bs\.?a\.?l\.?(?=\s|$|[,.:;!?])|stato (?:di |d')?avanzamento"),
+    ("fine_lavori", r"fine (?:dei )?lavori|verbale di (?:fine|consegna)|consegna (?:dei )?lavori|chiusura (?:dei )?lavori|lavori (?:finiti|terminati|conclusi)"),
+    ("variante", r"\bvariant[ei]\b|lavori (?:extra|aggiuntivi|in pi[uù])|extra lavori"),
+]
+
+
+def detect_report_type(text: str, custom: Optional[list] = None) -> Optional[str]:
+    """The report type the message asks for -> a BUILTIN_TEMPLATES key, "commessa", the id of
+    one of the user's own models named in it ({"id", "name"}), or None (the selection decides)."""
+    low = " ".join((text or "").lower().split())
+    if not low:
+        return None
+    if asks_commessa_report(low):
+        return COMMESSA_REPORT["key"]
+    for t in custom or []:
+        name = " ".join(str(t.get("name") or "").lower().split())
+        if len(name) >= 4 and re.search(rf"\b{re.escape(name)}\b", low):
+            return t["id"]
+    hits = [(m.start(), key) for key, rx in _TYPE_CUES for m in [re.search(rx, low)] if m]
+    return min(hits)[1] if hits else None
+
+
 def parts_from_text(text: str) -> list:
     """The parts named in the request ("solo ore e problemi"), in the report's order."""
     low = (text or "").lower()

@@ -280,6 +280,27 @@ async def main():
     assert sec["Ore lavorate"]["Ore per persona"] == "- Luca: 8 h\n- Gino: 6 h" and sec["Materiali"]["Materiali impiegati"] == "- 50 m cavo 2,5"
     assert "Lavori svolti" in sec and len(db.collection_sub_items.docs) == nsubs
 
+    assert r["type_from_text"]   # Primo sopralluogo was selected, the message asked for this one
+
+    # 8c) the message decides the type, the selection only when it says none
+    D = wr.detect_report_type
+    assert D("SAL del bagno dei Rossi: fatto il 60%") == "sal" and D("stato di avanzamento lavori Bianchi") == "sal"
+    assert D("Fine lavori del bagno dei Rossi, collaudato") == "fine_lavori" and D("verbale di consegna ai Verdi") == "fine_lavori"
+    assert D("Variante per i Rossi: una presa in più") == "variante" and D("lavori extra dai Bianchi") == "variante"
+    assert D("Intervento dai Verdi: riparato il quadro") == "intervento" and D("riparazione caldaia Neri") == "intervento"
+    assert D("sopralluogo dai Rossi per una variante in bagno") == "sopralluogo" and D("sopraluogo Bianchi") == "sopralluogo"
+    assert D("report della commessa bagno") == "commessa" and D("dai Rossi, bagno da rifare") is None
+    assert D("salvami il bagno dei Rossi") is None and D("SAL.") == "sal"
+    assert D("compila il Verbale ASL per i Rossi", [{"id": "wtpl_1", "name": "Verbale ASL"}]) == "wtpl_1"
+    # the chips with "Report di commessa" selected; what the message says wins over them
+    r = await server._generate_work_report(me, "report della commessa Bagno dei Rossi: solo i materiali, mese scorso", "commessa",
+                                           commessa_opts={"include": ["ore"], "period": "last7", "date_from": None, "date_to": None})
+    assert r["report_type"] == "commessa" and r["include"] == ["materiali"] and r["period_label"] == "dal 01/09/2026 al 30/09/2026"
+    assert not r["type_from_text"]
+    r = await server._generate_work_report(me, "Bagno dei Rossi", "commessa",
+                                           commessa_opts={"include": ["ore"], "period": "last7", "date_from": None, "date_to": None})
+    assert r["include"] == ["ore"] and r["period_label"] == "dal 18/10/2026 al 24/10/2026"   # nothing said: the chips
+
     # 9) a client with no commessa / an unknown commessa
     db.collection_items.docs.append({"id": "c_verdi", "collection_id": cl["id"], "data": {"nome": "Paolo Verdi"}})
     try:

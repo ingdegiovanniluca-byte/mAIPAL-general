@@ -378,6 +378,11 @@ class GenerateWorkReportPayload(BaseModel):
     report_type: str = "sopralluogo"   # chiave built-in o id di un template personalizzato
     client_item_id: Optional[str] = None   # forza un cliente (risoluzione ambiguità nome)
     new_client: bool = False               # "è un cliente nuovo" anche se il nome somiglia a uno esistente
+    # report di commessa: the chips, used for what the message doesn't say
+    include: List[str] = []
+    period: str = "all"
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
 
 
 class CommessaReportPayload(BaseModel):
@@ -5183,11 +5188,13 @@ async def delete_work_template(template_id: str, current: User = Depends(get_cur
 
 @api_router.post("/work/generate-report")
 async def generate_work_report(payload: GenerateWorkReportPayload, current: User = Depends(get_current_user)):
-    return await _generate_work_report(current, payload.text, payload.report_type, payload.client_item_id, payload.new_client)
+    opts = {"include": payload.include, "period": payload.period, "date_from": payload.date_from, "date_to": payload.date_to}
+    return await _generate_work_report(current, payload.text, payload.report_type, payload.client_item_id, payload.new_client,
+                                       commessa_opts=opts)
 
 
 async def _generate_work_report(current: User, text: str, report_type: str = "sopralluogo", client_item_id: Optional[str] = None,
-                                new_client: bool = False, channel: str = "web") -> dict:
+                                new_client: bool = False, channel: str = "web", commessa_opts: Optional[dict] = None) -> dict:
     """The artigiano's report from a dictation. The client is recognized deterministically in the
     Clienti list (several clients with that name -> {"status": "ambiguous_client", "candidates"}
     and the caller re-calls with client_item_id, or new_client); a client or a commessa that
@@ -5196,10 +5203,15 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Descrivi il sopralluogo o l'intervento")
-    # "fammi il report della commessa ..." with a dictated type still selected: the report di
-    # commessa, from the diary (parts and period read from the request) - never an empty sopralluogo
-    if report_type in work_reports.BUILTIN_TEMPLATES and not client_item_id and not new_client and work_reports.asks_commessa_report(text):
-        return await _generate_commessa_report(current, CommessaReportPayload(text=text), channel)
+    # the message says which report it is ("SAL del bagno", "fammi il report della commessa ..."):
+    # that wins over the type selected in the chat, which only counts when the message doesn't say
+    custom = await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(200)
+    said_type = work_reports.detect_report_type(text, custom)
+    from_text = bool(said_type) and said_type != report_type
+    report_type = said_type or report_type
+    if report_type == work_reports.COMMESSA_REPORT["key"]:   # from the diary, never dictated
+        rep = await _generate_commessa_report(current, CommessaReportPayload(text=text, **(commessa_opts or {})), channel)
+        return {**rep, "type_from_text": from_text}
     if report_type in work_reports.BUILTIN_TEMPLATES:
         template_name = work_reports.BUILTIN_TEMPLATES[report_type]["name"]
         skeleton = work_reports.BUILTIN_TEMPLATES[report_type]["sections"]
@@ -5316,6 +5328,7 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         "user_id": current.user_id,
         "org_id": current.org_id,
         "report_type": report_type,
+        "type_from_text": from_text,   # the message named another type than the selected one
         "template_name": template_name,
         "collection_id": clienti["id"],
         "client_item_id": client["id"] if client else None,
@@ -5406,7 +5419,11 @@ def _ms_report_line(v: dict) -> str:
 
 
 def _report_period(payload: "CommessaReportPayload", today: date) -> Optional[tuple]:
-    """(from, to) of a report di commessa, or None for the whole job."""
+    """(from, to) of a report di commessa, or None for the whole job: the period said in the
+    message first, then the one chosen with the chips."""
+    said = work_reports.parse_period(payload.text, today)
+    if said:
+        return said
     p = payload.period or "all"
     if p == "last7":
         return today - timedelta(days=6), today
@@ -5424,7 +5441,7 @@ def _report_period(payload: "CommessaReportPayload", today: date) -> Optional[tu
         if a and a > b:
             a, b = b, a
         return (a, b) if (a or payload.date_to) else None   # only "up to": from the job's first day
-    return work_reports.parse_period(payload.text, today)
+    return None
 
 
 @api_router.post("/work/commessa-report")
@@ -5464,7 +5481,7 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
     today = jl.today_local()
     period = _report_period(payload, today)
     valid = {k for k, _ in work_reports.COMMESSA_PARTS}
-    wants = [k for k in payload.include if k in valid] or work_reports.parts_from_text(text) or list(work_reports.COMMESSA_DEFAULT)
+    wants = work_reports.parts_from_text(text) or [k for k in payload.include if k in valid] or list(work_reports.COMMESSA_DEFAULT)
     q = {"commessa_id": cid}
     if period:
         q["date"] = {"$lte": period[1].isoformat(), **({"$gte": period[0].isoformat()} if period[0] else {})}

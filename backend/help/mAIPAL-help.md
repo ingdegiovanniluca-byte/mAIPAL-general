@@ -209,13 +209,14 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 
 ## Report di lavoro
 <!-- id: report-lavoro · verticale: artigiano -->
-L'agente **Report** genera report in Word, con lo spazio per le firme. Con l'icona sotto il nome scegli il tipo:
+L'agente **Report** genera report in Word, con lo spazio per le firme. **Che report fare lo capisce dal messaggio**: "SAL del bagno dei Rossi…", "fine lavori dai Bianchi…", "variante per i Verdi…", "intervento da…", "sopralluogo da…", "report della commessa…", o il nome di un tuo modello. Il tipo scelto con l'icona sotto il nome (accanto c'è scritto quale è) vale solo quando il messaggio non lo dice; se il messaggio chiede un altro tipo, la risposta lo segnala con "capito dal messaggio". I tipi sono:
 - **Primo sopralluogo**: stato attuale, rilievi, lavori proposti, tempi e stima indicativa.
 - **Rapporto di intervento**: un intervento (riparazione, manutenzione, installazione): orario, attività svolte, materiali, ore, esito.
 - **Stato avanzamento lavori (SAL)**: percentuale di avanzamento, lavori del periodo, problemi, prossime attività e previsione di fine lavori. Ore, materiali, problemi e milestone del periodo (dall'ultimo SAL, o dall'inizio) li prende **dal diario della commessa** se non li detti.
 - **Verbale di fine lavori**: lavori eseguiti, verifiche e collaudi, documentazione consegnata, garanzia; data di inizio e ore complessive dal diario.
 - **Lavori extra / variante**: lavori aggiunti o cambiati, con tempi e costo indicativo, da far approvare al cliente.
 - **Report di commessa**: non si detta, si costruisce **dal diario della commessa**. Sotto il nome scegli **cosa inserire** (riassunto stato commessa, lavori svolti, ore lavorate, problematiche, materiali, milestone, costi) e il **periodo** (tutta la commessa, ultimi 7 o 30 giorni, mese scorso, oppure dal… al… con le date). Poi scrivi di quale commessa si tratta, ad esempio "Report del bagno dei Rossi, metti in evidenza i ritardi".
+  - Quello che scrivi nel messaggio (parti e periodo) vale più dei pulsanti: i pulsanti servono per quello che il messaggio non dice.
   - Basta anche scriverlo nel messaggio, qualunque tipo sia selezionato: "Fammi il report della commessa impianto elettrico di Luca D per la settimana corrente, con attività, materiali e ore per lavoratore". mAIPAL capisce che è un report di commessa e prende dal messaggio le parti e il periodo. Funziona anche da Telegram con `/report`.
   - Il periodo puoi anche scriverlo nel messaggio ("di ottobre", "dal 1 al 15/10", "ultime due settimane") quando hai scelto "Tutta la commessa".
   - Ore, problemi, materiali, milestone e costi sono copiati dal diario così come sono. Il riassunto e i lavori svolti li scrive mAIPAL solo da quello che c'è nel diario del periodo.

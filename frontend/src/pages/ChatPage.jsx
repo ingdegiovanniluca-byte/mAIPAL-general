@@ -685,7 +685,7 @@ export default function ChatPage() {
       return;
     }
     const lines = [
-      `✅ Report generato: ${rep.template_name}`,
+      `✅ Report generato: ${rep.template_name}${rep.type_from_text ? " (capito dal messaggio)" : ""}`,
       rep.client_name
         ? `👤 Cliente: ${rep.client_name}${rep.client_created ? " (nuovo, aggiunto alla lista Clienti)" : ""}`
         : "👤 Cliente non indicato: il report non è collegato a nessun cliente",
@@ -714,7 +714,6 @@ export default function ChatPage() {
       ? [...thread.messages].reverse().find((m) => m.reportKind === "work" && m.reportId) : null;
     const commessaReport = workType === comTpl?.key && !lastReport;
     if (!content) { toast.error(commessaReport ? "Scrivi di quale commessa vuoi il report" : "Descrivi il sopralluogo"); return; }
-    if (commessaReport && !comPartsOn.length) { toast.error("Scegli almeno una cosa da inserire nel report"); return; }
     if (commessaReport && comPeriod === "custom" && !comFrom && !comTo) { toast.error("Scegli le date del periodo"); return; }
     if (streaming || transcribing) return;
     setStreaming(true);
@@ -733,16 +732,12 @@ export default function ChatPage() {
           : { role: "assistant", content: r.data.message }] }));
         return;
       }
-      if (commessaReport) {
-        // chips never touched: the parts named in the message, else the default ones (the backend decides)
-        const opts = { include: comParts || [], period: comPeriod, date_from: comPeriod === "custom" ? comFrom || null : null,
-                       date_to: comPeriod === "custom" ? comTo || null : null };
-        const r = await api.post("/work/commessa-report", { text: workText || content, ...opts });
-        appendWorkReportResult(r.data, opts);
-        return;
-      }
-      const r = await api.post("/work/generate-report", { text: workText || content, report_type: workType });
-      appendWorkReportResult(r.data);
+      // the message decides the report (and, for a report di commessa, what goes in and the
+      // period); the type selected and the chips only count for what the message doesn't say
+      const opts = commessaReport ? { include: comParts || [], period: comPeriod, date_from: comPeriod === "custom" ? comFrom || null : null,
+                                      date_to: comPeriod === "custom" ? comTo || null : null } : {};
+      const r = await api.post("/work/generate-report", { text: workText || content, report_type: workType, ...opts });
+      appendWorkReportResult(r.data, opts);
       await dispatchTagged(content, r.data?.id ? { type: "work_report", id: r.data.id, preview: (workText || "").slice(0, 200) } : null);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
@@ -1755,6 +1750,7 @@ export default function ChatPage() {
     setChatOpt({ cloud: on ? cloudTargets.filter((x) => x !== t) : [...cloudTargets, t] });
     flash(`${label}: ${on ? "spento" : "acceso"}`);
   };
+  const visitTypes = [...(tplList.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(tplList.custom || []).map((t) => ({ id: t.id, name: t.name }))];
   const agentOptions = [];
   if (active === "info_request") {
     agentOptions.push(
@@ -1782,9 +1778,21 @@ export default function ChatPage() {
       flash(chatOpts.taskBell ? "Promemoria: spento" : "Promemoria acceso per i nuovi task");
     }, "Promemoria"));
   } else if (active === "vet_report" || active === "work_report") {
-    agentOptions.push(optIcon("visit-type", ClipboardList, true, () => setVisitMenuOpen((v) => !v), isWork ? "Tipo di report" : "Tipo di visita"));
+    if (isWork) {
+      // Report: the selected type written beside its icon (the message can still ask for another)
+      const selName = visitTypes.find((t) => t.id === tplSel)?.name || "Primo sopralluogo";
+      agentOptions.push(
+        <button key="visit-type" type="button" data-testid="opt-visit-type" onClick={() => setVisitMenuOpen((v) => !v)}
+          title="Tipo di report" aria-label={`Tipo di report: ${selName}`} aria-expanded={visitMenuOpen}
+          className="h-8 inline-flex items-center gap-1.5 text-white drop-shadow-[0_0_6px_rgba(255,255,255,0.55)]">
+          <ClipboardList size={19} className="shrink-0" />
+          <span className="text-[13px] font-medium whitespace-nowrap" data-testid="visit-type-label">{selName}</span>
+        </button>,
+      );
+    } else {
+      agentOptions.push(optIcon("visit-type", ClipboardList, true, () => setVisitMenuOpen((v) => !v), "Tipo di visita"));
+    }
   }
-  const visitTypes = [...(tplList.builtin || []).map((t) => ({ id: t.key, name: t.name })), ...(tplList.custom || []).map((t) => ({ id: t.id, name: t.name }))];
 
   const compactHero = !!(text.trim() || thread || mobileReplyTo || attachments.length || pendingVoice);
   // where the drop goes: the height of a capital "D" in the name's font (Diario's first letter:
