@@ -1,22 +1,22 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, FileText, LayoutGrid, MessageSquareText, Plus, Rows3, Search, Sparkles, Trash2, Type, X } from "lucide-react";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import InfoCard from "@/components/InfoCard";
-import { ClipDefs } from "@/components/TodoFolders";
+import { ClipDefs, Folder } from "@/components/TodoFolders";
 
-/* Documenti on the phone: one folder per topic (category), two per row, of the To-Do's glass and
-   in the topic's colour; files and the information saved through Salva together. The first ones
-   peek out of the folder; a finger held on it a moment fans them out (a slide scrolls the page),
-   a tap opens the list of all of them, a document in the list opens its card. On top, always,
-   the totals: documents, characters, categories. */
+/* Documenti on the phone: one folder per topic (category), two per row - the To-Do's folders,
+   with their gestures, in the topic's colour; files and the information saved through Salva
+   together. The newest peek out of the folder: a finger on them fans them out, slid up they stay
+   up (then sideways it scrolls through all of them, down puts them back, a tap opens one); a tap
+   on the folder opens the list of all of them. The page scrolls from the folders' lower part and
+   the gaps. On top, always, the totals: documents, characters, categories. */
 
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "short" }) : "");
 const longDay = (iso) => (iso ? new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "long" }) : "");
 const num = (n) => new Intl.NumberFormat("it-IT").format(n || 0);
 const isInfo = (d) => d.source_type === "chat";
 const kind = (d) => (isInfo(d) ? "Info" : d.source_type === "image_ocr" ? "Foto" : (d.ext || "file").toUpperCase());
-const HOLD_MS = 350;   // a finger held this long on a folder fans its documents out (shorter: a tap)
 
 function useScrolled() {
   const [on, setOn] = useState(false);
@@ -53,67 +53,6 @@ function Totals({ docs, groups }) {
         <InfoCard icon={Type} label="Caratteri" value={num(chars)} testid="docs-stat-chars" />
         <InfoCard icon={LayoutGrid} label="Categorie" value={num(groups.length)} testid="docs-stat-categories" />
       </div>
-    </div>
-  );
-}
-
-function DocFolder({ g, k, fan, onFan, onUnfan, onOpen, onAdd }) {
-  const press = useRef(null);
-  const touchedAt = useRef(0);   // a finger answers on lifting; the click the browser sends after it is ignored
-  // a finger: a tap opens the folder when it lifts, held a moment it fans the documents out
-  // (lifting then only puts them back), moved it is scrolling the page
-  const down = (e) => {
-    if (e.pointerType === "mouse") return;
-    touchedAt.current = Date.now();
-    const p = { x: e.clientX, y: e.clientY, held: false, onAdd: !!e.target.closest(".tf-add") };
-    p.timer = setTimeout(() => { p.held = true; onFan(); }, HOLD_MS);
-    press.current = p;
-  };
-  const end = (lifted) => {
-    const p = press.current;
-    press.current = null;
-    if (!p) return;
-    clearTimeout(p.timer);
-    touchedAt.current = Date.now();
-    if (p.held) onUnfan();
-    else if (lifted && !p.onAdd) onOpen();
-  };
-  const move = (e) => {
-    const p = press.current;
-    if (p && !p.held && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 8) { clearTimeout(p.timer); press.current = null; }   // scrolling
-  };
-  return (
-    <div className={`todo-folder ${fan ? "fan" : ""}`} data-testid={`doc-folder-${g.key}`}
-      style={{ "--k": k, "--tone": `linear-gradient(160deg, ${g.meta.color}40, ${g.meta.color}0d)`, touchAction: "pan-y", WebkitTouchCallout: "none" }}
-      onPointerDown={down} onPointerMove={move} onPointerUp={() => end(true)} onPointerCancel={() => end(false)}
-      onPointerEnter={(e) => { if (e.pointerType === "mouse") onFan(); }}
-      onPointerLeave={(e) => { if (e.pointerType === "mouse") onUnfan(); else end(false); }}
-      onContextMenu={(e) => e.preventDefault()}
-      onClick={(e) => {   // the mouse (a finger was already answered on lifting)
-        if (Date.now() - touchedAt.current < 800) return;
-        if (!e.target.closest(".tf-add")) onOpen();
-      }}>
-      <div className="tf-shade"><i /></div>
-      <div className="tf-back" />
-      {g.items.slice(0, 3).map((d, i) => (
-        <div key={d.doc_id} className={`tf-sheet s${i} ${fan && i === 0 ? "hot" : ""}`}>
-          <div className="tf-st">{d.name}</div>
-          <div className="tf-sm"><i style={{ background: g.meta.color }} />{kind(d)} · {day(d.created_at)}</div>
-        </div>
-      ))}
-      <div className="tf-front" />
-      <div className="tf-lbl tf-idle">
-        <div className="tf-n doc-folder-name">{g.meta.label}</div>
-        <div className="tf-c"><Rows3 /> {g.items.length} doc</div>
-      </div>
-      <div className="tf-lbl tf-open">
-        <div className="tf-n">{g.meta.label}</div>
-        <div className="tf-c">aggiornato il {day(g.items[0].created_at)}</div>
-      </div>
-      <button type="button" className="tf-add" data-testid={`doc-folder-add-${g.key}`} aria-label={`Aggiungi a ${g.meta.label}`}
-        onClick={(e) => { e.stopPropagation(); onAdd(); }}>
-        <Plus />
-      </button>
     </div>
   );
 }
@@ -161,13 +100,15 @@ function DocSheet({ d, meta, icon, onClose, onDelete }) {
 export default function DocFolders({ docs, loading, meta, q, setQ, onDelete, icon }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const [fan, setFan] = useState(null);
+  const [fan, setFan] = useState(null);           // {key, hot}
+  const [pinned, setPinned] = useState(null);     // the folder whose cards stay up
   const [card, setCard] = useState(null);
   const k = useScale();
   // a folder per topic that has something, the fullest first; inside, the newest first
   const groups = Object.entries(meta)
     .map(([key, m]) => ({ key, meta: m, items: docs.filter((d) => (meta[d.category] ? d.category : "altro") === key)
-      .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")) }))
+      .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))
+      .map((d) => ({ ...d, id: d.doc_id, title: d.name })) }))
     .filter((g) => g.items.length)
     .sort((a, b) => b.items.length - a.items.length || (b.items[0].created_at || "").localeCompare(a.items[0].created_at || ""));
   const openKey = params.get("cartella");
@@ -238,9 +179,15 @@ export default function DocFolders({ docs, loading, meta, q, setQ, onDelete, ico
       )}
       <div className="grid grid-cols-2 gap-x-[22px] gap-y-[54px] mt-[70px] pb-6 justify-items-center">
         {groups.map((g) => (
-          <DocFolder key={g.key} g={g} k={k} fan={fan === g.key}
-            onFan={() => setFan(g.key)} onUnfan={() => setFan((cur) => (cur === g.key ? null : cur))}
-            onOpen={() => { setFan(null); openFolder(g.key); }} onAdd={add} />
+          <Folder key={g.key} folder={{ key: g.key, label: g.meta.label, tone: `linear-gradient(160deg, ${g.meta.color}40, ${g.meta.color}0d)` }}
+            items={g.items} k={k} unit="doc" nameClass="doc-folder-name"
+            cardMeta={(d) => `${kind(d)} · ${day(d.created_at)}`} cardDot={() => g.meta.color}
+            fan={fan?.key === g.key} hot={fan?.key === g.key ? fan.hot : -1} pinned={pinned === g.key}
+            onFan={(hot) => { if (pinned && pinned !== g.key) setPinned(null); setFan((cur) => (cur?.key === g.key && cur.hot === hot ? cur : { key: g.key, hot })); }}
+            onUnfan={() => setFan((cur) => (cur?.key === g.key ? null : cur))}
+            onPin={() => { setFan(null); setPinned(g.key); }}
+            onUnpin={() => setPinned((cur) => (cur === g.key ? null : cur))}
+            onOpen={() => { setPinned(null); setFan(null); openFolder(g.key); }} onOpenTodo={(d) => setCard(d)} onAdd={add} />
         ))}
       </div>
       {sheet}

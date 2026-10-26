@@ -281,7 +281,7 @@ Documenti è la tua **base di conoscenza**: tutto quello che hai caricato con Sa
 - Per aggiungerne: Chat → Salva, con la graffetta (o condividendo un file dal telefono verso mAIPAL).
 - **Sul telefono** i documenti sono in **cartelle**, una per argomento (Lavoro, Ricevute, Finanza…), due per riga: le più piene in alto, ognuna con il colore del suo argomento. Dentro ci sono i file e anche le **informazioni registrate** con Salva (segnate **Info**).
   - In alto, sempre visibili anche scorrendo: quanti **documenti** (e quante sono info), quanti **caratteri** e quante **categorie**.
-  - Dalla cartella spuntano gli ultimi documenti; **tieni il dito fermo** un attimo sulla cartella per vederli a ventaglio. Scorrendo con il dito, scorre la pagina.
+  - Dalla cartella spuntano gli ultimi documenti, e i gesti sono quelli dei To-Do: col dito sopra escono a ventaglio; **scorri in su** sopra i documenti e restano alzati; allora scorrendo in orizzontale li sfogli tutti (dopo l'ultimo ricomincia dal primo), toccandone uno apri la sua scheda, e scorrendo in giù rientrano. La pagina scorre trascinando sulla parte bassa delle cartelle (nome e numero) o negli spazi tra una e l'altra.
   - **Tocca** la cartella per l'elenco dei suoi documenti, dal più recente; tocca un documento per la sua scheda (argomento, parole chiave, anteprima, **Apri su Drive**, **Elimina**). Con la freccia in alto (o il tasto indietro) torni alle cartelle.
   - Il **+** apre la chat con **Salva** per aggiungere un documento: l'argomento lo sceglie mAIPAL.
 

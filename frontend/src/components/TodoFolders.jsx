@@ -98,7 +98,10 @@ function slotStyle(p, last) {
            opacity: Math.max(0, Math.min(1, fade)) };
 }
 
-function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onUnpin, onOpen, onOpenTodo, onAdd }) {
+// also the Documenti's folders: items {id, title, ...}, with what their cards say (cardMeta,
+// cardDot) and what they are called (unit)
+export function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onUnpin, onOpen, onOpenTodo, onAdd,
+                         unit = "to do", cardMeta = meta, cardDot = (t) => PRIORITY[t.priority]?.color, nameClass = "" }) {
   const n = items.length;
   const hit = useRef(null);
   const press = useRef(null);
@@ -175,7 +178,8 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
     press.current = null;
     if (!p) return;
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
-    const tap = Math.abs(dx) < 8 && Math.abs(dy) < 8 && Date.now() - p.t < 350;
+    // with the cards up a slow tap still opens the card (nothing else is done holding still there)
+    const tap = Math.abs(dx) < 8 && Math.abs(dy) < 8 && Date.now() - p.t < (pinned ? 800 : 350);
     try { hit.current?.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
     if (pinned) {
       if (tap) {
@@ -233,21 +237,21 @@ function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onPin, onU
         <div key={`c${v}`} data-todo-card={t.id} className={`tf-sheet s${mod(v, 3)} ${fan && !pinned && hot === v ? "hot" : ""}`} style={style}>
           <div className="tf-st">{t.title}</div>
           <div className="tf-sm">
-            {PRIORITY[t.priority] && <i style={{ background: PRIORITY[t.priority].color }} />}
-            {meta(t)}
+            {cardDot(t) && <i style={{ background: cardDot(t) }} />}
+            {cardMeta(t)}
           </div>
         </div>
       ))}
       <div className="tf-front" />
       <div className="tf-lbl tf-idle">
-        <div className="tf-n">{folder.label}</div>
-        <div className="tf-c"><Rows3 /> {items.length} to do</div>
+        <div className={`tf-n ${nameClass}`}>{folder.label}</div>
+        <div className="tf-c"><Rows3 /> {items.length} {unit}</div>
       </div>
       <div className="tf-lbl tf-open">
         <div className="tf-n">{folder.label}</div>
         <div className="tf-c">{lastChange(items)}</div>
       </div>
-      <button type="button" className="tf-add" data-testid={`folder-add-${folder.key}`} onClick={onAdd} aria-label={`Nuovo to do in ${folder.label}`}>
+      <button type="button" className="tf-add" data-testid={`folder-add-${folder.key}`} onClick={onAdd} aria-label={`Aggiungi in ${folder.label}`}>
         <Plus />
       </button>
       {pinned && n > 1 && (
