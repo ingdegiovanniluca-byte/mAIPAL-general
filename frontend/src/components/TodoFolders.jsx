@@ -33,7 +33,7 @@ const BACK = "M0 52 Q0 32 20 32 L132 32 C151 32 151 0 172 0 L298 0 Q318 0 318 20
 const FRONT = "M0 89 Q0 69 20 69 L116 69 C138 69 139 98 162 98 L298 98 Q318 98 318 118 L318 235 Q318 255 298 255 L20 255 Q0 255 0 235 Z";
 const unit = (d) => { let i = 0; return d.replace(/-?\d+(\.\d+)?/g, (n) => (+n / (i++ % 2 ? H : W)).toFixed(5)); };
 
-function ClipDefs() {
+export function ClipDefs() {
   return (
     <svg width="0" height="0" className="absolute" aria-hidden="true">
       <defs>

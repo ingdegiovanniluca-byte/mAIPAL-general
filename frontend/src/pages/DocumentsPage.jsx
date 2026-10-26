@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { Input } from "@/components/ui/input";
+import DocFolders from "@/components/DocFolders";
 import { toast } from "sonner";
 import {
   FolderOpen, FileText, FileSpreadsheet, FileImage, FileType, File as FileIcon,
@@ -103,6 +104,11 @@ export default function DocumentsPage() {
   const catMask = `linear-gradient(to right, ${catEdges.start ? "#000" : "transparent"} 0, #000 24px, #000 calc(100% - 24px), ${catEdges.end ? "#000" : "transparent"} 100%)`;
 
   const totalChars = useMemo(() => docs.reduce((s, d) => s + (d.chars || 0), 0), [docs]);
+
+  // the phone: one folder per topic, two per row (DocFolders); the computer keeps the cards
+  if (isMobile) {
+    return <DocFolders docs={docs} loading={loading} meta={CATEGORY_META} q={q} setQ={setQ} onDelete={del} icon={extIcon} />;
+  }
 
   return (
     <div className="w-full">

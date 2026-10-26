@@ -7,6 +7,7 @@ import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertT
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
+import InfoCard from "@/components/InfoCard";
 import CommessaContacts from "@/components/CommessaContacts";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
@@ -115,25 +116,6 @@ const periodRange = (p) => (p.key === "30" ? { from: daysAgoIso(29), to: todayIs
 // an item of the row on top of the diary: the icon on the left, at the height of the small
 // caps label; the label and the value under it start on the same vertical (with a short grey
 // note beside the value when useful); no box behind
-function InfoCard({ icon: Icon, label, value, note, onClick, href, testid, ariaLabel, external }) {
-  const cls = "snap-start shrink-0 min-w-[92px] max-w-[190px] py-1 flex items-start gap-1.5 text-left text-white"
-    + (onClick || href ? " active:opacity-70" : "");
-  const body = (
-    <>
-      <Icon size={14} className="text-white/55 shrink-0" />
-      <span className="flex flex-col gap-1.5 min-w-0">
-        <span className="text-[10px] leading-[14px] uppercase tracking-widest text-white/50 truncate" data-testid="info-label">{label}</span>
-        <span className="flex items-baseline gap-1.5 min-w-0" data-testid="info-value">
-          <span className="text-[15px] font-medium text-white/90 truncate">{value}</span>
-          {note && <span className="text-[11px] text-white/55 whitespace-nowrap">{note}</span>}
-        </span>
-      </span>
-    </>
-  );
-  if (href) return <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</a>;
-  if (onClick) return <button type="button" onClick={onClick} data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</button>;
-  return <div data-testid={testid} aria-label={ariaLabel} className={cls}>{body}</div>;
-}
 
 // ===== Milestone templates: the steps of a kind of job (ready-made, or saved from a commessa),
 // each due N working days after the start; applied to a commessa from a start date.

@@ -746,6 +746,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .todo-folder .tf-add:active { transform: scale(.94); }
 .todo-folder .tf-hit { position: absolute; left: 0; right: 0; top: calc(-40px * var(--k)); height: calc(140px * var(--k)); z-index: 5; touch-action: none; }
 .todo-folder.fan { z-index: 6; }
+/* Documenti on the phone: the same folders, two per row - the cards' text a little bigger than
+   the scale would give, the topic's name never under the + */
+.doc-folders .todo-folder .tf-st { font-size: 10.5px; }
+.doc-folders .todo-folder .tf-sm { font-size: 9px; }
+.docs-totals.scrolled { background: rgba(96, 32, 76, .9); backdrop-filter: blur(28px) saturate(140%); -webkit-backdrop-filter: blur(28px) saturate(140%); }
+[data-theme="light"] .docs-totals.scrolled { background: rgba(255, 255, 255, .95); }
+.doc-folders .todo-folder .doc-folder-name { max-width: calc(190px * var(--k)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* cards kept up: the touch area covers them, a sideways slide follows the finger without delay */
 .todo-folder.pinned .tf-hit { top: calc(-120px * var(--k)); height: calc(240px * var(--k)); }
 .todo-folder.sliding .tf-sheet { transition: none; }
