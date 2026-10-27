@@ -151,6 +151,15 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Se non si capisce se i materiali sono stati usati o sono da prendere (es. solo "10 scatole 503"), mAIPAL chiede con due pulsanti: **Usati oggi** / **Da prendere**.
 - I materiali da prendere si vedono in cima alla sezione **Materiali** (blocco **Da prendere**) e tra i **To Do**, con l'icona della scatola. Se una voce già salvata ha un materiale che in realtà era da prendere, aprila e tocca l'icona del calendario accanto al materiale: esce dai materiali usati e diventa un promemoria per il giorno dopo.
 - I collaboratori esterni possono anche segnare **arrivo e fine in cantiere** dal pulsante 📍 su Telegram: le ore vanno nel diario da sole, con la distanza dal cantiere (vedi "Collaboratori su Telegram"). In alto, **In cantiere ora** mostra chi sta lavorando; la posizione del cantiere la imposti dal pallino sulla mappa (o dalla voce **Cantiere**, se la mappa non c'è ancora).
+- **Anche tu e il tuo team** segnate arrivo e fine in cantiere:
+  - **dall'app**: nel diario della commessa, sotto il nome, tocca **📍 Sono in cantiere** (con la posizione del telefono, se la permetti) e poi **Ho finito**. Alla fine scegli se togliere una pausa e scrivi **com'è andata oggi**: va nel diario;
+  - **da Telegram**: comando `/cantiere` per il pulsante 📍, oppure scrivi «sono arrivato (dai Rossi)» / «ho finito (alle 17:30)». Se le commesse aperte sono più di una, la sceglie la posizione, il nome scritto o i pulsanti.
+  - Le ore vanno nel diario a nome tuo, come quelle dei collaboratori.
+- **Controllo serale**: dalle **19:00** (l'orario lo cambi in Impostazioni → Collaboratori) chi risulta ancora in cantiere riceve la domanda **«Sei ancora in cantiere?»**, su Telegram con i pulsanti **Sì / No** e, per chi usa l'app, con una notifica e il riquadro nel diario. Tu ricevi un avviso con chi è ancora lì e poi la sua risposta.
+  - **No**: chiede a che ora è andato via (pulsanti con le mezz'ore, oppure «ho finito alle 17:40») e chiude il tempo a quell'ora.
+  - **Sì**: la domanda torna due ore dopo.
+  - Chi ha iniziato tardi riceve la domanda due ore dopo l'inizio.
+- **Com'è andata oggi?**: una ventina di minuti dopo la fine, se nel diario di quella commessa non ha scritto niente quel giorno (solo le ore), chi era in cantiere riceve la domanda. La risposta, anche a voce, va nel diario della commessa.
 - L'agente Diario **scrive soltanto**: salva solo quello che hai detto tu, senza aggiungere nulla. Se la nota non è chiara non salva niente e ti chiede di precisare. Se invece fai una domanda ("com'è messa la commessa dei Rossi?") non salva niente: per cercare usa l'agente **Cerca** oppure la chat della commessa qui nel Diario.
 - Puoi allegare le foto: vanno nella voce e nella cartella della commessa su Drive/OneDrive. Se mandi prima la foto e poi (entro 20 minuti) la sua descrizione, scritta o a voce, la descrizione completa la voce della foto invece di crearne una nuova.
 - Da Telegram: comando `/journal` o scrivi liberamente; le foto mandate subito dopo vanno nella stessa voce.

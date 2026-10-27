@@ -21,6 +21,27 @@ const BUSINESS_VERTICALS = [
   { key: "artigiano", label: "Artigiano", icon: Hammer },
 ];
 
+// presences on site: from this hour whoever still results "in cantiere" (collaborators, the team,
+// me) is asked if they really are, and I am told
+function PresenceHourRow() {
+  const { user, setUser } = useAuth();
+  const [at, setAt] = useState(user?.presence_late_at || "19:00");
+  const save = async (v) => {
+    if (!/^\d{2}:\d{2}$/.test(v) || v === (user?.presence_late_at || "19:00")) return;
+    try { setUser((await api.patch("/profile", { presence_late_at: v })).data); toast.success(`Controllo presenze alle ${v}`); }
+    catch { toast.error("Orario non valido"); }
+  };
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-white/5 px-4 py-3 mb-4" data-testid="presence-late-row">
+      <span className="flex-1 text-[13px] text-white/80 leading-snug">
+        Alle <b>{at}</b> chiedo a chi risulta ancora in cantiere se lo è davvero, e ti avviso.
+      </span>
+      <input type="time" value={at} onChange={(e) => setAt(e.target.value)} onBlur={(e) => save(e.target.value)} data-testid="presence-late-at"
+        className="com-date h-9 rounded-full bg-white/10 px-3 text-white text-[13px]" />
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { user, setUser } = useAuth();
   const [status, setStatus] = useState(null);
@@ -493,6 +514,7 @@ export default function SettingsPage() {
   const secCollaborators = (mode) => (user?.role === "admin") ? (
     <Section mode={mode} id="collaborators" testid="collaborators-card-settings" icon={HardHat} title="Collaboratori"
       subtitle="Collaboratori esterni che scrivono nel diario delle commesse da Telegram, senza accesso all'app.">
+      <PresenceHourRow />
       <CollaboratorsPanel />
     </Section>
   ) : null;

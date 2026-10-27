@@ -109,6 +109,7 @@ class User(BaseModel):
     org_role: Optional[Literal["owner", "member"]] = None
     news_time: Optional[str] = "08:00"
     summary_time: Optional[str] = "07:00"
+    presence_late_at: Optional[str] = None
     business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
 
 
@@ -144,6 +145,8 @@ class ProfilePatch(BaseModel):
     news_time: Optional[str] = None
     summary_time: Optional[str] = None
     business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
+    # artigiano: from this hour whoever is still "in cantiere" is asked if they really are
+    presence_late_at: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 class ChatRequest(BaseModel):
@@ -7679,6 +7682,56 @@ async def _open_presence(collab_id: str) -> Optional[dict]:
     return await db.work_sessions.find_one({"collaborator_id": collab_id, "end_at": None}, {"_id": 0})
 
 
+# Not only the collaborators: the app's users (the owner, the colleagues of the team) say they
+# are on site too - from the app or the bot. Their presence is the same thing, kept under the id
+# "usr_<user_id>" in work_sessions.collaborator_id ("who is working"); their diary entry is theirs.
+USER_WORKER = "usr_"
+
+
+def _user_worker(udoc: dict, owner_user_id: Optional[str] = None) -> dict:
+    """An app user as "who is on site". owner_user_id: whose Clienti list the commesse are."""
+    first = _first_name(udoc.get("name")) or "Io"
+    rest = " ".join((udoc.get("name") or "").split()[1:])
+    return {"id": f"{USER_WORKER}{udoc['user_id']}", "user_id": udoc["user_id"], "owner_user_id": owner_user_id or udoc["user_id"],
+            "first_name": first, "last_name": rest, "company": "", "status": "active",
+            "telegram_chat_id": udoc.get("telegram_chat_id"), "is_user": True}
+
+
+async def _worker_of(worker_id: Optional[str]) -> Optional[dict]:
+    """Who a work session belongs to: a collaborator, or an app user."""
+    if not worker_id:
+        return None
+    if worker_id.startswith(USER_WORKER):
+        u = await db.users.find_one({"user_id": worker_id[len(USER_WORKER):]}, {"_id": 0})
+        return _user_worker(u) if u else None
+    return await db.collaborators.find_one({"id": worker_id}, {"_id": 0})
+
+
+async def _tg_send(chat_id, text: str, kb=None) -> bool:
+    """A Telegram message (Markdown, plain text if that fails)."""
+    if not chat_id or not tg.bot_token():
+        return False
+    from telegram import Bot
+    bot = Bot(token=tg.bot_token())
+    for mode in ("Markdown", None):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, **({"parse_mode": mode} if mode else {}))
+            return True
+        except Exception:
+            if mode is None:
+                logger.exception("telegram message failed")
+    return False
+
+
+async def _tell_worker(w: dict, text: str, kb=None) -> bool:
+    """To whoever is on site, on Telegram: a collaborator (if active) or an app user (if linked)."""
+    if not w or w.get("status", "active") != "active":
+        return False
+    if not w.get("is_user") and kb is None:   # a plain message to a collaborator: the usual way
+        return await _tell_collaborator(w, text)
+    return await _tg_send(w.get("telegram_chat_id"), text, kb)
+
+
 def _local(iso: str) -> datetime:
     return datetime.fromisoformat(iso).astimezone(LOCAL_TZ)
 
@@ -7691,8 +7744,8 @@ async def _presence_start(collab: dict, owner: Optional[User], view: Optional[di
                 "quando hai finito tocca 📍 Ho finito (o scrivi «ho finito»).")
     geo = await _commessa_geo(view["id"], view) if loc else None
     d = sp.distance_m(loc, geo)
-    doc = {"id": f"ws_{uuid.uuid4().hex[:12]}", "collaborator_id": collab["id"], "owner_user_id": collab["owner_user_id"],
-           "org_id": owner.org_id, "commessa_id": view["id"], "commessa_title": view.get("title"), "client_name": view.get("client_name"),
+    doc = {"id": f"ws_{uuid.uuid4().hex[:12]}", "collaborator_id": collab["id"], "user_id": collab.get("user_id"),
+           "owner_user_id": collab["owner_user_id"], "org_id": owner.org_id if owner else None, "commessa_id": view["id"], "commessa_title": view.get("title"), "client_name": view.get("client_name"),
            "start_at": at.astimezone(timezone.utc).isoformat(), "start_loc": loc, "start_m": d, "site_known": geo is not None,
            "end_at": None, "end_loc": None, "end_m": None, "created_at": datetime.now(timezone.utc).isoformat()}
     await db.work_sessions.insert_one(doc)
@@ -7703,6 +7756,7 @@ async def _presence_start(collab: dict, owner: Optional[User], view: Optional[di
     msg += f" ({sp.distance_text(d)})." if d is not None else "." if loc else " (senza posizione)."
     if sp.far(d):
         msg += f"\n⚠️ Risulti {sp.distance_text(d)}: se sei nel posto giusto va bene così, la distanza resta segnata."
+    if sp.far(d) and owner and owner.user_id != collab.get("user_id"):
         push.fire_and_forget(db, owner.user_id, f"⚠️ {_collab_name(collab)} · {view.get('title')}",
                              f"Inizio lavoro {sp.distance_text(d)}", f"/dashboard/journal?commessa={view['id']}", f"ws-{doc['id']}")
     if loc and geo is None:
@@ -7710,7 +7764,7 @@ async def _presence_start(collab: dict, owner: Optional[User], view: Optional[di
     return msg + "\nQuando hai finito tocca 📍 Ho finito (o scrivi «ho finito»)." + ("" if loc else "\nCon il pulsante 📍 si registra anche la posizione.")
 
 
-async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict]) -> tuple:
+async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict], channel: str = "telegram") -> tuple:
     """The end: the hours in the diary of that commessa. -> (answer, diary entry id or None)."""
     s_ = await _open_presence(collab["id"])
     if not s_:
@@ -7735,14 +7789,17 @@ async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict]) -> tup
     geo = await _commessa_geo(view["id"], view) if loc else None
     d_end = sp.distance_m(loc, geo)
     hours = sp.round_hours(minutes)
-    log = _presence_log(collab, owner, view, s_, at, minutes, 0, loc, d_end)
+    log = _presence_log(collab, owner, view, s_, at, minutes, 0, loc, d_end, channel)
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
     await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": at.astimezone(timezone.utc).isoformat(), "end_loc": loc,
                                                                   "end_m": d_end, "minutes": minutes, "log_id": log["id"]}})
+    if s_.get("late_asked_at") and not s_.get("late_answer_at"):   # the evening's question answered by closing
+        await _presence_answered(s_, collab, left_at=at)
     await db.collaborators.update_one({"id": collab["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": datetime.now(timezone.utc).isoformat()}}})
-    author = {"id": collab["id"], "first_name": collab.get("first_name") or "", "name": _collab_name(collab), "company": collab.get("company") or ""}
-    _push_collab_entry(owner, log, author)
+    if not collab.get("is_user"):
+        author = {"id": collab["id"], "first_name": collab.get("first_name") or "", "name": _collab_name(collab), "company": collab.get("company") or ""}
+        _push_collab_entry(owner, log, author)
     if hours:
         asyncio.create_task(_check_budget_alert(clienti, view["id"]))
     msg = (f"🔴 Fine alle {sp.hhmm(at.astimezone(LOCAL_TZ))}: {sp.fmt_duration(minutes)} su «{view['title']}» → "
@@ -7753,7 +7810,7 @@ async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict]) -> tup
 
 
 def _presence_log(collab: dict, owner: User, view: dict, s_: dict, end: datetime, minutes: int, pause: int,
-                  end_loc: Optional[dict], end_m: Optional[int]) -> dict:
+                  end_loc: Optional[dict], end_m: Optional[int], channel: str = "telegram") -> dict:
     """The diary entry of a presence: the times, the hours (pauses out) and how far from the site."""
     start_l, end_l = _local(s_["start_at"]), end.astimezone(LOCAL_TZ)
     worked = max(0, minutes - pause)
@@ -7763,13 +7820,13 @@ def _presence_log(collab: dict, owner: User, view: dict, s_: dict, end: datetime
     text = (f"In cantiere dalle {sp.hhmm(start_l)} alle {sp.hhmm(end_l)} ({sp.fmt_duration(worked)}"
             + (f", pausa {sp.fmt_duration(pause)} esclusa" if pause else "") + ")" + (f" · ⚠️ {', '.join(warn)}" if warn else ""))
     return {
-        "id": f"jlog_{uuid.uuid4().hex[:12]}", "user_id": owner.user_id, "org_id": owner.org_id,
-        "author_name": collab.get("first_name") or _collab_name(collab), "collaborator_id": collab["id"],
+        "id": f"jlog_{uuid.uuid4().hex[:12]}", "user_id": collab.get("user_id") or owner.user_id, "org_id": owner.org_id,
+        "author_name": collab.get("first_name") or _collab_name(collab), "collaborator_id": None if collab.get("is_user") else collab["id"],
         "author_company": collab.get("company") or "",
         "collection_id": view["collection_id"], "client_item_id": view["client_item_id"], "client_name": view["client_name"],
         "commessa_id": view["id"], "commessa_title": view["title"], "date": start_l.date().isoformat(),
         "raw_text": text, "text": text, "hours": [{"who": collab.get("first_name") or _collab_name(collab), "hours": sp.round_hours(worked)}],
-        "materials": [], "problems": [], "photos": [], "channel": "telegram", "conv_id": None,
+        "materials": [], "problems": [], "photos": [], "channel": channel, "conv_id": None,
         "created_at": datetime.now(timezone.utc).isoformat(), "embedding": None,
         "presence": {"session_id": s_["id"], "start_at": s_["start_at"], "end_at": end.astimezone(timezone.utc).isoformat(),
                      "minutes": minutes, "pause_min": pause, "start_m": s_.get("start_m"), "end_m": end_m,
@@ -7783,16 +7840,23 @@ PRESENCE_GONE = "Non trovo più quella voce."
 async def _presence_pause(collab: dict, log_id: str, pause: int) -> str:
     """A pause taken out of a presence's hours (the last choice counts; 0 = none)."""
     log = await db.job_logs.find_one({"id": log_id}, {"_id": 0})
-    if not log or log.get("collaborator_id") != collab["id"] or not log.get("presence"):
+    mine = log and ((collab.get("is_user") and log.get("user_id") == collab.get("user_id") and not log.get("collaborator_id"))
+                    or (not collab.get("is_user") and log.get("collaborator_id") == collab["id"]))
+    if not mine or not log.get("presence"):
         return PRESENCE_GONE
     pr = log["presence"]
     pause = max(0, min(int(pause), pr["minutes"] - 1))
-    owner = User(**(await db.users.find_one({"user_id": collab["owner_user_id"]}, {"_id": 0})))
+    session = await db.work_sessions.find_one({"id": pr["session_id"]}, {"_id": 0}) or {}
+    owner_doc = await db.users.find_one({"user_id": session.get("owner_user_id") or collab["owner_user_id"]}, {"_id": 0})
+    if not owner_doc:
+        return PRESENCE_GONE
+    owner = User(**owner_doc)
     view = {"id": log["commessa_id"], "title": log["commessa_title"], "client_name": log["client_name"],
             "collection_id": log["collection_id"], "client_item_id": log["client_item_id"]}
     s_ = {"id": pr["session_id"], "start_at": pr["start_at"], "start_m": pr.get("start_m"), "start_loc": pr.get("start_loc"),
           "site_known": pr.get("site_known")}
-    new = _presence_log(collab, owner, view, s_, datetime.fromisoformat(pr["end_at"]), pr["minutes"], pause, pr.get("end_loc"), pr.get("end_m"))
+    new = _presence_log(collab, owner, view, s_, datetime.fromisoformat(pr["end_at"]), pr["minutes"], pause, pr.get("end_loc"), pr.get("end_m"),
+                        log.get("channel") or "telegram")
     upd = {k: new[k] for k in ("text", "raw_text", "hours", "presence")}
     await db.job_logs.update_one({"id": log_id}, {"$set": {**upd, "embedding": None}})
     if not pause:
@@ -7809,27 +7873,306 @@ async def _presence_forgotten(now_utc: Optional[datetime] = None) -> int:
     for s_ in await db.work_sessions.find({"end_at": None, "start_at": {"$lt": limit}}, {"_id": 0}).to_list(500):
         await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": s_["start_at"], "forgotten": True}})
         n += 1
-        c = await db.collaborators.find_one({"id": s_["collaborator_id"]}, {"_id": 0})
+        c = await _worker_of(s_["collaborator_id"])
         when = f"{_short_it_date(_local(s_['start_at']).date().isoformat())} alle {sp.hhmm(_local(s_['start_at']))}"
         if c:
+            text = (f"⏱️ Non hai segnato la fine del lavoro su «{s_['commessa_title']}» (iniziato {when}): "
+                    "non ho contato le ore. Scrivimele, es. «ieri 8 ore».")
             try:
-                await _tell_collaborator(c, f"⏱️ Non hai segnato la fine del lavoro su «{s_['commessa_title']}» (iniziato {when}): "
-                                            "non ho contato le ore. Scrivimele, es. «ieri 8 ore».")
+                await _tell_worker(c, text)
             except Exception:
                 logger.exception("forgotten presence notice failed")
+            if c.get("is_user"):
+                push.fire_and_forget(db, c["user_id"], "⏱️ Fine non segnata", text, f"/dashboard/journal?commessa={s_['commessa_id']}", f"ws-{s_['id']}")
         owner_doc = await db.users.find_one({"user_id": s_["owner_user_id"]}, {"_id": 0})
-        if owner_doc and c:
+        if owner_doc and c and owner_doc["user_id"] != c.get("user_id"):
             await _notify_owner(User(**owner_doc), f"⏱️ {_collab_name(c)} ha iniziato su «{s_['commessa_title']}» {when} "
                                                    "ma non ha segnato la fine: quelle ore non sono state contate.")
     return n
+
+
+# ---- the app's users on site, from the app: "📍 Sono in cantiere" / "Ho finito" in the commessa's
+# diary (the phone's position if allowed), the pauses, "are you still there?" answered.
+
+class PresencePayload(BaseModel):
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    at: Optional[str] = None          # "HH:MM" today, when said later ("ho finito alle 17:30")
+
+
+class PresencePausePayload(BaseModel):
+    log_id: str
+    minutes: int = 0
+
+
+async def _me_worker(current: User) -> dict:
+    clienti = await _clienti_list(current)
+    udoc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or {"user_id": current.user_id, "name": current.name}
+    return _user_worker(udoc, (clienti or {}).get("user_id") or current.user_id)
+
+
+def _at_today(hhmm: Optional[str], now: datetime, day: Optional[date] = None) -> datetime:
+    """"17:30" on that day (today by default), as UTC; now when not given. Never in the future."""
+    if not hhmm:
+        return now
+    m = re.fullmatch(r"(\d{1,2})[:.](\d{2})", hhmm.strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise HTTPException(status_code=400, detail="Orario non valido")
+    d = day or now.astimezone(LOCAL_TZ).date()
+    at = datetime.combine(d, datetime.min.time().replace(hour=int(m.group(1)), minute=int(m.group(2))), tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+    if at > now + timedelta(minutes=5):
+        raise HTTPException(status_code=400, detail=f"Le {hhmm} non sono ancora arrivate")
+    return at
+
+
+def _session_view(s_: Optional[dict]) -> Optional[dict]:
+    if not s_:
+        return None
+    return {"id": s_["id"], "commessa_id": s_["commessa_id"], "commessa_title": s_.get("commessa_title"), "client_name": s_.get("client_name"),
+            "start_at": s_["start_at"], "start_m": s_.get("start_m"), "far": sp.far(s_.get("start_m")),
+            # asked in the evening whether they are still there, not answered yet
+            "late_asked": bool(s_.get("late_asked_at")) and not s_.get("late_answer_at")}
+
+
+@api_router.get("/jobs/presence/me")
+async def my_presence(current: User = Depends(get_current_user)):
+    """Am I on site now (and where, since when)?"""
+    return {"open": _session_view(await _open_presence(f"{USER_WORKER}{current.user_id}"))}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/presence/start")
+async def presence_start_app(commessa_id: str, payload: PresencePayload, current: User = Depends(get_current_user)):
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    view = _commessa_view(sub, client, clienti)
+    if view["stato"] == "chiusa":
+        raise HTTPException(status_code=400, detail="La commessa è chiusa")
+    worker = await _me_worker(current)
+    open_ = await _open_presence(worker["id"])
+    if open_:
+        raise HTTPException(status_code=409, detail=f"Sei già in cantiere su «{open_['commessa_title']}» dalle {sp.hhmm(_local(open_['start_at']))}")
+    owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+    now = datetime.now(timezone.utc)
+    loc = {"lat": payload.lat, "lon": payload.lon} if payload.lat is not None and payload.lon is not None else None
+    await _presence_start({**worker, "owner_user_id": clienti.get("user_id") or current.user_id},
+                          User(**owner_doc) if owner_doc else current, view, _at_today(payload.at, now), loc)
+    return {"open": _session_view(await _open_presence(worker["id"]))}
+
+
+@api_router.post("/jobs/presence/stop")
+async def presence_stop_app(payload: PresencePayload, current: User = Depends(get_current_user)):
+    worker = await _me_worker(current)
+    s_ = await _open_presence(worker["id"])
+    if not s_:
+        raise HTTPException(status_code=400, detail="Non risulti in cantiere")
+    worker["owner_user_id"] = s_.get("owner_user_id") or worker["owner_user_id"]
+    now = datetime.now(timezone.utc)
+    at = _at_today(payload.at, now, _local(s_["start_at"]).date())
+    loc = {"lat": payload.lat, "lon": payload.lon} if payload.lat is not None and payload.lon is not None else None
+    answer, log_id = await _presence_stop(worker, at, loc, channel="web")
+    if not log_id:
+        raise HTTPException(status_code=400, detail=answer)
+    log = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "presence": 1, "hours": 1, "commessa_id": 1, "commessa_title": 1})
+    return {"message": answer, "log_id": log_id, "minutes": log["presence"]["minutes"], "hours": log["hours"][0]["hours"],
+            "commessa_id": log["commessa_id"], "commessa_title": log["commessa_title"]}
+
+
+@api_router.post("/jobs/presence/pause")
+async def presence_pause_app(payload: PresencePausePayload, current: User = Depends(get_current_user)):
+    answer = await _presence_pause(await _me_worker(current), payload.log_id, payload.minutes)
+    if answer == PRESENCE_GONE:
+        raise HTTPException(status_code=404, detail=answer)
+    return {"message": answer}
+
+
+@api_router.post("/jobs/presence/still")
+async def presence_still_app(current: User = Depends(get_current_user)):
+    """The evening's question answered in the app: yes, still on site."""
+    worker = await _me_worker(current)
+    s_ = await _open_presence(worker["id"])
+    if not s_:
+        raise HTTPException(status_code=400, detail="Non risulti in cantiere")
+    return {"message": await _presence_late_answer(worker, s_["id"], True)}
+
+
+# ---- THE EVENING CHECK: past the owner's hour (19:00 unless changed in Impostazioni) whoever is
+# still "in cantiere" is asked if they really are (✅ Sì / 🚪 No), the owner is told. "No": at what
+# time they left (buttons, or "ho finito alle 17:40") and the time is closed there; "Sì": asked
+# again two hours later. A start made late is asked two hours after it.
+
+PRESENCE_LATE_AT = "19:00"
+PRESENCE_ASK_AGAIN = timedelta(hours=2)
+
+
+def _late_threshold(s_: dict, late_at: str) -> datetime:
+    start = _local(s_["start_at"])
+    h, m = (int(x) for x in (late_at or PRESENCE_LATE_AT).split(":"))
+    at = datetime.combine(start.date(), datetime.min.time().replace(hour=h, minute=m), tzinfo=LOCAL_TZ)
+    return max(at, start + PRESENCE_ASK_AGAIN).astimezone(timezone.utc)
+
+
+def _left_options(s_: dict, now: datetime) -> list:
+    """Half hours from half an hour after the start to now (the last six): the buttons of "when did you leave?"."""
+    start = _local(s_["start_at"]) + timedelta(minutes=30)
+    t = start.replace(minute=0 if start.minute == 0 else 30 if start.minute <= 30 else 0, second=0, microsecond=0)
+    if t < start:
+        t += timedelta(minutes=30)
+    out, end = [], now.astimezone(LOCAL_TZ)
+    while t <= end:
+        out.append(t.strftime("%H:%M"))
+        t += timedelta(minutes=30)
+    return out[-6:]
+
+
+def _late_kb(sid: str):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Sì, sono ancora qui", callback_data=f"pls:y:{sid}"),
+                                  InlineKeyboardButton("🚪 No, sono andato via", callback_data=f"pls:n:{sid}")]])
+
+
+def _left_kb(sid: str, options: list):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    rows = [[InlineKeyboardButton(o, callback_data=f"ple:{sid}:{o.replace(':', '')}") for o in options[i:i + 3]] for i in range(0, len(options), 3)]
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def _presence_late_check(now_utc: Optional[datetime] = None) -> int:
+    """Asks whoever is still on site past the hour (see above). -> how many asked."""
+    now = now_utc or datetime.now(timezone.utc)
+    asked = 0
+    late_at = {}
+    for s_ in await db.work_sessions.find({"end_at": None}, {"_id": 0}).to_list(1000):
+        own = s_.get("owner_user_id")
+        if own not in late_at:
+            od = await db.users.find_one({"user_id": own}, {"_id": 0, "presence_late_at": 1}) or {}
+            late_at[own] = od.get("presence_late_at") or PRESENCE_LATE_AT
+        due = _late_threshold(s_, late_at[own])
+        if s_.get("late_asked_at"):
+            nxt = s_.get("late_next_at")
+            if not nxt or s_.get("late_answer_at") is None or datetime.fromisoformat(nxt) > now:
+                continue
+        elif now < due:
+            continue
+        await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"late_asked_at": now.isoformat(), "late_answer_at": None, "late_next_at": None}})
+        w = await _worker_of(s_["collaborator_id"])
+        if not w:
+            continue
+        since = sp.hhmm(_local(s_["start_at"]))
+        text = (f"🕖 Sei ancora in cantiere su «{s_['commessa_title']}»? Risulti lì dalle {since}.\n"
+                "Se sei andato via dimmi a che ora, così chiudo il tempo giusto.")
+        await _tell_worker(w, text, _late_kb(s_["id"]))
+        if w.get("is_user"):
+            push.fire_and_forget(db, w["user_id"], "🕖 Sei ancora in cantiere?", f"«{s_['commessa_title']}», dalle {since}: rispondi nel diario.",
+                                 f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-{s_['id']}")
+        asked += 1
+        if own and own != w.get("user_id") and not s_.get("late_told_owner"):
+            owner_doc = await db.users.find_one({"user_id": own}, {"_id": 0})
+            if owner_doc:
+                note = (f"🕖 Alle {sp.hhmm(now.astimezone(LOCAL_TZ))} risulta ancora in cantiere *{_collab_name(w)}* su «{s_['commessa_title']}» "
+                        f"(dalle {since}). Gli ho chiesto se è ancora lì: ti dico cosa risponde.")
+                await _notify_owner(User(**owner_doc), note)
+                push.fire_and_forget(db, own, "🕖 Ancora in cantiere", f"{_collab_name(w)} su «{s_['commessa_title']}» dalle {since}",
+                                     f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-o-{s_['id']}")
+                await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"late_told_owner": True}})
+    return asked
+
+
+async def _presence_answered(s_: dict, w: dict, still: bool = False, left_at: Optional[datetime] = None) -> None:
+    """The evening's answer: noted on the session and, when it is someone else's, told to the owner."""
+    now = datetime.now(timezone.utc)
+    upd = {"late_answer_at": now.isoformat(), "late_answer": "si" if still else "no"}
+    if still:
+        upd["late_next_at"] = (now + PRESENCE_ASK_AGAIN).isoformat()
+    await db.work_sessions.update_one({"id": s_["id"]}, {"$set": upd})
+    own = s_.get("owner_user_id")
+    if not s_.get("late_asked_at") or not own or own == w.get("user_id"):
+        return
+    owner_doc = await db.users.find_one({"user_id": own}, {"_id": 0})
+    if not owner_doc:
+        return
+    text = (f"✅ {_collab_name(w)} conferma di essere ancora in cantiere su «{s_['commessa_title']}»." if still else
+            f"🚪 {_collab_name(w)} era andato via da «{s_['commessa_title']}» alle {sp.hhmm(left_at.astimezone(LOCAL_TZ))}: ore registrate fino a lì.")
+    await _notify_owner(User(**owner_doc), text)
+
+
+async def _presence_late_answer(w: dict, sid: str, still: bool) -> str:
+    """✅ Sì (still there) or 🚪 No (asked when they left: the buttons go with _presence_left_kb)."""
+    s_ = await db.work_sessions.find_one({"id": sid, "collaborator_id": w["id"]}, {"_id": 0})
+    if not s_ or s_.get("end_at"):
+        return "Il tempo in cantiere è già chiuso."
+    if still:
+        await _presence_answered(s_, w, still=True)
+        return "👍 Ok, buon lavoro! Quando hai finito tocca 📍 Ho finito (o scrivi «ho finito»)."
+    return "🚪 A che ora sei andato via? Tocca l'orario, oppure scrivimelo (es. «ho finito alle 17:40»)."
+
+
+async def _presence_left_buttons(sid: str):
+    s_ = await db.work_sessions.find_one({"id": sid}, {"_id": 0})
+    return _left_kb(sid, _left_options(s_, datetime.now(timezone.utc))) if s_ and not s_.get("end_at") else None
+
+
+async def _presence_left_at(w: dict, sid: str, hhmm: str, channel: str = "telegram") -> tuple:
+    """The time they left (a button of the evening's question): the time closed there. -> (answer, log id)."""
+    s_ = await db.work_sessions.find_one({"id": sid, "collaborator_id": w["id"]}, {"_id": 0})
+    if not s_ or s_.get("end_at"):
+        return "Il tempo in cantiere è già chiuso.", None
+    hhmm = f"{hhmm[:2]}:{hhmm[2:]}" if re.fullmatch(r"\d{4}", hhmm or "") else hhmm
+    try:
+        at = _at_today(hhmm, datetime.now(timezone.utc), _local(s_["start_at"]).date())
+    except HTTPException as e:
+        return e.detail, None
+    w = {**w, "owner_user_id": s_.get("owner_user_id") or w.get("owner_user_id")}
+    return await _presence_stop(w, at, None, channel)
+
+
+# ---- "HOW DID IT GO?": a while after someone ends their time on a commessa, if they wrote
+# nothing in its diary that day (the hours alone), they are asked - their answer goes there.
+
+PRESENCE_NOTE_AFTER = timedelta(minutes=20)
+
+
+async def _presence_day_note(now_utc: Optional[datetime] = None) -> int:
+    now = now_utc or datetime.now(timezone.utc)
+    asked = 0
+    q = {"end_at": {"$lte": (now - PRESENCE_NOTE_AFTER).isoformat(), "$gte": (now - timedelta(hours=12)).isoformat()}}
+    for s_ in await db.work_sessions.find(q, {"_id": 0}).to_list(1000):
+        if s_.get("note_asked") or s_.get("forgotten") or s_.get("orphan") or not s_.get("log_id"):
+            continue
+        await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"note_asked": True}})
+        w = await _worker_of(s_["collaborator_id"])
+        if not w:
+            continue
+        day = _local(s_["start_at"]).date().isoformat()
+        wrote = False
+        for lg in await db.job_logs.find({"commessa_id": s_["commessa_id"], "date": day}, {"_id": 0, "presence": 1, "kind": 1,
+                                                                                            "collaborator_id": 1, "user_id": 1}).to_list(500):
+            if lg.get("presence") or lg.get("kind"):
+                continue
+            if (w.get("is_user") and lg.get("user_id") == w["user_id"] and not lg.get("collaborator_id")) or lg.get("collaborator_id") == w["id"]:
+                wrote = True
+                break
+        if wrote:
+            continue
+        text = (f"📝 Com'è andata oggi su «{s_['commessa_title']}»? Scrivimi (anche a voce) cosa avete fatto, "
+                "eventuali problemi o materiali: lo metto nel diario della commessa.")
+        if w.get("is_user"):
+            if w.get("telegram_chat_id"):
+                await tg._set_state(db, w["telegram_chat_id"], w["user_id"],
+                                    pending_presence_note={"commessa_id": s_["commessa_id"], "at": now.isoformat()})
+            push.fire_and_forget(db, w["user_id"], "📝 Com'è andata oggi?", f"«{s_['commessa_title']}»: scrivilo nel diario.",
+                                 f"/dashboard/journal?commessa={s_['commessa_id']}", f"note-{s_['id']}")
+        else:   # what they write next goes to that commessa
+            await db.collaborators.update_one({"id": w["id"]}, {"$set": {"tg_state": {"target": s_["commessa_id"], "at": now.isoformat()}}})
+        if await _tell_worker(w, text) or w.get("is_user"):
+            asked += 1
+    return asked
 
 
 async def _on_site(commessa_id: str) -> list:
     """Who is working on the commessa now (a start not ended yet)."""
     out = []
     for s_ in await db.work_sessions.find({"commessa_id": commessa_id, "end_at": None}, {"_id": 0}).to_list(50):
-        c = await db.collaborators.find_one({"id": s_["collaborator_id"]}, {"_id": 0})
-        out.append({"name": _collab_name(c) if c else "?", "since": s_["start_at"], "start_m": s_.get("start_m"),
+        c = await _worker_of(s_["collaborator_id"])
+        out.append({"name": _collab_name(c) if c else "?", "is_user": bool(c and c.get("is_user")), "since": s_["start_at"], "start_m": s_.get("start_m"),
                     "far": sp.far(s_.get("start_m"))})
     return out
 
@@ -7989,6 +8332,8 @@ async def _collab_reminder_loop():
                 await _todo_reminders()
                 await _material_reminders()
                 await _presence_forgotten()
+                await _presence_late_check()
+                await _presence_day_note()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)

@@ -15,6 +15,7 @@ import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { useAuth } from "@/auth/AuthContext";
 import { MOBILE_BREAKPOINT } from "@/hooks/use-is-mobile";
 import SiteMapBand from "@/components/SiteMapBand";
+import PresencePill from "@/components/PresencePill";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -1342,6 +1343,8 @@ export default function JobDiaryPage() {
         </button>
         <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">{c.title}</h1>
       </div>
+      {/* me on site: "Sono in cantiere" / "Ho finito", like the collaborators on Telegram */}
+      <PresencePill commessa={c} onChanged={() => loadDetail(selectedId)} />
 
       {/* the commessa in one row that scrolls sideways: state, hours, reports, documents, then
           the card's details (site, dates, phone, e-mail) */}

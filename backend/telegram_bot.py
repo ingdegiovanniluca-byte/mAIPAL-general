@@ -426,6 +426,7 @@ async def _cmd_help(update: Update, ctx):
         "  /azione <comando> — programma un'azione ricorrente, es. \"/azione ogni domenica a mezzanotte "
         "calcola la spesa della settimana e mandamela\"\n"
         "  /azioni — elenco delle azioni programmate attive\n"
+        "  /cantiere — per gli artigiani: il pulsante 📍 per segnare arrivo e fine in cantiere (o scrivi «sono arrivato» / «ho finito»)\n"
         "  /end   — chiudi la conversazione in corso\n"
         "  /help"
     )
@@ -571,6 +572,11 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
     else:
         content = text
         state = await _get_state(db, user["user_id"], chat_id)
+        import team_presence_tg as tp   # artigiano: "sono arrivato" / "ho finito", the answer to "com'è andata?"
+        if await tp.try_presence(update, ctx, user, content):
+            return
+        if await tp.try_note(update, ctx, user, state, content):
+            return
         if state.get("pending_work_revise") and _state_is_fresh(state):
             await _run_work_revise_flow(update, ctx, db, user, state["pending_work_revise"], content)
             return
@@ -1015,6 +1021,9 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     data = q.data or ""
+    import team_presence_tg as tp   # the buttons of the presence on site (artigiano)
+    if await tp.handle_callback(update, ctx, user, data):
+        return
     if data == "ctrl:end":
         await _clear_state(db, chat_id, user["user_id"])
         await ctx.bot.send_message(chat_id=chat_id, text="✅ Conversazione chiusa.")
@@ -1226,6 +1235,13 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎙️ _{transcript}_", parse_mode="Markdown")
 
         state = await _get_state(db, user["user_id"], chat_id)
+        import team_presence_tg as tp
+        if await tp.try_presence(update, ctx, user, transcript):
+            _track_stt("diario")
+            return
+        if await tp.try_note(update, ctx, user, state, transcript):
+            _track_stt("diario")
+            return
         if state.get("pending_work_revise") and _state_is_fresh(state):
             _track_stt("creazione_report")
             await _run_work_revise_flow(update, ctx, db, user, state["pending_work_revise"], transcript)
@@ -1411,6 +1427,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("lista", _cmd_list_update))
     app.add_handler(CommandHandler("azione", _cmd_scheduled_action))
     app.add_handler(CommandHandler("azioni", _cmd_scheduled_list))
+    import team_presence_tg as tp
+    app.add_handler(CommandHandler("cantiere", tp.cmd_cantiere))
+    app.add_handler(MessageHandler(filters.LOCATION, tp.on_location))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.PHOTO, _msg_photo))

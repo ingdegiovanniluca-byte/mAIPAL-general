@@ -433,6 +433,30 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         answer = await _presence_start(rec_for, target[0], target[2], datetime.fromisoformat(pend["at"]), pend.get("loc"))
         await _reply(update, answer, reply_markup=await _keyboard_for(active))
         return
+    if data.startswith("pls:") or data.startswith("ple:"):   # the evening's "still on site?" and "when did you leave?"
+        from server import _presence_late_answer, _presence_left_at, _presence_left_buttons
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        if data.startswith("pls:"):
+            _, yn, sid = (data.split(":") + ["", ""])[:3]
+            for r in active:
+                answer = await _presence_late_answer(r, sid, yn == "y")
+                if not answer.startswith("Il tempo"):
+                    break
+            await _reply(update, answer, reply_markup=(await _presence_left_buttons(sid)) if yn == "n" and not answer.startswith("Il tempo") else None)
+            return
+        _, sid, hhmm = (data.split(":") + ["", ""])[:3]
+        answer, log_id = "Il tempo in cantiere è già chiuso.", None
+        for r in active:
+            answer, log_id = await _presence_left_at(r, sid, hhmm)
+            if log_id or not answer.startswith("Il tempo"):
+                break
+        await _reply(update, answer, reply_markup=await _keyboard_for(active))
+        if log_id:
+            await _reply(update, "Hai fatto pause?", reply_markup=_pause_buttons(log_id))
+        return
     if data.startswith("cpz:"):   # a pause taken out of the hours just counted
         from server import _presence_pause, PRESENCE_GONE
         _, log_id, minutes = (data.split(":") + ["", "0"])[:3]
