@@ -6073,8 +6073,11 @@ async def _plan_materials(current: User, target: dict, clienti: dict, planned: l
     """Materials to take -> one To Do "Da prendere" per day needed and person: the one named
     ("ricorda a Mario…", a collaborator of the commessa or a team mate), else who wrote it.
     Reminded the evening before and that morning; a collaborator named by someone else hears it
-    at once on Telegram (one without Telegram: the writer is reminded instead)."""
+    at once on Telegram (one without Telegram: the writer is reminded instead). A collaborator's
+    own one is also for the colleagues of their company on that commessa (on Telegram, with ✅
+    Fatto for all), unless they said "solo per me"."""
     people = await _plan_people(current, target["id"])
+    mates = await _company_mates(author, target["id"]) if author and not jl.only_for_me(raw) else []
     groups: dict = {}
     for m in planned:
         due = m.get("for_date") or (jl.today_local() + timedelta(days=1)).isoformat()
@@ -6104,18 +6107,54 @@ async def _plan_materials(current: User, target: dict, clienti: dict, planned: l
                "from_log_id": from_log_id, "created_at": now.isoformat(),
                # a time already gone when it is written is not reminded (it was just said)
                "reminded": {**({"eve": due} if now >= eve else {}), **({"morning": due} if now >= morning else {})}}
+        mine = person is None or (person["kind"] == "collab" and person["id"] == (author or {}).get("id")) \
+            or (person["kind"] == "user" and not author and person["id"] == current.user_id)
+        shared = mates if mine else []   # (mates: only for a collaborator's own)
+        if shared:
+            doc["shared_with"] = [c["id"] for c in shared]
         await db.job_todos.insert_one(doc)
         doc.pop("_id", None)
         view_doc = {k: v for k, v in doc.items() if k != "reminded"}
-        mine = person is None or (person["kind"] == "collab" and person["id"] == (author or {}).get("id")) \
-            or (person["kind"] == "user" and not author and person["id"] == current.user_id)
+        if shared:
+            view_doc["shared_names"] = [c.get("first_name") or _collab_name(c) for c in shared]
         view_doc["for_other"] = not mine   # (for the answer: whose it is, when not the writer's)
         # given to a collaborator by someone else: told now (the writer was just answered)
         if collab_id and collab_id != (author or {}).get("id"):
             view_doc["notified"] = await _notify_assignee("todo", view_doc, target)
-        _day_pin_touch(collab_id)
+        for c in shared:   # the colleagues of the same company: told now, like the writer was
+            try:
+                await _tell_collaborator(c, _shared_material_text(view_doc, target, author), f"cldone:t:{doc['id']}")
+            except Exception:
+                logger.exception("shared material notice failed")
+        _day_pin_touch(collab_id, *[c["id"] for c in shared])
         out.append(view_doc)
     return out
+
+
+async def _company_mates(author: dict, commessa_id: str) -> list:
+    """The other collaborators of the author's company enabled on the commessa, on Telegram."""
+    company = " ".join((author.get("company") or "").split()).lower()
+    if not company or not author.get("id"):
+        return []
+    me = await db.collaborators.find_one({"id": author["id"]}, {"_id": 0, "owner_user_id": 1})
+    if not me:
+        return []
+    docs = await db.collaborators.find({"owner_user_id": me["owner_user_id"], "commesse": {"$in": [commessa_id]}}, {"_id": 0}).to_list(200)
+    return [c for c in docs if c["id"] != author["id"] and c.get("status") == "active" and c.get("telegram_chat_id")
+            and " ".join((c.get("company") or "").split()).lower() == company]
+
+
+def _and_join(names: list) -> str:
+    return ", ".join(names[:-1]) + " e " + names[-1] if len(names) > 1 else "".join(names)
+
+
+def _shared_material_text(todo: dict, target: dict, author: dict) -> str:
+    today = jl.today_local()
+    due = todo["due_date"]
+    when = "domani" if due == (today + timedelta(days=1)).isoformat() else "oggi" if due == today.isoformat() else _short_it_date(due)
+    return (f"📌 {author.get('first_name') or author.get('name')} ha segnato da prendere {when} per «{target.get('title')}»"
+            + (f" — {target['client_name']}" if target.get("client_name") else "")
+            + f":\n{todo['text'].removeprefix('Da prendere: ')}\nVale per tutta la ditta: quando qualcuno l'ha preso tocca ✅ Fatto.")
 
 
 def _plan_message(target: dict, todos: list, short: bool = False) -> str:
@@ -6124,6 +6163,7 @@ def _plan_message(target: dict, todos: list, short: bool = False) -> str:
         d = date.fromisoformat(due)
         return "domani" if d == today + timedelta(days=1) else "oggi" if d == today else _short_it_date(due)
     lines = [f"📌 Da prendere {when(t['due_date'])}" + (f" ({t['who']})" if t.get("for_other") else "") + f": {t['text'].removeprefix('Da prendere: ')}"
+             + (f" — lo vedono anche {_and_join(t['shared_names'])} (scrivi «solo per me» se è solo tuo)" if t.get("shared_names") else "")
              for t in todos]
     if short:
         return "\n".join(lines)
@@ -6165,11 +6205,14 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
         head = "🧰 Domani da prendere" if kind == "eve" else "🧰 Oggi da prendere"
         text = f"{head} per «{view['title']}» — {view['client_name']}:\n{what}"
         try:
-            if t.get("collaborator_id"):
-                c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
+            # the collaborator, and the colleagues of their company it is shared with
+            for cid in [x for x in [t.get("collaborator_id"), *(t.get("shared_with") or [])] if x]:
+                c = await db.collaborators.find_one({"id": cid}, {"_id": 0})
                 pinned_today = kind == "morning" and ((c or {}).get("day_pin") or {}).get("date") == t["due_date"] \
                     and (c or {}).get("day_pin", {}).get("message_id")
-                if c and not pinned_today and t["commessa_id"] in (c.get("commesse") or []) and await _tell_collaborator(c, text + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
+                by = f" (segnato da {t.get('author_name')})" if cid != t.get("collaborator_id") and t.get("author_name") else ""
+                if c and not pinned_today and t["commessa_id"] in (c.get("commesse") or []) \
+                        and await _tell_collaborator(c, text + by + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
                     sent += 1
             if t.get("assignee_user_id"):
                 u = await db.users.find_one({"user_id": t["assignee_user_id"]}, {"_id": 0, "telegram_chat_id": 1})
@@ -6536,7 +6579,7 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
     coll = db.job_todos if kind == "t" else db.job_milestones
     item = await coll.find_one({"id": item_id}, {"_id": 0})
     if not item or item["commessa_id"] not in (collab.get("commesse") or []) \
-            or (item.get("collaborator_id") and item["collaborator_id"] != collab["id"]):
+            or (item.get("collaborator_id") and item["collaborator_id"] != collab["id"] and collab["id"] not in (item.get("shared_with") or [])):
         return COLLAB_NOT_YOURS
     what = item.get("text") if kind == "t" else item.get("title")
     if item.get("done"):
@@ -6563,7 +6606,7 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
         line = f"Milestone «{what}» completata il {_short_it_date(today)}{late} (segnata da {who} su Telegram)."
     await _log_commessa_event(owner, view, "todo" if kind == "t" else "milestone", line,
                               {"todo_id" if kind == "t" else "milestone_id": item_id}, author_name=collab.get("first_name") or _collab_name(collab))
-    _day_pin_touch(collab["id"])
+    _day_pin_touch(collab["id"], item.get("collaborator_id"), *(item.get("shared_with") or []))
     push.fire_and_forget(db, owner.user_id, f"✅ {_collab_name(collab)} · {view.get('title')}", f"Fatta: «{what}»",
                          f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}")
     try:
@@ -6662,7 +6705,7 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
     if upd:
         await db.job_todos.update_one({"id": todo_id}, {"$set": upd})
     out = {k: v for k, v in {**todo, **upd}.items() if k != "reminded"}
-    _day_pin_touch(todo.get("collaborator_id"), out.get("collaborator_id"))
+    _day_pin_touch(todo.get("collaborator_id"), out.get("collaborator_id"), *(todo.get("shared_with") or []))
     new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != todo.get("collaborator_id")
     moved = "reminded" in upd and out.get("collaborator_id") and not new_collab
     if new_collab or moved:
@@ -6676,7 +6719,7 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
 async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user)):
     todo = await _job_todo_or_404(current, todo_id)
     await db.job_todos.delete_one({"id": todo_id})
-    _day_pin_touch(todo.get("collaborator_id"))
+    _day_pin_touch(todo.get("collaborator_id"), *(todo.get("shared_with") or []))
     return {"ok": True}
 
 
@@ -7258,7 +7301,7 @@ async def get_commessa_economics(commessa_id: str, current: User = Depends(get_c
     collabs = [c.get("first_name") for c in await db.collaborators.find({"owner_user_id": clienti.get("user_id")}, {"_id": 0, "first_name": 1}).to_list(500)]
     rates = costs.get("rates") or {}
     return {**e, "default_rate": costs.get("default_rate"),
-            "people": [{"who": n, "rate": rates.get(n)} for n in _econ_people(e, team, collabs)]}
+            "people": [{"who": n, "rate": _rate_of(rates, n)} for n in _econ_people(e, team, collabs)]}
 
 
 @api_router.patch("/jobs/commesse/{commessa_id}/economics")
@@ -7365,6 +7408,7 @@ class CollaboratorPayload(BaseModel):
     company: Optional[str] = ""
     commesse: List[str] = []
     show_client_contacts: bool = False
+    hourly_rate: Optional[float] = None       # €/h: their default cost on the commesse (Costi can change it)
 
 
 class CollaboratorPatch(BaseModel):
@@ -7377,6 +7421,8 @@ class CollaboratorPatch(BaseModel):
     commesse: Optional[List[str]] = None
     show_client_contacts: Optional[bool] = None
     status: Optional[Literal["active", "suspended"]] = None
+    hourly_rate: Optional[float] = None
+    clear_hourly_rate: bool = False
 
 
 def _require_admin(current: User) -> None:
@@ -7412,10 +7458,37 @@ async def _collab_views(current: User) -> dict:
     return {c["id"]: c for c in commesse}
 
 
-def _collab_public(c: dict, views: dict) -> dict:
+def _rate_of(rates: Optional[dict], name: Optional[str]) -> Optional[float]:
+    """The hourly cost of a person on the Clienti list (by first name, as the diary counts the hours)."""
+    low = (name or "").strip().lower()
+    return next((v for k, v in (rates or {}).items() if k.lower() == low and v is not None), None) if low else None
+
+
+async def _list_rates(current: User) -> dict:
+    clienti = await _clienti_list(current)
+    return ((clienti or {}).get("costs") or {}).get("rates") or {}
+
+
+async def _set_person_rate(current: User, name: str, rate: Optional[float]) -> None:
+    """A collaborator's hourly cost, kept with the others on the Clienti list: the one the Costi
+    of every commessa use (and change)."""
+    clienti = await _clienti_list(current)
+    name = " ".join((name or "").split())[:60]
+    if not clienti or not name:
+        return
+    costs = dict(clienti.get("costs") or {})
+    rates = {k: v for k, v in (costs.get("rates") or {}).items() if k.lower() != name.lower()}
+    if rate is not None:
+        rates[name] = rate
+    costs["rates"] = rates
+    await db.collections.update_one({"id": clienti["id"]}, {"$set": {"costs": costs}})
+
+
+def _collab_public(c: dict, views: dict, rates: Optional[dict] = None) -> dict:
     out = {k: c.get(k) for k in ("id", "first_name", "last_name", "email", "phone", "role", "company", "status",
                                   "show_client_contacts", "linked_at", "last_message_at", "created_at", "code_expires_at")}
     out["name"] = _collab_name(c)
+    out["hourly_rate"] = _rate_of(rates, c.get("first_name"))
     out["linked"] = bool(c.get("telegram_chat_id"))
     out["commesse"] = [{"id": cid, "title": views[cid]["title"], "client_name": views[cid]["client_name"], "stato": views[cid]["stato"]}
                        for cid in c.get("commesse") or [] if cid in views]
@@ -7469,7 +7542,8 @@ async def list_collaborators(current: User = Depends(get_current_user)):
     _require_admin(current)
     views = await _collab_views(current)
     docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return [_collab_public(c, views) for c in docs]
+    rates = await _list_rates(current)
+    return [_collab_public(c, views, rates) for c in docs]
 
 
 @api_router.post("/collaborators")
@@ -7489,7 +7563,10 @@ async def create_collaborator(payload: CollaboratorPayload, current: User = Depe
     }
     await db.collaborators.insert_one(c)
     c.pop("_id", None)
-    return {"collaborator": _collab_public(c, views), "invite": await _collab_invite(current, c, views)}
+    rate = _num_or_none(payload.hourly_rate)
+    if rate is not None:
+        await _set_person_rate(current, c["first_name"], rate)
+    return {"collaborator": _collab_public(c, views, await _list_rates(current)), "invite": await _collab_invite(current, c, views)}
 
 
 @api_router.patch("/collaborators/{collab_id}")
@@ -7506,10 +7583,18 @@ async def update_collaborator(collab_id: str, payload: CollaboratorPatch, curren
         if c.get("status") == "invited" and payload.status == "active":
             raise HTTPException(status_code=400, detail="Il collaboratore non si è ancora collegato a Telegram")
         upd["status"] = payload.status
+    old_first = c.get("first_name")
     if upd:
         await db.collaborators.update_one({"id": collab_id}, {"$set": upd})
         c.update(upd)
-    return _collab_public(c, views)
+    rates = await _list_rates(current)
+    rate = None if payload.clear_hourly_rate else _num_or_none(payload.hourly_rate)
+    if payload.clear_hourly_rate or rate is not None:
+        await _set_person_rate(current, c["first_name"], rate)
+    elif c["first_name"].lower() != (old_first or "").lower() and _rate_of(rates, old_first) is not None \
+            and _rate_of(rates, c["first_name"]) is None:   # renamed: their cost follows them
+        await _set_person_rate(current, c["first_name"], _rate_of(rates, old_first))
+    return _collab_public(c, views, await _list_rates(current))
 
 
 @api_router.post("/collaborators/{collab_id}/invite")
@@ -7521,7 +7606,7 @@ async def reinvite_collaborator(collab_id: str, current: User = Depends(get_curr
     upd = {"code": _collab_code(), "code_expires_at": (datetime.now(timezone.utc) + timedelta(days=COLLAB_CODE_DAYS)).isoformat()}
     await db.collaborators.update_one({"id": collab_id}, {"$set": upd})
     c.update(upd)
-    return {"collaborator": _collab_public(c, views), "invite": await _collab_invite(current, c, views)}
+    return {"collaborator": _collab_public(c, views, await _list_rates(current)), "invite": await _collab_invite(current, c, views)}
 
 
 @api_router.delete("/collaborators/{collab_id}")
@@ -8173,8 +8258,8 @@ async def _on_site(commessa_id: str) -> list:
     for s_ in await db.work_sessions.find({"commessa_id": commessa_id, "end_at": None}, {"_id": 0}).to_list(50):
         c = await _worker_of(s_["collaborator_id"])
         out.append({"name": _collab_name(c) if c else "?", "is_user": bool(c and c.get("is_user")), "since": s_["start_at"], "start_m": s_.get("start_m"),
-                    "far": sp.far(s_.get("start_m"))})
-    return out
+                    "far": sp.far(s_.get("start_m")), "role": (c or {}).get("role") or "", "company": (c or {}).get("company") or ""})
+    return sorted(out, key=lambda p: p["since"] or "")
 
 
 # ---- THE DAY'S PINNED MESSAGE (collaborators, Telegram): at 6:00 one message "📋 Oggi" with,
@@ -8209,7 +8294,8 @@ async def _collab_day_items(collab: dict, day: str) -> list:
     out = []
     for _owner, _cl, view in await _collab_targets(collab):
         rows = []
-        for t in await db.job_todos.find({"commessa_id": view["id"], "collaborator_id": collab["id"], "due_date": day}, {"_id": 0}).to_list(100):
+        for t in await db.job_todos.find({"commessa_id": view["id"], "due_date": day,
+                                          "$or": [{"collaborator_id": collab["id"]}, {"shared_with": {"$in": [collab["id"]]}}]}, {"_id": 0}).to_list(100):
             label = ("🧰 Da portare: " + t["text"].removeprefix("Da prendere: ")) if t.get("kind") == "materiale" else t["text"]
             rows.append((0 if t.get("kind") != "materiale" else 2, "t", t["id"], label, bool(t.get("done"))))
         for m in await db.job_milestones.find({"commessa_id": view["id"], "due_date": day}, {"_id": 0}).to_list(100):

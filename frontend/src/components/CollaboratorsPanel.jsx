@@ -107,6 +107,7 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
     first_name: initial?.first_name || "", last_name: initial?.last_name || "", email: initial?.email || "",
     phone: initial?.phone || "", role: initial?.role || "", company: initial?.company || "",
     commesse: (initial?.commesse || []).map((c) => c.id), show_client_contacts: !!initial?.show_client_contacts,
+    hourly_rate: initial?.hourly_rate != null ? String(initial.hourly_rate).replace(".", ",") : "",
   }));
   const [saving, setSaving] = useState(false);
   const [invite, setInvite] = useState(null);
@@ -127,14 +128,18 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
   const save = async () => {
     if (!f.first_name.trim() || !f.last_name.trim()) { toast.error("Nome e cognome sono obbligatori"); return; }
     if (f.email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) { toast.error("Email non valida"); return; }
+    const typed = f.hourly_rate.trim().replace(/\s|€/g, "");
+    const rate = typed ? Number(typed.includes(",") ? typed.replace(/\./g, "").replace(",", ".") : typed) : null;
+    if (rate !== null && !(rate >= 0)) { toast.error("Costo orario non valido"); return; }
+    const body = { ...f, hourly_rate: rate, ...(rate === null && !isNew ? { clear_hourly_rate: true } : {}) };
     setSaving(true);
     try {
       if (isNew) {
-        const r = await api.post("/collaborators", f);
+        const r = await api.post("/collaborators", body);
         setInvite(r.data.invite);
         onSaved(false);
       } else {
-        await api.patch(`/collaborators/${initial.id}`, f);
+        await api.patch(`/collaborators/${initial.id}`, body);
         onSaved(true);
       }
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -163,6 +168,13 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
             <div className="grid grid-cols-2 gap-2.5">
               <input value={f.role} onChange={set("role")} placeholder="Ruolo (es. idraulico)" data-testid="collab-role" className={field} />
               <input value={f.company} onChange={set("company")} placeholder="Azienda" data-testid="collab-company" className={field} />
+            </div>
+            <div>
+              <div className="relative">
+                <input value={f.hourly_rate} onChange={set("hourly_rate")} placeholder="Costo orario (facoltativo)" inputMode="decimal" data-testid="collab-rate" className={`${field} pr-12`} />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/50">€/h</span>
+              </div>
+              <div className="text-[11px] text-white/50 mt-1 px-1">Lo uso per le sue ore nei Costi delle commesse; puoi cambiarlo anche dal diario, in Costi.</div>
             </div>
             <div>
               <div className="kicker mb-2">commesse abilitate</div>
@@ -238,7 +250,7 @@ export default function CollaboratorsPanel() {
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-white leading-snug">{c.name}</div>
-                    <div className="text-xs text-white/60">{[c.role, c.company].filter(Boolean).join(" · ") || c.phone || c.email}</div>
+                    <div className="text-xs text-white/60">{[c.role, c.company, c.hourly_rate != null && `${String(c.hourly_rate).replace(".", ",")} €/h`].filter(Boolean).join(" · ") || c.phone || c.email}</div>
                   </div>
                   <span className="inline-flex items-center gap-1.5 text-[11px] text-white/80 shrink-0" data-testid="collab-status">
                     <span className="h-2 w-2 rounded-full" style={{ background: st.dot }} />{st.label}

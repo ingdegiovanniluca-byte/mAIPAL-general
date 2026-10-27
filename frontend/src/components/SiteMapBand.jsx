@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { MapPinned, Navigation, X } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import OnSiteList from "@/components/OnSiteList";
 
 /* The commessa's site on a colour map, as a band across the diary under its figures - never
    taller than that. The map is OpenFreeMap's "Liberty" style (OpenStreetMap's data drawn like
@@ -26,8 +27,6 @@ function paintPin(el, onSite) {
     <span style="position:absolute;inset:3px;border-radius:50%;border:3px solid #fff;background:${busy ? "#2FBF71" : "#F2701E"};box-shadow:0 3px 8px rgba(30,10,25,.45)"></span>
     ${busy ? `<span style="position:absolute;right:-8px;top:-8px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#fff;color:#1E7D4B;font:700 10.5px/17px sans-serif;text-align:center;box-shadow:0 2px 5px rgba(0,0,0,.25)">${onSite}</span>` : ""}`;
 }
-
-const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
 
 export default function SiteMapBand({ geo, onSite: people = [], address = "", onEditSite, className = "" }) {
   const onSite = people.length;
@@ -130,27 +129,31 @@ export default function SiteMapBand({ geo, onSite: people = [], address = "", on
     <div className={`relative ${className}`} data-testid="site-map">
       <div className="relative overflow-hidden" style={{ height: h, transition: dragging ? "none" : "height 240ms cubic-bezier(.2,.8,.2,1)" }}>
         <div ref={box} className="absolute inset-x-0 top-0 sitemap" style={{ height: BAND }} data-testid="site-map-canvas" />
-        {info && (
-          <div className="absolute left-2 top-2 z-[5] w-[calc(100%-104px)] max-w-[400px] glass-panel !rounded-2xl px-3 py-2 flex items-start gap-2.5 text-white" data-testid="site-map-info">
-            <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: onSite ? "#2FBF71" : "#F2701E", boxShadow: `0 0 0 3px ${onSite ? "rgba(47,191,113,.3)" : "rgba(242,112,30,.3)"}` }} />
-            <div className="min-w-0 flex-1">
-              <div className="text-[12.5px] font-semibold leading-tight">{onSite ? `In cantiere ora: ${onSite}` : "Nessuno in cantiere ora"}</div>
-              <div className="text-[11.5px] text-white/75 leading-snug truncate">
-                {onSite ? people.map((p) => `${(p.name || "").split(" ")[0]} dalle ${hhmm(p.since)}`).join(" · ") : (address || "Il pallino è il cantiere")}
-              </div>
-              <div className="text-[10.5px] text-white/55 leading-snug truncate">{onSite ? (address || "") : "Diventa verde quando qualcuno è arrivato"}</div>
-            </div>
-            {onEditSite && (
-              <button type="button" onClick={() => { setInfo(false); onEditSite(); }} data-testid="site-map-edit"
-                aria-label="Posizione del cantiere" title="Posizione del cantiere"
-                className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center"><MapPinned size={14} /></button>
-            )}
-            <a href={`https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`} target="_blank" rel="noreferrer" data-testid="site-map-navigate"
-              aria-label="Naviga fino al cantiere" className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center"><Navigation size={14} /></a>
-            <button type="button" onClick={() => setInfo(false)} aria-label="Chiudi" className="h-8 w-6 shrink-0 flex items-center justify-center text-white/70"><X size={14} /></button>
-          </div>
-        )}
       </div>
+      {/* the pin's card, over the band and below it when it is long (the band clips nothing) */}
+      {info && (
+        <div className="absolute left-2 top-2 z-30 w-[calc(100%-104px)] max-w-[400px] glass-panel !rounded-2xl px-3 py-2 flex items-start gap-2.5 text-white" data-testid="site-map-info">
+          <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: onSite ? "#2FBF71" : "#F2701E", boxShadow: `0 0 0 3px ${onSite ? "rgba(47,191,113,.3)" : "rgba(242,112,30,.3)"}` }} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-semibold leading-tight">{onSite ? `In cantiere ora: ${onSite}` : "Nessuno in cantiere ora"}</div>
+            {onSite ? (
+              // everyone, by role; a long list scrolls inside the card (it may go past the map)
+              <div className="mt-1 max-h-[46vh] overflow-y-auto overscroll-contain"><OnSiteList people={people} compact /></div>
+            ) : (
+              <div className="text-[11.5px] text-white/75 leading-snug truncate">{address || "Il pallino è il cantiere"}</div>
+            )}
+            <div className={`text-[10.5px] text-white/55 leading-snug truncate ${onSite ? "mt-1" : ""}`}>{onSite ? (address || "") : "Diventa verde quando qualcuno è arrivato"}</div>
+          </div>
+          {onEditSite && (
+            <button type="button" onClick={() => { setInfo(false); onEditSite(); }} data-testid="site-map-edit"
+              aria-label="Posizione del cantiere" title="Posizione del cantiere"
+              className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center"><MapPinned size={14} /></button>
+          )}
+          <a href={`https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`} target="_blank" rel="noreferrer" data-testid="site-map-navigate"
+            aria-label="Naviga fino al cantiere" className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center"><Navigation size={14} /></a>
+          <button type="button" onClick={() => setInfo(false)} aria-label="Chiudi" className="h-8 w-6 shrink-0 flex items-center justify-center text-white/70"><X size={14} /></button>
+        </div>
+      )}
       {/* the bar, like a sheet's: drag it up to hide the map, down to bring it back */}
       <button type="button" aria-label={mode === "closed" ? "Mostra la mappa" : "Nascondi la mappa"} data-testid="site-map-handle"
         onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}

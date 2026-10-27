@@ -234,7 +234,7 @@ async def main():
     assert r["open"]["commessa_id"] == "s_bagno" and r["open"]["start_m"] < 50 and not r["open"]["late_asked"]
     assert (await server.my_presence(me))["open"]["commessa_title"] == "Bagno"
     det = await server.get_job_commessa("s_bagno", current=me)
-    assert det["on_site"] == [{"name": "Luca Rossi", "is_user": True, "since": r["open"]["start_at"], "start_m": r["open"]["start_m"], "far": False}]
+    assert det["on_site"] == [{"name": "Luca Rossi", "is_user": True, "since": r["open"]["start_at"], "start_m": r["open"]["start_m"], "far": False, "role": "", "company": ""}]
     try:
         await server.presence_start_app("s_tetto", server.PresencePayload(), me); assert False
     except HTTPException as ex:
@@ -339,6 +339,7 @@ async def main():
     state = await tg._get_state(db, "u1", 77)
     assert state["pending_presence_note"]["commessa_id"] == "s_bagno"
     n_logs = len(db.job_logs.docs)
+    state["pending_presence_note"]["at"] = datetime.now(timezone.utc).isoformat()   # (asked "yesterday" in this test: answered at once)
     assert await tp.try_note(Upd77(Msg("posati i sanitari")), Ctx(), me_doc(), state, "posati i sanitari")
     new = db.job_logs.docs[n_logs:]
     assert new and new[0]["commessa_id"] == "s_bagno" and new[0]["user_id"] == "u1" and "sanitari" in new[0]["text"]

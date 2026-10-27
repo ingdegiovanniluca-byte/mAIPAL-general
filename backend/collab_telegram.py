@@ -390,7 +390,7 @@ async def presence(update: Update, active: list, targets: list, command: Optiona
 
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: list):
-    from server import db, _collab_targets, COLLAB_UNDO_MINUTES
+    from server import db, _collab_targets, _day_pin_touch, COLLAB_UNDO_MINUTES
     q = update.callback_query
     data = q.data or ""
     try:
@@ -508,9 +508,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         mine = {r["id"] for r in recs}
         gone = 0
         for tid in data[4:].split(","):
-            t = await db.job_todos.find_one({"id": tid}, {"_id": 0, "collaborator_id": 1, "created_at": 1})
+            t = await db.job_todos.find_one({"id": tid}, {"_id": 0, "collaborator_id": 1, "created_at": 1, "shared_with": 1})
             if t and t.get("collaborator_id") in mine and t.get("created_at", "") >= limit:
                 await db.job_todos.delete_one({"id": tid})
+                _day_pin_touch(*(t.get("shared_with") or []))   # the colleagues it was shared with
                 gone += 1
         try:
             await q.edit_message_reply_markup(reply_markup=None)
@@ -543,7 +544,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             return
         await db.job_logs.delete_one({"id": log["id"]})
         await db.job_photos.delete_many({"log_id": log["id"]})
+        shared = [c for t in await db.job_todos.find({"from_log_id": log["id"]}, {"_id": 0, "shared_with": 1}).to_list(50)
+                  for c in t.get("shared_with") or []]
         await db.job_todos.delete_many({"from_log_id": log["id"]})   # the reminder written with it, too
+        _day_pin_touch(*shared)
         try:
             await q.edit_message_reply_markup(reply_markup=None)
         except Exception:

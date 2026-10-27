@@ -16,6 +16,8 @@ import { useAuth } from "@/auth/AuthContext";
 import { MOBILE_BREAKPOINT } from "@/hooks/use-is-mobile";
 import SiteMapBand from "@/components/SiteMapBand";
 import PresencePill from "@/components/PresencePill";
+import OnSiteList from "@/components/OnSiteList";
+import { firstName, onSiteSummary } from "@/lib/onSite";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -1142,7 +1144,7 @@ export default function JobDiaryPage() {
   const [period, setPeriod] = useState({ key: "30" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [menu, setMenu] = useState(null);       // "stato" | "periodo" | "collab"
+  const [menu, setMenu] = useState(null);       // "stato" | "periodo" | "collab" | "onsite"
   // Admin: the collaborators (Telegram only) enabled on this commessa
   const { user: me } = useAuth();
   const isAdmin = me?.role === "admin";
@@ -1161,6 +1163,9 @@ export default function JobDiaryPage() {
     return next;
   });
   const swipeX = useRef(null);
+  // the menus open just under what opened them (the row of figures, the period)
+  const detailBox = useRef(null), totalsRow = useRef(null), periodBtn = useRef(null);
+  const under = (el) => (el && detailBox.current ? el.getBoundingClientRect().bottom - detailBox.current.getBoundingClientRect().top + 6 : undefined);
 
   const loadList = async () => {
     try { setCommesse((await api.get("/jobs/commesse")).data || []); }
@@ -1334,7 +1339,7 @@ export default function JobDiaryPage() {
   };
 
   const diaryView = !c ? loading : (
-    <div className="relative w-full" data-testid="commessa-detail">
+    <div ref={detailBox} className="relative w-full" data-testid="commessa-detail">
       {/* only the commessa's name; the arrow goes back to its card */}
       <div className="flex items-center gap-2.5">
         <button onClick={() => setLevel("clients")} data-testid="job-back" aria-label="Torna ai clienti"
@@ -1348,13 +1353,16 @@ export default function JobDiaryPage() {
 
       {/* the commessa in one row that scrolls sideways: state, hours, reports, documents, then
           the card's details (site, dates, phone, e-mail) */}
-      <div className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
+      <div ref={totalsRow} className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
           ariaLabel="Cambia lo stato della commessa" onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
         {(detail.on_site || []).length > 0 && (
-          <InfoCard icon={HardHat} label="In cantiere ora" testid="glance-on-site" ariaLabel="Chi sta lavorando ora in cantiere"
-            value={detail.on_site.map((x) => x.name.split(" ")[0]).join(", ")}
-            note={`dalle ${hhmmOf(detail.on_site[0].since)}${detail.on_site.some((x) => x.far) ? " · ⚠️ lontano" : ""}`} />
+          // one: the name; more: how many and of which role - tapped, everyone by role
+          <InfoCard icon={HardHat} label="In cantiere ora" testid="glance-on-site" ariaLabel="Chi sta lavorando ora in cantiere" wide
+            onClick={() => setMenu((m) => (m === "onsite" ? null : "onsite"))}
+            value={detail.on_site.length === 1 ? firstName(detail.on_site[0]) : `${detail.on_site.length} persone`}
+            note={detail.on_site.length === 1 ? `dalle ${hhmmOf(detail.on_site[0].since)}${detail.on_site[0].far ? " · ⚠️ lontano" : ""}`
+              : (onSiteSummary(detail.on_site) || detail.on_site.map(firstName).join(", "))} />
         )}
         <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")} />
         {detail.economics && (
@@ -1466,7 +1474,7 @@ export default function JobDiaryPage() {
       )}
       {/* the period */}
       <div className="mt-1.5 flex items-center justify-center gap-2.5">
-        <button type="button" onClick={() => setMenu((m) => (m === "periodo" ? null : "periodo"))} data-testid="period-btn" aria-label="Scegli il periodo"
+        <button ref={periodBtn} type="button" onClick={() => setMenu((m) => (m === "periodo" ? null : "periodo"))} data-testid="period-btn" aria-label="Scegli il periodo"
           className="h-[34px] w-[30px] flex items-center justify-center text-white/90 active:opacity-70">
           <CalendarDays size={17} />
         </button>
@@ -1512,7 +1520,7 @@ export default function JobDiaryPage() {
       {/* state menu and period popup, like the profile menu */}
       {menu && <button type="button" aria-label="Chiudi" className="fixed inset-0 z-30 cursor-default" onClick={() => setMenu(null)} />}
       {menu === "stato" && (
-        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" className="glass-panel absolute z-40 left-0 top-[112px] w-[236px] py-1">
+        <div role="menu" aria-label="Stato della commessa" data-testid="stato-menu" style={{ top: under(totalsRow.current) }} className="glass-panel absolute z-40 left-0 top-[112px] w-[236px] py-1">
           {(detail.stati || []).map((s) => {
             const on = s === c.stato;
             return (
@@ -1528,8 +1536,14 @@ export default function JobDiaryPage() {
           <div className="px-5 pt-2.5 pb-3 text-[11px] text-white/55 border-t border-white/[0.13]">Il cambio resta scritto nel diario</div>
         </div>
       )}
+      {menu === "onsite" && (detail.on_site || []).length > 0 && (
+        <div role="dialog" aria-label="Chi è in cantiere ora" data-testid="on-site-menu" style={{ top: under(totalsRow.current) }} className="glass-panel absolute z-40 left-0 top-[112px] w-[300px] max-w-[calc(100vw-32px)] max-h-[60vh] overflow-y-auto px-5 pt-3.5 pb-3">
+          <div className="text-[15px] font-semibold text-white mb-2.5">In cantiere ora · {detail.on_site.length}</div>
+          <OnSiteList people={detail.on_site} />
+        </div>
+      )}
       {menu === "collab" && collabs && (
-        <div role="menu" aria-label="Collaboratori abilitati" data-testid="collab-menu" className="glass-panel absolute z-40 right-0 top-[112px] w-[280px] py-1">
+        <div role="menu" aria-label="Collaboratori abilitati" data-testid="collab-menu" style={{ top: under(totalsRow.current) }} className="glass-panel absolute z-40 right-0 top-[112px] w-[280px] py-1">
           {collabs.length === 0 && <div className="px-5 py-3.5 text-[13px] text-white/75">Nessun collaboratore: aggiungili in Impostazioni → Collaboratori.</div>}
           {collabs.map((x) => (
             <button key={x.id} type="button" role="menuitemcheckbox" aria-checked={x.enabled} onClick={() => toggleCollab(x)} data-testid={`collab-toggle-${x.id}`}
@@ -1549,7 +1563,7 @@ export default function JobDiaryPage() {
         </div>
       )}
       {menu === "periodo" && (
-        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[236px] w-[300px] pt-1 pb-3.5">
+        <div role="dialog" aria-label="Periodo da consultare" data-testid="period-menu" style={{ top: under(periodBtn.current) }} className="glass-panel absolute z-40 left-1/2 -translate-x-1/2 top-[236px] w-[300px] pt-1 pb-3.5">
           {PERIODS.map((p) => (
             <button key={p.key} type="button" onClick={() => { setPeriod({ key: p.key }); setMenu(null); }}
               className="glass-row w-full flex items-center gap-3.5 px-5 py-3.5 text-left text-[15px] text-white">

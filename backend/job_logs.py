@@ -156,6 +156,17 @@ def plan_date(m: dict, raw: str, day: date) -> str:
     return (day + timedelta(days=2 if re.search(r"\bdopodomani\b", n) else 0 if re.search(r"\b(stasera|oggi pomeriggio)\b", n) else 1)).isoformat()
 
 
+# "solo per me", "ricordalo solo a me", "non dirlo agli altri": a material to take that stays the
+# writer's (otherwise the colleagues of their company on that commessa see it too)
+_ONLY_ME = re.compile(r"\bsolo (?:per|a) me\b|\bsolo (?:io|mio|mia)\b|\bpromemoria personale\b"
+                      r"|\bnon (?:lo |la |li |le )?(?:dire|dirlo|mandare|mandarlo|mostrare|mostrarlo|condividere|condividerlo|avvisare)"
+                      r"(?:la|li|le)? (?:a |agli |ai |alle )?(?:altri|colleghi|ragazzi|compagni)\b")
+
+
+def only_for_me(raw: str) -> bool:
+    return bool(_ONLY_ME.search(_norm(raw or "")))
+
+
 def clean_problems(rows) -> list:
     return [str(p).strip()[:300] for p in (rows if isinstance(rows, list) else []) if str(p or "").strip()]
 
