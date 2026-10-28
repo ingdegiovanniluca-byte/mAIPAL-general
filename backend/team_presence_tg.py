@@ -99,6 +99,11 @@ async def try_presence(update: Update, ctx, user_doc: dict, text: str = "", loc:
             await update.message.reply_text(f"Le {command['at'].strftime('%H:%M')} non sono ancora arrivate: scrivimi l'ora giusta.")
             return True
     open_ = await _open_presence(worker["id"])
+    if command and command["action"] == "stop" and command.get("at") and not open_ and not loc:
+        # "ho finito alle 17.10" with nothing open: a correction of the day's end, for the diary
+        from telegram_bot import _run_job_log_flow
+        await _run_job_log_flow(update, ctx, db, user_doc, text)
+        return True
     action = command["action"] if command else ("stop" if open_ else "start")
     if action == "stop":
         if open_:

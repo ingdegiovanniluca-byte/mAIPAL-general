@@ -3634,6 +3634,8 @@ def _push_collab_entry(owner: User, log: dict, author: dict) -> None:
     """A collaborator wrote in a commessa's diary: the owner's devices hear it."""
     who = author.get("name") or author.get("first_name") or "Un collaboratore"
     bits = [jl.hours_line(log["hours"])] if log.get("hours") else []
+    if log.get("hours_pending"):
+        bits.append(f"🕒 {jl.hours_line(log['hours_pending'])} da approvare")
     if log.get("problems"):
         bits.append("⚠️ " + "; ".join(log["problems"]))
     body = (log.get("text") or "") + (f" · {' · '.join(bits)}" if bits else "")
@@ -5508,7 +5510,8 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
     written = {}
     if "stato" in wants or "attivita" in wants:
         facts = "; ".join(x for x in (
-            hours and f"ore lavorate {hours}", tot["problems"] and f"{len(tot['problems'])} problemi registrati",
+            hours and f"ore lavorate {hours}",
+            tot["hours_pending_total"] and f"ore da approvare (non conteggiate) {jl._fmt_num(tot['hours_pending_total'])} h", tot["problems"] and f"{len(tot['problems'])} problemi registrati",
             milestones and "milestone: " + milestones_line(milestones)) if x)
         diary = "\n".join(jl._ctx_line(lg) for lg in logs)[-14000:]
         try:
@@ -5536,6 +5539,9 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
             days = len({lg["date"] for lg in work if lg.get("date") and lg.get("hours")})
             fields = {"Ore totali": hours or "0 h", "Ore per persona": people or none,
                       "Giorni con ore registrate": str(days) if days else "0"}
+            if tot["pending"]:   # written by collaborators, not approved yet: apart, not in the totals
+                fields["Ore da approvare (non conteggiate)"] = "\n".join(
+                    f"- {fmt(p['date'])} · {p['who']}: {jl._fmt_num(p['hours'])} h" for p in tot["pending"])
         elif key == "problemi":
             fields = {"Problemi riscontrati": problems or "Nessun problema registrato nel periodo"}
         elif key == "materiali":
@@ -6016,7 +6022,13 @@ def _job_log_message(log: dict, created: dict) -> str:
         lines.append(f"👤 Cliente nuovo aggiunto alla lista Clienti: {log.get('client_name')}")
     if created.get("commessa"):
         lines.append("🧱 Commessa nuova, stato «in corso»")
-    lines.append(f"⏱ Ore: {jl.hours_line(log['hours'])}" if log.get("hours") else "⏱ Ore: non indicate")
+    if log.get("hours_pending"):
+        lines.append(f"⏳ Ore da approvare: {jl.hours_line(log['hours_pending'])}{_review_detail(log)}. "
+                     "Contano quando il titolare le approva.")
+    elif log.get("hours"):
+        lines.append(f"⏱ Ore: {jl.hours_line(log['hours'])}" + (_review_detail(log) if (log.get("hours_review") or {}).get("start") else ""))
+    else:
+        lines.append("⏱ Ore: non indicate")
     if log.get("materials"):
         lines.append(f"🧰 Materiali: {jl.materials_line(log['materials'])}")
     if log.get("problems"):
@@ -6025,6 +6037,121 @@ def _job_log_message(log: dict, created: dict) -> str:
         n = len(log["photos"])
         lines.append(f"📷 {n} foto" if n > 1 else "📷 1 foto")
     return "\n".join(lines)
+
+
+# ---- HOURS TO APPROVE: a collaborator's hours are counted by themselves only from 📍 arrival
+# and end (with the position). Hours written in a note - "oggi 8 ore", "ho finito alle 17.10",
+# "ho sbagliato l'orario di fine, era 17.10" - go in the diary as hours to approve: the owner
+# approves them (then they count; a correction takes the place of the 📍 hours of that day) or
+# not. The app's users (the owner, the team) write theirs as before: counted at once.
+
+HOURS_LOOKBACK_DAYS = 3   # "correggi l'ultimo fine cantiere": the presence of the last days
+
+
+def _hhmm_at(day: date, hhmm: str) -> datetime:
+    return datetime.combine(day, datetime.strptime(hhmm, "%H:%M").time(), tzinfo=LOCAL_TZ)
+
+
+async def _hours_claim(current: User, author: Optional[dict], speaker: str, target: dict, parsed: dict, times: dict) -> dict:
+    """What a note says about the writer's hours: the times of arrival / end ("ho finito alle
+    17.10" - the other one from their 📍 of that day, or from a start never ended) or the hours.
+    -> {"hours": counted now, "pending": to approve, "review": dict|None, "replaces": the 📍 entry
+    they take the place of, "session": a start never ended that they close, "date", "missing":
+    "start"|"end" when a time alone can't make hours, "error"}"""
+    now = datetime.now(timezone.utc).isoformat()
+    out = {"hours": parsed["hours"], "pending": [], "review": None, "replaces": None, "session": None,
+           "date": parsed["date"], "missing": None, "error": None}
+    has_times = bool(times.get("start") or times.get("end"))
+    if not has_times and not (author and parsed["hours"]):
+        return out
+    today = jl.today_local()
+    day = date.fromisoformat(parsed["date"])
+    # a time with no day said ("correggi l'ultimo fine cantiere") may be about the last days
+    since = (today - timedelta(days=HOURS_LOOKBACK_DAYS) if has_times and day == today else day).isoformat()
+    who_q = {"collaborator_id": author["id"]} if author else {"user_id": current.user_id, "collaborator_id": None}
+    pres = [lg for lg in await db.job_logs.find({"commessa_id": target["id"], **who_q, "date": {"$gte": since, "$lte": day.isoformat()}},
+                                                {"_id": 0, "embedding": 0}).to_list(100)
+            if lg.get("presence") and not lg.get("hours_replaced_by")]
+    pres_one = max(pres, key=lambda lg: lg["presence"]["end_at"], default=None)
+    sess = None
+    if has_times and not pres_one:   # a start never ended (open, or closed as forgotten)
+        worker = author["id"] if author else f"{USER_WORKER}{current.user_id}"
+        cands = [x for x in await db.work_sessions.find({"collaborator_id": worker, "commessa_id": target["id"]}, {"_id": 0}).to_list(500)
+                 if not x.get("log_id") and (x.get("end_at") is None or x.get("forgotten"))
+                 and since <= _local(x["start_at"]).date().isoformat() <= day.isoformat()]
+        sess = max(cands, key=lambda x: x["start_at"], default=None)
+    base = date.fromisoformat(pres_one["date"]) if pres_one else _local(sess["start_at"]).date() if sess else day
+    start = times.get("start") or (sp.hhmm(_local(pres_one["presence"]["start_at"])) if pres_one
+                                   else sp.hhmm(_local(sess["start_at"])) if sess else None)
+    end = times.get("end") or (sp.hhmm(_local(pres_one["presence"]["end_at"])) if pres_one else None)
+    hours, replaces = list(parsed["hours"]), None
+    if has_times and start and end:
+        minutes = int((_hhmm_at(base, end) - _hhmm_at(base, start)).total_seconds() // 60)
+        if minutes <= 0:
+            out["error"] = f"L'orario di fine ({end}) è prima dell'inizio ({start}): scrivimi gli orari giusti, es. «dalle 8 alle 17.10»."
+            return out
+        pause = ((pres_one or {}).get("presence") or {}).get("pause_min") or 0
+        hours = [{"who": speaker, "hours": sp.round_hours(max(0, minutes - pause))}] + [h for h in hours if h["who"].lower() != speaker.lower()]
+        replaces = pres_one
+        out["session"] = sess
+    elif has_times:
+        out["missing"] = "start" if not start else "end"
+    elif author and any(h["who"].lower() == speaker.lower() for h in hours):
+        replaces = pres_one   # "oggi 8 ore" on a day with their 📍: in its place
+    out.update(date=base.isoformat(), replaces=replaces)
+    if not hours:
+        out["hours"] = []
+        return out
+    review = {"kind": "correzione" if replaces else "dichiarate", "start": start if has_times else None, "end": end if has_times else None,
+              "replaces_log_id": replaces["id"] if replaces else None, "replaced_hours": replaces["hours"] if replaces else [],
+              "requested_by": speaker, "requested_at": now}
+    if author:
+        out.update(hours=[], pending=hours, review={**review, "status": "pending"})
+    elif has_times:
+        out.update(hours=hours, review={**review, "status": "approved", "decided_by": speaker, "decided_at": now})
+    return out
+
+
+async def _hours_claim_done(current: User, claim: dict, log: dict, author: Optional[dict], view: dict) -> None:
+    """After the entry is saved: the start never ended is closed with it, a correction by the
+    owner/team takes the 📍 hours' place at once, a collaborator's hours go to the owner."""
+    rv = claim["review"] or {}
+    if claim["session"] and (log.get("hours") or log.get("hours_pending")):
+        end = _hhmm_at(date.fromisoformat(log["date"]), rv["end"]) if rv.get("end") else datetime.now(timezone.utc)
+        await db.work_sessions.update_one({"id": claim["session"]["id"]}, {"$set": {
+            "end_at": end.astimezone(timezone.utc).isoformat(), "log_id": log["id"], "declared": True}})
+    if rv.get("status") == "approved" and rv.get("replaces_log_id"):
+        await _replace_presence_hours(rv["replaces_log_id"], log["id"])
+    if rv.get("status") == "pending" and author:
+        await _hours_to_approve_notice(current, log, author, view)
+
+
+def _review_detail(log: dict) -> str:
+    """"(dalle 07:58 alle 17:10, al posto delle 10,5 h segnate con 📍)" """
+    rv = log.get("hours_review") or {}
+    bits = [f"dalle {rv['start']} alle {rv['end']}"] if rv.get("start") and rv.get("end") else []
+    if rv.get("replaces_log_id"):
+        old = sum(h["hours"] for h in rv.get("replaced_hours") or [])
+        bits.append(f"al posto delle {jl._fmt_num(old)} h segnate con 📍" if old else "al posto della presenza segnata con 📍")
+    return f" ({', '.join(bits)})" if bits else ""
+
+
+async def _replace_presence_hours(pres_id: str, log_id: str) -> None:
+    pres = await db.job_logs.find_one({"id": pres_id}, {"_id": 0, "hours": 1, "hours_replaced_by": 1})
+    if pres and not pres.get("hours_replaced_by"):
+        await db.job_logs.update_one({"id": pres_id}, {"$set": {"hours": [], "hours_replaced": pres.get("hours") or [],
+                                                                 "hours_replaced_by": log_id, "embedding": None}})
+
+
+async def _hours_to_approve_notice(owner: User, log: dict, author: dict, view: dict) -> None:
+    who = (author.get("name") or author.get("first_name") or "") + (f" ({author['company']})" if author.get("company") else "")
+    what = f"{_short_it_date(log['date'])}: {jl.hours_line(log['hours_pending'])}{_review_detail(log)}"
+    try:
+        await _notify_owner(owner, f"🕒 Ore da approvare: {who} su «{view['title']}» — {view['client_name']}, {what}.\n"
+                                   "Le approvi nel diario della commessa, sezione Ore.")
+    except Exception:
+        logger.exception("hours to approve notice failed")
+    # (on the phone: the entry's own notification says "da approvare")
 
 
 MAT_EVE_AT, MAT_MORNING_AT = "19:30", "07:00"   # materials to take: the evening before and that morning
@@ -6260,7 +6387,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     collaborator writing on Telegram ({"id", "first_name", "name", "company"}) - the entry is
     theirs, in the account (`current`) that enabled them on that commessa.
     -> {"status": "ok", "log", "message", ...} | {"status": "pick_commessa", "candidates", "message", "text"}
-       | {"status": "question" | "unclear", "message"} - nothing saved
+       | {"status": "question" | "unclear" | "invalid", "message"} - nothing saved (invalid: times that don't add up)
        | {"status": "planned", "todos", "message"} - only materials to take: a reminder, no entry
        | {"status": "material_doubt", "materials", "commessa_id", "message", "text"} - asked: used or to take?"""
     text = (text or "").strip()
@@ -6297,6 +6424,17 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     photo_only = bool(images) and text == PHOTO_ONLY_TEXT
     if not photo_only and (parsed.get("kind") == "domanda" or jl.is_plain_question(text)):
         return {"status": "question", "message": JOB_LOG_QUESTION_MSG}
+    times = jl.clock_times(parsed.get("times"), text)   # "ho finito alle 17.10": an entry even with nothing else
+    has_times = bool(times["start"] or times["end"])
+    if has_times and parsed.get("kind") == "non_chiara":
+        parsed["kind"] = "nota"
+    if has_times and not commessa_id and not hint_commessa_id:   # on the commessa of their last 📍
+        since = (jl.today_local() - timedelta(days=HOURS_LOOKBACK_DAYS)).isoformat()
+        q = {"collaborator_id": author["id"]} if author else {"user_id": current.user_id, "collaborator_id": None}
+        last = [lg for lg in await db.job_logs.find({**q, "date": {"$gte": since}}, {"_id": 0, "commessa_id": 1, "presence": 1}).to_list(100)
+                if lg.get("presence")]
+        if last:
+            hint_commessa_id = max(last, key=lambda lg: lg["presence"]["end_at"])["commessa_id"]
     if not photo_only and parsed.get("kind") == "non_chiara":
         return {"status": "unclear", "message": "Non ho salvato niente: la nota non è chiara. "
                 + (parsed.get("doubt") or "Mi dici cosa avete fatto e per quale cliente o commessa?")}
@@ -6366,17 +6504,24 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         return {"status": "planned", "todos": todos, "commessa": target, "client_created": bool(created.get("client")),
                 "commessa_created": bool(created.get("commessa")), "message": _plan_message(target, todos)}
 
+    claim = await _hours_claim(current, author, speaker, target, parsed, times)
+    if claim["error"]:
+        return {"status": "invalid", "message": "Non ho salvato niente: " + claim["error"][0].lower() + claim["error"][1:]}
+    parsed["hours"], parsed["date"] = claim["hours"], claim["date"]
+    review_fields = {"hours_pending": claim["pending"], "hours_review": claim["review"]} if claim["review"] else {}
+
     now = datetime.now(timezone.utc).isoformat()
     if photo_entry and photo_entry["commessa_id"] == target["id"]:
         # the description goes into the photo's entry (what it was is kept, to undo it)
         upd = {"raw_text": text, "text": parsed["text"], "date": parsed["date"], "hours": parsed["hours"],
-               "materials": parsed["materials"], "problems": parsed["problems"], "described_at": now, "embedding": None,
+               "materials": parsed["materials"], "problems": parsed["problems"], "described_at": now, "embedding": None, **review_fields,
                "before_description": {k: photo_entry.get(k) for k in ("raw_text", "text", "date", "hours", "materials", "problems")}}
         await db.job_logs.update_one({"id": photo_entry["id"]}, {"$set": upd})
         log = {**photo_entry, **upd}
         ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
         if log["hours"] or log["materials"]:
             asyncio.create_task(_check_budget_alert(clienti, target["id"]))
+        await _hours_claim_done(current, claim, log, author, target)
         n = len(photo_entry.get("photos") or [])
         msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
         todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"], raw=text) if planned else []
@@ -6394,11 +6539,12 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         "client_item_id": target["client_item_id"], "client_name": target["client_name"],
         "commessa_id": target["id"], "commessa_title": target["title"],
         "date": parsed["date"], "raw_text": text, "text": parsed["text"],
-        "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"],
+        "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"], **review_fields,
         "photos": [], "channel": channel, "conv_id": conv_id, "created_at": now, "embedding": None,
     }
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
+    await _hours_claim_done(current, claim, log, author, target)
     if images:
         await _store_job_photos(current, log, images)
     if author:
@@ -6407,6 +6553,9 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if log["hours"] or log["materials"]:
         asyncio.create_task(_check_budget_alert(clienti, target["id"]))
     msg = _job_log_message(log, created)
+    if claim["missing"]:
+        msg += ("\nNon so a che ora sei arrivato" if claim["missing"] == "start" else "\nNon so a che ora hai finito") \
+            + ": per le ore scrivimi l'orario di arrivo e di fine, es. «ieri dalle 8 alle 17.10»."
     todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"], raw=text) if planned else []
     if todos:
         msg += "\n" + _plan_message(target, todos, short=True)
@@ -6446,7 +6595,8 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     The totals need only the figures, so the texts are loaded for the period alone."""
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
     light = await db.job_logs.find({"commessa_id": commessa_id},
-                                   {"_id": 0, "id": 1, "date": 1, "kind": 1, "hours": 1, "materials": 1, "problems": 1, "photos": 1}).to_list(20000)
+                                   {"_id": 0, "id": 1, "date": 1, "kind": 1, "hours": 1, "materials": 1, "problems": 1, "photos": 1,
+                                    "hours_pending": 1, "hours_review": 1, "author_name": 1}).to_list(20000)
     q: dict = {"commessa_id": commessa_id}
     rng = {}
     if date_from:
@@ -6462,7 +6612,10 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
     econ = await _commessa_economics(clienti, commessa_id, light)
     milestones = await _commessa_milestones(commessa_id)
+    waiting = [lg["id"] for lg in light if lg.get("hours_pending")]   # a collaborator's hours, to approve
+    to_approve = await db.job_logs.find({"id": {"$in": waiting}}, {"_id": 0, "embedding": 0}).to_list(500) if waiting else []
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
+            "hours_to_approve": sorted(to_approve, key=lambda lg: (lg.get("date") or "", lg.get("created_at") or "")),
             "todos": todos, "team": await _team_first_names(current),
             "collaborators": await _assignable_collaborators(commessa_id),
             "on_site": await _on_site(commessa_id), "geo": sub.get("geo"),
@@ -7854,7 +8007,8 @@ async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict], channe
     s_ = await _open_presence(collab["id"])
     if not s_:
         return ("Non hai un inizio aperto: quando arrivi in cantiere tocca 📍 Sono arrivato (o scrivi «sono arrivato»). "
-                "Per le ore di oggi puoi anche scriverle, es. «oggi 8 ore».", None)
+                "Se hai dimenticato di segnarlo scrivimi gli orari, es. «oggi dalle 8 alle 17»"
+                + (": li metto nel diario." if collab.get("is_user") else ": vanno nel diario come ore da approvare dal titolare."), None)
     start = datetime.fromisoformat(s_["start_at"])
     minutes = int((at - start).total_seconds() // 60)
     if minutes <= 0:
@@ -7962,7 +8116,8 @@ async def _presence_forgotten(now_utc: Optional[datetime] = None) -> int:
         when = f"{_short_it_date(_local(s_['start_at']).date().isoformat())} alle {sp.hhmm(_local(s_['start_at']))}"
         if c:
             text = (f"⏱️ Non hai segnato la fine del lavoro su «{s_['commessa_title']}» (iniziato {when}): "
-                    "non ho contato le ore. Scrivimele, es. «ieri 8 ore».")
+                    "non ho contato le ore. Scrivimi a che ora hai finito, es. «ho finito alle 17.30»"
+                    + ("." if c.get("is_user") else ": vanno nel diario come ore da approvare dal titolare."))
             try:
                 await _tell_worker(c, text)
             except Exception:
@@ -8499,6 +8654,47 @@ async def _job_log_or_404(current: User, log_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Voce non trovata")
     await _commessa_or_404(current, log["commessa_id"])   # the user can see that commessa
     return log
+
+
+class HoursReviewPayload(BaseModel):
+    approve: bool
+
+
+@api_router.post("/jobs/logs/{log_id}/hours-review")
+async def review_job_log_hours(log_id: str, payload: HoursReviewPayload, current: User = Depends(get_current_user)):
+    """The hours a collaborator wrote: approved (they count; a correction takes the place of the
+    📍 hours of that day) or not. Told to the collaborator on Telegram."""
+    log = await _job_log_or_404(current, log_id)
+    clienti, sub, client = await _commessa_or_404(current, log["commessa_id"])
+    if current.role != "admin" and clienti.get("user_id") != current.user_id:
+        raise HTTPException(status_code=403, detail="Le ore le approva il titolare")
+    rv = dict(log.get("hours_review") or {})
+    if rv.get("status") != "pending" or not log.get("hours_pending"):
+        raise HTTPException(status_code=400, detail="Queste ore non sono da approvare")
+    now = datetime.now(timezone.utc).isoformat()
+    rv.update(status="approved" if payload.approve else "rejected", decided_by=_first_name(current.name), decided_at=now)
+    if payload.approve:
+        upd = {"hours": log["hours_pending"], "hours_pending": [], "hours_review": rv, "embedding": None}
+        if rv.get("replaces_log_id"):
+            await _replace_presence_hours(rv["replaces_log_id"], log_id)
+    else:
+        upd = {"hours_pending": [], "hours_review": {**rv, "rejected_hours": log["hours_pending"]}, "embedding": None}
+    await db.job_logs.update_one({"id": log_id}, {"$set": upd})
+    log.update(upd)
+    if payload.approve:
+        asyncio.create_task(_check_budget_alert(clienti, log["commessa_id"]))
+    c = await db.collaborators.find_one({"id": log.get("collaborator_id")}, {"_id": 0}) if log.get("collaborator_id") else None
+    if c:
+        view = _commessa_view(sub, client, clienti)
+        hrs = jl.hours_line(upd.get("hours") or upd["hours_review"].get("rejected_hours") or [])
+        text = (f"✅ Approvate le ore del {_short_it_date(log['date'])} su «{view['title']}»: {hrs}." if payload.approve else
+                f"❌ Le ore del {_short_it_date(log['date'])} su «{view['title']}» ({hrs}) non sono state approvate"
+                + (": restano quelle segnate con 📍." if rv.get("replaces_log_id") else "."))
+        try:
+            await _tell_collaborator(c, text)
+        except Exception:
+            logger.exception("hours review notice failed")
+    return {"log": _public_log(log)}
 
 
 class PlanMaterialPayload(BaseModel):
@@ -11002,7 +11198,7 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             if res["status"] == "material_doubt":
                 return {**base, "label": "Diario commessa", "status": "error",
                         "message": f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."}
-            if res["status"] in ("question", "unclear"):
+            if res["status"] in ("question", "unclear", "invalid"):
                 return {**base, "label": "Diario commessa", "status": "error", "message": res["message"]}
             opts = "; ".join(f"«{c['title']}» ({c['client_name']})" for c in res.get("candidates") or [])
             return {**base, "label": "Diario commessa", "status": "error",

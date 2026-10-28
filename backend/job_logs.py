@@ -244,6 +244,63 @@ def ground(parsed: dict, raw: str) -> dict:
     return out
 
 
+# ---- times of arrival / end said in a note ("ho finito alle 17.10", "dalle 8 alle 17", "ho sbagliato
+# l'orario di fine: 17.10"): what a forgotten 📍 or a wrong end is corrected with. Only what was
+# written counts - the model's reading is kept when its numbers are in the message, else the
+# message's own words are read.
+
+_CLOCK = r"(?:(?:alle|ore|le|dalle|verso le)\s+(?:ore\s+)?(\d{1,2})(?:[:.,h](\d{2}))?|(\d{1,2})[:.](\d{2}))\b"
+_RANGE = re.compile(r"\bdall[ae']\s*(\d{1,2})(?:[:.,h](\d{2}))?\s+(?:alle|a)\s+(\d{1,2})(?:[:.,h](\d{2}))?\b")
+# between the words and the time only filler ("ho finito alle 17", "il fine cantiere era 18.10"), so that
+# "ho finito il massetto alle 12" is not an end of the day
+_GAP = r"(?:\s*(?:[,:;-]|\.{1,3}|\b(?:era|erano|e|di|lavorare|in|cantiere|oggi|ieri|stamattina|stasera|invece|realmente|veramente|corretto|giusto)\b))*\s*"
+_END_AT = re.compile(r"\b(?:(?:orario|ora) di (?:fine|uscita)|fine (?:del )?(?:cantiere|lavori|lavoro|giornata|turno)|(?:ho|abbiamo) finito|"
+                     r"finit[oaie] di lavorare|uscit[oaie]|andat[oaie] via|staccat[oaie]|stacco|smess[oaie])" + _GAP + _CLOCK)
+_START_AT = re.compile(r"\b(?:(?:orario|ora) di (?:inizio|arrivo|entrata)|inizio (?:del )?(?:cantiere|lavori|lavoro|giornata|turno)|"
+                       r"(?:sono|siamo) arrivat[oaie]|arrivat[oaie]|(?:ho|abbiamo) (?:iniziato|cominciato|attaccato)|entrat[oaie])" + _GAP + _CLOCK)
+
+
+def _hhmm(h, m) -> Optional[str]:
+    try:
+        h, m = int(h), int(m or 0)
+    except (TypeError, ValueError):
+        return None
+    return f"{h:02d}:{m:02d}" if 0 <= h <= 23 and 0 <= m <= 59 else None
+
+
+def _clock_of(match, base: int = 1) -> Optional[str]:
+    g = match.groups()[base - 1:base + 3]
+    return _hhmm(g[0], g[1]) if g[0] else _hhmm(g[2], g[3])
+
+
+def _clock_said(hhmm: str, raw: str) -> bool:
+    h, m = int(hhmm[:2]), int(hhmm[3:])
+    n = _norm(raw)
+    if m:
+        return bool(re.search(rf"\b0?{h}\s*[:.,h]\s*{m:02d}\b", n))
+    return bool(re.search(rf"\b0?{h}(?:[:.,h]00)?\b", n))
+
+
+def clock_times(model_times, raw: str) -> dict:
+    """{"start": "HH:MM"|None, "end": "HH:MM"|None}: the times of arrival and end written in the note."""
+    out = {"start": None, "end": None}
+    mt = model_times if isinstance(model_times, dict) else {}
+    for k in out:
+        v = str(mt.get(k) or "").strip().replace(".", ":")
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", v)
+        hm = _hhmm(m.group(1), m.group(2)) if m else None
+        if hm and _clock_said(hm, raw):
+            out[k] = hm
+    if out["start"] or out["end"]:
+        return out
+    n = _norm(raw)
+    r = _RANGE.search(n)
+    if r:
+        return {"start": _hhmm(r.group(1), r.group(2)), "end": _hhmm(r.group(3), r.group(4))}
+    e, st = _END_AT.search(n), _START_AT.search(n)
+    return {"start": _clock_of(st) if st else None, "end": _clock_of(e) if e else None}
+
+
 def valid_day(s, fallback: date) -> str:
     """The entry's day: what the model computed if it's a real, not-future date, else today."""
     try:
@@ -274,7 +331,9 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "Compiti:\n"
         "0. \"kind\": cosa ha scritto l'utente.\n"
         "   - \"nota\": racconta lavori fatti o da fare, ore, materiali, problemi, cose successe in cantiere, "
-        "anche solo materiali da prendere o portare (\"domani porto 10 scatole 503\").\n"
+        "anche solo materiali da prendere o portare (\"domani porto 10 scatole 503\"), anche solo l'orario di arrivo "
+        "o di fine in cantiere o la correzione di un orario segnato male (\"ho finito alle 17.10\", \"ho sbagliato "
+        "l'orario di fine, era 17.10\", \"ieri dalle 8 alle 17\").\n"
         "   - \"domanda\": CHIEDE informazioni invece di raccontare (\"com'è messa la commessa dei Rossi?\", "
         "\"cosa abbiamo fatto ieri?\", \"quante ore abbiamo fatto?\", \"mancano materiali?\").\n"
         "   - \"non_chiara\": non si capisce cosa annotare (troppo vaga, frasi senza senso, saluti, \"ok\", "
@@ -300,9 +359,13 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "5. \"problems\": problemi, imprevisti, cose mancanti o da rifare, frasi brevi. Nessuno: [].\n"
         "6. \"client\" e \"commessa\": il cliente e i lavori/cantiere come li nomina il testo (\"dai Rossi\" -> "
         "\"Rossi\"), stringa vuota se non li nomina.\n"
+        "7. \"times\": gli orari di arrivo/inizio (\"start\") e di fine/uscita (\"end\") in cantiere di chi scrive, "
+        "come \"HH:MM\", solo se scritti (\"ho finito alle 17.10\" -> end \"17:10\"; \"dalle 8 alle 17\" -> start "
+        "\"08:00\", end \"17:00\"); altrimenti null. Il giorno va in \"date\" (\"ieri\" -> ieri).\n"
         "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
         "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
-        "\"hours\": [], \"materials\": [], \"problems\": [], \"client\": \"\", \"commessa\": \"\"}"
+        "\"hours\": [], \"materials\": [], \"problems\": [], \"times\": {\"start\": null, \"end\": null}, "
+        "\"client\": \"\", \"commessa\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -331,6 +394,7 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "hours": clean_hours(parsed.get("hours"), speaker),
         "materials": mats,
         "problems": clean_problems(parsed.get("problems")),
+        "times": clock_times(parsed.get("times"), text),
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),
     }
@@ -342,10 +406,13 @@ def _mat_key(m: dict) -> tuple:
 
 def totals(logs: list) -> dict:
     """Hours (total and per person), materials summed by name+unit, problems with their day."""
-    by_person, mats, problems = {}, {}, []
+    by_person, mats, problems, pending = {}, {}, [], []
     for lg in logs:
         for h in lg.get("hours") or []:
             by_person[h["who"]] = round(by_person.get(h["who"], 0) + float(h.get("hours") or 0), 2)
+        for h in lg.get("hours_pending") or []:   # written in a note by a collaborator: apart until approved
+            pending.append({"log_id": lg.get("id"), "date": lg.get("date"), "who": h["who"], "hours": float(h.get("hours") or 0),
+                            "review": lg.get("hours_review") or {}})
         for m in lg.get("materials") or []:
             k = _mat_key(m)
             cur = mats.setdefault(k, {"name": m["name"], "unit": m.get("unit") or "", "qty": None})
@@ -353,7 +420,11 @@ def totals(logs: list) -> dict:
                 cur["qty"] = round((cur["qty"] or 0) + float(m["qty"]), 3)
         for p in lg.get("problems") or []:
             problems.append({"date": lg.get("date"), "text": p, "log_id": lg.get("id")})
+    pending_by = {}
+    for x in pending:
+        pending_by[x["who"]] = round(pending_by.get(x["who"], 0) + x["hours"], 2)
     return {"hours_total": round(sum(by_person.values()), 2), "by_person": by_person,
+            "pending": pending, "pending_by_person": pending_by, "hours_pending_total": round(sum(pending_by.values()), 2),
             "materials": sorted(mats.values(), key=lambda x: x["name"].lower()), "problems": problems,
             "entries": sum(1 for lg in logs if not lg.get("kind")),   # state changes are not entries
             "first_day": min((lg.get("date") for lg in logs if lg.get("date")), default=None),
@@ -467,7 +538,9 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         f"Contatti utili: {commessa.get('contacts_line')}" if commessa.get("contacts_line") else "",
         f"Attività da fare (To Do): {commessa.get('todos_line')}" if commessa.get("todos_line") else "",
     ] if x)
+    pend = ", ".join(f"{k} {_fmt_num(v)} h" for k, v in tot["pending_by_person"].items())
     totals_s = (f"Voci di diario: {tot['entries']}. Ore totali: {_fmt_num(tot['hours_total'])} h" + (f" ({per})" if per else "")
+                + (f". Ore da approvare, NON comprese nel totale: {_fmt_num(tot['hours_pending_total'])} h ({pend})" if pend else "")
                 + ". Materiali: " + (materials_line(tot["materials"]) or "nessuno") + ".")
     diary = "\n".join(_ctx_line(lg) for lg in logs) or "(nessuna voce)"
     reps = []
@@ -477,7 +550,8 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
     today = today_local()
     system = (
         "Sei l'assistente di un'impresa artigiana e rispondi su UNA commessa, usando SOLO i dati qui sotto (scheda, "
-        "diario, report). Se un dato non c'è, dillo chiaramente: non inventare ore, materiali, date o importi. Fai i conti "
+        "diario, report). Se un dato non c'è, dillo chiaramente: non inventare ore, materiali, date o importi. Le ore \"da "
+        "approvare\" sono scritte da un collaboratore in una nota e non sono ancora conteggiate: tienile separate e dillo. Fai i conti "
         "quando servono (ore per persona, per periodo, materiali sommati). Risposte brevi e concrete, in italiano. "
         f"Oggi è {IT_WEEKDAYS[today.weekday()]} {today.isoformat()}.\n\n"
         f"SCHEDA\n{card}\n\nTOTALI\n{totals_s}\n\nDIARIO (dal più vecchio)\n{diary}\n\n"
@@ -510,6 +584,10 @@ def search_text(log: dict) -> str:
     bits = [log.get("text") or ""]
     if log.get("hours"):
         bits.append("Ore: " + hours_line(log["hours"]) + ".")
+    if log.get("hours_pending"):
+        bits.append("Ore da approvare (scritte nella nota, non ancora conteggiate): " + hours_line(log["hours_pending"]) + ".")
+    if log.get("hours_replaced_by"):
+        bits.append("Ore sostituite da una correzione approvata.")
     if log.get("materials"):
         bits.append("Materiali: " + materials_line(log["materials"]) + ".")
     if log.get("problems"):

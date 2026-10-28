@@ -179,7 +179,7 @@ async def main():
     ep, msg = PUSHED[-1]
     print(msg)
     assert len(PUSHED) == n + 1 and ep == SUB["endpoint"] and msg["title"] == "📒 Gino Neri · Bagno"
-    assert "Gino 3 h" in msg["body"] and "manca il miscelatore" in msg["body"] and msg["url"] == "/dashboard/journal?commessa=s_bagno"
+    assert "🕒 Gino 3 h da approvare" in msg["body"] and "manca il miscelatore" in msg["body"] and msg["url"] == "/dashboard/journal?commessa=s_bagno"
     # the outcome is kept, for Impostazioni > Notifiche
     for _ in range(40):
         last = (await server.push_status(server.PushEndpointPayload(endpoint=SUB["endpoint"]), me))["last"]

@@ -28,8 +28,9 @@ import site_presence as sp
 
 logger = logging.getLogger(__name__)
 
-TARGET_FRESH = timedelta(hours=2)   # the commessa of the conversation, for the next messages
+TARGET_FRESH = timedelta(minutes=20)   # the commessa of the conversation: kept for the messages a few minutes apart
 HISTORY_KEEP = 8
+UNCLEAR_FRESH = timedelta(minutes=15)   # a note not clear, completed by the next message
 
 HELP = ("Qui puoi fare due cose, sulle commesse che ti sono state abilitate:\n"
         "📒 scrivere cosa avete fatto (ore, materiali, problemi), anche a voce o con le foto;\n"
@@ -193,7 +194,8 @@ def _target_buttons(targets: list) -> InlineKeyboardMarkup:
 
 
 def _choose(rec: dict, content: str, targets: list) -> Optional[tuple]:
-    """The commessa a message is about: the only one, the one it names, or the conversation's."""
+    """The commessa a message is about: the only one, the one it names, or the conversation's
+    (the last message was a few minutes ago - after longer a new conversation starts)."""
     import retrieval
     if len(targets) == 1:
         return targets[0]
@@ -222,8 +224,14 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
     from server import db, _save_job_log, _collab_answer, _collab_name, _notify_owner, COLLAB_UNDO_MINUTES
     owner, _clienti, view = target
     author = {"id": rec["id"], "first_name": rec.get("first_name") or "", "name": _collab_name(rec), "company": rec.get("company") or ""}
+    # the answer to "the note is not clear: …?" completes it ("giorno di ieri")
+    unclear = rec.get("unclear") or {}
+    said = content
+    if unclear.get("text") and unclear.get("commessa_id") == view["id"] and unclear.get("at", "") >= (_now() - UNCLEAR_FRESH).isoformat() \
+            and not images:
+        content = f"{unclear['text']}\n{content}"[-1500:]
     await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": _now().isoformat()},
-                                                                    "pending": None}})
+                                                                    "pending": None, "unclear": None}})
     try:
         res = await _save_job_log(owner, content, images=images or None, commessa_id=view["id"], channel="telegram", author=author,
                                   material_choice=material_choice)
@@ -255,14 +263,16 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
     if res["status"] == "question":
         history = list(rec.get("tg_history") or [])
         try:
-            answer = await _collab_answer(rec, owner, view, content, history)
+            answer = await _collab_answer(rec, owner, view, said, history)
         except Exception:
             logger.exception("collaborator question failed")
             answer = "Non sono riuscito a rispondere, riprova tra poco."
-        history = (history + [{"role": "user", "content": content}, {"role": "assistant", "content": answer}])[-HISTORY_KEEP:]
+        history = (history + [{"role": "user", "content": said}, {"role": "assistant", "content": answer}])[-HISTORY_KEEP:]
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_history": history}})
         await _reply(update, f"🔎 «{view['title']}» — {view['client_name']}\n{answer}", reply_markup=await _keyboard_for([rec]))
         return
+    if res["status"] == "unclear":   # kept a few minutes: the answer to the question completes it
+        await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"unclear": {"text": content, "commessa_id": view["id"], "at": _now().isoformat()}}})
     await _reply(update, "📒 " + (res.get("message") or "Non l'ho salvato: riscrivilo, per favore."), reply_markup=await _keyboard_for([rec]))
 
 
@@ -287,6 +297,11 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         return
     command = sp.parse_command(text) if text else None
     place = getattr(msg, "location", None)
+    if command and command["action"] == "stop" and command.get("at") and not place:
+        # "ho finito alle 17.10" with nothing open: a correction of the day's end, for the diary
+        from server import _open_presence
+        if not any([await _open_presence(r["id"]) for r in active]):
+            command = None
     if place or command:
         await presence(update, active, targets, command, {"lat": place.latitude, "lon": place.longitude} if place else None)
         return
@@ -320,7 +335,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         await _reply(update, "Mandami un testo, un messaggio vocale o una foto.")
         return
     target = _choose(rec, content, targets)
-    if not target:   # working on a commessa (time open): a message naming no other goes there
+    if not target:   # on site (time open): what they do or photograph there is that commessa's
         from server import _open_presence
         for r in active:
             s_ = await _open_presence(r["id"])

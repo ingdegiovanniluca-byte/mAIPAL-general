@@ -330,7 +330,7 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     conv = None if new_conv else await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "job_commessa_id": 1})
     res = await _save_job_log(_to_user_pydantic(user_doc), content, images=images,
                               hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
-    if res["status"] in ("ok", "question", "unclear", "planned"):
+    if res["status"] in ("ok", "question", "unclear", "invalid", "planned"):
         answer = res["message"]
     elif res["status"] == "material_doubt":
         answer = f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."
@@ -492,7 +492,7 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🧰 Usati oggi", callback_data="jobm:usato"), InlineKeyboardButton("📌 Da prendere", callback_data="jobm:da_prendere")]]))
         return
-    if res["status"] in ("question", "unclear"):   # nothing saved, nothing waiting
+    if res["status"] in ("question", "unclear", "invalid"):   # nothing saved, nothing waiting
         await _set_state(db, chat_id, user["user_id"], current_action="journal", pending_job_context=None)
         await ctx.bot.send_message(chat_id=chat_id, text="📒 " + res["message"], reply_markup=_reply_keyboard("journal"))
         return

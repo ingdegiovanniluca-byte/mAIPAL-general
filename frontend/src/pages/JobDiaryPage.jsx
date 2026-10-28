@@ -327,7 +327,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
       <button type="button" onClick={() => onOpen(log)} className="w-full text-left">
         <span className="flex items-center gap-[5px] text-white/50">
           {isEvent && (isReport ? <FileText size={11} strokeWidth={2} /> : log.kind === "milestone" ? <Flag size={11} strokeWidth={2} /> : log.kind === "todo" ? <ListChecks size={11} strokeWidth={2} /> : <RefreshCw size={11} strokeWidth={2} />)}
-          {full && !isEvent && log.hours?.length > 0 && <Clock size={11} strokeWidth={2} />}
+          {full && !isEvent && (log.hours?.length > 0 || log.hours_pending?.length > 0) && <Clock size={11} strokeWidth={2} />}
           {full && !isEvent && log.problems?.length > 0 && <AlertTriangle size={11} strokeWidth={2} />}
           {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
           <span className="text-[11.5px] font-medium">{log.author_name}</span>
@@ -345,6 +345,14 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
           ) : isEvent && log.stato_to ? `Stato: ${log.stato_from || "—"} → ${log.stato_to}` : log.text}
         </span>
       </button>
+      {full && !isEvent && (log.hours_pending?.length > 0 || log.hours_review || log.hours_replaced_by) && (
+        <span className="mt-1 block text-[12px] text-white/60" data-testid="job-hours-review">
+          {log.hours_pending?.length > 0 ? `⏳ ${hoursLineOf(log)}${reviewDetail(log)}`
+            : log.hours_replaced_by ? "Ore sostituite da una correzione approvata"
+            : log.hours_review?.status === "rejected" ? `Ore non approvate (${(log.hours_review.rejected_hours || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ")})`
+            : log.hours_review?.status === "approved" ? `✓ Ore approvate${log.hours_review.decided_by ? ` da ${log.hours_review.decided_by}` : ""}${reviewDetail(log)}` : ""}
+        </span>
+      )}
       {isReport && log.report_id && me && log.user_id === me && (
         <a href={`${API}/work/reports/${log.report_id}/download`} data-testid="job-report-download"
           className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-white/75 underline-offset-2 hover:underline">
@@ -374,7 +382,51 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
     </div>
   );
 }
-const hoursLineOf = (log) => (log.hours || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ");
+const hoursLineOf = (log) => (log.hours?.length ? log.hours : log.hours_pending || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ")
+  + (log.hours_pending?.length ? " da approvare" : "");
+// "(dalle 07:58 alle 17:10, al posto delle 10 h segnate con 📍)"
+const reviewDetail = (log) => {
+  const rv = log.hours_review || {};
+  const bits = rv.start && rv.end ? [`dalle ${rv.start} alle ${rv.end}`] : [];
+  const old = (rv.replaced_hours || []).reduce((n, h) => n + h.hours, 0);
+  if (rv.replaces_log_id) bits.push(old ? `al posto delle ${fmtNum(old)} h segnate con 📍` : "al posto della presenza segnata con 📍");
+  return bits.length ? ` (${bits.join(", ")})` : "";
+};
+
+// hours a collaborator wrote in a note: not counted until the owner approves them
+function HoursToApprove({ log, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const decide = async (approve) => {
+    setBusy(true);
+    try {
+      await api.post(`/jobs/logs/${log.id}/hours-review`, { approve });
+      toast.success(approve ? "Ore approvate: ora contano" : "Ore non approvate");
+      onDone();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]" data-testid="hours-to-approve">
+      <Clock size={16} strokeWidth={2} className="mt-[2px] text-white/70" />
+      <div className="min-w-0">
+        <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-white/60">
+          <span>{log.author_name}</span>{log.author_company && <span className="text-[11px] text-white/40">· {log.author_company}</span>}
+          <span className="text-[11px] text-white/40">· {shortDay(log.date)}</span>
+        </span>
+        <span className="block mt-[3px] text-[14.5px] font-medium leading-snug text-white">
+          {(log.hours_pending || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ")}{reviewDetail(log)}
+        </span>
+        {log.text && <span className="block mt-[3px] text-[12.5px] leading-[1.45] text-white/60 whitespace-pre-wrap">{log.text}</span>}
+        <div className="mt-2 flex gap-2">
+          <button type="button" disabled={busy} onClick={() => decide(true)} data-testid="hours-approve"
+            className="px-3.5 py-1.5 rounded-full text-[12.5px] bg-white text-[#403A3C] font-semibold disabled:opacity-50">Approva</button>
+          <button type="button" disabled={busy} onClick={() => decide(false)} data-testid="hours-reject"
+            className="px-3.5 py-1.5 rounded-full text-[12.5px] bg-white/15 text-white disabled:opacity-50">Non approvare</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function EditDialog({ log, onClose, onSaved, onDelete }) {
   const toTake = async (i) => {
@@ -1289,7 +1341,7 @@ export default function JobDiaryPage() {
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.created_at || "").localeCompare(a.created_at || ""))
     .filter((lg) => section === "diario" ? true
     : lg.kind ? false
-    : section === "ore" ? lg.hours?.length > 0
+    : section === "ore" ? lg.hours?.length > 0 || lg.hours_pending?.length > 0 || !!lg.hours_replaced_by
     : section === "problemi" ? lg.problems?.length > 0
     : lg.materials?.length > 0);
   // days newest first; the month on its own line above its first day
@@ -1311,6 +1363,7 @@ export default function JobDiaryPage() {
   const pt = detail?.period_totals;
   const summary = !pt ? "" : section === "ore"
     ? `${fmtNum(pt.hours_total)} h nel periodo${Object.keys(pt.by_person).length ? " · " + Object.entries(pt.by_person).map(([k, v]) => `${k} ${fmtNum(v)} h`).join(" · ") : ""}`
+      + (pt.hours_pending_total ? ` · ${fmtNum(pt.hours_pending_total)} h da approvare (non contate)` : "")
     : section === "problemi" ? `${pt.problems.length} ${pt.problems.length === 1 ? "segnalazione" : "segnalazioni"} nel periodo`
     : section === "materiali" ? (pt.materials.map(matLabel).join(" · ") || "Nessun materiale nel periodo") : "";
   const range = periodRange(period);
@@ -1364,7 +1417,8 @@ export default function JobDiaryPage() {
             note={detail.on_site.length === 1 ? `dalle ${hhmmOf(detail.on_site[0].since)}${detail.on_site[0].far ? " · ⚠️ lontano" : ""}`
               : (onSiteSummary(detail.on_site) || detail.on_site.map(firstName).join(", "))} />
         )}
-        <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")} />
+        <InfoCard icon={Clock} label="Ore" value={`${fmtNum(t.hours_total)} h`} testid="glance-ore" ariaLabel="Mostra le ore" onClick={() => pickSection("ore")}
+          note={t.hours_pending_total ? `${fmtNum(t.hours_pending_total)} h da approvare` : ""} />
         {detail.economics && (
           <InfoCard icon={Euro} label="Costi" value={eur(detail.economics.cost_total)} testid="glance-costi" ariaLabel="Mostra costi e margine"
             note={detail.economics.budget ? `${Math.round(detail.economics.used_pct || 0)}% del preventivo` : ""} onClick={() => pickSection("costi")} />
@@ -1466,6 +1520,12 @@ export default function JobDiaryPage() {
           </div>
         </>
       ) : (<>
+      {section === "ore" && (detail.hours_to_approve || []).length > 0 && (
+        <div className="mt-1 mb-4" data-testid="hours-to-approve-list">
+          <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">ore da approvare</div>
+          {detail.hours_to_approve.map((lg) => <HoursToApprove key={lg.id} log={lg} onDone={() => loadDetail(selectedId)} />)}
+        </div>
+      )}
       {section === "materiali" && toTake.length > 0 && (
         <div className="mt-1 mb-4" data-testid="materials-to-take">
           <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">da prendere</div>

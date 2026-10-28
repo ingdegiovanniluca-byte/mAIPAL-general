@@ -235,7 +235,10 @@ async def main():
     assert await send(900, "oggi 4 ore sul bagno, manca una scatola 503")
     lg = db.job_logs.docs[-1]
     assert lg["commessa_id"] == "s_bagno" and lg["author_name"] == "Gino" and lg["collaborator_id"] == c0["id"]
-    assert lg["author_company"] == "Idraulica Neri" and lg["user_id"] == "u1" and lg["hours"] == [{"who": "Gino", "hours": 4.0}]
+    assert lg["author_company"] == "Idraulica Neri" and lg["user_id"] == "u1"
+    # hours written by a collaborator: to approve (they count by themselves only with 📍 arrival and end)
+    assert lg["hours"] == [] and lg["hours_pending"] == [{"who": "Gino", "hours": 4.0}] and lg["hours_review"]["status"] == "pending"
+    assert any("🕒 Ore da approvare: Gino Neri (Idraulica Neri)" in t for _c, t in NOTICES)
     assert jl.interpret.last["speaker"] == "Gino" and "Luca" in jl.interpret.last["team"]
     assert buttons(REPLIES[-1][1]) == [f"clu:{lg['id']}"]
     assert "segnala su «Bagno»" in NOTICES[-1][1] and "manca una scatola 503" in NOTICES[-1][1]
