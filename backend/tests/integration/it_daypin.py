@@ -199,7 +199,7 @@ async def main():
     print(text)
     assert op == "send" and chat == 900 and len(PINS) == 1
     assert "📋 <b>Oggi," in text and "🏗️ <b>Bagno</b> — Mario Rossi" in text and "maps/search/?api=1&amp;query=Via%20Roma%205%2C%20Torino" in text
-    assert "• Montare i sanitari" in text and "• 🧰 Da portare: 10 pz scatole 503" in text and "🏗️ <b>Tetto</b>" in text and "• 🚩 Guaina posata (milestone)" in text
+    assert "• Montare i sanitari" in text and "• 🧰 Da portare:\n   ◦ 10 pz scatole 503" in text and "🏗️ <b>Tetto</b>" in text and "• 🚩 Guaina posata (milestone)" in text
     assert "Tracce cucina" not in text   # tomorrow's
     assert text.index("Montare i sanitari") < text.index("Da portare")
     assert buttons(kb) == [f"cldone:t:{t1['id']}", "cldone:t:jtm1", f"cldone:m:{m1['id']}"]

@@ -6275,13 +6275,24 @@ def _and_join(names: list) -> str:
     return ", ".join(names[:-1]) + " e " + names[-1] if len(names) > 1 else "".join(names)
 
 
+def _mat_items(todo: dict) -> list:
+    """The materials of a To Do "Da prendere", one label each ("10 pz scatole 503")."""
+    return [jl.mat_label(m) for m in todo.get("materials") or [] if m.get("name")] \
+        or [x.strip() for x in (todo.get("text") or "").removeprefix("Da prendere: ").split(", ") if x.strip()]
+
+
+def _mat_bullets(todo: dict, mark: str = "•") -> str:
+    """The materials as a bulleted list, one per line (the Telegram messages)."""
+    return "\n".join(f"{mark} {x}" for x in _mat_items(todo))
+
+
 def _shared_material_text(todo: dict, target: dict, author: dict) -> str:
     today = jl.today_local()
     due = todo["due_date"]
     when = "domani" if due == (today + timedelta(days=1)).isoformat() else "oggi" if due == today.isoformat() else _short_it_date(due)
     return (f"📌 {author.get('first_name') or author.get('name')} ha segnato da prendere {when} per «{target.get('title')}»"
             + (f" — {target['client_name']}" if target.get("client_name") else "")
-            + f":\n{todo['text'].removeprefix('Da prendere: ')}\nVale per tutta la ditta: quando qualcuno l'ha preso tocca ✅ Fatto.")
+            + f":\n{_mat_bullets(todo)}\nVale per tutta la ditta: quando qualcuno l'ha preso tocca ✅ Fatto.")
 
 
 def _plan_message(target: dict, todos: list, short: bool = False) -> str:
@@ -6289,8 +6300,8 @@ def _plan_message(target: dict, todos: list, short: bool = False) -> str:
     def when(due):
         d = date.fromisoformat(due)
         return "domani" if d == today + timedelta(days=1) else "oggi" if d == today else _short_it_date(due)
-    lines = [f"📌 Da prendere {when(t['due_date'])}" + (f" ({t['who']})" if t.get("for_other") else "") + f": {t['text'].removeprefix('Da prendere: ')}"
-             + (f" — lo vedono anche {_and_join(t['shared_names'])} (scrivi «solo per me» se è solo tuo)" if t.get("shared_names") else "")
+    lines = [f"📌 Da prendere {when(t['due_date'])}" + (f" ({t['who']})" if t.get("for_other") else "") + f":\n{_mat_bullets(t)}"
+             + (f"\nLo vedono anche {_and_join(t['shared_names'])} (scrivi «solo per me» se è solo tuo)." if t.get("shared_names") else "")
              for t in todos]
     if short:
         return "\n".join(lines)
@@ -6328,9 +6339,9 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
         client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
         coll = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0})
         view = _commessa_view(sub, client, coll or {})
-        what = t["text"].removeprefix("Da prendere: ")
+        what = ", ".join(_mat_items(t))   # (the phone's notification: one line)
         head = "🧰 Domani da prendere" if kind == "eve" else "🧰 Oggi da prendere"
-        text = f"{head} per «{view['title']}» — {view['client_name']}:\n{what}"
+        text = f"{head} per «{view['title']}» — {view['client_name']}:\n{_mat_bullets(t)}"
         try:
             # the collaborator, and the colleagues of their company it is shared with
             for cid in [x for x in [t.get("collaborator_id"), *(t.get("shared_with") or [])] if x]:
@@ -6709,6 +6720,9 @@ def _assignment_text(kind: str, item: dict, view: dict, change: str, old_due: Op
     if change == "date":
         head = f"📅 Nuova scadenza per {'l’attività' if kind == 'todo' else 'la milestone'} *{what}*"
         return f"{head}\n{where} · {'entro ' + _short_it_date(due) if due else 'senza data'}" + (f" (era {_short_it_date(old_due)})" if old_due else "")
+    if kind == "todo" and item.get("kind") == "materiale":   # materials to take: one per line
+        return (f"📌 Da prendere per te{' entro ' + _short_it_date(due) if due else ''}:\n{_mat_bullets(item)}\n{where}"
+                "\nQuando l'hai preso tocca ✅ Fatto.")
     head = f"📌 Nuova attività per te: *{what}*" if kind == "todo" else f"🚩 Milestone affidata a te: *{what}*"
     return (f"{head}\n{where}" + (f" · {'entro' if kind == 'todo' else 'scadenza'} {_short_it_date(due)}" if due else "")
             + "\nQuando è fatta tocca ✅ Fatto.")
@@ -8451,7 +8465,7 @@ async def _collab_day_items(collab: dict, day: str) -> list:
         rows = []
         for t in await db.job_todos.find({"commessa_id": view["id"], "due_date": day,
                                           "$or": [{"collaborator_id": collab["id"]}, {"shared_with": {"$in": [collab["id"]]}}]}, {"_id": 0}).to_list(100):
-            label = ("🧰 Da portare: " + t["text"].removeprefix("Da prendere: ")) if t.get("kind") == "materiale" else t["text"]
+            label = ("🧰 Da portare:\n" + _mat_bullets(t, "   ◦")) if t.get("kind") == "materiale" else t["text"]
             rows.append((0 if t.get("kind") != "materiale" else 2, "t", t["id"], label, bool(t.get("done"))))
         for m in await db.job_milestones.find({"commessa_id": view["id"], "due_date": day}, {"_id": 0}).to_list(100):
             c = await _milestone_collaborator(m)
@@ -8477,7 +8491,8 @@ def _day_pin_body(day: str, items: list) -> tuple:
         for kind, item_id, label, done in rows:
             lines.append(f"✅ <s>{html.escape(label)}</s>" if done else f"• {html.escape(label)}")
             if not done:
-                buttons.append([InlineKeyboardButton(f"✅ {label}"[:60], callback_data=f"cldone:{kind}:{item_id}")])
+                short = re.sub(r"\s*\n\s*◦\s*", ", ", label).replace(":, ", ": ")   # a button: one line
+                buttons.append([InlineKeyboardButton(f"✅ {short}"[:60], callback_data=f"cldone:{kind}:{item_id}")])
     open_n = sum(1 for _v, rows in items for r in rows if not r[3])
     lines += ["", "Quando una cosa è fatta tocca il suo ✅." if open_n else "🎉 Tutto fatto per oggi!"]
     return "\n".join(lines), (InlineKeyboardMarkup(buttons) if buttons else None)

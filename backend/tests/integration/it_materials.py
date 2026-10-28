@@ -198,7 +198,7 @@ async def main():
           materials=[{"name": "scatole 503", "qty": 10, "unit": "pz", "status": "usato"}, {"name": "flessibile", "qty": None, "unit": ""}])
     r = await say("domani porto 10 scatole 503 e il flessibile")
     print(r[-1][0])
-    assert "📌 Promemoria per «Bagno» — Mario Rossi" in r[-1][0] and "10 pz scatole 503, flessibile" in r[-1][0] and "Non l'ho messo tra i materiali usati" in r[-1][0]
+    assert "📌 Promemoria per «Bagno» — Mario Rossi" in r[-1][0] and "Da prendere domani:\n• 10 pz scatole 503\n• flessibile" in r[-1][0] and "Non l'ho messo tra i materiali usati" in r[-1][0]
     assert not entries() and len(mat_todos()) == 1
     t = mat_todos()[0]
     assert t["due_date"] == tomorrow and t["collaborator_id"] == "k1" and t["who"] == "Gino Neri" and t["text"] == "Da prendere: 10 pz scatole 503, flessibile"
@@ -214,7 +214,7 @@ async def main():
     print(r[-1][0])
     e = entries()[-1]
     assert [m["name"] for m in e["materials"]] == ["corrugato"] and "status" not in e["materials"][0]
-    assert "🧰 Materiali: 20 m corrugato" in r[-1][0] and "📌 Da prendere domani: 10 pz scatole 503" in r[-1][0]
+    assert "🧰 Materiali: 20 m corrugato" in r[-1][0] and "📌 Da prendere domani:\n• 10 pz scatole 503" in r[-1][0]
     t = mat_todos()[-1]
     assert t["from_log_id"] == e["id"]
     # the totals count only what was used
@@ -242,6 +242,7 @@ async def main():
     n = len(TOLD)
     assert await server._material_reminders(eve - timedelta(minutes=10)) == 0           # 19:21: not yet
     assert await server._material_reminders(eve) == 1 and "🧰 Domani da prendere per «Bagno»" in TOLD[-1][1] and TOLD[-1][2] == f"cldone:t:{t['id']}"
+    assert "— Mario Rossi:\n• 10 pz scatole 503\nQuando l'hai preso" in TOLD[-1][1]   # a bulleted list, one per line
     assert await server._material_reminders(eve + timedelta(minutes=5)) == 0             # not twice
     morning = datetime.combine(today + timedelta(days=1), datetime.strptime("07:01", "%H:%M").time(), tzinfo=server.LOCAL_TZ).astimezone(timezone.utc)
     assert await server._material_reminders(morning) == 1 and "🧰 Oggi da prendere" in TOLD[-1][1]
@@ -274,7 +275,7 @@ async def main():
     t = r["todos"][0]
     print(r["message"])
     assert r["status"] == "planned" and t["collaborator_id"] == "k2" and t["who"] == "Mario Bianchi" and t["assignee_user_id"] is None and t["notified"]
-    assert TOLD[n][0] == "k2" and "📌 Nuova attività per te: *Da prendere: 10 pz scatole 503*" in TOLD[n][1] and TOLD[n][2] == f"cldone:t:{t['id']}"
+    assert TOLD[n][0] == "k2" and "📌 Da prendere per te" in TOLD[n][1] and "\n• 10 pz scatole 503\n" in TOLD[n][1] and TOLD[n][2] == f"cldone:t:{t['id']}"
     assert "(Mario Bianchi)" in r["message"] and "Mandato su Telegram a Mario Bianchi" in r["message"]
     db.job_todos.docs[-1]["reminded"] = {}
     n, p = len(TOLD), len(PUSHED)

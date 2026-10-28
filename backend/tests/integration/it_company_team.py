@@ -247,7 +247,7 @@ async def main():
     print(r[-1][0])
     t = mat_todos()[-1]
     assert t["collaborator_id"] == gino["id"] and t["shared_with"] == [ugo["id"]]
-    assert "lo vedono anche Ugo" in r[-1][0] and "solo per me" in r[-1][0]
+    assert "Lo vedono anche Ugo" in r[-1][0] and "solo per me" in r[-1][0]
     told = [x for x in TOLD if x[0] == ugo["id"]]
     assert len(told) == 1 and "📌 Gino ha segnato da prendere domani per «Bagno»" in told[0][1] and "10 pz scatole 503" in told[0][1] \
         and told[0][2] == f"cldone:t:{t['id']}"
