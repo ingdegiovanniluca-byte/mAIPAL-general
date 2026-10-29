@@ -25,6 +25,7 @@ from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 import site_presence as sp
+import client_telegram
 
 logger = logging.getLogger(__name__)
 
@@ -581,7 +582,7 @@ async def gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = (msg.text or "").strip()
     if text.startswith("/start"):
         parts = text.split(maxsplit=1)
-        if len(parts) == 2 and await try_link(update, ctx, parts[1]):
+        if len(parts) == 2 and (await try_link(update, ctx, parts[1]) or await client_telegram.try_link(update, parts[1])):
             raise ApplicationHandlerStop
     if msg.contact:
         if await on_contact(update, ctx):
@@ -589,6 +590,8 @@ async def gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     recs = await _records(db, update.effective_chat.id)
     if not recs:
+        if await client_telegram.handle(update):   # a client: only the weekly progress
+            raise ApplicationHandlerStop
         return
     try:
         await handle_message(update, ctx, recs)

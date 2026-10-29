@@ -42,6 +42,36 @@ function PresenceHourRow() {
   );
 }
 
+const WEEKDAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"];
+
+// artigiano: when the clients linked on Telegram get the weekly progress of their works
+function ClientUpdateRow() {
+  const { user, setUser } = useAuth();
+  const [day, setDay] = useState(user?.client_update_day ?? 4);
+  const [at, setAt] = useState(user?.client_update_at || "17:00");
+  const save = async (patch, label) => {
+    try { setUser((await api.patch("/profile", patch)).data); toast.success(label); }
+    catch { toast.error("Valore non valido"); }
+  };
+  return (
+    <div className="rounded-2xl bg-white/5 px-4 py-3 mb-4" data-testid="client-update-row">
+      <div className="text-[13px] text-white/80 leading-snug">
+        Avanzamento settimanale ai clienti collegati su Telegram (lo attivi dal diario di ogni commessa):
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <select value={day} data-testid="client-update-day" onChange={(e) => { const d = Number(e.target.value); setDay(d); save({ client_update_day: d }, `Avanzamento ogni ${WEEKDAYS[d]}`); }}
+          className="h-9 rounded-full bg-white/10 px-3 text-white text-[13px] outline-none">
+          {WEEKDAYS.map((w, i) => <option key={w} value={i} className="text-black">{w}</option>)}
+        </select>
+        <span className="text-[13px] text-white/70">alle</span>
+        <input type="time" value={at} onChange={(e) => setAt(e.target.value)} data-testid="client-update-at"
+          onBlur={(e) => { const v = e.target.value; if (/^\d{2}:\d{2}$/.test(v) && v !== (user?.client_update_at || "17:00")) save({ client_update_at: v }, `Avanzamento alle ${v}`); }}
+          className="com-date h-9 rounded-full bg-white/10 px-3 text-white text-[13px]" />
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { user, setUser } = useAuth();
   const [status, setStatus] = useState(null);
@@ -515,6 +545,7 @@ export default function SettingsPage() {
     <Section mode={mode} id="collaborators" testid="collaborators-card-settings" icon={HardHat} title="Collaboratori"
       subtitle="Collaboratori esterni che scrivono nel diario delle commesse da Telegram, senza accesso all'app.">
       <PresenceHourRow />
+      <ClientUpdateRow />
       <CollaboratorsPanel />
     </Section>
   ) : null;

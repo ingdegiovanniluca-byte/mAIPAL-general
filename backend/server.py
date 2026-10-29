@@ -55,6 +55,7 @@ import help_guide
 import verticals as vx
 import push_notify as push
 import site_presence as sp
+import client_updates as cu
 import milestone_templates as mtpl
 import fitness as fx
 
@@ -110,6 +111,8 @@ class User(BaseModel):
     news_time: Optional[str] = "08:00"
     summary_time: Optional[str] = "07:00"
     presence_late_at: Optional[str] = None
+    client_update_day: Optional[int] = None
+    client_update_at: Optional[str] = None
     business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
 
 
@@ -147,6 +150,9 @@ class ProfilePatch(BaseModel):
     business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
     # artigiano: from this hour whoever is still "in cantiere" is asked if they really are
     presence_late_at: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # artigiano: when the clients get the weekly progress of their works (0 = monday)
+    client_update_day: Optional[int] = Field(default=None, ge=0, le=6)
+    client_update_at: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 class ChatRequest(BaseModel):
@@ -3493,6 +3499,7 @@ async def delete_collection_item(collection_id: str, item_id: str, code: Optiona
         await _check_delete_code(current, collection_id, item_id, None, code)
         subs = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "id": 1}).to_list(5000)
         await _delete_job_diaries([sb["id"] for sb in subs])
+        await db.client_links.delete_many({"item_id": item_id})   # no more weekly progress to them
     await db.collection_items.delete_one({"id": item_id, "collection_id": collection_id})
     await db.collection_sub_items.delete_many({"collection_id": collection_id, "item_id": item_id})
     return {"ok": True}
@@ -8590,9 +8597,212 @@ async def _collab_reminder_loop():
                 await _presence_forgotten()
                 await _presence_late_check()
                 await _presence_day_note()
+                await _client_weekly_updates()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
+
+
+# ---- THE CLIENT'S WEEKLY PROGRESS (Telegram): the client links once, from the invitation the
+# owner sends on WhatsApp (link + code, like a collaborator's); then every week, on the owner's
+# day and hour, each open commessa of theirs with work done in the week gets a short message:
+# the works done (written for them from the diary's notes - never hours, costs, names or
+# problems), the milestones reached, the next works. The owner gets a copy; from the
+# commessa's diary they turn it off, see it beforehand or send it at once.
+
+class ClientInvitePayload(BaseModel):
+    phone: Optional[str] = None
+
+
+class ClientUpdatesPatch(BaseModel):
+    enabled: bool
+
+
+def _require_owner(current: User, clienti: dict) -> None:
+    if current.role != "admin" and clienti.get("user_id") != current.user_id:
+        raise HTTPException(status_code=403, detail="Lo gestisce il titolare")
+
+
+def _client_schedule(owner_doc: dict) -> tuple:
+    day = owner_doc.get("client_update_day")
+    return (cu.DEFAULT_DAY if day is None else int(day)), (owner_doc.get("client_update_at") or cu.DEFAULT_AT)
+
+
+def _client_updates_on(sub: dict) -> bool:
+    return (sub.get("client_updates") or {}).get("enabled", True)
+
+
+async def _client_updates_state(clienti: dict, sub: dict, client: dict) -> dict:
+    view = _commessa_view(sub, client, clienti)
+    link = await db.client_links.find_one({"item_id": sub.get("item_id")}, {"_id": 0}) or {}
+    owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0}) or {}
+    day, at = _client_schedule(owner_doc)
+    expired = not link.get("code_expires_at") or link["code_expires_at"] < datetime.now(timezone.utc).isoformat()
+    cup = sub.get("client_updates") or {}
+    return {"client_name": view["client_name"], "phone": link.get("phone") or view.get("client_phone") or "",
+            "status": "active" if link.get("telegram_chat_id") and link.get("status") == "active" else
+                      "stopped" if link.get("telegram_chat_id") else "invited" if link.get("code") and not expired else "none",
+            "linked_at": link.get("linked_at"), "code_expires_at": None if expired else link.get("code_expires_at"),
+            "enabled": _client_updates_on(sub), "day": day, "day_label": cu.WEEKDAYS[day], "at": at,
+            "last_sent_at": cup.get("last_sent_at"), "last_text": cup.get("last_text")}
+
+
+async def _client_update_text(clienti: dict, sub: dict, client: dict, owner_name: str, day: Optional[date] = None) -> tuple:
+    """-> (message or "" when the week has no work to tell, the first day of the week)"""
+    view = _commessa_view(sub, client, clienti)
+    day = day or jl.today_local()
+    start = cu.week_start(day, (sub.get("client_updates") or {}).get("last_sent_at"))
+    logs = await db.job_logs.find({"commessa_id": sub["id"], "date": {"$gte": start.isoformat(), "$lte": day.isoformat()}},
+                                  {"_id": 0, "embedding": 0}).to_list(2000)
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
+    # only the notes of work: no state changes, reports, presences ("in cantiere dalle…"), photos alone
+    notes = [lg["text"] for lg in logs if not lg.get("kind") and not lg.get("presence") and lg.get("text")
+             and lg.get("raw_text") != PHOTO_ONLY_TEXT]
+    done = await cu.summarize(view["title"], notes, user_id=clienti.get("user_id")) if notes else []
+    ms = await _commessa_milestones(sub["id"])
+    reached = [m["title"] for m in ms if m["status"] == "done" and start.isoformat() <= (m.get("done_date") or "") <= day.isoformat()]
+    upcoming = [m["title"] for m in ms if m["status"] != "done"][:3]
+    if not done and not reached:
+        return "", start
+    return cu.message(view["title"], start, day, done, reached, upcoming, owner_name), start
+
+
+async def _send_client_update(clienti: dict, sub: dict, client: dict, link: dict, owner: User, day: Optional[date] = None) -> Optional[str]:
+    """The week's message to the client (and a copy to the owner). -> the text, None if nothing to tell."""
+    day = day or jl.today_local()
+    text, _start = await _client_update_text(clienti, sub, client, owner.name or "", day)
+    now = datetime.now(timezone.utc).isoformat()
+    if not text:
+        await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"client_updates": {
+            **(sub.get("client_updates") or {}), "last_checked": day.isoformat()}}})
+        return None
+    if not await _send_telegram_text(link["telegram_chat_id"], text):
+        raise RuntimeError("telegram send failed")
+    await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"client_updates": {
+        **(sub.get("client_updates") or {}), "last_sent_at": now, "last_text": text, "last_checked": day.isoformat()}}})
+    await _notify_owner(owner, f"📤 Avanzamento settimanale inviato a {link.get('name') or 'il cliente'}:\n\n{text}")
+    return text
+
+
+async def _client_weekly_updates(now_utc: Optional[datetime] = None) -> int:
+    """On each owner's day, from their hour: the week's message for every open commessa of the
+    clients linked (once a day at most per commessa). -> how many sent."""
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    today = now.date().isoformat()
+    sent = 0
+    for link in await db.client_links.find({"status": "active"}, {"_id": 0}).to_list(5000):
+        if not link.get("telegram_chat_id"):
+            continue
+        owner_doc = await db.users.find_one({"user_id": link["owner_user_id"]}, {"_id": 0})
+        if not owner_doc:
+            continue
+        day, at = _client_schedule(owner_doc)
+        if now.weekday() != day or now.strftime("%H:%M") < at:
+            continue
+        clienti = await db.collections.find_one({"id": link["collection_id"]}, {"_id": 0})
+        client = await db.collection_items.find_one({"id": link["item_id"]}, {"_id": 0, "embedding": 0})
+        if not clienti or not client:
+            continue
+        for sub in await db.collection_sub_items.find({"item_id": link["item_id"]}, {"_id": 0, "embedding": 0}).to_list(200):
+            cup = sub.get("client_updates") or {}
+            if not _client_updates_on(sub) or _commessa_view(sub, client, clienti)["stato"] == "chiusa" \
+                    or cup.get("last_checked") == today:
+                continue
+            try:
+                if await _send_client_update(clienti, sub, client, link, User(**owner_doc), now.date()):
+                    sent += 1
+            except Exception:
+                logger.exception("client weekly update failed")
+    return sent
+
+
+async def _client_commessa(current: User, commessa_id: str) -> tuple:
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    _require_owner(current, clienti)
+    return clienti, sub, client
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/client-updates")
+async def get_client_updates(commessa_id: str, current: User = Depends(get_current_user)):
+    return await _client_updates_state(*(await _client_commessa(current, commessa_id)))
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/client-updates/invite")
+async def invite_client_updates(commessa_id: str, payload: ClientInvitePayload, current: User = Depends(get_current_user)):
+    """The invitation for the client: a link to the bot with a code (7 days), to send on WhatsApp."""
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    view = _commessa_view(sub, client, clienti)
+    phone = " ".join((payload.phone or view.get("client_phone") or "").split())[:40]
+    if phone and not 8 <= len(_phone_digits(phone)) <= 15:
+        raise HTTPException(status_code=400, detail="Numero di telefono non valido")
+    now = datetime.now(timezone.utc)
+    link = await db.client_links.find_one({"item_id": sub["item_id"]}, {"_id": 0})
+    upd = {"code": _collab_code(), "code_expires_at": (now + timedelta(days=COLLAB_CODE_DAYS)).isoformat(), "phone": phone,
+           "name": view["client_name"]}
+    if link:
+        await db.client_links.update_one({"id": link["id"]}, {"$set": upd})
+    else:
+        link = {"id": f"cl_{uuid.uuid4().hex[:12]}", "owner_user_id": clienti.get("user_id"), "collection_id": clienti["id"],
+                "item_id": sub["item_id"], "telegram_chat_id": None, "linked_at": None, "status": "invited", "created_at": now.isoformat()}
+        await db.client_links.insert_one({**link, **upd})
+    username = await tg.bot_username()
+    url = f"https://t.me/{username}?start={upd['code']}" if username else None
+    msg = (f"Buongiorno {view['client_name']}, sono {current.name or 'la vostra impresa'}: ogni settimana le manderò su Telegram un breve "
+           f"aggiornamento su come avanzano i lavori «{view['title']}».\n\n"
+           + (f"Per riceverlo apra questo link e prema «Avvia»: {url}\n" if url else "Apra Telegram e cerchi il bot di mAIPAL.\n")
+           + f"Se le chiede un codice, scriva: /start {upd['code']}")
+    from urllib.parse import quote
+    digits = _phone_digits(phone)
+    state = await _client_updates_state(clienti, await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0}), client)
+    return {**state, "invite": {"code": upd["code"], "link": url, "message": msg, "expires_at": upd["code_expires_at"],
+                                "whatsapp_url": f"https://wa.me/{digits}?text={quote(msg)}" if digits else f"https://wa.me/?text={quote(msg)}"}}
+
+
+@api_router.patch("/jobs/commesse/{commessa_id}/client-updates")
+async def patch_client_updates(commessa_id: str, payload: ClientUpdatesPatch, current: User = Depends(get_current_user)):
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    cup = {**(sub.get("client_updates") or {}), "enabled": payload.enabled}
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"client_updates": cup}})
+    return await _client_updates_state(clienti, {**sub, "client_updates": cup}, client)
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/client-updates/preview")
+async def preview_client_update(commessa_id: str, current: User = Depends(get_current_user)):
+    """What the client would get now (nothing is sent)."""
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    text, start = await _client_update_text(clienti, sub, client, current.name or "")
+    return {"text": text, "since": start.isoformat()}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/client-updates/send")
+async def send_client_update_now(commessa_id: str, current: User = Depends(get_current_user)):
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    link = await db.client_links.find_one({"item_id": sub["item_id"]}, {"_id": 0}) or {}
+    if not link.get("telegram_chat_id") or link.get("status") != "active":
+        raise HTTPException(status_code=400, detail="Il cliente non è collegato a Telegram")
+    owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+    try:
+        text = await _send_client_update(clienti, sub, client, link, User(**owner_doc) if owner_doc else current)
+    except Exception:
+        logger.exception("client update send failed")
+        raise HTTPException(status_code=502, detail="Invio non riuscito, riprova tra poco")
+    if not text:
+        raise HTTPException(status_code=400, detail="Questa settimana non ci sono lavori nel diario da raccontare")
+    return {"sent": True, "text": text}
+
+
+@api_router.delete("/jobs/commesse/{commessa_id}/client-updates/link")
+async def unlink_client_updates(commessa_id: str, current: User = Depends(get_current_user)):
+    """The client no longer gets anything (their Telegram is unlinked)."""
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    link = await db.client_links.find_one({"item_id": sub["item_id"]}, {"_id": 0})
+    if link and link.get("telegram_chat_id"):
+        try:
+            await _send_telegram_text(link["telegram_chat_id"], "Non riceverai più qui gli aggiornamenti sui lavori.")
+        except Exception:
+            logger.exception("client unlink notice failed")
+    await db.client_links.delete_many({"item_id": sub["item_id"]})
+    return await _client_updates_state(clienti, sub, client)
 
 
 async def _notify_owner(owner: User, text: str) -> None:

@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import InfoCard from "@/components/InfoCard";
 import CommessaContacts from "@/components/CommessaContacts";
+import ClientUpdatesSheet from "@/components/ClientUpdatesSheet";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
@@ -1189,6 +1190,7 @@ export default function JobDiaryPage() {
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [contactsOpen, setContactsOpen] = useState(false);
+  const [updatesOpen, setUpdatesOpen] = useState(false);   // the client's weekly progress on Telegram
   const [siteOpen, setSiteOpen] = useState(false);
   const [tplOpen, setTplOpen] = useState(null);   // "apply" | "save"
   const [viewer, setViewer] = useState(null);   // {log, photo}
@@ -1441,6 +1443,10 @@ export default function JobDiaryPage() {
           value={c.data_inizio ? `${shortDay(c.data_inizio)} → ${c.data_fine ? shortDay(c.data_fine) : "in corso"}` : "non indicate"} />
         {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
         {c.client_email && <InfoCard icon={Mail} label="Email" value={c.client_email} href={`mailto:${c.client_email}`} testid="info-email" ariaLabel={`Scrivi a ${c.client_name}`} />}
+        {isAdmin && (
+          <InfoCard icon={Send} label="Avanzamento" value="al cliente" testid="info-avanzamento"
+            ariaLabel="Avanzamento settimanale al cliente su Telegram" onClick={() => setUpdatesOpen(true)} />
+        )}
         {isAdmin && collabs && (
           <InfoCard icon={HardHat} label="Collaboratori" value={String(collabs.filter((x) => x.enabled).length)} testid="info-collaboratori"
             ariaLabel="Scegli i collaboratori abilitati su questa commessa" onClick={() => setMenu((m) => (m === "collab" ? null : "collab"))} />
@@ -1671,6 +1677,7 @@ export default function JobDiaryPage() {
           <CommessaContacts commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
         </GlassBottomSheet>
       )}
+      {updatesOpen && c && <ClientUpdatesSheet commessa={c} onClose={() => setUpdatesOpen(false)} />}
       {tplOpen === "apply" && c && <MilestoneTemplatesSheet commessa={c} onClose={() => setTplOpen(null)} onApplied={() => { setTplOpen(null); loadDetail(selectedId); }} />}
       {tplOpen === "save" && c && <SaveTemplateSheet commessa={c} onClose={() => setTplOpen(null)} />}
       {siteOpen && c && <SiteSheet commessa={c} geo={detail?.geo} onClose={() => setSiteOpen(false)} onChanged={() => loadDetail(selectedId)} />}
