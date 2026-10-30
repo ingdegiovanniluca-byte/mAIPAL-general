@@ -3,13 +3,14 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks, LayoutTemplate, BookmarkPlus, Copy } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, LayoutTemplate, BookmarkPlus, Copy, Users } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import InfoCard from "@/components/InfoCard";
 import CommessaContacts from "@/components/CommessaContacts";
 import ClientUpdatesSheet from "@/components/ClientUpdatesSheet";
+import CommessaShareSheet from "@/components/CommessaShareSheet";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
@@ -963,6 +964,9 @@ function ClientCard({ client, commesse, total, active, open, onToggle, onOpen })
           </span>
         </span>
         {client.address && <span className="flex items-center gap-1 text-xs text-white/60 mt-0.5"><MapPin size={11} />{client.address}</span>}
+        {client.shared_by != null && (
+          <span className="flex items-center gap-1 text-xs text-white/60 mt-0.5" data-testid="client-shared-by"><Users size={11} />condivisa da {client.shared_by || "un collega"}</span>
+        )}
       </button>
       <button type="button" onClick={onToggle} data-testid="expand-client-group" aria-expanded={open}
         aria-label={open ? "Nascondi le commesse" : "Mostra le commesse"}
@@ -979,6 +983,7 @@ function ClientCard({ client, commesse, total, active, open, onToggle, onOpen })
                 {c.entries ? `${c.entries} voc${c.entries === 1 ? "e" : "i"} · ${fmtNum(c.hours_total)} h · ultima ${shortDay(c.last_day)}` : "nessuna voce"}
               </span>
             </span>
+            {c.perm === "read" && <span className="text-[10.5px] text-white/50 shrink-0" data-testid="commessa-read-only">sola lettura</span>}
             <StatoPill stato={c.stato} />
             <ChevronRight size={14} className="text-white/45 shrink-0" />
           </button>
@@ -1201,7 +1206,10 @@ export default function JobDiaryPage() {
   const [menu, setMenu] = useState(null);       // "stato" | "periodo" | "collab" | "onsite"
   // Admin: the collaborators (Telegram only) enabled on this commessa
   const { user: me } = useAuth();
-  const isAdmin = me?.role === "admin";
+  const access = detail?.access || { perm: "owner", is_owner: true, shared_by: null };
+  const ro = access.perm === "read";                                   // shared with me read-only
+  const isAdmin = !!me?.can_collaborators && access.shared_by == null && !ro;   // links collaborators (whitelist)
+  const [shareOpen, setShareOpen] = useState(false);                   // the commessa shared with team-mates
   const [collabs, setCollabs] = useState(null);
   const loadCollabs = (id) => api.get(`/jobs/commesse/${id}/collaborators`).then((r) => setCollabs(r.data || [])).catch(() => setCollabs([]));
   useEffect(() => { if (isAdmin && selectedId) loadCollabs(selectedId); else setCollabs(null); }, [isAdmin, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1252,7 +1260,7 @@ export default function JobDiaryPage() {
     const by = new Map();
     commesse.forEach((c) => {
       if (ql && !`${c.title} ${c.client_name} ${c.address}`.toLowerCase().includes(ql)) return;
-      const g = by.get(c.client_item_id) || { id: c.client_item_id, name: c.client_name, address: "", commesse: [], last: "" };
+      const g = by.get(c.client_item_id) || { id: c.client_item_id, name: c.client_name, address: "", commesse: [], last: "", shared_by: c.shared ? c.shared_by : null };
       g.commesse.push(c);
       g.last = [g.last, c.last_day || ""].sort().pop();
       if (!g.address && c.address) g.address = c.address;
@@ -1404,13 +1412,18 @@ export default function JobDiaryPage() {
         <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">{c.title}</h1>
       </div>
       {/* me on site: "Sono in cantiere" / "Ho finito", like the collaborators on Telegram */}
-      <PresencePill commessa={c} onChanged={() => loadDetail(selectedId)} />
+      {access.shared_by != null && (
+        <div className="mt-2 flex items-center gap-1.5 text-[12px] text-white/65" data-testid="commessa-shared-banner">
+          <Users size={12} /> Condivisa da {access.shared_by || "un collega"} · {ro ? "sola lettura" : "puoi scriverci"}
+        </div>
+      )}
+      {!ro && <PresencePill commessa={c} onChanged={() => loadDetail(selectedId)} />}
 
       {/* the commessa in one row that scrolls sideways: state, hours, reports, documents, then
           the card's details (site, dates, phone, e-mail) */}
       <div ref={totalsRow} className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
-          ariaLabel="Cambia lo stato della commessa" onClick={() => setMenu((m) => (m === "stato" ? null : "stato"))} />
+          ariaLabel="Cambia lo stato della commessa" onClick={ro ? undefined : () => setMenu((m) => (m === "stato" ? null : "stato"))} />
         {(detail.on_site || []).length > 0 && (
           // one: the name; more: how many and of which role - tapped, everyone by role
           <InfoCard icon={HardHat} label="In cantiere ora" testid="glance-on-site" ariaLabel="Chi sta lavorando ora in cantiere" wide
@@ -1443,7 +1456,11 @@ export default function JobDiaryPage() {
           value={c.data_inizio ? `${shortDay(c.data_inizio)} → ${c.data_fine ? shortDay(c.data_fine) : "in corso"}` : "non indicate"} />
         {c.client_phone && <InfoCard icon={Phone} label="Telefono" value={c.client_phone} href={`tel:${c.client_phone}`} testid="info-telefono" ariaLabel={`Chiama ${c.client_name}`} />}
         {c.client_email && <InfoCard icon={Mail} label="Email" value={c.client_email} href={`mailto:${c.client_email}`} testid="info-email" ariaLabel={`Scrivi a ${c.client_name}`} />}
-        {isAdmin && (
+        {access.is_owner && me?.org_id && (
+          <InfoCard icon={Users} label="Condivisione" value={(detail.shared_count || 0) ? `${detail.shared_count} ${detail.shared_count === 1 ? "collega" : "colleghi"}` : "solo tu"}
+            testid="info-condivisione" ariaLabel="Condividi il diario della commessa con i colleghi del team" onClick={() => setShareOpen(true)} />
+        )}
+        {access.is_owner && (
           <InfoCard icon={Send} label="Avanzamento" value="al cliente" testid="info-avanzamento"
             ariaLabel="Avanzamento settimanale al cliente su Telegram" onClick={() => setUpdatesOpen(true)} />
         )}
@@ -1469,17 +1486,19 @@ export default function JobDiaryPage() {
 
       {/* Costi, Milestone and To Do: their own content instead of the period and the days */}
       {section === "costi" ? (
-        <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+        <div className={ro ? "pointer-events-none" : ""} data-testid={ro ? "costs-read-only" : undefined}>
+          <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+        </div>
       ) : section === "milestone" ? (
         <>
-          <div className="mt-1.5 flex items-center justify-center gap-2.5">
+          <div className={`mt-1.5 flex items-center justify-center gap-2.5 ${ro ? "hidden" : ""}`}>
             <button type="button" onClick={() => setMsEditing({})} data-testid="job-milestone-add" aria-label="Nuova milestone"
               className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 whitespace-nowrap">
               <Plus size={17} />
               <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova milestone</span>
             </button>
           </div>
-          <div className="mt-0.5 flex items-center justify-center gap-4 text-[12px] text-white/75">
+          <div className={`mt-0.5 flex items-center justify-center gap-4 text-[12px] text-white/75 ${ro ? "hidden" : ""}`}>
             <button type="button" onClick={() => setTplOpen("apply")} data-testid="ms-tpl-apply-btn" className="inline-flex items-center gap-1.5 active:opacity-70">
               <LayoutTemplate size={13} /> Da modello
             </button>
@@ -1497,7 +1516,7 @@ export default function JobDiaryPage() {
             </div>
           )}
           <div className="mt-3" data-testid="job-milestones">
-            {milestones.map((m) => <MilestoneRow key={m.id} m={m} onToggle={toggleMilestone} onOpen={setMsEditing} />)}
+            {milestones.map((m) => <MilestoneRow key={m.id} m={m} onToggle={ro ? () => {} : toggleMilestone} onOpen={ro ? () => {} : setMsEditing} />)}
             {milestones.length === 0 && (
               <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="job-milestones-empty">
                 Nessuna milestone. Tocca «Nuova milestone» per segnare le tappe del lavoro: cosa, chi la esegue ed entro quando.
@@ -1510,14 +1529,14 @@ export default function JobDiaryPage() {
         <>
           <div className="mt-1.5 flex items-center justify-center gap-2.5">
             <button type="button" onClick={() => setTodoEditing({})} data-testid="job-todo-add" aria-label="Nuova attività"
-              className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70">
+              className={`h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 ${ro ? "hidden" : ""}`}>
               <Plus size={17} />
               <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova attività</span>
             </button>
             <span className="text-[12px] tracking-[0.16em] uppercase text-white/55" data-testid="job-todo-count">· {openTodos} da fare</span>
           </div>
           <div className="mt-3" data-testid="job-todos">
-            {todos.map((x) => <TodoRow key={x.id} todo={x} onToggle={toggleTodo} onOpen={setTodoEditing} />)}
+            {todos.map((x) => <TodoRow key={x.id} todo={x} onToggle={ro ? () => {} : toggleTodo} onOpen={ro ? () => {} : setTodoEditing} />)}
             {todos.length === 0 && (
               <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="job-todos-empty">
                 Nessuna attività in programma. Tocca «Nuova attività» per segnare cosa c'è da fare, chi se ne occupa ed entro quando.
@@ -1526,7 +1545,7 @@ export default function JobDiaryPage() {
           </div>
         </>
       ) : (<>
-      {section === "ore" && (detail.hours_to_approve || []).length > 0 && (
+      {section === "ore" && (access.is_owner || me?.role === "admin") && (detail.hours_to_approve || []).length > 0 && (
         <div className="mt-1 mb-4" data-testid="hours-to-approve-list">
           <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">ore da approvare</div>
           {detail.hours_to_approve.map((lg) => <HoursToApprove key={lg.id} log={lg} onDone={() => loadDetail(selectedId)} />)}
@@ -1535,7 +1554,7 @@ export default function JobDiaryPage() {
       {section === "materiali" && toTake.length > 0 && (
         <div className="mt-1 mb-4" data-testid="materials-to-take">
           <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">da prendere</div>
-          {toTake.map((x) => <TodoRow key={x.id} todo={x} onToggle={toggleTodo} onOpen={setTodoEditing} />)}
+          {toTake.map((x) => <TodoRow key={x.id} todo={x} onToggle={ro ? () => {} : toggleTodo} onOpen={ro ? () => {} : setTodoEditing} />)}
         </div>
       )}
       {/* the period */}
@@ -1564,7 +1583,7 @@ export default function JobDiaryPage() {
             <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]">
               <div className="text-[14px] font-medium leading-[1.45] text-white/90 tabular-nums">{g.dayNum}</div>
               <div className="flex flex-col gap-3 min-w-0">
-                {g.logs.map((lg) => <DiaryLine key={lg.id} log={lg} section={section} me={me?.user_id} onOpen={(lg) => (lg.kind ? delLog(lg) : setEditing(lg))} onPhoto={(log, photo) => setViewer({ log, photo })} />)}
+                {g.logs.map((lg) => <DiaryLine key={lg.id} log={lg} section={section} me={me?.user_id} onOpen={(lg) => (ro ? null : lg.kind ? delLog(lg) : setEditing(lg))} onPhoto={(log, photo) => setViewer({ log, photo })} />)}
               </div>
             </div>
           </React.Fragment>
@@ -1678,6 +1697,7 @@ export default function JobDiaryPage() {
         </GlassBottomSheet>
       )}
       {updatesOpen && c && <ClientUpdatesSheet commessa={c} onClose={() => setUpdatesOpen(false)} />}
+      {shareOpen && c && <CommessaShareSheet commessa={c} onClose={() => setShareOpen(false)} onChanged={() => loadDetail(selectedId)} />}
       {tplOpen === "apply" && c && <MilestoneTemplatesSheet commessa={c} onClose={() => setTplOpen(null)} onApplied={() => { setTplOpen(null); loadDetail(selectedId); }} />}
       {tplOpen === "save" && c && <SaveTemplateSheet commessa={c} onClose={() => setTplOpen(null)} />}
       {siteOpen && c && <SiteSheet commessa={c} geo={detail?.geo} onClose={() => setSiteOpen(false)} onChanged={() => loadDetail(selectedId)} />}

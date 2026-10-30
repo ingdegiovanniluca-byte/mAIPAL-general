@@ -220,7 +220,7 @@ const joinNames = (names) => (names.length <= 1 ? names.join("") : `${names.slic
 
 // "di Mario Rossi" on a list a team-mate shared with me; "condivisa con …" on my own shared lists.
 function sharingLabel(c, teamName = "") {
-  if (c.is_owner === false) return `di ${c.owner?.name || "un collega"} · condivisa con te`;
+  if (c.is_owner === false) return `di ${c.owner?.name || "un collega"} · condivisa con te${c.my_perm === "read" ? " · sola lettura" : ""}`;
   if (c.visibility === "org") return teamName ? `condivisa con il team ${teamName}` : "condivisa con tutto il team";
   const names = (c.shared_with_users || []).map((u) => u.name.split(" ")[0]);
   return names.length ? `condivisa con ${joinNames(names)}` : "";
@@ -244,22 +244,34 @@ function useOrg() {
   return org;
 }
 
-// Who the list is shared with: nobody, the whole team, or chosen team-mates. Whoever it is
-// shared with can see and edit it; the creator stays the owner.
+// Who the list is shared with: nobody, the whole team, or chosen team-mates - each (or the
+// team) able to edit it or only to read it. The creator stays the owner.
+function PermToggle({ perm, onChange, testid }) {
+  const seg = (on) => `px-2.5 py-1 rounded-full text-[11px] transition-colors ${on ? "bg-white text-[#403A3C] font-semibold" : "text-white/70"}`;
+  return (
+    <span className="inline-flex rounded-full bg-white/10 p-0.5" data-testid={testid}>
+      <button type="button" onClick={() => onChange("edit")} className={seg(perm !== "read")}>Può modificare</button>
+      <button type="button" onClick={() => onChange("read")} className={seg(perm === "read")}>Solo lettura</button>
+    </span>
+  );
+}
+
 function SharePicker({ value, onChange }) {
   const mates = useTeamMates();
   if (!mates || mates.length === 0) return null;
   const { visibility, user_ids } = value;
-  const toggle = (id) => onChange({ visibility: "private", user_ids: user_ids.includes(id) ? user_ids.filter((x) => x !== id) : [...user_ids, id] });
+  const perms = value.perms || {};
+  const toggle = (id) => onChange({ ...value, visibility: "private", user_ids: user_ids.includes(id) ? user_ids.filter((x) => x !== id) : [...user_ids, id] });
   const chip = (on) => `px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors ${on ? "bg-[#4E7FA8] text-white" : "bg-white/10 text-white/70"}`;
+  const chosen = visibility === "org" ? [] : mates.filter((m) => user_ids.includes(m.user_id));
   return (
     <div data-testid="share-picker">
       <div className="kicker mb-2">condividi con</div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" data-testid="share-none" onClick={() => onChange({ visibility: "private", user_ids: [] })} className={chip(visibility !== "org" && user_ids.length === 0)}>
+        <button type="button" data-testid="share-none" onClick={() => onChange({ ...value, visibility: "private", user_ids: [] })} className={chip(visibility !== "org" && user_ids.length === 0)}>
           <Lock size={12} /> Solo io
         </button>
-        <button type="button" data-testid="share-team" onClick={() => onChange({ visibility: "org", user_ids: [] })} className={chip(visibility === "org")}>
+        <button type="button" data-testid="share-team" onClick={() => onChange({ ...value, visibility: "org", user_ids: [] })} className={chip(visibility === "org")}>
           <Users size={12} /> Tutto il team
         </button>
         {mates.map((m) => {
@@ -271,13 +283,29 @@ function SharePicker({ value, onChange }) {
           );
         })}
       </div>
-      <div className="text-[11px] text-white/40 mt-2">Chi la riceve può vederla e modificarla; solo tu puoi eliminarla o cambiare con chi è condivisa.</div>
+      {(visibility === "org" || chosen.length > 0) && (
+        <div className="mt-3 space-y-2" data-testid="share-perms">
+          {visibility === "org" ? (
+            <div className="flex items-center justify-between gap-3 text-[13px] text-white/85">
+              <span>Tutto il team</span>
+              <PermToggle perm={value.org_perm} testid="share-perm-team" onChange={(p) => onChange({ ...value, org_perm: p })} />
+            </div>
+          ) : chosen.map((m) => (
+            <div key={m.user_id} className="flex items-center justify-between gap-3 text-[13px] text-white/85">
+              <span className="min-w-0 truncate">{m.name || m.email}</span>
+              <PermToggle perm={perms[m.user_id]} testid={`share-perm-${m.user_id}`} onChange={(p) => onChange({ ...value, perms: { ...perms, [m.user_id]: p } })} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="text-[11px] text-white/40 mt-2">Con «Solo lettura» la vede ma non può modificarla; solo tu puoi eliminarla o cambiare con chi è condivisa.</div>
     </div>
   );
 }
 
 function ShareDialog({ collection, onClose, onSaved }) {
-  const [value, setValue] = useState({ visibility: collection.visibility || "private", user_ids: collection.shared_with || [] });
+  const [value, setValue] = useState({ visibility: collection.visibility || "private", user_ids: collection.shared_with || [],
+    perms: collection.share_perms || {}, org_perm: collection.org_perm || "edit" });
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
@@ -383,7 +411,8 @@ function CreateCollectionDialog({ existingCollections, onClose, onCreated }) {
     if (cleanFields.length === 0) { toast.error("Aggiungi almeno un attributo"); return; }
     setSaving(true);
     try {
-      const r = await api.post("/collections", { name: name.trim(), visibility: share.visibility, shared_with: share.user_ids, fields: cleanFields });
+      const r = await api.post("/collections", { name: name.trim(), visibility: share.visibility, shared_with: share.user_ids,
+        share_perms: share.perms || {}, org_perm: share.org_perm || "edit", fields: cleanFields });
       toast.success("Lista creata");
       onCreated(r.data);
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -469,6 +498,7 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   };
   const { mates, name: orgName } = useOrg();
   const canShare = coll.is_owner !== false && (mates || []).length > 0;
+  const ro = coll.my_perm === "read";   // shared with me read-only: nothing to change here
   useEffect(() => {
     api.get("/scheduled-actions")
       .then((r) => setRelated((r.data || []).filter((a) => a.enabled && a.kind === "list_update" && a.list_op?.collection_id === collection.id)))
@@ -499,7 +529,7 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
   };
   // "Condivisa" / the team's name, or who it's shared with; "Privata" otherwise
   const shareInfo = coll.is_owner === false
-    ? { label: "Condivisa", value: `di ${coll.owner?.name || "un collega"}` }
+    ? { label: ro ? "Sola lettura" : "Condivisa", value: `di ${coll.owner?.name || "un collega"}` }
     : coll.visibility === "org"
       ? { label: "Condivisa", value: orgName || "tutto il team" }
       : (coll.shared_with_users || []).length
@@ -579,10 +609,10 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
           className="w-full bg-white/15 rounded-xl px-3 py-1.5 font-semibold text-2xl text-white outline-none border-0"
         />
       ) : (
-        <button type="button" data-testid="rename-list" onClick={() => setRenaming(true)} title="Rinomina la lista"
+        <button type="button" data-testid="rename-list" onClick={() => !ro && setRenaming(true)} title={ro ? coll.name : "Rinomina la lista"}
           className="group flex items-center gap-2 text-left">
           <span className="font-semibold text-2xl">{coll.name}</span>
-          <Pencil size={15} className="text-white/60 shrink-0" />
+          {!ro && <Pencil size={15} className="text-white/60 shrink-0" />}
         </button>
       )}
       {/* the list at a glance: how many campi, who it's shared with, the actions working on it */}
@@ -598,12 +628,13 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
 
       {/* +, Gestisci attributi, Condividi: round glass buttons on one row, like the rest of the app */}
       <div className="flex items-center gap-2.5 mb-5" data-testid="collection-actions">
-        <RoundBtn icon={Plus} label="Nuovo campo" testid="new-item" onClick={() => setEditing({})} />
-        <RoundBtn icon={Settings2} label="Gestisci attributi" testid="manage-fields" onClick={() => setManagingFields(true)} />
+        {!ro && <RoundBtn icon={Plus} label="Nuovo campo" testid="new-item" onClick={() => setEditing({})} />}
+        {!ro && <RoundBtn icon={Settings2} label="Gestisci attributi" testid="manage-fields" onClick={() => setManagingFields(true)} />}
         {canShare && <RoundBtn icon={Share2} label="Condividi" testid="share-collection" onClick={() => setSharing(true)} />}
-        <RoundBtn icon={coll.drive_folder ? FolderOpen : FolderPlus} testid="list-folder" active={!!coll.drive_folder} disabled={folderBusy}
+        {ro && <span className="text-[12px] text-white/60" data-testid="list-read-only">Sola lettura: puoi vederla ma non modificarla</span>}
+        {(!ro || coll.drive_folder) && <RoundBtn icon={coll.drive_folder ? FolderOpen : FolderPlus} testid="list-folder" active={!!coll.drive_folder} disabled={folderBusy}
           label={coll.drive_folder ? `Apri la cartella «${coll.drive_folder.name}» su Drive` : "Crea la cartella della lista su Drive"}
-          onClick={openOrCreateFolder} />
+          onClick={openOrCreateFolder} />}
         {selected.size > 0 && (
           // only a bin, with how many campi are ticked; untick them to cancel
           <button data-testid="delete-selected" onClick={delSelected} title="Elimina selezionati" aria-label={`Elimina ${selected.size} selezionati`}
@@ -632,7 +663,7 @@ function CollectionDetail({ collection, onBack, onOpenItem, onCollectionChanged 
             data-testid={`item-card-${item.id}`}
 className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:cursor-grabbing transition-transform duration-150 ${dragOverId === item.id && draggedId !== item.id ? "ring-2 ring-white/40 scale-[1.02]" : ""} ${draggedId === item.id ? "opacity-50" : ""}`}
             // tap: while ticking campi it ticks this one too; otherwise opens it (its elementi) or edits it
-            onClick={() => (selected.size ? toggleSelected(item.id) : hasSubLevel ? onOpenItem(item) : setEditing(item))}
+            onClick={() => (selected.size ? toggleSelected(item.id) : hasSubLevel ? onOpenItem(item) : !ro && setEditing(item))}
           >
             {isClienti ? (
               <div data-testid="client-card">
@@ -661,7 +692,7 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
                         <div className="text-xs text-white/85 break-words whitespace-pre-wrap">{fmtVal(f, item.data[f.key])}</div>
                       </div>
                     ))}
-                    <div className="flex items-center gap-2 pt-1.5">
+                    <div className={`flex items-center gap-2 pt-1.5 ${ro ? "hidden" : ""}`}>
                       <button type="button" onClick={() => setEditing(item)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
                         <Pencil size={11} /> Modifica
                       </button>
@@ -690,7 +721,7 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
               </div>
             )}
             {/* round tick to select it (several at once, then "Elimina"); the pencil where a tap opens the elementi */}
-            <div className="absolute top-3 right-3 flex flex-col items-center gap-1.5">
+            <div className={`absolute top-3 right-3 flex flex-col items-center gap-1.5 ${ro ? "hidden" : ""}`}>
               <button type="button" data-testid={`select-item-${item.id}`} aria-pressed={selected.has(item.id)}
                 aria-label={selected.has(item.id) ? "Deseleziona" : "Seleziona"}
                 onClick={(e) => { e.stopPropagation(); toggleSelected(item.id); }}
@@ -854,7 +885,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
               value={loading ? "…" : `${activeCount} ${activeCount === 1 ? "attiva" : "attive"}`} />
           </div>
           <div className="flex items-center gap-2.5 mb-5">
-            <RoundBtn icon={Plus} label="Nuova commessa" testid="new-sub-item" onClick={() => setEditing({})} />
+            {coll.my_perm !== "read" && <RoundBtn icon={Plus} label="Nuova commessa" testid="new-sub-item" onClick={() => setEditing({})} />}
           </div>
         </>
       ) : (
@@ -905,12 +936,12 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                     <button type="button" data-testid="open-commessa-diary" onClick={() => openDiary(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
                       <NotebookPen size={11} /> Diario
                     </button>
-                    <button type="button" onClick={() => setEditing(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
+                    {coll.my_perm !== "read" && <button type="button" onClick={() => setEditing(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15">
                       <Pencil size={11} /> Modifica
-                    </button>
-                    <button type="button" data-testid="delete-commessa" onClick={() => delSub(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-200">
+                    </button>}
+                    {coll.my_perm !== "read" && <button type="button" data-testid="delete-commessa" onClick={() => delSub(sub)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-200">
                       <Trash2 size={11} /> Elimina
-                    </button>
+                    </button>}
                     {/* open card: the same folder icon, moved to the end of the commands' row (bottom corner) */}
                     <button type="button" data-testid={`commessa-folder-${sub.id}`} disabled={folderBusy === sub.id}
                       onClick={(e) => { e.stopPropagation(); commessaFolder(sub); }}
@@ -948,7 +979,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                 </div>
               ) : null
             ))}
-            <div className="absolute top-3 right-3 flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+            <div className={`absolute top-3 right-3 flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity ${coll.my_perm === "read" ? "hidden" : ""}`}>
               <button onClick={() => setEditing(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-white/10"><Pencil size={13} /></button>
               <button onClick={() => delSub(sub)} className="p-1.5 rounded-full text-white/50 hover:bg-red-500/10 hover:text-red-400"><Trash2 size={13} /></button>
             </div>

@@ -215,7 +215,7 @@ export default function CollaboratorsPanel() {
     try {
       const [a, b] = await Promise.all([api.get("/collaborators"), api.get("/jobs/commesse").catch(() => ({ data: [] }))]);
       setList(a.data || []);
-      setCommesse(b.data || []);
+      setCommesse((b.data || []).filter((c) => !c.shared));   // (a team-mate's commesse: their collaborators)
     } catch { toast.error("Errore nel caricamento dei collaboratori"); setList([]); }
   };
   useEffect(() => { load(); }, []);

@@ -541,7 +541,7 @@ export default function SettingsPage() {
     </Section>
   );
   // collaborators on Telegram only: for now the Admin manages them (later the subscription's holder)
-  const secCollaborators = (mode) => (user?.role === "admin") ? (
+  const secCollaborators = (mode) => (user?.role === "admin" || user?.can_collaborators) ? (
     <Section mode={mode} id="collaborators" testid="collaborators-card-settings" icon={HardHat} title="Collaboratori"
       subtitle="Collaboratori esterni che scrivono nel diario delle commesse da Telegram, senza accesso all'app.">
       <PresenceHourRow />
@@ -572,7 +572,7 @@ export default function SettingsPage() {
     { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
     { id: "notifications", icon: Bell, title: "Notifiche", sub: "Promemoria e diario", on: false },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },
-    ...(user?.role === "admin" ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori", sub: "Solo Telegram", on: false }] : []),
+    ...(user?.role === "admin" || user?.can_collaborators ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori", sub: "Solo Telegram", on: false }] : []),
     ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Admin", full: "Amministrazione", sub: "Accessi e utenti", on: false }] : []),
   ];
   const panelTile = tiles.find((t) => t.id === panel);

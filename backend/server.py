@@ -15,7 +15,7 @@ import asyncio
 import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Any
+from typing import Dict, List, Optional, Literal, Any
 from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import bcrypt
@@ -113,6 +113,7 @@ class User(BaseModel):
     presence_late_at: Optional[str] = None
     client_update_day: Optional[int] = None
     client_update_at: Optional[str] = None
+    can_collaborators: Optional[bool] = None   # (computed by /auth/me: may link collaborators)
     business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
 
 
@@ -260,7 +261,9 @@ class CollectionCreatePayload(BaseModel):
     fields: List[CollectionFieldDef]
     sub_item_fields: List[CollectionFieldDef] = []  # schema per gli "elementi" annidati in ogni campo
     visibility: Literal["private", "org"] = "private"
-    shared_with: List[str] = []  # user_id dei compagni di team con cui è condivisa (vedono e modificano)
+    shared_with: List[str] = []  # user_id dei compagni di team con cui è condivisa
+    share_perms: Dict[str, Literal["edit", "read"]] = {}  # per persona: modifica (default) o sola lettura
+    org_perm: Literal["edit", "read"] = "edit"  # con "tutto il team": modifica o sola lettura
     max_items: Optional[int] = None  # limite massimo di Campi nella lista, nullo = illimitato
     max_sub_items_per_item: Optional[int] = None  # limite massimo di Elementi per Campo, nullo = illimitato
 
@@ -280,6 +283,8 @@ class CollectionUpdatePayload(BaseModel):
 class CollectionSharingPayload(BaseModel):
     visibility: Literal["private", "org"] = "private"  # "org" = tutto il team
     user_ids: List[str] = []  # singole persone del team
+    perms: Dict[str, Literal["edit", "read"]] = {}  # per persona: modifica (default) o sola lettura
+    org_perm: Literal["edit", "read"] = "edit"  # con tutto il team
 
 
 class CollectionReorderPayload(BaseModel):
@@ -460,6 +465,34 @@ def _lists_query(current: User) -> dict:
         return {"$or": [{"user_id": current.user_id}, {"org_id": current.org_id, "visibility": "org"},
                         {"org_id": current.org_id, "shared_with": current.user_id}]}
     return {"user_id": current.user_id}
+
+
+def _list_perm(coll: dict, current: User) -> Optional[str]:
+    """What the user can do on a list: "owner", "edit", "read" (shared read-only) or None.
+    Shared with a team-mate by name, their own permission counts; with the whole team, the
+    team's (both "edit" when never set: the lists shared before had no read-only)."""
+    if coll.get("user_id") == current.user_id:
+        return "owner"
+    if not current.org_id or coll.get("org_id") != current.org_id:
+        return None
+    if current.user_id in (coll.get("shared_with") or []):
+        return (coll.get("share_perms") or {}).get(current.user_id) or "edit"
+    if coll.get("visibility") == "org":
+        return coll.get("org_perm") or "edit"
+    return None
+
+
+READ_ONLY_LIST = "Questa lista è condivisa con te in sola lettura: puoi vederla ma non modificarla."
+
+
+def _require_list_edit(coll: dict, current: User) -> None:
+    if _list_perm(coll, current) not in ("owner", "edit"):
+        raise HTTPException(status_code=403, detail=READ_ONLY_LIST)
+
+
+def _clean_perms(user_ids: list, perms: dict) -> dict:
+    """Only the read-only ones are kept (edit is the default)."""
+    return {u: "read" for u in user_ids if (perms or {}).get(u) == "read"}
 
 
 def _stamp_owner_fields(doc: dict, current: User):
@@ -668,7 +701,7 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
 
 @api_router.get("/auth/me", response_model=User)
 async def me(current: User = Depends(get_current_user)):
-    return current
+    return current.model_copy(update={"can_collaborators": await _can_manage_collaborators(current)})
 
 
 @api_router.post("/auth/logout")
@@ -841,7 +874,8 @@ async def update_profile(payload: ProfilePatch, current: User = Depends(get_curr
     if updates.get("business_vertical"):
         await _apply_vertical(User(**user_doc), updates["business_vertical"])
         user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
-    return User(**user_doc)
+    out = User(**user_doc)
+    return out.model_copy(update={"can_collaborators": await _can_manage_collaborators(out)})
 
 
 # ============ PACCHETTI VERTICALI (see verticals.py) ============
@@ -3227,7 +3261,10 @@ async def _add_sharing_info(colls: list, current: User):
     for c in colls:
         c["is_owner"] = c.get("user_id") == current.user_id
         c["owner"] = {"user_id": c.get("user_id"), "name": names.get(c.get("user_id"), "")}
-        c["shared_with_users"] = [{"user_id": u, "name": names.get(u, "")} for u in (c.get("shared_with") or []) if u in names]
+        c["shared_with_users"] = [{"user_id": u, "name": names.get(u, ""), "perm": (c.get("share_perms") or {}).get(u) or "edit"}
+                                  for u in (c.get("shared_with") or []) if u in names]
+        c["my_perm"] = _list_perm(c, current)
+        c["org_perm"] = c.get("org_perm") or "edit"
     return colls
 
 
@@ -3243,10 +3280,13 @@ async def _team_mate_ids(current: User, user_ids: list) -> list:
 async def _notify_list_shared(current: User, coll: dict, user_ids: list):
     if not user_ids:
         return
-    rec = await db.users.find({"user_id": {"$in": user_ids}, "telegram_chat_id": {"$ne": None}}, {"_id": 0, "telegram_chat_id": 1}).to_list(300)
+    rec = await db.users.find({"user_id": {"$in": user_ids}, "telegram_chat_id": {"$ne": None}}, {"_id": 0, "user_id": 1, "telegram_chat_id": 1}).to_list(300)
     for r in rec:
+        read = ((coll.get("share_perms") or {}).get(r["user_id"]) if r["user_id"] in (coll.get("shared_with") or [])
+                else coll.get("org_perm")) == "read"
         try:
-            await _send_telegram_text(r["telegram_chat_id"], f"📋 {current.name} ti ha condiviso la lista «{coll['name']}»: puoi vederla e modificarla in mAIPAL → Liste.")
+            await _send_telegram_text(r["telegram_chat_id"], f"📋 {current.name} ti ha condiviso la lista «{coll['name']}»: "
+                                      + ("puoi vederla (sola lettura)" if read else "puoi vederla e modificarla") + " in mAIPAL → Liste.")
         except Exception:
             logger.exception("list share telegram notice failed")
 
@@ -3254,7 +3294,7 @@ async def _notify_list_shared(current: User, coll: dict, user_ids: list):
 @api_router.put("/collections/{collection_id}/sharing")
 async def set_collection_sharing(collection_id: str, payload: CollectionSharingPayload, current: User = Depends(get_current_user)):
     """Only the owner decides who the list is shared with: the whole team (visibility "org")
-    and/or single team-mates (shared_with). Whoever it is shared with can see and edit it."""
+    and/or single team-mates (shared_with), each one (and the team) able to edit it or only to read it."""
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
@@ -3264,7 +3304,7 @@ async def set_collection_sharing(collection_id: str, payload: CollectionSharingP
         raise HTTPException(status_code=400, detail="Per condividere una lista devi far parte di un team.")
     shared = await _team_mate_ids(current, payload.user_ids)
     updates = {"visibility": payload.visibility if current.org_id else "private", "shared_with": shared,
-               "org_id": current.org_id}
+               "org_id": current.org_id, "share_perms": _clean_perms(shared, payload.perms), "org_perm": payload.org_perm}
     await db.collections.update_one({"id": collection_id}, {"$set": updates})
     before = coll.get("shared_with") or []
     new_people = [u for u in shared if u not in before]
@@ -3297,11 +3337,13 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
         "sub_item_fields": _unique_field_keys([f.model_dump() for f in payload.sub_item_fields]),
         "visibility": payload.visibility,
         "shared_with": await _team_mate_ids(current, payload.shared_with),
+        "org_perm": payload.org_perm,
         "max_items": payload.max_items,
         "max_sub_items_per_item": payload.max_sub_items_per_item,
         "sort_order": next_order,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    doc["share_perms"] = _clean_perms(doc["shared_with"], payload.share_perms)
     _stamp_owner_fields(doc, current)
     await db.collections.insert_one(doc)
     doc.pop("_id", None)
@@ -3328,6 +3370,7 @@ async def update_collection(collection_id: str, payload: CollectionUpdatePayload
     existing = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(existing, current)
     updates = {}
     if payload.name is not None:
         new_name = payload.name.strip() or existing["name"]
@@ -3427,6 +3470,7 @@ async def create_collection_item(collection_id: str, payload: CollectionItemPayl
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     max_items = coll.get("max_items")
     if max_items:
         current_count = await db.collection_items.count_documents({"collection_id": collection_id})
@@ -3462,6 +3506,7 @@ async def reorder_collection_items(collection_id: str, payload: CollectionReorde
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     existing = await db.collection_items.find({"collection_id": collection_id}, {"_id": 0, "id": 1}).to_list(2000)
     existing_ids = {it["id"] for it in existing}
     ids = [i for i in payload.ordered_ids if i in existing_ids]
@@ -3478,6 +3523,7 @@ async def update_collection_item(collection_id: str, item_id: str, payload: Coll
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     updates = {"data": payload.data, "embedding": None}
     if payload.visibility is not None:
         if payload.visibility == "org" and current.org_id:
@@ -3495,6 +3541,7 @@ async def delete_collection_item(collection_id: str, item_id: str, code: Optiona
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     if coll.get("system_key") == vx.CLIENTI_KEY:   # the client's commesse take their diary with them
         await _check_delete_code(current, collection_id, item_id, None, code)
         subs = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "id": 1}).to_list(5000)
@@ -3531,6 +3578,7 @@ async def request_delete_code(payload: DeleteCodePayload, current: User = Depend
     coll = await db.collections.find_one({"id": payload.collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll or coll.get("system_key") != vx.CLIENTI_KEY:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     if not current.telegram_chat_id or not tg.bot_token():
         raise HTTPException(status_code=409, detail=TELEGRAM_NEEDED_FOR_DELETE)
     client = await db.collection_items.find_one({"id": payload.item_id, "collection_id": coll["id"]}, {"_id": 0, "embedding": 0})
@@ -3682,6 +3730,7 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     item = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="Campo non trovato")
@@ -3721,6 +3770,7 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     before = await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"_id": 0})
     r = await db.collection_sub_items.update_one(
         {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": payload.data, "embedding": None}}
@@ -3742,6 +3792,7 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, code: O
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     if coll.get("system_key") == vx.CLIENTI_KEY:   # a commessa and its diary: only with the code from Telegram
         if not await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"_id": 1}):
             raise HTTPException(status_code=404, detail="Elemento non trovato")
@@ -3939,6 +3990,7 @@ async def create_list_folder(collection_id: str, current: User = Depends(get_cur
     coll = await db.collections.find_one({"id": collection_id, **_lists_query(current)}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
+    _require_list_edit(coll, current)
     info = await _ensure_list_folder(current, coll)
     return {"drive_folder": info, "message": f"Cartella «{info['name']}» pronta su {_folder_where(info)}."}
 
@@ -4081,9 +4133,11 @@ async def _execute_list_update(
     if not text:
         raise HTTPException(status_code=400, detail="Scrivi cosa vuoi modificare nella lista")
 
-    colls = await db.collections.find(_lists_query(current), {"_id": 0}).to_list(200)
+    visible = await db.collections.find(_lists_query(current), {"_id": 0}).to_list(200)
+    colls = [c for c in visible if _list_perm(c, current) in ("owner", "edit")]   # the read-only ones are not changed
     if not colls:
-        raise HTTPException(status_code=400, detail="Non hai ancora nessuna lista. Creane una nella sezione Liste prima di poter usare questa funzione.")
+        raise HTTPException(status_code=400, detail=READ_ONLY_LIST if visible else
+                            "Non hai ancora nessuna lista. Creane una nella sezione Liste prima di poter usare questa funzione.")
     coll_by_id = {c["id"]: c for c in colls}
     if not op and _WHOLE_LIST_DELETE.search(text) and not _LIST_CONTENT_WORDS.search(text):
         # deleting a WHOLE list goes through Azioni, which always asks for a yes first
@@ -5470,8 +5524,8 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
     clienti = await _clienti_list(current)
     if not clienti:
         raise HTTPException(status_code=400, detail="Non hai ancora commesse: il report di commessa si fa dal loro diario")
-    if payload.commessa_id:
-        _, sub, client = await _commessa_or_404(current, payload.commessa_id)
+    if payload.commessa_id:   # (also one shared with them, even read-only: a report only reads it)
+        clienti, sub, client = await _commessa_or_404(current, payload.commessa_id, write=False)
         view = _commessa_view(sub, client, clienti)
     else:
         res = await _resolve_commessa(clienti, text, "", "", None)
@@ -5839,14 +5893,40 @@ async def _all_commesse(clienti: dict) -> tuple[list, dict]:
     return [_commessa_view(sb, clients.get(sb.get("item_id")), clienti) for sb in subs if sb.get("item_id") in clients], clients
 
 
-async def _commessa_or_404(current: User, commessa_id: str) -> tuple[dict, dict, Optional[dict]]:
-    """(clienti list, commessa sub-item, client item) of a commessa the user can see."""
+READ_ONLY_COMMESSA = "Questa commessa è condivisa con te in sola lettura: puoi vederla ma non modificarla."
+
+
+async def _commessa_access(current: User, commessa_id: str) -> Optional[dict]:
+    """How the user reaches a commessa: from their Clienti list (as its owner, or as the team's
+    list shared with them) or because a team-mate shared that one commessa with them.
+    -> {"clienti", "sub", "client", "perm": "owner"|"edit"|"read", "shared_by": name|None} or None"""
     clienti = await _clienti_list(current)
     sub = await db.collection_sub_items.find_one({"id": commessa_id, "collection_id": clienti["id"]}, {"_id": 0}) if clienti else None
-    if not sub:
-        raise HTTPException(status_code=404, detail="Commessa non trovata")
+    shared_by = None
+    if sub:
+        perm = _list_perm(clienti, current) or "read"
+    else:   # one commessa shared by a team-mate (only while both are in the same team)
+        sub = await db.collection_sub_items.find_one({"id": commessa_id, "shared_with": {"$in": [current.user_id]}}, {"_id": 0}) \
+            if current.org_id else None
+        clienti = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0}) if sub else None
+        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0, "org_id": 1, "name": 1}) if clienti else None
+        if not owner or owner.get("org_id") != current.org_id:
+            return None
+        perm = (sub.get("share_perms") or {}).get(current.user_id) or "edit"
+        shared_by = owner.get("name") or ""
     client = await db.collection_items.find_one({"id": sub.get("item_id"), "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
-    return clienti, sub, client
+    return {"clienti": clienti, "sub": sub, "client": client, "perm": perm, "shared_by": shared_by}
+
+
+async def _commessa_or_404(current: User, commessa_id: str, write: bool = True) -> tuple[dict, dict, Optional[dict]]:
+    """(clienti list, commessa sub-item, client item) of a commessa the user can see - and, when
+    `write`, change (a commessa or a list shared read-only: 403)."""
+    acc = await _commessa_access(current, commessa_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Commessa non trovata")
+    if write and acc["perm"] == "read":
+        raise HTTPException(status_code=403, detail=READ_ONLY_COMMESSA)
+    return acc["clienti"], acc["sub"], acc["client"]
 
 
 async def _last_activity(commessa_ids: list) -> dict:
@@ -6425,8 +6505,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if photo_entry and not commessa_id and not hint_commessa_id:
         hint_commessa_id = photo_entry["commessa_id"]
     known, target, created = None, None, {}
-    if commessa_id:
-        _, sub, client = await _commessa_or_404(current, commessa_id)
+    if commessa_id:   # (a commessa shared by a team-mate is in their Clienti list)
+        clienti, sub, client = await _commessa_or_404(current, commessa_id)
         target = _commessa_view(sub, client, clienti)
         known = {"title": target["title"], "client": target["client_name"]}
     try:
@@ -6497,6 +6577,9 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
             return {"status": "pick_commessa", "message": msg, "candidates": res.get("pick") or [],
                     "clients": res.get("clients") or [], "new_commessa_for": nc,
                     "new_client_name": res.get("client_said") or "", "text": text}
+
+    if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
+        await _commessa_or_404(current, target["id"])
 
     # materials used vs to take ("domani porto 10 scatole 503"): the ones to take become a reminder
     # (To Do "Da prendere"), never material used; when it can't be told, asked
@@ -6588,12 +6671,35 @@ async def create_job_log(payload: JobLogPayload, current: User = Depends(get_cur
                                material_choice=payload.material_choice)
 
 
+async def _shared_commesse(current: User, skip: set) -> list:
+    """The commesse a team-mate shared with the user (while both are in the same team)."""
+    if not current.org_id:
+        return []
+    out = []
+    for sub in await db.collection_sub_items.find({"shared_with": {"$in": [current.user_id]}}, {"_id": 0, "embedding": 0}).to_list(500):
+        if sub["id"] in skip:
+            continue
+        acc = await _commessa_access(current, sub["id"])
+        if acc and acc["shared_by"] is not None:
+            out.append({**_commessa_view(acc["sub"], acc["client"], acc["clienti"]), "shared": True, "shared_by": acc["shared_by"],
+                        "perm": acc["perm"]})
+    return out
+
+
 @api_router.get("/jobs/commesse")
 async def list_job_commesse(current: User = Depends(get_current_user)):
+    """The commesse of the user's Clienti list and the ones team-mates shared with them
+    ("shared": true, with who shared it and the permission)."""
     clienti = await _clienti_list(current)
-    if not clienti:
+    commesse = []
+    if clienti:
+        commesse, _ = await _all_commesse(clienti)
+        perm = _list_perm(clienti, current) or "read"
+        for c in commesse:
+            c.update({"perm": perm, "shared": False})
+    commesse += await _shared_commesse(current, {c["id"] for c in commesse})
+    if not commesse:
         return []
-    commesse, _ = await _all_commesse(clienti)
     act = await _last_activity([c["id"] for c in commesse])
     for c in commesse:
         a = act.get(c["id"]) or {}
@@ -6611,7 +6717,10 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     """The commessa, its whole-job totals (the four figures on top) and the entries of the
     period asked (date_from/date_to, YYYY-MM-DD; none = the whole commessa), newest first.
     The totals need only the figures, so the texts are loaded for the period alone."""
-    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    acc = await _commessa_access(current, commessa_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Commessa non trovata")
+    clienti, sub, client = acc["clienti"], acc["sub"], acc["client"]
     light = await db.job_logs.find({"commessa_id": commessa_id},
                                    {"_id": 0, "id": 1, "date": 1, "kind": 1, "hours": 1, "materials": 1, "problems": 1, "photos": 1,
                                     "hours_pending": 1, "hours_review": 1, "author_name": 1}).to_list(20000)
@@ -6642,7 +6751,60 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
-            "stati": vx.COMMESSA_STATI}
+            "stati": vx.COMMESSA_STATI,
+            # what the user can do: "owner" (also shares it), "edit", "read"; shared_by: a team-mate's commessa
+            "access": {"perm": acc["perm"], "shared_by": acc["shared_by"], "is_owner": clienti.get("user_id") == current.user_id},
+            "shared_count": len(sub.get("shared_with") or []) if clienti.get("user_id") == current.user_id else 0}
+
+
+class CommessaSharingPayload(BaseModel):
+    user_ids: List[str] = []                              # team-mates
+    perms: Dict[str, Literal["edit", "read"]] = {}        # each one: modifica (default) or sola lettura
+
+
+async def _commessa_sharing_view(current: User, sub: dict) -> dict:
+    mates = await db.users.find({"org_id": current.org_id, "user_id": {"$ne": current.user_id}},
+                                {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(300) if current.org_id else []
+    shared, perms = sub.get("shared_with") or [], sub.get("share_perms") or {}
+    return {"in_team": bool(current.org_id),
+            "members": [{"user_id": m["user_id"], "name": m.get("name") or (m.get("email") or "").split("@")[0],
+                         "shared": m["user_id"] in shared, "perm": perms.get(m["user_id"]) or "edit"} for m in mates]}
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/sharing")
+async def get_commessa_sharing(commessa_id: str, current: User = Depends(get_current_user)):
+    clienti, sub, _client = await _commessa_or_404(current, commessa_id, write=False)
+    if clienti.get("user_id") != current.user_id:
+        raise HTTPException(status_code=403, detail="Solo chi ha la commessa nella sua lista Clienti può condividerla")
+    return await _commessa_sharing_view(current, sub)
+
+
+@api_router.put("/jobs/commesse/{commessa_id}/sharing")
+async def set_commessa_sharing(commessa_id: str, payload: CommessaSharingPayload, current: User = Depends(get_current_user)):
+    """One commessa (its diary, costs included) shared with team-mates, each able to write in it
+    or only to read it. Only who has it in their own Clienti list decides."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id, write=False)
+    if clienti.get("user_id") != current.user_id:
+        raise HTTPException(status_code=403, detail="Solo chi ha la commessa nella sua lista Clienti può condividerla")
+    if payload.user_ids and not current.org_id:
+        raise HTTPException(status_code=400, detail="Per condividere una commessa devi far parte di un team.")
+    shared = await _team_mate_ids(current, payload.user_ids)
+    perms = _clean_perms(shared, payload.perms)
+    before = sub.get("shared_with") or []
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"shared_with": shared, "share_perms": perms}})
+    sub = {**sub, "shared_with": shared, "share_perms": perms}
+    view = _commessa_view(sub, client, clienti)
+    for u in await db.users.find({"user_id": {"$in": [x for x in shared if x not in before]}}, {"_id": 0}).to_list(300):
+        how = "puoi vederlo (sola lettura)" if perms.get(u["user_id"]) == "read" else "puoi vederlo e scriverci"
+        text = f"📒 {current.name} ti ha condiviso il diario di «{view['title']}» — {view['client_name']}: {how} in mAIPAL → Diario."
+        push.fire_and_forget(db, u["user_id"], f"📒 Commessa condivisa · {view['title']}", text, f"/dashboard/journal?commessa={commessa_id}",
+                             f"share-{commessa_id}")
+        if u.get("telegram_chat_id"):
+            try:
+                await _send_telegram_text(u["telegram_chat_id"], text)
+            except Exception:
+                logger.exception("commessa share notice failed")
+    return await _commessa_sharing_view(current, sub)
 
 
 # ---- the commessa's To Do: the next activities, who takes care of them and by when ----
@@ -6992,7 +7154,7 @@ async def _log_commessa_event(current: User, view: dict, kind: str, text: str, e
 
 @api_router.get("/jobs/commesse/{commessa_id}/milestones")
 async def list_milestones(commessa_id: str, current: User = Depends(get_current_user)):
-    await _commessa_or_404(current, commessa_id)
+    await _commessa_or_404(current, commessa_id, write=False)
     views = await _commessa_milestones(commessa_id)
     return {"milestones": views, "summary": _milestones_summary(views)}
 
@@ -7156,7 +7318,7 @@ async def create_milestone_template(payload: MilestoneTemplatePayload, current: 
 async def save_milestone_template(commessa_id: str, payload: SaveMilestoneTemplatePayload, current: User = Depends(get_current_user)):
     """The commessa's milestones as a template: each first planned date as working days from
     the start (the commessa's start date, or its first milestone)."""
-    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    clienti, sub, client = await _commessa_or_404(current, commessa_id, write=False)
     ms = await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(500)
     if not ms:
         raise HTTPException(status_code=400, detail="La commessa non ha milestone da salvare")
@@ -7341,7 +7503,7 @@ async def _job_contact_or_404(current: User, contact_id: str) -> dict:
 
 @api_router.get("/jobs/commesse/{commessa_id}/contacts")
 async def list_job_contacts(commessa_id: str, current: User = Depends(get_current_user)):
-    await _commessa_or_404(current, commessa_id)
+    await _commessa_or_404(current, commessa_id, write=False)
     return await _commessa_contacts(commessa_id)
 
 
@@ -7468,7 +7630,7 @@ def _econ_people(e: dict, team: list, collabs: list) -> list:
 
 @api_router.get("/jobs/commesse/{commessa_id}/economics")
 async def get_commessa_economics(commessa_id: str, current: User = Depends(get_current_user)):
-    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    clienti, _, _ = await _commessa_or_404(current, commessa_id, write=False)
     e = await _commessa_economics(clienti, commessa_id)
     costs = clienti.get("costs") or {}
     team = await _team_first_names(current)
@@ -7519,8 +7681,14 @@ async def delete_commessa_extra(commessa_id: str, extra_id: str, current: User =
 
 @api_router.patch("/jobs/costs")
 async def patch_job_costs(payload: CostsPatch, commessa_id: Optional[str] = None, current: User = Depends(get_current_user)):
-    """Hourly costs and material prices, the same for every commessa (kept on the Clienti list)."""
-    clienti = await _clienti_list(current)
+    """Hourly costs and material prices, the same for every commessa (kept on the Clienti list -
+    for a commessa shared by a team-mate, theirs)."""
+    if commessa_id:
+        clienti, _sub, _client = await _commessa_or_404(current, commessa_id)
+    else:
+        clienti = await _clienti_list(current)
+        if clienti:
+            _require_list_edit(clienti, current)
     if not clienti:
         raise HTTPException(status_code=404, detail="Lista Clienti non trovata")
     costs = dict(clienti.get("costs") or {})
@@ -7556,7 +7724,6 @@ async def patch_job_costs(payload: CostsPatch, commessa_id: Optional[str] = None
     await db.collections.update_one({"id": clienti["id"]}, {"$set": {"costs": costs}})
     clienti["costs"] = costs
     if commessa_id:
-        await _commessa_or_404(current, commessa_id)
         await _check_budget_alert(clienti, commessa_id)
         return await get_commessa_economics(commessa_id, current)
     return {"ok": True, "costs": costs}
@@ -7599,9 +7766,16 @@ class CollaboratorPatch(BaseModel):
     clear_hourly_rate: bool = False
 
 
-def _require_admin(current: User) -> None:
-    if current.role != "admin":
-        raise HTTPException(status_code=403, detail="Solo l'amministratore gestisce i collaboratori")
+async def _can_manage_collaborators(current: User) -> bool:
+    """The administrator and every account they enabled (in the whitelist) link their own collaborators."""
+    if current.role == "admin":
+        return True
+    return bool(current.email and await db.allowed_emails.find_one({"email": current.email.strip().lower()}, {"_id": 1}))
+
+
+async def _require_collab_manager(current: User) -> None:
+    if not await _can_manage_collaborators(current):
+        raise HTTPException(status_code=403, detail="Il tuo account non è abilitato a gestire i collaboratori")
 
 
 def _collab_code() -> str:
@@ -7713,7 +7887,7 @@ def _clean_collab_fields(d: dict) -> dict:
 
 @api_router.get("/collaborators")
 async def list_collaborators(current: User = Depends(get_current_user)):
-    _require_admin(current)
+    await _require_collab_manager(current)
     views = await _collab_views(current)
     docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
     rates = await _list_rates(current)
@@ -7722,7 +7896,7 @@ async def list_collaborators(current: User = Depends(get_current_user)):
 
 @api_router.post("/collaborators")
 async def create_collaborator(payload: CollaboratorPayload, current: User = Depends(get_current_user)):
-    _require_admin(current)
+    await _require_collab_manager(current)
     fields = _clean_collab_fields(payload.model_dump())
     if not fields.get("first_name") or not fields.get("last_name"):
         raise HTTPException(status_code=400, detail="Nome e cognome sono obbligatori")
@@ -7745,7 +7919,7 @@ async def create_collaborator(payload: CollaboratorPayload, current: User = Depe
 
 @api_router.patch("/collaborators/{collab_id}")
 async def update_collaborator(collab_id: str, payload: CollaboratorPatch, current: User = Depends(get_current_user)):
-    _require_admin(current)
+    await _require_collab_manager(current)
     c = await _collab_or_404(current, collab_id)
     views = await _collab_views(current)
     upd = _clean_collab_fields(payload.model_dump(exclude_none=True))
@@ -7774,7 +7948,7 @@ async def update_collaborator(collab_id: str, payload: CollaboratorPatch, curren
 @api_router.post("/collaborators/{collab_id}/invite")
 async def reinvite_collaborator(collab_id: str, current: User = Depends(get_current_user)):
     """A new code (the old one stops working): to send again, or to link a new phone."""
-    _require_admin(current)
+    await _require_collab_manager(current)
     c = await _collab_or_404(current, collab_id)
     views = await _collab_views(current)
     upd = {"code": _collab_code(), "code_expires_at": (datetime.now(timezone.utc) + timedelta(days=COLLAB_CODE_DAYS)).isoformat()}
@@ -7786,7 +7960,7 @@ async def reinvite_collaborator(collab_id: str, current: User = Depends(get_curr
 @api_router.delete("/collaborators/{collab_id}")
 async def delete_collaborator(collab_id: str, current: User = Depends(get_current_user)):
     """Removed: they can't write any more; what they already wrote stays in the diary."""
-    _require_admin(current)
+    await _require_collab_manager(current)
     await _collab_or_404(current, collab_id)
     await db.collaborators.delete_one({"id": collab_id})
     return {"ok": True}
@@ -7795,8 +7969,8 @@ async def delete_collaborator(collab_id: str, current: User = Depends(get_curren
 @api_router.get("/jobs/commesse/{commessa_id}/collaborators")
 async def commessa_collaborators(commessa_id: str, current: User = Depends(get_current_user)):
     """From the commessa's diary: every collaborator, and whether they are enabled on it."""
-    _require_admin(current)
-    await _commessa_or_404(current, commessa_id)
+    await _require_collab_manager(current)
+    await _commessa_or_404(current, commessa_id, write=False)
     docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("first_name", 1).to_list(500)
     return [{"id": c["id"], "name": _collab_name(c), "company": c.get("company") or "", "role": c.get("role") or "",
              "status": c.get("status"), "enabled": commessa_id in (c.get("commesse") or [])} for c in docs]
@@ -7831,7 +8005,10 @@ class CollabEnablePayload(BaseModel):
 @api_router.put("/jobs/commesse/{commessa_id}/collaborators/{collab_id}")
 async def set_commessa_collaborator(commessa_id: str, collab_id: str, payload: CollabEnablePayload, current: User = Depends(get_current_user)):
     """From the commessa's diary: enable or disable one collaborator on it."""
-    _require_admin(current)
+    await _require_collab_manager(current)
+    acc = await _commessa_access(current, commessa_id)
+    if not acc or acc["shared_by"] is not None:   # (a team-mate's commessa: their collaborators)
+        raise HTTPException(status_code=404, detail="Commessa non trovata")
     await _commessa_or_404(current, commessa_id)
     await _collab_or_404(current, collab_id)
     op = {"$addToSet": {"commesse": commessa_id}} if payload.enabled else {"$pull": {"commesse": commessa_id}}
@@ -8857,7 +9034,7 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     question = (payload.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="Scrivi una domanda")
-    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    clienti, sub, client = await _commessa_or_404(current, commessa_id, write=False)
     view = _commessa_view(sub, client, clienti)
     logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
@@ -9006,7 +9183,7 @@ async def get_job_photo(photo_id: str, current: User = Depends(get_current_user)
     ph = await db.job_photos.find_one({"id": photo_id}, {"_id": 0})
     if not ph:
         raise HTTPException(status_code=404, detail="Foto non trovata")
-    await _commessa_or_404(current, ph["commessa_id"])
+    await _commessa_or_404(current, ph["commessa_id"], write=False)
     import base64 as _b64
     return Response(content=_b64.b64decode(ph["data_b64"]), media_type=ph.get("mime") or "image/jpeg",
                     headers={"Cache-Control": "private, max-age=86400"})
@@ -10712,8 +10889,10 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
     }
     if kind == "list_update":
         lo = draft.get("list_op") or {}
-        if lo.get("op") not in lu.VALID_OPS or not await db.collections.find_one({"id": lo.get("collection_id"), **_lists_query(current)}, {"_id": 1}):
+        target_list = await db.collections.find_one({"id": lo.get("collection_id"), **_lists_query(current)}, {"_id": 0})
+        if lo.get("op") not in lu.VALID_OPS or not target_list:
             raise HTTPException(status_code=400, detail="Lista non trovata")
+        _require_list_edit(target_list, current)
         doc["list_op"] = {k: lo.get(k) for k in ("text", "op", "collection_id", "collection_name", "item_query", "sub_item_query", "fields", "sub_items", "items")}
     elif kind == "report":
         doc["report_instruction"] = str(draft.get("report_instruction") or doc["text"])[:1000]
@@ -10725,6 +10904,7 @@ async def _create_scheduled_action(current: User, draft: dict) -> dict:
         coll = await db.collections.find_one({"id": ld.get("collection_id"), **_lists_query(current)}, {"_id": 0})
         if not coll:
             raise HTTPException(status_code=400, detail="Lista non trovata (forse è già stata eliminata)")
+        _require_list_edit(coll, current)
         if coll.get("user_id") != current.user_id:
             raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può eliminarla.")
         doc["list_delete"] = {"collection_id": coll["id"], "collection_name": coll["name"]}
