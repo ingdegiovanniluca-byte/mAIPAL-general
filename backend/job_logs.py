@@ -231,6 +231,35 @@ def _hours_said(h: float, raw: str) -> bool:
     return bool(re.search(r"\bdall[ae']\s*\d|\bmezza\s+giornata|\bgiornata\s+intera|\btutto\s+il\s+giorno", n))
 
 
+# what stops or slows the works, said in a note: an absence (ill, injured), the weather, the site
+# stopped, a delivery not arrived, a delay. A problem even when the model wrote it in its own words
+# (dropped as not said) or missed it: the writer's own sentence is kept.
+_IMPEDIMENT = re.compile(
+    r"\bnon (?:sono|siamo|e|è|era|erano) (?:potut|riuscit|andat|venut|passat)\w*|\bstat[oaie] mal[ei]\b|\bsto male\b|\bmalat\w*|"
+    r"\binfluenza\b|\bfebbre\b|\binfortun\w*|\bferit[oaie]\b|\bricoverat\w*|\bassent[ei]\b|\bassenza\b|"
+    r"\bmaltempo\b|\bpioggia\b|\bpiove\w*|\bneve\b|\bnevica\w*|\bgrandine\b|"
+    r"\b(?:cantiere|lavori) (?:e |è )?(?:fermo|fermi|chiuso|bloccat\w*|sospes\w*)\b|"
+    r"\bnon (?:e|è|sono) (?:ancora )?arrivat\w*|\bin ritardo\b")
+
+
+def _sentences(raw: str) -> list:
+    return [x.strip(" ,-") for x in re.split(r"(?<=[.!?;])\s+|\n+", raw or "") if x.strip(" ,-")]
+
+
+def impediment_problems(problems: list, raw: str) -> list:
+    """The problems kept, plus each sentence of the note that says the work was stopped or
+    slowed (absence, weather, site stopped, delays) when no problem kept already tells it."""
+    out = list(problems)
+    for sent in _sentences(raw):
+        if not _IMPEDIMENT.search(_norm(sent)):
+            continue
+        covered = any(grounded(p, sent, 0.5) or grounded(sent, p, 0.5) for p in out)
+        if not covered:
+            t = sent.rstrip(".;")
+            out.append((t[0].upper() + t[1:])[:300])
+    return out
+
+
 def ground(parsed: dict, raw: str) -> dict:
     """Keeps only what the user said: the cleaned-up text if it holds to their words (else
     their own words), hours that were said, materials and problems named in the message."""
@@ -240,7 +269,7 @@ def ground(parsed: dict, raw: str) -> dict:
     said = set(_words(raw))
     out["hours"] = [h for h in out.get("hours") or [] if _hours_said(float(h["hours"]), raw)]
     out["materials"] = [m for m in out.get("materials") or [] if any(_said(w, said) for w in _words(m["name"]))]
-    out["problems"] = [p for p in out.get("problems") or [] if grounded(p, raw, 0.5)]
+    out["problems"] = impediment_problems([p for p in out.get("problems") or [] if grounded(p, raw, 0.5)], raw)
     return out
 
 
@@ -332,7 +361,8 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "0. \"kind\": cosa ha scritto l'utente.\n"
         "   - \"nota\": racconta lavori fatti o da fare, ore, materiali, problemi, cose successe in cantiere, "
         "anche solo materiali da prendere o portare (\"domani porto 10 scatole 503\"), anche solo l'orario di arrivo "
-        "o di fine in cantiere o la correzione di un orario segnato male (\"ho finito alle 17.10\", \"ho sbagliato "
+        "o di fine in cantiere, un'assenza (\"oggi non sono potuto andare in cantiere, sono stato male\") "
+        "o la correzione di un orario segnato male (\"ho finito alle 17.10\", \"ho sbagliato "
         "l'orario di fine, era 17.10\", \"ieri dalle 8 alle 17\").\n"
         "   - \"domanda\": CHIEDE informazioni invece di raccontare (\"com'è messa la commessa dei Rossi?\", "
         "\"cosa abbiamo fatto ieri?\", \"quante ore abbiamo fatto?\", \"mancano materiali?\").\n"
@@ -356,7 +386,11 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "(es. solo un elenco di materiali senza verbo). \"for_date\": per i da_prendere il giorno in cui servono "
         "(YYYY-MM-DD, \"domani\" = il giorno dopo oggi), altrimenti null. \"who\": per i da_prendere chi li deve prendere "
         "se è detto (\"ricorda a Mario di prendere…\" -> \"Mario\", \"Gino porta…\" -> \"Gino\"), altrimenti \"\".\n"
-        "5. \"problems\": problemi, imprevisti, cose mancanti o da rifare, frasi brevi. Nessuno: [].\n"
+        "5. \"problems\": problemi, imprevisti, cose mancanti o da rifare, frasi brevi. Sono problemi anche le ASSENZE e "
+        "tutto ciò che ferma o rallenta i lavori: qualcuno che non è potuto andare in cantiere (malattia, infortunio, "
+        "motivi personali), maltempo, cantiere fermo, consegne non arrivate, cliente assente, ritardi. Scrivili con le parole "
+        f"di chi scrive (\"non sono potuto andare in cantiere perché sono stato male\" -> \"{speaker} non è potuto andare in "
+        "cantiere perché stava male\"), non con un riassunto (\"assenza per malattia\"). Nessuno: [].\n"
         "6. \"client\" e \"commessa\": il cliente e i lavori/cantiere come li nomina il testo (\"dai Rossi\" -> "
         "\"Rossi\"), stringa vuota se non li nomina.\n"
         "7. \"times\": gli orari di arrivo/inizio (\"start\") e di fine/uscita (\"end\") in cantiere di chi scrive, "
