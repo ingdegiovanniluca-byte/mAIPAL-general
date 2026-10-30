@@ -358,9 +358,13 @@ mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anch
 
 ## Team e condivisione
 <!-- id: team · verticale: tutti -->
-- Entri in un team con il codice che ti dà l'amministratore (Impostazioni → Team).
-- In Impostazioni → **Team** vedi il tuo team: il nome, il numero di membri e chi ne fa parte.
-- L'amministratore, sempre in **Team**, crea un nuovo team con il **+** nel cerchio e da ogni scheda cambia il nome, copia o rigenera il codice, invita o toglie le persone.
+- Un account può far parte di **più team**. In Impostazioni → **Team** trovi:
+  - gli **inviti** che hai ricevuto, con **Accetta** / **Rifiuta**: basta essere entrati con l'email invitata, il codice non serve. Quando vieni invitato ti arriva anche un avviso (Telegram e notifica);
+  - **i tuoi team**, con quello **attivo**: liste, commesse e task condivisi «con il team» e i colleghi che vedi (nelle condivisioni, nelle ore del diario, con `@team`) sono quelli del team attivo. Lo cambi con **Usa questo**; da lì puoi anche uscire da un team;
+  - i membri del team attivo;
+  - la casella per entrare con un **codice**, se te l'hanno dato (serve comunque l'invito alla tua email).
+- Le liste e le commesse condivise con te **per nome** le vedi da qualsiasi tuo team, finché ne fate parte entrambi.
+- L'amministratore crea un nuovo team con il **+** nel cerchio: **ne fa subito parte** (diventa il suo team attivo se non ne aveva uno). Da ogni scheda cambia il nome, copia o rigenera il codice, invita o toglie le persone; se invita la propria email entra direttamente.
 - Puoi **condividere o assegnare task** (dal dettaglio del task), **condividere liste** (icona di condivisione della lista) e **condividere informazioni** salvate scrivendo `@nome` o `@team` nel messaggio.
 - **Liste condivise**: scegli tutto il team o le singole persone e, per ognuna (o per tutto il team), **Può modificare** oppure **Solo lettura**. Chi l'ha in sola lettura la vede (con la scritta «sola lettura») ma non può aggiungere, modificare o eliminare niente, nemmeno chiedendolo in chat; solo tu puoi eliminarla o cambiare con chi è condivisa.
 - **Diario di una commessa condiviso** (artigiani): nel diario della commessa tocca **Condivisione** nella barra in alto e scegli i colleghi del team, ognuno con **Può modificare** (scrive nel diario, ore, To Do, milestone, costi) o **Solo lettura** (vede tutto, costi compresi, senza cambiare niente). Ricevono un avviso; la trovano nel loro **Diario**, nella scheda del cliente con la scritta «condivisa da …». Solo chi ha la commessa nella sua lista Clienti la condivide; collaboratori esterni e avanzamento al cliente restano suoi. Chi esce dal team non la vede più.

@@ -106,7 +106,8 @@ class User(BaseModel):
     created_at: Optional[str] = None
     telegram_chat_id: Optional[int] = None
     role: Optional[str] = "user"
-    org_id: Optional[str] = None
+    org_id: Optional[str] = None              # the active team (lists, commesse, tasks shared with it)
+    org_ids: Optional[List[str]] = None       # every team the account is in
     org_role: Optional[Literal["owner", "member"]] = None
     news_time: Optional[str] = "08:00"
     summary_time: Optional[str] = "07:00"
@@ -457,13 +458,22 @@ def _editable_query(current: User) -> dict:
     return _visible_query(current)
 
 
+def _my_orgs(current: User) -> list:
+    """Every team of the account (the active one first)."""
+    ids = list(current.org_ids or [])
+    if current.org_id and current.org_id not in ids:
+        ids.insert(0, current.org_id)
+    return ids
+
+
 def _lists_query(current: User) -> dict:
-    """Lists (collections) a user can see AND edit: their own, the team's (visibility
-    "org") and the ones a team-mate shared with them by name (shared_with). Sharing by
-    name only holds within the same team: whoever leaves it stops seeing the list."""
-    if current.org_id:
-        return {"$or": [{"user_id": current.user_id}, {"org_id": current.org_id, "visibility": "org"},
-                        {"org_id": current.org_id, "shared_with": current.user_id}]}
+    """Lists (collections) a user can see: their own, their teams' (visibility "org") and the
+    ones a team-mate shared with them by name (shared_with) - in any of their teams. Sharing
+    only holds within a team: whoever leaves it stops seeing the list."""
+    orgs = _my_orgs(current)
+    if orgs:
+        return {"$or": [{"user_id": current.user_id}, {"org_id": {"$in": orgs}, "visibility": "org"},
+                        {"org_id": {"$in": orgs}, "shared_with": current.user_id}]}
     return {"user_id": current.user_id}
 
 
@@ -473,7 +483,7 @@ def _list_perm(coll: dict, current: User) -> Optional[str]:
     team's (both "edit" when never set: the lists shared before had no read-only)."""
     if coll.get("user_id") == current.user_id:
         return "owner"
-    if not current.org_id or coll.get("org_id") != current.org_id:
+    if not coll.get("org_id") or coll.get("org_id") not in _my_orgs(current):
         return None
     if current.user_id in (coll.get("shared_with") or []):
         return (coll.get("share_perms") or {}).get(current.user_id) or "edit"
@@ -900,7 +910,7 @@ async def _apply_vertical(current: User, key: str) -> None:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.organizations.insert_one(org_doc)
-        await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org_doc["id"], "org_role": "owner"}})
+        await _add_membership(current.user_id, org_doc["id"], "owner")
         current = current.model_copy(update={"org_id": org_doc["id"], "org_role": "owner"})
     await _ensure_clienti_list(current)
     await _ensure_weekly_jobs_action(current.model_copy(update={"business_vertical": "artigiano"}))
@@ -909,7 +919,7 @@ async def _apply_vertical(current: User, key: str) -> None:
 async def _ensure_clienti_list(current: User) -> dict:
     """The artigiano's "Clienti" list, with a "Commessa" under each client. A list already
     called Clienti is adopted (its attributes and data stay, the missing base ones are added)."""
-    existing = await db.collections.find_one({**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 0})
+    existing = await _clienti_list(current)
     if existing:
         return existing
     named = next((c for c in await db.collections.find({"user_id": current.user_id}, {"_id": 0}).to_list(500)
@@ -960,63 +970,160 @@ async def upload_avatar(file: UploadFile = File(...), current: User = Depends(ge
 
 
 # ============ TEAM (org condivisa, gestita dall'amministratore) ============
+# An account can be in several teams (org_ids); one is the active one (org_id): the lists,
+# commesse and tasks shared "with the team" are the active team's, and it is changed from
+# Impostazioni > Team. Whoever creates a team is in it; an invitation (by e-mail) is seen by the
+# invited account there, to accept or decline - also when it is already in another team.
+
 def _gen_org_code() -> str:
     return secrets.token_hex(3).upper()  # es. "A1B2C3"
+
+
+def _team_q(org_id: Optional[str]) -> dict:
+    """The users of a team (also the ones that only have it as their single, older org_id)."""
+    return {"$or": [{"org_ids": org_id}, {"org_id": org_id}]}
+
+
+def _memberships(udoc: dict) -> list:
+    ids = list(udoc.get("org_ids") or [])
+    if udoc.get("org_id") and udoc["org_id"] not in ids:
+        ids.insert(0, udoc["org_id"])
+    return ids
+
+
+async def _add_membership(user_id: str, org_id: str, role: str = "member", activate: bool = False) -> None:
+    """In the team (and active there when they had none, or when asked)."""
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    ids = _memberships(u)
+    if org_id not in ids:
+        ids.append(org_id)
+    upd = {"org_ids": ids}
+    if activate or not u.get("org_id"):
+        upd.update({"org_id": org_id, "org_role": role})
+    await db.users.update_one({"user_id": user_id}, {"$set": upd})
+
+
+async def _drop_membership(user_id: str, org_id: str) -> bool:
+    """Out of the team; if it was the active one, another of theirs becomes active (or none)."""
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not u or org_id not in _memberships(u):
+        return False
+    ids = [x for x in _memberships(u) if x != org_id]
+    upd = {"org_ids": ids}
+    if u.get("org_id") == org_id:
+        upd.update({"org_id": ids[0] if ids else None, "org_role": "member" if ids else None})
+    await db.users.update_one({"user_id": user_id}, {"$set": upd})
+    return True
 
 
 class TeamInviteCreate(BaseModel):
     email: str
 
 
+class OrgSwitchPayload(BaseModel):
+    org_id: str
+
+
+class OrgLeavePayload(BaseModel):
+    org_id: Optional[str] = None
+
+
+async def _team_members(org_id: str) -> list:
+    return await db.users.find(_team_q(org_id), {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1, "org_role": 1,
+                                                  "telegram_chat_id": 1}).to_list(300)
+
+
 @api_router.get("/org")
 async def get_org(current: User = Depends(get_current_user)):
-    """Vista di sola lettura del team a cui appartiene l'utente corrente."""
-    if not current.org_id:
-        return None
-    org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0})
+    """The active team with its members, every team of the account (teams) and the invitations
+    waiting for its e-mail (invites). Without any team and invitation: only those two, empty."""
+    udoc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or {}
+    ids = _memberships(udoc)
+    orgs = {o["id"]: o for o in await db.organizations.find({"id": {"$in": ids}}, {"_id": 0}).to_list(100)} if ids else {}
+    teams = []
+    for oid in ids:
+        if oid in orgs:
+            teams.append({"id": oid, "name": orgs[oid].get("name"), "active": oid == current.org_id,
+                          "members_count": len(await _team_members(oid))})
+    invites = []
+    for inv in await db.team_invites.find({"email": (current.email or "").lower()}, {"_id": 0}).to_list(50):
+        if inv["org_id"] in ids:
+            continue
+        o = await db.organizations.find_one({"id": inv["org_id"]}, {"_id": 0, "name": 1})
+        if o:
+            invites.append({"org_id": inv["org_id"], "name": o.get("name"), "invited_by": inv.get("invited_by"), "invited_at": inv.get("invited_at")})
+    org = orgs.get(current.org_id)
     if not org:
-        return None
-    members = await db.users.find(
-        {"org_id": current.org_id},
-        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1, "org_role": 1, "telegram_chat_id": 1},
-    ).to_list(200)
+        return {"teams": teams, "invites": invites, "members": []} if (teams or invites) else None
+    members = await _team_members(org["id"])
     for m in members:
         m["has_telegram"] = bool(m.pop("telegram_chat_id", None))
-    org["members"] = members
-    return org
+    return {**org, "members": members, "teams": teams, "invites": invites}
 
 
 @api_router.post("/org/join")
 async def join_org(payload: OrgJoinPayload, current: User = Depends(get_current_user)):
-    if current.org_id:
-        raise HTTPException(status_code=400, detail="Fai già parte di un team. Esci prima di unirti a un altro.")
+    """With the team's code (the account's e-mail must be invited): in the team, also when it is
+    already in others."""
     code = (payload.code or "").strip().upper()
     org = await db.organizations.find_one({"join_code": code}, {"_id": 0})
     if not org:
         raise HTTPException(status_code=404, detail="Codice non valido")
-    invite = await db.team_invites.find_one({"org_id": org["id"], "email": current.email.lower()}, {"_id": 0})
+    return await _accept_invite(current, org)
+
+
+async def _accept_invite(current: User, org: dict) -> dict:
+    udoc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or {}
+    if org["id"] in _memberships(udoc):
+        raise HTTPException(status_code=400, detail="Fai già parte di questo team")
+    invite = await db.team_invites.find_one({"org_id": org["id"], "email": (current.email or "").lower()}, {"_id": 0})
     if not invite:
         raise HTTPException(status_code=403, detail="Il tuo indirizzo email non è stato invitato a questo team. Contatta l'amministratore.")
-    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": org["id"], "org_role": "member"}})
-    await db.team_invites.delete_one({"org_id": org["id"], "email": current.email.lower()})
+    await _add_membership(current.user_id, org["id"])
+    await db.team_invites.delete_one({"org_id": org["id"], "email": (current.email or "").lower()})
     return org
 
 
-@api_router.post("/org/leave")
-async def leave_org(current: User = Depends(get_current_user)):
-    if not current.org_id:
-        raise HTTPException(status_code=400, detail="Non fai parte di un team")
-    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": None, "org_role": None}})
+@api_router.post("/org/invites/{org_id}/accept")
+async def accept_team_invite(org_id: str, current: User = Depends(get_current_user)):
+    """The invitation seen in Impostazioni > Team: in the team (the e-mail is the proof, no code)."""
+    org = await db.organizations.find_one({"id": org_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    return await _accept_invite(current, org)
+
+
+@api_router.post("/org/invites/{org_id}/decline")
+async def decline_team_invite(org_id: str, current: User = Depends(get_current_user)):
+    await db.team_invites.delete_one({"org_id": org_id, "email": (current.email or "").lower()})
     return {"ok": True}
 
 
-# ---- Gestione team (solo amministratore): crea più team, invita per email, fornisce
-# il codice d'invito, rimuove membri. La creazione/appartenenza non è più self-service:
-# un utente può unirsi solo a un team a cui è stato esplicitamente invitato.
+@api_router.post("/org/switch")
+async def switch_org(payload: OrgSwitchPayload, current: User = Depends(get_current_user)):
+    """The active team: the one whose shared lists, commesse and tasks the account works with."""
+    udoc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or {}
+    if payload.org_id not in _memberships(udoc):
+        raise HTTPException(status_code=404, detail="Non fai parte di questo team")
+    org = await db.organizations.find_one({"id": payload.org_id}, {"_id": 0})
+    role = "owner" if (org or {}).get("created_by") == current.user_id else "member"
+    await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": payload.org_id, "org_role": role, "org_ids": _memberships(udoc)}})
+    return {"ok": True, "org_id": payload.org_id}
+
+
+@api_router.post("/org/leave")
+async def leave_org(payload: Optional[OrgLeavePayload] = None, current: User = Depends(get_current_user)):
+    org_id = (payload.org_id if payload else None) or current.org_id
+    if not org_id or not await _drop_membership(current.user_id, org_id):
+        raise HTTPException(status_code=400, detail="Non fai parte di questo team")
+    return {"ok": True}
+
+
+# ---- Gestione team (solo amministratore): crea più team (e ne fa parte), invita per email,
+# fornisce il codice d'invito, rimuove membri. Un utente entra solo in un team a cui è stato
+# invitato: accetta l'invito da Impostazioni > Team (o con il codice).
 async def _team_with_details(org: dict) -> dict:
-    members = await db.users.find(
-        {"org_id": org["id"]}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1}
-    ).to_list(200)
+    members = await db.users.find(_team_q(org["id"]), {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1}).to_list(300)
     invites = await db.team_invites.find({"org_id": org["id"]}, {"_id": 0}).sort("invited_at", -1).to_list(200)
     return {**org, "members": members, "invites": invites}
 
@@ -1029,6 +1136,7 @@ async def admin_list_teams(current: User = Depends(require_admin)):
 
 @api_router.post("/admin/teams")
 async def admin_create_team(payload: OrgCreatePayload, current: User = Depends(require_admin)):
+    """A new team, with whoever creates it already in (active only when they had none)."""
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nome obbligatorio")
@@ -1041,7 +1149,8 @@ async def admin_create_team(payload: OrgCreatePayload, current: User = Depends(r
     }
     await db.organizations.insert_one(org_doc)
     org_doc.pop("_id", None)
-    return {**org_doc, "members": [], "invites": []}
+    await _add_membership(current.user_id, org_doc["id"], "owner")
+    return await _team_with_details(org_doc)
 
 
 @api_router.patch("/admin/teams/{team_id}")
@@ -1071,7 +1180,8 @@ async def admin_delete_team(team_id: str, current: User = Depends(require_admin)
     org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
     if not org:
         raise HTTPException(status_code=404, detail="Team non trovato")
-    await db.users.update_many({"org_id": team_id}, {"$set": {"org_id": None, "org_role": None}})
+    for m in await db.users.find(_team_q(team_id), {"_id": 0, "user_id": 1}).to_list(500):
+        await _drop_membership(m["user_id"], team_id)
     await db.team_invites.delete_many({"org_id": team_id})
     await db.organizations.delete_one({"id": team_id})
     return {"ok": True}
@@ -1079,15 +1189,20 @@ async def admin_delete_team(team_id: str, current: User = Depends(require_admin)
 
 @api_router.post("/admin/teams/{team_id}/invites")
 async def admin_invite_to_team(team_id: str, payload: TeamInviteCreate, current: User = Depends(require_admin)):
+    """An invitation by e-mail: the account sees it in Impostazioni > Team (and is told, if it
+    already has the app), also when it is already in another team."""
     org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
     if not org:
         raise HTTPException(status_code=404, detail="Team non trovato")
     email = (payload.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Email non valida")
-    already_member = await db.users.find_one({"email": email, "org_id": team_id}, {"_id": 0})
-    if already_member:
+    invited = await db.users.find_one({"email": email}, {"_id": 0})
+    if invited and team_id in _memberships(invited):
         raise HTTPException(status_code=400, detail="Questa persona fa già parte del team")
+    if invited and invited["user_id"] == current.user_id:   # yourself: simply in
+        await _add_membership(current.user_id, team_id)
+        return {"org_id": team_id, "email": email, "joined": True}
     await db.team_invites.update_one(
         {"org_id": team_id, "email": email},
         {
@@ -1096,6 +1211,15 @@ async def admin_invite_to_team(team_id: str, payload: TeamInviteCreate, current:
         },
         upsert=True,
     )
+    if invited:
+        text = (f"👥 {current.name or 'L'+chr(39)+'amministratore'} ti ha invitato nel team «{org['name']}»: "
+                "lo accetti in mAIPAL → Impostazioni → Team.")
+        push.fire_and_forget(db, invited["user_id"], "👥 Invito in un team", text, "/dashboard/settings?s=team", f"team-{team_id}")
+        if invited.get("telegram_chat_id"):
+            try:
+                await _send_telegram_text(invited["telegram_chat_id"], text)
+            except Exception:
+                logger.exception("team invite notice failed")
     return await db.team_invites.find_one({"org_id": team_id, "email": email}, {"_id": 0})
 
 
@@ -1107,8 +1231,7 @@ async def admin_remove_team_invite(team_id: str, email: str, current: User = Dep
 
 @api_router.delete("/admin/teams/{team_id}/members/{member_user_id}")
 async def admin_remove_team_member(team_id: str, member_user_id: str, current: User = Depends(require_admin)):
-    r = await db.users.update_one({"user_id": member_user_id, "org_id": team_id}, {"$set": {"org_id": None, "org_role": None}})
-    if r.matched_count == 0:
+    if not await _drop_membership(member_user_id, team_id):
         raise HTTPException(status_code=404, detail="Membro non trovato in questo team")
     return {"ok": True}
 
@@ -1396,7 +1519,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     # @persone / @team: who the saved information is ALSO shared with (see _share_kb_docs)
     share_recipients, share_slugs, typed_clean = [], [], typed
     if current.org_id and "@" in typed:
-        members = await db.users.find({"org_id": current.org_id}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "telegram_chat_id": 1}).to_list(300)
+        members = await db.users.find(_team_q(current.org_id), {"_id": 0, "user_id": 1, "name": 1, "email": 1, "telegram_chat_id": 1}).to_list(300)
         directory = mn.people_directory(members)
         typed_clean, share_slugs = mn.extract_people(typed, directory)
         for slug in share_slugs:
@@ -3152,7 +3275,7 @@ async def assign_task(task_id: str, payload: TaskAssignPayload, current: User = 
     update = {"assigned_to": payload.assigned_to}
     assignee = None
     if payload.assigned_to:
-        assignee = await db.users.find_one({"user_id": payload.assigned_to, "org_id": current.org_id}, {"_id": 0})
+        assignee = await db.users.find_one({"user_id": payload.assigned_to, **_team_q(current.org_id)}, {"_id": 0})
         if not assignee:
             raise HTTPException(status_code=404, detail="Membro non trovato nell'organizzazione")
         # assigning shares the task with the team, so the assignee can actually see it
@@ -3272,7 +3395,7 @@ async def _team_mate_ids(current: User, user_ids: list) -> list:
     """The given ids that are members of the caller's team (the caller excluded), deduplicated."""
     if not current.org_id or not user_ids:
         return []
-    mates = await db.users.find({"org_id": current.org_id, "user_id": {"$in": list(user_ids)}}, {"_id": 0, "user_id": 1}).to_list(300)
+    mates = await db.users.find({**_team_q(current.org_id), "user_id": {"$in": list(user_ids)}}, {"_id": 0, "user_id": 1}).to_list(300)
     ok = {m["user_id"] for m in mates} - {current.user_id}
     return [u for u in dict.fromkeys(user_ids) if u in ok]
 
@@ -3309,7 +3432,7 @@ async def set_collection_sharing(collection_id: str, payload: CollectionSharingP
     before = coll.get("shared_with") or []
     new_people = [u for u in shared if u not in before]
     if payload.visibility == "org" and coll.get("visibility") != "org":
-        mates = await db.users.find({"org_id": current.org_id, "user_id": {"$ne": current.user_id}}, {"_id": 0, "user_id": 1}).to_list(300)
+        mates = await db.users.find({**_team_q(current.org_id), "user_id": {"$ne": current.user_id}}, {"_id": 0, "user_id": 1}).to_list(300)
         new_people = list(dict.fromkeys(new_people + [m["user_id"] for m in mates if m["user_id"] not in before]))
     await _notify_list_shared(current, {**coll, **updates}, new_people)
     out = await db.collections.find_one({"id": collection_id}, {"_id": 0})
@@ -3350,7 +3473,7 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
     if doc["shared_with"] or doc["visibility"] == "org":
         people = doc["shared_with"]
         if doc["visibility"] == "org":
-            mates = await db.users.find({"org_id": current.org_id, "user_id": {"$ne": current.user_id}}, {"_id": 0, "user_id": 1}).to_list(300)
+            mates = await db.users.find({**_team_q(current.org_id), "user_id": {"$ne": current.user_id}}, {"_id": 0, "user_id": 1}).to_list(300)
             people = list(dict.fromkeys(people + [m["user_id"] for m in mates]))
         await _notify_list_shared(current, doc, people)
     return (await _add_sharing_info([doc], current))[0]
@@ -5868,7 +5991,10 @@ def _first_name(name: Optional[str]) -> str:
 
 
 async def _clienti_list(current: User) -> Optional[dict]:
-    return await db.collections.find_one({**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 0})
+    """The Clienti list the user works with: their own, else the active team's, else another team's."""
+    found = await db.collections.find({**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(50)
+    return min(found, key=lambda c: (c.get("user_id") != current.user_id, c.get("org_id") != current.org_id,
+                                     c.get("created_at") or ""), default=None)
 
 
 def _commessa_view(sub: dict, client: Optional[dict], clienti: dict) -> dict:
@@ -5905,12 +6031,12 @@ async def _commessa_access(current: User, commessa_id: str) -> Optional[dict]:
     shared_by = None
     if sub:
         perm = _list_perm(clienti, current) or "read"
-    else:   # one commessa shared by a team-mate (only while both are in the same team)
-        sub = await db.collection_sub_items.find_one({"id": commessa_id, "shared_with": {"$in": [current.user_id]}}, {"_id": 0}) \
-            if current.org_id else None
+    else:   # one commessa shared by a team-mate (only while they are in a team together)
+        sub = await db.collection_sub_items.find_one({"id": commessa_id, "shared_with": {"$in": [current.user_id]}}, {"_id": 0})
         clienti = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0}) if sub else None
-        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0, "org_id": 1, "name": 1}) if clienti else None
-        if not owner or owner.get("org_id") != current.org_id:
+        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0}) if clienti else None
+        me_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or current.model_dump()
+        if not owner or not set(_memberships(owner)) & set(_memberships(me_doc)):
             return None
         perm = (sub.get("share_perms") or {}).get(current.user_id) or "edit"
         shared_by = owner.get("name") or ""
@@ -6255,7 +6381,7 @@ async def _plan_people(current: User, commessa_id: str) -> list:
     """Who a material to take can be for: the collaborators enabled on the commessa and the team."""
     people = [{"kind": "collab", "id": c["id"], "name": c["name"], "first": c["first_name"]}
               for c in await _assignable_collaborators(commessa_id)]
-    team = await db.users.find({"org_id": current.org_id}, {"_id": 0, "user_id": 1, "name": 1}).to_list(200) if current.org_id else []
+    team = await db.users.find(_team_q(current.org_id), {"_id": 0, "user_id": 1, "name": 1}).to_list(200) if current.org_id else []
     if not any(u["user_id"] == current.user_id for u in team):
         team.append({"user_id": current.user_id, "name": current.name})
     people += [{"kind": "user", "id": u["user_id"], "name": u.get("name") or "", "first": _first_name(u.get("name"))} for u in team]
@@ -6494,7 +6620,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     clienti = await _ensure_clienti_list(current)
     team = []
     if current.org_id:
-        team = [_first_name(m.get("name")) for m in await db.users.find({"org_id": current.org_id}, {"_id": 0, "name": 1}).to_list(200)]
+        team = [_first_name(m.get("name")) for m in await db.users.find(_team_q(current.org_id), {"_id": 0, "name": 1}).to_list(200)]
     speaker = _first_name(current.name)
     if author:
         speaker = author.get("first_name") or speaker
@@ -6672,9 +6798,7 @@ async def create_job_log(payload: JobLogPayload, current: User = Depends(get_cur
 
 
 async def _shared_commesse(current: User, skip: set) -> list:
-    """The commesse a team-mate shared with the user (while both are in the same team)."""
-    if not current.org_id:
-        return []
+    """The commesse a team-mate shared with the user (while they are in a team together)."""
     out = []
     for sub in await db.collection_sub_items.find({"shared_with": {"$in": [current.user_id]}}, {"_id": 0, "embedding": 0}).to_list(500):
         if sub["id"] in skip:
@@ -6763,7 +6887,7 @@ class CommessaSharingPayload(BaseModel):
 
 
 async def _commessa_sharing_view(current: User, sub: dict) -> dict:
-    mates = await db.users.find({"org_id": current.org_id, "user_id": {"$ne": current.user_id}},
+    mates = await db.users.find({**_team_q(current.org_id), "user_id": {"$ne": current.user_id}},
                                 {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(300) if current.org_id else []
     shared, perms = sub.get("shared_with") or [], sub.get("share_perms") or {}
     return {"in_team": bool(current.org_id),
@@ -6821,7 +6945,7 @@ async def _team_first_names(current: User) -> list:
     me = _first_name(current.name)
     if not current.org_id:
         return [me]
-    names = [_first_name(m.get("name")) for m in await db.users.find({"org_id": current.org_id}, {"_id": 0, "name": 1}).to_list(200)]
+    names = [_first_name(m.get("name")) for m in await db.users.find(_team_q(current.org_id), {"_id": 0, "name": 1}).to_list(200)]
     return [me] + sorted({n for n in names if n and n != me})
 
 
@@ -7387,7 +7511,7 @@ async def _milestone_recipients(m: dict) -> list:
     who = (m.get("who") or "").strip().lower()
     if who:
         if m.get("org_id"):
-            for u in await db.users.find({"org_id": m["org_id"]}, {"_id": 0, "name": 1, "telegram_chat_id": 1}).to_list(200):
+            for u in await db.users.find(_team_q(m["org_id"]), {"_id": 0, "name": 1, "telegram_chat_id": 1}).to_list(200):
                 if u.get("telegram_chat_id") and who in {(u.get("name") or "").strip().lower(), _first_name(u.get("name")).lower()}:
                     chats.append(u["telegram_chat_id"])
     return list(dict.fromkeys(chats))

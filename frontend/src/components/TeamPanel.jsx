@@ -13,11 +13,13 @@ import GlassBottomSheet from "@/components/GlassBottomSheet";
 export default function TeamPanel() {
   const { user } = useAuth();
   if (user?.role !== "admin") return <OrganizationPage />;
-  return <TeamsAdmin inTeam={!!user?.org_id} />;
+  return <TeamsAdmin />;
 }
 
-function TeamsAdmin({ inTeam }) {
+function TeamsAdmin() {
+  const { refresh } = useAuth();
   const [teams, setTeams] = useState(null);
+  const [mine, setMine] = useState(0);   // reloads "your teams" when the admin changes them
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -25,6 +27,7 @@ function TeamsAdmin({ inTeam }) {
   const load = async () => {
     try { setTeams((await api.get("/admin/teams")).data || []); }
     catch { toast.error("Errore nel caricamento dei team"); setTeams([]); }
+    setMine((n) => n + 1);
   };
   useEffect(() => { load(); }, []);
 
@@ -34,9 +37,9 @@ function TeamsAdmin({ inTeam }) {
     setBusy(true);
     try {
       await api.post("/admin/teams", { name: n });
-      toast.success(`Team "${n}" creato`);
+      toast.success(`Team "${n}" creato: ne fai già parte`);
       setName(""); setCreating(false);
-      await load();
+      await Promise.all([load(), refresh()]);
     } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
     finally { setBusy(false); }
   };
@@ -49,7 +52,8 @@ function TeamsAdmin({ inTeam }) {
           <Plus size={22} strokeWidth={1.7} />
         </button>
       </div>
-      {!inTeam && <div className="mb-4"><OrganizationPage /></div>}
+      <div className="mb-5"><OrganizationPage reloadKey={mine} /></div>
+      <div className="kicker mb-2">· gestisci i team</div>
       {teams === null ? <div className="kicker">caricamento…</div> : (
         <div className="space-y-3">
           {teams.length === 0 && <div className="text-sm text-white/60">Nessun team ancora: crealo con il +.</div>}
