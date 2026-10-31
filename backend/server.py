@@ -6198,6 +6198,7 @@ def _commessa_view(sub: dict, client: Optional[dict], clienti: dict) -> dict:
         "address": _sysval(d, smap, "indirizzo_cantiere") or _sysval(cd, fmap, "indirizzo"),
         "data_inizio": _sysval(d, smap, "data_inizio"), "data_fine": _sysval(d, smap, "data_fine"),
         "descrizione": _sysval(d, smap, "descrizione"),
+        "descrizione_info": sub.get("description_meta"),   # where it came from: {source, file, kind, by, at}
         "client_name": _sysval(cd, fmap, "nome"), "client_phone": _sysval(cd, fmap, "telefono"),
         "client_email": _sysval(cd, fmap, "email"),
     }
@@ -6211,6 +6212,27 @@ async def _all_commesse(clienti: dict) -> tuple[list, dict]:
 
 
 READ_ONLY_COMMESSA = "Questa commessa è condivisa con te in sola lettura: puoi vederla ma non modificarla."
+DESCRIPTION_OWNER_ONLY = "La descrizione delle attività la scrive il titolare della commessa o un amministratore."
+
+
+def _can_describe(current: User, clienti: Optional[dict]) -> bool:
+    """The commessa's description (the activities to carry out): its owner or an administrator."""
+    return current.role == "admin" or (clienti or {}).get("user_id") == current.user_id
+
+
+async def _set_commessa_description(current: User, clienti: dict, sub_id: str, text: str, mode: str = "sostituisci",
+                                    source: str = "testo", file_name: str = "", doc_kind: str = "") -> str:
+    """Saves the description of the activities on the commessa (its "descrizione" field) -> the new text."""
+    key = (clienti.get("system_sub_map") or {}).get("descrizione", "descrizione")
+    sub = await db.collection_sub_items.find_one({"id": sub_id}, {"_id": 0, "data": 1}) or {}
+    old = str((sub.get("data") or {}).get(key) or "").strip()
+    text = (text or "").strip()
+    new = (f"{old}\n\n{text}" if mode == "aggiungi" and old else text)[:8000]
+    meta = {"source": source, "file": file_name or None, "kind": doc_kind or None, "by": _first_name(current.name),
+            "at": datetime.now(timezone.utc).isoformat()}
+    await db.collection_sub_items.update_one({"id": sub_id}, {"$set": {"data": {**(sub.get("data") or {}), key: new},
+                                                                       "description_meta": meta, "updated_at": meta["at"]}})
+    return new
 
 
 async def _commessa_access(current: User, commessa_id: str) -> Optional[dict]:
@@ -6826,6 +6848,9 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         clienti, sub, client = await _commessa_or_404(current, commessa_id)
         target = _commessa_view(sub, client, clienti)
         known = {"title": target["title"], "client": target["client_name"]}
+    # the description of the activities, said in so many words ("descrizione attività: …", "il
+    # lavoro consiste in …"): only the owner or an administrator - never a collaborator
+    said_description = jl.description_said(text) if not author and not images and _can_describe(current, clienti) else None
     try:
         parsed = await jl.interpret(text, speaker, team, known=known, user_id=current.user_id, channel=channel,
                                     **({"photos": len(photo_entry["photos"])} if photo_entry else {}))
@@ -6833,11 +6858,13 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         logger.exception("job log interpretation failed, saving the text as is")
         parsed = {"kind": "nota", "date": jl.today_local().isoformat(), "text": text, "hours": [], "materials": [], "problems": [],
                   "client": "", "commessa": ""}
+    if said_description:   # whatever the model thought of it (a question, not clear…)
+        parsed.update(kind="descrizione", text=said_description["text"], description_mode=said_description["mode"])
 
     # the agent Diario only writes entries, with only what the user said: a question or an entry
     # it can't understand saves nothing (and creates no client or commessa)
     photo_only = bool(images) and text == PHOTO_ONLY_TEXT
-    if not photo_only and (parsed.get("kind") == "domanda" or jl.is_plain_question(text)):
+    if not photo_only and parsed.get("kind") != "descrizione" and (parsed.get("kind") == "domanda" or jl.is_plain_question(text)):
         return {"status": "question", "message": JOB_LOG_QUESTION_MSG}
     times = jl.clock_times(parsed.get("times"), text)   # "ho finito alle 17.10": an entry even with nothing else
     has_times = bool(times["start"] or times["end"])
@@ -6897,6 +6924,18 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
 
     if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
         await _commessa_or_404(current, target["id"])
+
+    if parsed.get("kind") == "descrizione":
+        if not _can_describe(current, clienti):
+            raise HTTPException(status_code=403, detail=DESCRIPTION_OWNER_ONLY)
+        desc = await _set_commessa_description(current, clienti, target["id"], parsed.get("text") or text,
+                                               parsed.get("description_mode") or "sostituisci",
+                                               source="vocale" if channel in ("voice", "watch") else "messaggio")
+        ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
+        verb = "aggiunta alla descrizione" if parsed.get("description_mode") == "aggiungi" else "descrizione delle attività aggiornata"
+        return {"status": "description", "commessa": target, "description": desc,
+                "client_created": bool(created.get("client")), "commessa_created": bool(created.get("commessa")),
+                "message": f"📝 «{target['title']}» — {target['client_name']}: {verb}.\n{desc[:600]}"}
 
     # materials used vs to take ("domani porto 10 scatole 503"): the ones to take become a reminder
     # (To Do "Da prendere"), never material used; when it can't be told, asked
@@ -7955,6 +7994,107 @@ async def get_commessa_economics(commessa_id: str, current: User = Depends(get_c
     rates = costs.get("rates") or {}
     return {**e, "default_rate": costs.get("default_rate"),
             "people": [{"who": n, "rate": _rate_of(rates, n)} for n in _econ_people(e, team, collabs)]}
+
+
+# ---- THE DESCRIPTION OF THE ACTIVITIES (the commessa's scope): written or dictated by its owner
+# or an administrator, or read from the site-survey report or the quote they upload - the quote
+# also gives the commessa's value (the budget of Costi), when its total is written in it.
+
+DESC_DOC_MAX_BYTES = 15 * 1024 * 1024
+DESC_DOC_IMAGES = ("jpg", "jpeg", "png", "webp", "heic", "heif")
+
+
+class CommessaDescriptionPayload(BaseModel):
+    text: str = ""
+    mode: Literal["sostituisci", "aggiungi"] = "sostituisci"
+    budget: Optional[float] = None        # the commessa's value, from the quote (when chosen)
+    file_name: Optional[str] = None       # from a document read with /description/read
+    doc_kind: Optional[str] = None        # preventivo | sopralluogo | altro
+
+
+@api_router.put("/jobs/commesse/{commessa_id}/description")
+async def set_commessa_description(commessa_id: str, payload: CommessaDescriptionPayload, current: User = Depends(get_current_user)):
+    clienti, sub, _client = await _commessa_or_404(current, commessa_id)
+    if not _can_describe(current, clienti):
+        raise HTTPException(status_code=403, detail=DESCRIPTION_OWNER_ONLY)
+    desc = await _set_commessa_description(current, clienti, commessa_id, payload.text, payload.mode,
+                                           source="documento" if payload.file_name else "testo",
+                                           file_name=(payload.file_name or "")[:200], doc_kind=(payload.doc_kind or "")[:20])
+    budget = _num_or_none(payload.budget)
+    if budget is not None and budget > 0:
+        await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {
+            "commessa_id": commessa_id, "budget": round(budget, 2),
+            "budget_source": {"file": payload.file_name, "at": datetime.now(timezone.utc).isoformat()} if payload.file_name else None}}, upsert=True)
+        await _check_budget_alert(clienti, commessa_id)
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}
+    meta = (await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0, "description_meta": 1}) or {}).get("description_meta")
+    return {"descrizione": desc, "descrizione_info": meta, "budget": econ.get("budget")}
+
+
+async def _archive_commessa_file(user_id: str, clienti: dict, view: dict, tmp_path: str, name: str, content_type: Optional[str]) -> None:
+    """The document also goes in the archive (Drive / OneDrive: Clienti / client / commessa); best effort."""
+    try:
+        if await _storage_targets(user_id):
+            await asyncio.wait_for(_storage_save(user_id, _drive_safe(clienti.get("name") or vx.CLIENTI_NAME), tmp_path, name, content_type,
+                                                 subfolders=[x for x in (view.get("client_name"), view.get("title")) if x]),
+                                   timeout=LIST_FOLDER_TIMEOUT)
+    except Exception:
+        logger.exception("commessa document archive failed")
+    finally:
+        try: os.unlink(tmp_path)
+        except Exception: pass
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/description/read")
+async def read_commessa_document(commessa_id: str, file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    """A site-survey report or a quote (pdf, docx, xlsx, txt, a photo): the activities to carry out
+    and - for a quote - its value, proposed (saved with PUT /description once confirmed). The
+    file is also kept in the commessa's folder of the archive."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    if not _can_describe(current, clienti):
+        raise HTTPException(status_code=403, detail=DESCRIPTION_OWNER_ONLY)
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Il file è vuoto")
+    if len(contents) > DESC_DOC_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Il file è troppo grande (massimo 15 MB)")
+    name = os.path.basename(file.filename or "documento").strip() or "documento"
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    if ext in DESC_DOC_IMAGES:
+        text = await _ocr_image_bytes(_downscale_image_bytes(contents), name, current.user_id)
+        text = "" if "[NO_TEXT]" in (text or "") else text
+    else:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext or 'bin'}") as tmp:
+            tmp.write(contents)
+            path = tmp.name
+        try:
+            text = await asyncio.to_thread(_extract_text_from_file, path, name)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            logger.exception("commessa document read failed")
+            raise HTTPException(status_code=400, detail="Non riesco ad aprire questo file")
+        finally:
+            try: os.unlink(path)
+            except Exception: pass
+    if len((text or "").strip()) < 40:
+        raise HTTPException(status_code=400, detail="Non riesco a leggere il testo del documento: se è una scansione, caricane una foto.")
+    view = _commessa_view(sub, client, clienti)
+    try:
+        res = await jl.read_document(text, view, user_id=current.user_id)
+    except Exception:
+        logger.exception("commessa document interpretation failed")
+        raise HTTPException(status_code=502, detail="Non sono riuscito a leggere il documento, riprova tra poco")
+    if not res["description"]:
+        raise HTTPException(status_code=400, detail="Nel documento non trovo una descrizione dei lavori")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext or 'bin'}") as tmp:
+        tmp.write(contents)
+        keep = tmp.name
+    task = asyncio.create_task(_archive_commessa_file(current.user_id, clienti, view, keep, name, file.content_type))
+    _DAY_PIN_TASKS.add(task)
+    task.add_done_callback(_DAY_PIN_TASKS.discard)
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}
+    return {**res, "file_name": name, "current_description": view.get("descrizione") or "", "current_budget": econ.get("budget")}
 
 
 @api_router.patch("/jobs/commesse/{commessa_id}/economics")
@@ -11968,7 +12108,7 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             if res["status"] == "ok":
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"],
                         "commessa_id": res["log"]["commessa_id"]}
-            if res["status"] == "planned":
+            if res["status"] in ("planned", "description"):
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"], "commessa_id": res["commessa"]["id"]}
             if res["status"] == "material_doubt":
                 return {**base, "label": "Diario commessa", "status": "error",

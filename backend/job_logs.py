@@ -177,6 +177,29 @@ def clean_problems(rows) -> list:
 # saved is checked against the user's own words, so nothing invented ever lands in the diary.
 
 KINDS = ("nota", "domanda", "non_chiara")
+# "descrizione attività: …", "il lavoro consiste in …": the commessa's description (only its
+# owner or an administrator writes it - never a collaborator)
+_DESCRIPTION_START = re.compile(
+    r"^\s*(?:(?:la\s+)?descrizione\s+(?:dell[ae']?\s*|dei\s+|delle\s+)?(?:attivit[aà]|lavori|lavoro|commessa|intervento|opere)"
+    r"|attivit[aà]\s+da\s+(?:svolgere|eseguire)|oggetto\s+(?:dei\s+lavori|della\s+commessa|dell'intervento)"
+    r"|il\s+lavoro\s+(?:consiste|prevede)|l'(?:attivit[aà]|intervento)\s+(?:consiste|prevede))\b\s*[:.,-]?\s*", re.I)
+_DESCRIPTION_ADD = re.compile(r"^\s*(?:aggiungi|aggiungere|integra)\b.{0,40}\bdescrizione\b\s*[:.,-]?\s*", re.I)
+
+
+def description_said(text: str) -> Optional[dict]:
+    """A message that explicitly sets the commessa's description -> {"text", "mode": sostituisci|aggiungi}."""
+    def rest(t: str) -> str:   # "… per i Rossi: rifacimento del bagno" -> "rifacimento del bagno" (the client finds the commessa)
+        t = re.sub(r"^(?:per|del|della|dei|degli|delle|di|da)\s+[^:\n]{1,60}:\s*", "", t.strip(), flags=re.I)
+        return re.sub(r"^(?:è|e'|sono)\b\s*(?:questa|questo|la seguente|le seguenti|questi|queste)?\s*:?\s*", "", t, flags=re.I).strip()
+    m = _DESCRIPTION_ADD.match(text or "")
+    if m and len(rest(text[m.end():])) >= 3:
+        return {"text": rest(text[m.end():]), "mode": "aggiungi"}
+    m = _DESCRIPTION_START.match(text or "")
+    if m and len(rest(text[m.end():])) >= 8:
+        # "il lavoro consiste in …" keeps its words; "descrizione attività: …" only what follows
+        keep = re.match(r"\s*(?:il\s+lavoro|l'(?:attivit|intervento))", text, re.I)
+        return {"text": (text.strip() if keep else rest(text[m.end():])), "mode": "sostituisci"}
+    return None
 _STOP = set("""il lo la i gli le un uno una di a da in con su per tra fra e o ma se che chi cosa come dove quando
 del dello della dei degli delle al allo alla ai agli alle dal dalla dai nel nella nei nelle sul sulla sui sulle
 è e' sono ho hai ha abbiamo hanno siamo era stato stata stati fatto fatta fatti non mi ti si ci vi ne anche poi
@@ -432,6 +455,77 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),
     }
+
+
+# ---- the commessa's description from a document: a site-survey report or a quote ----
+DOC_KINDS = ("preventivo", "sopralluogo", "altro")
+
+
+def amount_in_text(amount: float, raw: str) -> bool:
+    """The amount is written in the document (12.500,00 / 12500,00 / 12,500.00 / 12500)."""
+    try:
+        cents = round(float(amount) * 100)
+    except (TypeError, ValueError):
+        return False
+    if cents <= 0:
+        return False
+    for m in re.finditer(r"\d[\d.,' ]*\d|\d", raw or ""):
+        tok = m.group(0).replace(" ", "").replace("'", "")
+        for dec, th in ((",", "."), (".", ",")):
+            t = tok.replace(th, "")
+            if t.count(dec) > 1:
+                continue
+            try:
+                if round(float(t.replace(dec, ".")) * 100) == cents:
+                    return True
+            except ValueError:
+                pass
+    return False
+
+
+async def read_document(text: str, commessa: dict, user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """-> {"kind": preventivo|sopralluogo|altro, "description": str, "amount": float|None,
+    "amount_basis": "imponibile"|"totale"|""} - the activities to carry out, from the document's
+    own words; the quote's amount only when written in it (the taxable one, without VAT, when both)."""
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Ricevi il testo di un documento caricato nel diario della commessa "
+        f"«{commessa.get('title')}» del cliente {commessa.get('client_name')}: di solito un PREVENTIVO o un REPORT DI SOPRALLUOGO.\n"
+        "Compiti:\n"
+        "1. \"kind\": \"preventivo\" (offerta con voci e prezzi), \"sopralluogo\" (report/verbale di sopralluogo), altrimenti \"altro\".\n"
+        "2. \"description\": la DESCRIZIONE DELLE ATTIVITÀ DA SVOLGERE sulla commessa, scritta in modo chiaro per chi lavora: "
+        "una frase introduttiva sull'oggetto dei lavori, poi l'elenco delle lavorazioni (una per riga, che inizia con \"- \"), "
+        "con le quantità e le specifiche scritte nel documento. Per un sopralluogo: lo stato rilevato in breve e i lavori da fare. "
+        "NIENTE prezzi, importi, sconti, condizioni di pagamento, IVA, dati fiscali o di contatto. Solo cose scritte nel documento, "
+        "MAI inventare. Al massimo 1500 caratteri.\n"
+        "3. \"amount\": solo per un preventivo, il valore complessivo dei lavori come numero (es. 12500.50): l'IMPONIBILE "
+        "(totale senza IVA) se è indicato, altrimenti il totale indicato. null se non c'è un totale chiaro o non è un preventivo. "
+        "\"amount_basis\": \"imponibile\" o \"totale\" (vuoto se amount è null).\n"
+        "Rispondi SOLO con JSON: {\"kind\": \"\", \"description\": \"\", \"amount\": null, \"amount_basis\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL, max_completion_tokens=2048, response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": (text or "")[:30000]}],
+        )
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    parsed = json.loads(m.group(0)) if m else {}
+    kind = str(parsed.get("kind") or "").strip().lower()
+    kind = kind if kind in DOC_KINDS else "altro"
+    amount = parsed.get("amount")
+    try:
+        amount = round(float(str(amount).replace(",", ".")), 2) if amount not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        amount = None
+    if amount is not None and (amount <= 0 or not amount_in_text(amount, text)):   # never a figure not written there
+        amount = None
+    basis = str(parsed.get("amount_basis") or "").strip().lower()
+    return {"kind": kind, "description": str(parsed.get("description") or "").strip()[:4000],
+            "amount": amount, "amount_basis": (basis if basis in ("imponibile", "totale") else "totale") if amount else ""}
 
 
 def _mat_key(m: dict) -> tuple:

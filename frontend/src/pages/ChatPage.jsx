@@ -786,7 +786,7 @@ export default function ChatPage() {
       }] }));
       return;
     }
-    if (res.status === "planned") {   // only materials to take: a reminder, nothing in the diary
+    if (res.status === "planned" || res.status === "description") {   // a reminder of materials to take / the commessa's description: no entry
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, jobCommessaId: res.commessa?.id }] }));
       return;
     }

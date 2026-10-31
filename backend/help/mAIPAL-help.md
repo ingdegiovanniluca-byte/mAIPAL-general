@@ -167,15 +167,24 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 **La sezione**
 - In alto i clienti: ogni riquadro mostra nome, indirizzo e quante commesse ha (**totali** e **attive**, cioè tutte tranne le chiuse). Con la **freccia** lo apri e vedi le sue commesse con il loro stato; tocca una commessa per aprirne il diario. Cercando un cliente o una commessa, i riquadri trovati si aprono da soli.
 - Nel diario della commessa:
-  - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), Ore, Segnalazioni, Documenti, Date, Telefono, Email (il cantiere è sulla mappa qui sotto; la voce **Cantiere** compare solo finché la posizione non c'è);
+  - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), **Attività** (l'inizio della descrizione: toccala per leggerla tutta), Ore, Segnalazioni, Documenti, Date, Telefono, Email (il cantiere è sulla mappa qui sotto; la voce **Cantiere** compare solo finché la posizione non c'è);
   - la **mappa** del cantiere, a colori, sotto i dati in alto: il pallino è **verde** (col numero) se qualcuno è in cantiere ora, arancione se non c'è nessuno. Trascina la **barretta** sotto la mappa in su per nasconderla e in giù per riaprirla, oppure toccala; la scelta resta su quel dispositivo. Con un dito sposti la mappa, con due la ingrandisci. **Tocca il pallino** per sapere cosa indica: chi è in cantiere e da quando (o che non c'è nessuno), l'indirizzo e il pulsante per **navigare** fin lì. La posizione è quella dell'indirizzo o quella che imposti tu: tocca il pallino e poi l'icona della **posizione**. Senza una posizione la mappa non c'è, e al suo posto nella barra in alto c'è la voce **Cantiere** per impostarla;
-  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / Milestone / To Do**: scorri per passare dall'una all'altra;
+  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / Milestone / To Do / Descrizione**: scorri per passare dall'una all'altra;
   - **To Do**: le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
   - il **periodo** (questa settimana da lunedì, ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.
 - Anche ogni **report** generato con l'agente **Report** per una commessa resta scritto nel suo diario: il tipo di report, chi l'ha fatto e un breve riassunto, con il link **Scarica il report**. Se poi modifichi il report, nel diario compare anche la nuova versione con i campi cambiati. Toccando la riga puoi toglierla dal diario (il report resta tra i documenti).
 - Il **tasto chat** tondo sul lato apre una chat per interrogare la commessa: "quante ore abbiamo fatto?", "cosa manca da comprare?".
+
+**Descrizione delle attività**
+- Nella sezione **Descrizione** c'è il testo che descrive il lavoro da svolgere sulla commessa: l'oggetto e l'elenco delle lavorazioni. Sotto vedi da dove viene (scritta, dettata in chat o da quale documento), chi l'ha messa e quando, e il **valore della commessa**.
+- La scrive **il titolare della commessa o un amministratore**; gli altri la leggono. In tre modi:
+  - **Scrivi** / **Modifica** nella sezione;
+  - **dalla chat** (quella della commessa, l'agente Diario o Telegram), anche **a voce**, iniziando con le parole giuste: "**Descrizione attività:** rifacimento completo del bagno con…", "Il lavoro consiste in…", "Attività da svolgere: …". Con "**Aggiungi alla descrizione:** …" la aggiunge in fondo. Non diventa una voce di diario. Se nomini il cliente ("descrizione attività per i Rossi: …") trova la commessa da solo;
+  - **Carica sopralluogo o preventivo** (pdf, Word, Excel, testo o una foto del foglio): leggo il documento e propongo la descrizione delle lavorazioni (senza prezzi), che correggi prima di salvare. Se c'è già una descrizione scegli se **sostituirla** o **aggiungere in fondo**. Il file resta anche nell'archivio (Drive o OneDrive), nella cartella della commessa.
+- **Valore della commessa dal preventivo**: se il documento è un preventivo con un totale, propongo come valore l'**imponibile** (senza IVA; il totale se l'imponibile non c'è), già selezionato: salvando va nel **Preventivo** della sezione Costi, per il margine e gli avvisi all'80% e al 100%. Uso solo un importo scritto nel documento; se non trovo un totale chiaro, lo scrivi tu in Costi.
+- Le risposte della chat della commessa e quelle ai collaboratori su Telegram tengono conto della descrizione.
 
 **Contatti utili**
 - Il riquadro **Contatti** in alto apre i contatti della commessa: gli altri artigiani e le persone del lavoro (idraulico, elettricista, direttore lavori, fornitori, amministratore…), con ruolo, telefono, email e una nota. Tocca il numero per chiamare, l'email per scrivere.

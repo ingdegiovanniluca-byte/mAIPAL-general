@@ -330,7 +330,7 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     conv = None if new_conv else await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "job_commessa_id": 1})
     res = await _save_job_log(_to_user_pydantic(user_doc), content, images=images,
                               hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
-    if res["status"] in ("ok", "question", "unclear", "invalid", "planned"):
+    if res["status"] in ("ok", "question", "unclear", "invalid", "planned", "description"):
         answer = res["message"]
     elif res["status"] == "material_doubt":
         answer = f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."
@@ -344,7 +344,7 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     fields = {"updated_at": now_iso}
     if res["status"] == "ok":
         fields["job_commessa_id"] = res["log"]["commessa_id"]
-    elif res["status"] == "planned":
+    elif res["status"] in ("planned", "description"):
         fields["job_commessa_id"] = res["commessa"]["id"]
     if new_conv:
         await db.conversations.insert_one({"conv_id": conv_id, "user_id": user_doc["user_id"], "action": "journal", "channel": channel,
@@ -481,7 +481,7 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
                          pending_job_context=None, last_user_message=content)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
         return
-    if res["status"] == "planned":   # only materials to take: a reminder, no entry
+    if res["status"] in ("planned", "description"):   # only materials to take (a reminder) / the commessa's description: no entry
         await _set_state(db, chat_id, user["user_id"], current_action="journal", job_commessa_id=res["commessa"]["id"],
                          pending_job_context=None)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
