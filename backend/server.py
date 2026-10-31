@@ -8395,23 +8395,35 @@ async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
         return 0
     today = now_local.date().isoformat()
     sent = 0
+    # one person, one reminder: a collaborator of more than one firm has a record per firm on the same chat
+    by_chat: dict = {}
     for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}, "reminded_on": {"$ne": today}}, {"_id": 0}).to_list(2000):
-        await db.collaborators.update_one({"id": c["id"]}, {"$set": {"reminded_on": today}})
-        open_ = await _open_presence(c["id"])
+        by_chat.setdefault(c["telegram_chat_id"], []).append(c)
+    import collab_telegram as ctg
+    for chat_recs in by_chat.values():
+        c = chat_recs[0]
+        for r in chat_recs:
+            await db.collaborators.update_one({"id": r["id"]}, {"$set": {"reminded_on": today}})
+        open_ = None
+        for r in chat_recs:
+            open_ = await _open_presence(r["id"])
+            if open_:
+                c = r
+                break
         if open_:
             if await _tell_collaborator(c, f"⏱️ Hai ancora il tempo aperto su «{open_['commessa_title']}» dalle "
                                            f"{sp.hhmm(_local(open_['start_at']))}: quando hai finito tocca 📍 Ho finito "
                                            "(o scrivi «ho finito alle 17:30»)."):
                 sent += 1
             continue
-        if await db.job_logs.find_one({"collaborator_id": c["id"], "date": today}, {"_id": 1}):
+        if await db.job_logs.find_one({"collaborator_id": {"$in": [r["id"] for r in chat_recs]}, "date": today}, {"_id": 1}):
             continue
-        targets = await _collab_targets(c)
+        targets, _rec_of = await ctg._targets_of(chat_recs)
         if not targets:
             continue
         try:
             from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"{v['title']} · {v['client_name']}"[:60], callback_data=f"clc:{v['id']}")]
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(ctg._label(v), callback_data=f"clc:{v['id']}")]
                                        for _o, _cl, v in targets[:8]])
             await Bot(token=tg.bot_token()).send_message(
                 chat_id=c["telegram_chat_id"], reply_markup=kb,
@@ -8988,12 +9000,14 @@ async def _collab_day_items(collab: dict, day: str) -> list:
     return out
 
 
-def _day_pin_body(day: str, items: list) -> tuple:
-    """-> (HTML text, inline keyboard with a ✅ per open item)"""
+def _day_pin_body(day: str, items: list, firm: str = "") -> tuple:
+    """-> (HTML text, inline keyboard with a ✅ per open item). firm: the organization's name, for
+    a collaborator of more than one (a pinned message per firm)."""
     import html
     from urllib.parse import quote
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    lines = [f"📋 <b>Oggi, {jl.IT_WEEKDAYS[date.fromisoformat(day).weekday()]} {html.escape(_short_it_date(day))}</b>"]
+    lines = [f"📋 <b>Oggi, {jl.IT_WEEKDAYS[date.fromisoformat(day).weekday()]} {html.escape(_short_it_date(day))}</b>"
+             + (f" · {html.escape(firm)}" if firm else "")]
     buttons = []
     for view, rows in items:
         lines += ["", f"🏗️ <b>{html.escape(view.get('title') or '')}</b> — {html.escape(view.get('client_name') or '')}"]
@@ -9033,7 +9047,11 @@ async def _day_pin_refresh(collab_id: str, now_utc: Optional[datetime] = None) -
     items = await _collab_day_items(c, day)
     if not items and not pin.get("message_id"):
         return "none"
-    text, kb = _day_pin_body(day, items)
+    firm = ""
+    if c.get("tenant_id") and await db.collaborators.find_one({"telegram_chat_id": c["telegram_chat_id"], "status": "active",
+                                                                "tenant_id": {"$ne": c["tenant_id"]}}, {"_id": 1}):
+        firm = (await db.tenants.find_one({"id": c["tenant_id"]}, {"_id": 0, "name": 1}) or {}).get("name") or ""
+    text, kb = _day_pin_body(day, items, firm)
     if pin.get("message_id"):
         if pin.get("text") == text:
             return "same"

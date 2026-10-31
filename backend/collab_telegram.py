@@ -12,6 +12,11 @@ write in the diario of the commesse they were enabled on, and ask about those co
   commessa's data only (the client's phone and e-mail left out unless allowed); anything else
   goes in its diary with their name, with "Annulla" for COLLAB_UNDO_MINUTES. A problem they
   report is sent to the admin.
+- The same person can be a collaborator of more than one organization (an electrician working
+  for two firms): one record per organization on the same chat. Their commesse are offered
+  together (with the firm's name), and everything - the diary entry, the answer, the hours, the
+  history of the questions, "last message" - goes to the record of the commessa's organization,
+  so no firm ever sees what they do for another.
 """
 import logging
 import os
@@ -77,6 +82,38 @@ def _now() -> datetime:
 
 async def _records(db, chat_id: int) -> list:
     return await db.collaborators.find({"telegram_chat_id": chat_id}, {"_id": 0}).to_list(10)
+
+
+async def _targets_of(active: list) -> tuple:
+    """Every commessa they can work on, of all their firms -> (targets, {commessa id: the record
+    of its firm}). With more than one firm each commessa carries the firm's name (org_name)."""
+    from server import _collab_targets, db
+    pairs = [(r, t) for r in active for t in await _collab_targets(r)]
+    firms = {r.get("tenant_id") or r.get("owner_user_id") for r, _t in pairs}
+    if len(firms) > 1:
+        names = {}
+        for r, _t in pairs:
+            key = r.get("tenant_id")
+            if key and key not in names:
+                t = await db.tenants.find_one({"id": key}, {"_id": 0, "name": 1}) or {}
+                names[key] = t.get("name") or ""
+        pairs = [(r, (o, cl, {**v, "org_name": names.get(r.get("tenant_id")) or o.name or ""})) for r, (o, cl, v) in pairs]
+    return [t for _r, t in pairs], {t[2]["id"]: r for r, t in pairs}
+
+
+def _label(v: dict) -> str:
+    """A commessa on a button: its title and client (and the firm's name, with more than one)."""
+    return (f"{v['title']} · {v['client_name']}" + (f" · {v['org_name']}" if v.get("org_name") else ""))[:60]
+
+
+def _latest_state(active: list) -> dict:
+    """The conversation's commessa: the most recent of their firms' records."""
+    states = [r.get("tg_state") or {} for r in active]
+    return {"tg_state": max(states, key=lambda st: st.get("at") or "", default={})}
+
+
+async def _all_active(db, update: Update, rec: dict) -> list:
+    return [r for r in await _records(db, update.effective_chat.id) if r.get("status") == "active"] or [rec]
 
 
 async def _reply(update: Update, text: str, **kw):
@@ -145,8 +182,14 @@ async def _complete_link(update: Update, c: dict, chat_id: int):
     c.update(upd)
     targets = await _collab_targets(c)
     jobs = "\n".join(f"• {v['title']} — {v['client_name']}" for _o, _cl, v in targets) or "nessuna, per ora"
+    firm = (await db.tenants.find_one({"id": c.get("tenant_id")}, {"_id": 0, "name": 1}) or {}).get("name") if c.get("tenant_id") else None
+    others = [r for r in await db.collaborators.find({"telegram_chat_id": chat_id, "status": "active"}, {"_id": 0, "id": 1, "tenant_id": 1}).to_list(10)
+              if r["id"] != c["id"] and r.get("tenant_id") != c.get("tenant_id")]
+    also = ("\n\n🏢 Collabori con più imprese: qui trovi le commesse di tutte (sui pulsanti c'è il nome dell'impresa). "
+            "Ogni impresa vede solo quello che scrivi sulle sue commesse." if others else "")
     await _reply(update,
-                 f"✅ Ciao {c.get('first_name', '')}, sei collegato a mAIPAL.\n\n{HELP}\n\nLe tue commesse:\n{jobs}\n\n"
+                 f"✅ Ciao {c.get('first_name', '')}, sei collegato a mAIPAL" + (f" come collaboratore di {firm}" if firm else "")
+                 + f".\n\n{HELP}\n\nLe tue commesse" + (f" di {firm}" if firm and others else "") + f":\n{jobs}{also}\n\n"
                  "ℹ️ Quello che scrivi qui viene salvato nel diario delle commesse con il tuo nome, ed è visibile a chi ti ha "
                  f"invitato. {PRIVACY_PLACE} Per correggere o cancellare i tuoi dati rivolgiti a lui.",
                  reply_markup=presence_keyboard(False))
@@ -190,8 +233,7 @@ async def _transcribe(ctx, file_id: str, owner_user_id: str, org_id: Optional[st
 
 
 def _target_buttons(targets: list) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{v['title']} · {v['client_name']}"[:60], callback_data=f"clc:{v['id']}")]
-                                 for _o, _cl, v in targets[:10]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(_label(v), callback_data=f"clc:{v['id']}")] for _o, _cl, v in targets[:10]])
 
 
 def _choose(rec: dict, content: str, targets: list) -> Optional[tuple]:
@@ -214,8 +256,7 @@ async def _over_limit(db, rec: dict) -> bool:
     from server import COLLAB_DAILY_LIMIT
     today = _now().date().isoformat()
     n = (rec.get("msg_count") or 0) + 1 if rec.get("msg_day") == today else 1
-    await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"msg_day": today, "msg_count": n,
-                                                                    "last_message_at": _now().isoformat()}})
+    await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"msg_day": today, "msg_count": n}})
     return n > COLLAB_DAILY_LIMIT
 
 
@@ -232,7 +273,8 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
             and not images:
         content = f"{unclear['text']}\n{content}"[-1500:]
     await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": _now().isoformat()},
-                                                                    "pending": None, "unclear": None}})
+                                                                    "pending": None, "unclear": None, "last_message_at": _now().isoformat()}})
+    everyone = await _all_active(db, update, rec)   # their records of every firm (the 📍 button follows any open time)
     try:
         res = await _save_job_log(owner, content, images=images or None, commessa_id=view["id"], channel="telegram", author=author,
                                   material_choice=material_choice)
@@ -244,7 +286,7 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         ids = ",".join(t["id"] for t in res["todos"][:2])
         await _reply(update, res["message"], reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clt:{ids}")]]))
-        await _still_working(update, [rec])
+        await _still_working(update, everyone)
         return
     if res["status"] == "material_doubt":   # "10 scatole 503": used today or to take? asked
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_material": {"text": content, "images": images or [], "commessa_id": view["id"]}}})
@@ -255,7 +297,7 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         log = res["log"]
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clu:{log['id']}")]])
         await _reply(update, res["message"], reply_markup=kb)
-        await _still_working(update, [rec])
+        await _still_working(update, everyone)
         if log.get("problems"):
             who = _collab_name(rec) + (f" ({rec['company']})" if rec.get("company") else "")
             await _notify_owner(owner, f"⚠️ {who} segnala su «{view['title']}» — {view['client_name']}:\n"
@@ -270,11 +312,11 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
             answer = "Non sono riuscito a rispondere, riprova tra poco."
         history = (history + [{"role": "user", "content": said}, {"role": "assistant", "content": answer}])[-HISTORY_KEEP:]
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_history": history}})
-        await _reply(update, f"🔎 «{view['title']}» — {view['client_name']}\n{answer}", reply_markup=await _keyboard_for([rec]))
+        await _reply(update, f"🔎 «{view['title']}» — {view['client_name']}\n{answer}", reply_markup=await _keyboard_for(everyone))
         return
     if res["status"] == "unclear":   # kept a few minutes: the answer to the question completes it
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"unclear": {"text": content, "commessa_id": view["id"], "at": _now().isoformat()}}})
-    await _reply(update, "📒 " + (res.get("message") or "Non l'ho salvato: riscrivilo, per favore."), reply_markup=await _keyboard_for([rec]))
+    await _reply(update, "📒 " + (res.get("message") or "Non l'ho salvato: riscrivilo, per favore."), reply_markup=await _keyboard_for(everyone))
 
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: list):
@@ -292,7 +334,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
                      "Qui puoi solo scrivere nel diario delle tue commesse o chiedere informazioni su di esse.\n\n" + HELP)
                      + "\n\n" + PRIVACY_PLACE, reply_markup=await _keyboard_for(active))
         return
-    targets = [t for r in active for t in await _collab_targets(r)]
+    targets, rec_of = await _targets_of(active)
     if not targets:
         await _reply(update, "Al momento non hai commesse abilitate (o sono chiuse): rivolgiti a chi ti ha invitato.")
         return
@@ -304,7 +346,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         if not any([await _open_presence(r["id"]) for r in active]):
             command = None
     if place or command:
-        await presence(update, active, targets, command, {"lat": place.latitude, "lon": place.longitude} if place else None)
+        await presence(update, active, targets, command, {"lat": place.latitude, "lon": place.longitude} if place else None, rec_of)
         return
     if await _over_limit(db, rec):
         await _reply(update, "Hai raggiunto il numero massimo di messaggi per oggi: riprova domani.")
@@ -335,20 +377,19 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
     else:
         await _reply(update, "Mandami un testo, un messaggio vocale o una foto.")
         return
-    target = _choose(rec, content, targets)
+    target = _choose(_latest_state(active), content, targets)
     if not target:   # on site (time open): what they do or photograph there is that commessa's
         from server import _open_presence
         for r in active:
             s_ = await _open_presence(r["id"])
             target = next((t for t in targets if s_ and t[2]["id"] == s_["commessa_id"]), None)
             if target:
-                rec = r
                 break
     if not target:
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending": {"text": content, "images": images}}})
         await _reply(update, "📒 Di quale commessa si tratta?", reply_markup=_target_buttons(targets))
         return
-    await process(update, rec, target, content, images)
+    await process(update, rec_of[target[2]["id"]], target, content, images)   # the record of the commessa's firm
 
 
 def _pause_buttons(log_id: str) -> InlineKeyboardMarkup:
@@ -356,7 +397,8 @@ def _pause_buttons(log_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([row + [InlineKeyboardButton("Nessuna pausa", callback_data=f"cpz:{log_id}:0")]])
 
 
-async def presence(update: Update, active: list, targets: list, command: Optional[dict], loc: Optional[dict]):
+async def presence(update: Update, active: list, targets: list, command: Optional[dict], loc: Optional[dict],
+                   rec_of: Optional[dict] = None):
     """"Sono arrivato" / "ho finito" (said, or the 📍 button that sends the position): the start
     or the end of the work. Without a word, the position starts when nothing is open, ends otherwise."""
     from server import db, _open_presence, _presence_start, _presence_stop, _commessa_geo, LOCAL_TZ
@@ -395,11 +437,12 @@ async def presence(update: Update, active: list, targets: list, command: Optiona
         target = next((t for t in targets if hit and t[2]["id"] == hit[0]), None)
     if not target and command and command.get("rest"):
         target = _choose({}, command["rest"], targets)
-    rec = next((r for r in active if target and target[0].user_id == r["owner_user_id"]), active[0])
+    rec = ((rec_of or {}).get(target[2]["id"]) if target else None) \
+        or next((r for r in active if target and target[0].user_id == r["owner_user_id"]), active[0])
     if not target:
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_checkin": {"at": at.isoformat(), "loc": loc}}})
         await _reply(update, "⏱️ Su quale commessa inizi?", reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(f"{v['title']} · {v['client_name']}"[:60], callback_data=f"cin:{v['id']}")] for _o, _cl, v in targets[:10]]))
+            [[InlineKeyboardButton(_label(v), callback_data=f"cin:{v['id']}")] for _o, _cl, v in targets[:10]]))
         return
     answer = await _presence_start(rec, target[0], target[2], at, loc)
     await _reply(update, answer, reply_markup=await _keyboard_for(active))
@@ -420,24 +463,31 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
     rec = active[0]
     if data.startswith("clc:"):
         cid = data[4:]
-        targets = [t for r in active for t in await _collab_targets(r)]
+        targets, rec_of = await _targets_of(active)
         target = next((t for t in targets if t[2]["id"] == cid), None)
         if not target:
             await _reply(update, "Questa commessa non è più abilitata per te.")
             return
-        pending = rec.get("pending") or {}
-        if pending.get("text"):
-            await process(update, rec, target, pending["text"], pending.get("images") or [])
+        owner_rec = rec_of[cid]   # the record of the commessa's firm
+        held = next((r for r in active if (r.get("pending") or {}).get("text")), None)
+        if held:
+            pending = held["pending"]
+            if held["id"] != owner_rec["id"]:
+                await db.collaborators.update_one({"id": held["id"]}, {"$set": {"pending": None}})
+            await process(update, owner_rec, target, pending["text"], pending.get("images") or [])
             return
-        await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": cid, "at": _now().isoformat()}}})
+        await db.collaborators.update_one({"id": owner_rec["id"]}, {"$set": {"tg_state": {"target": cid, "at": _now().isoformat()}}})
         await _reply(update, f"Ok, «{target[2]['title']}»: scrivimi (anche a voce) cosa avete fatto, o cosa vuoi sapere.")
         return
     if data.startswith("cin:"):   # the commessa of a start
         from server import _presence_start
-        targets = [t for r in active for t in await _collab_targets(r)]
+        targets, rec_of = await _targets_of(active)
         target = next((t for t in targets if t[2]["id"] == data[4:]), None)
-        rec_for = next((r for r in active if target and target[0].user_id == r["owner_user_id"]), rec)
-        pend = rec_for.get("pending_checkin") or rec.get("pending_checkin")
+        rec_for = rec_of.get(data[4:]) or rec
+        held = next((r for r in active if r.get("pending_checkin")), None)
+        pend = rec_for.get("pending_checkin") or (held or {}).get("pending_checkin")
+        if held and held["id"] != rec_for["id"]:
+            await db.collaborators.update_one({"id": held["id"]}, {"$set": {"pending_checkin": None}})
         if not target or not pend:
             await _reply(update, "Riprova: tocca 📍 Sono arrivato in cantiere o scrivi «sono arrivato».")
             return
@@ -506,8 +556,9 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         return
     if data.startswith("cmat:"):   # the answer to "usati oggi o da prendere?"
         choice = data[5:]
+        rec = next((r for r in active if (r.get("pending_material") or {}).get("text")), rec)   # the firm's record that asked
         pend = rec.get("pending_material") or {}
-        targets = [t for r in active for t in await _collab_targets(r)]
+        targets, _rec_of = await _targets_of([rec])
         target = next((t for t in targets if t[2]["id"] == pend.get("commessa_id")), None)
         if not pend.get("text") or not target or choice not in ("usato", "da_prendere"):
             await _reply(update, "Riscrivimelo, per favore.")
