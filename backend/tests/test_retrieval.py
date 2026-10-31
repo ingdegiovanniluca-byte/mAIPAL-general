@@ -48,6 +48,7 @@ class _Cursor:
 class _Coll:
     def __init__(self, docs=None): self.docs = list(docs or [])
     def find(self, q=None, proj=None): return _Cursor([d for d in self.docs if _match(d, q)])
+    async def find_one(self, q=None, proj=None): return next((dict(d) for d in self.docs if _match(d, q)), None)
     async def update_one(self, q, upd):
         for d in self.docs:
             if _match(d, q):
@@ -57,7 +58,7 @@ class _Coll:
 class _DB:
     def __init__(self, **cols):
         for name in ["kb_chunks", "tasks", "todos", "journal_entries", "vet_reports", "work_reports", "job_logs", "collections",
-                     "collection_items", "collection_sub_items"]:
+                     "collection_items", "collection_sub_items", "users"]:
             setattr(self, name, _Coll(cols.get(name)))
 
 

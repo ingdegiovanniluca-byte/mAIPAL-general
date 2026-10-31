@@ -9,6 +9,10 @@ services:
     build: ./backend
     restart: unless-stopped
     env_file: .env
+    volumes:
+      # who may come in as an organization's administrator (org_admins.txt): edited on the server,
+      # read again when it changes - no rebuild, no restart
+      - ./backend/data/access:/app/data/access
     depends_on:
       - mongodb
 

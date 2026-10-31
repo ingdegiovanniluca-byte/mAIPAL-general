@@ -104,7 +104,7 @@ import scheduled_actions as sa
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-U = {"user_id": "u1", "email": "a@b.it", "name": "Luca Rossi", "role": "admin", "telegram_chat_id": 77}
+U = {"user_id": "u1", "email": "a@b.it", "name": "Luca Rossi", "role": "admin", "telegram_chat_id": 77, "tenant_id": "ten_1"}
 db.users.docs.append(dict(U))
 tg.bot_token = lambda: "123:abc"
 NOTICES = []
@@ -187,6 +187,10 @@ tg.bot_username = _bot_name
 PINNED = []
 server._day_pin_touch = lambda *ids: PINNED.append({x for x in ids if x})
 
+
+# his organization (he is its administrator)
+db.tenants.docs.append({"id": "ten_1", "name": "Impresa Rossi", "owner_user_id": "u1", "owner_email": "a@b.it",
+                       "plan": {"max_users": 5, "max_collaborators": 5, "max_admins": 2}, "sharing": {"users_share": True, "collab_contacts": False}})
 
 async def main():
     me = await server.update_profile(server.ProfilePatch(business_vertical="artigiano"), server.User(**U))

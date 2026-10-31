@@ -105,7 +105,7 @@ from fastapi import HTTPException
 from telegram.ext import ApplicationHandlerStop
 import telegram
 
-U = {"user_id": "u1", "email": "a@b.it", "name": "Luca Rossi", "role": "admin", "telegram_chat_id": 77}
+U = {"user_id": "u1", "email": "a@b.it", "name": "Luca Rossi", "role": "admin", "telegram_chat_id": 77, "tenant_id": "ten_1"}
 db.users.docs.append(dict(U))
 db.users.docs.append({"user_id": "u2", "email": "x@b.it", "name": "Altro Utente", "role": "user"})
 async def uname(): return "maipal_bot"
@@ -174,6 +174,10 @@ async def tap(chat, data):
 
 def buttons(markup):
     return [b.callback_data for row in (markup.inline_keyboard if markup else []) for b in row]
+
+# his organization (he is its administrator)
+db.tenants.docs.append({"id": "ten_1", "name": "Impresa Rossi", "owner_user_id": "u1", "owner_email": "a@b.it",
+                       "plan": {"max_users": 5, "max_collaborators": 5, "max_admins": 2}, "sharing": {"users_share": True, "collab_contacts": False}})
 
 async def main():
     me = await server.update_profile(server.ProfilePatch(business_vertical="artigiano"), server.User(**U))

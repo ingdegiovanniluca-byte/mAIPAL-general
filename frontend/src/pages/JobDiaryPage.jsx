@@ -1208,7 +1208,7 @@ export default function JobDiaryPage() {
   const { user: me } = useAuth();
   const access = detail?.access || { perm: "owner", is_owner: true, shared_by: null };
   const ro = access.perm === "read";                                   // shared with me read-only
-  const isAdmin = !!me?.can_collaborators && access.shared_by == null && !ro;   // links collaborators (whitelist)
+  const isAdmin = !!me?.can_collaborators && access.shared_by == null && !ro;   // links collaborators (an administrator of the organization)
   const [shareOpen, setShareOpen] = useState(false);                   // the commessa shared with team-mates
   const [collabs, setCollabs] = useState(null);
   const loadCollabs = (id) => api.get(`/jobs/commesse/${id}/collaborators`).then((r) => setCollabs(r.data || [])).catch(() => setCollabs([]));

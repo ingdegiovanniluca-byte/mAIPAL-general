@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ExternalLink, FileText, LayoutGrid, MessageSquareText, Plus, Rows3, Search, Sparkles, Trash2, Type, X } from "lucide-react";
+import { ArrowLeft, Building2, ExternalLink, FileText, LayoutGrid, MessageSquareText, Plus, Rows3, Search, Sparkles, Trash2, Type, X } from "lucide-react";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import InfoCard from "@/components/InfoCard";
 import { ClipDefs, Folder } from "@/components/TodoFolders";
@@ -58,7 +58,8 @@ function Totals({ docs, groups }) {
 }
 
 // a document's card: what the list on the computer shows, in the app's sheet
-function DocSheet({ d, meta, icon, onClose, onDelete }) {
+function DocSheet({ d, meta, icon, onClose, onDelete, orgKb }) {
+  const mine = d.mine !== false;
   return (
     <GlassBottomSheet onClose={onClose} testid="doc-sheet" className="max-h-[86vh]">
       <div className="flex items-start gap-3">
@@ -76,11 +77,21 @@ function DocSheet({ d, meta, icon, onClose, onDelete }) {
         <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-md text-white" style={{ backgroundColor: meta.color }}>{meta.label}</span>
         {d.source_type === "image_ocr" && <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-md text-white/70 bg-white/10 inline-flex items-center gap-1"><Sparkles size={10} /> ocr</span>}
         {isInfo(d) && <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-md text-white/70 bg-white/10">via chat</span>}
+        {d.org_kb && <span data-testid="doc-org-badge" className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-md text-white bg-white/20 inline-flex items-center gap-1"><Building2 size={10} /> organizzazione</span>}
         {d.shared_by?.name && <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-md text-white bg-[#4E7FA8]">condivisa da {d.shared_by.name}</span>}
         {(d.shared_with || []).length > 0 && <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-md text-white/70 bg-white/10">condivisa con {d.shared_with.length}</span>}
         {(d.keywords || []).slice(0, 8).map((x, i) => <span key={i} className="text-[10px] lowercase tracking-widest px-2 py-0.5 rounded-md bg-white/10 text-white/70">#{x}</span>)}
       </div>
       {(d.preview || d.summary) && <div className="mt-4 text-[14px] text-white/80 leading-relaxed whitespace-pre-wrap">{d.preview || d.summary}</div>}
+      {mine && orgKb?.can && !d.legacy && (
+        <button type="button" data-testid="doc-org-kb" onClick={() => orgKb.toggle(d)} aria-pressed={!!d.org_kb}
+          className="mt-4 w-full flex items-start gap-3 text-left text-[14px] text-white">
+          <span className={`mt-0.5 h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${d.org_kb ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+            {d.org_kb && <Building2 size={11} strokeWidth={2.6} />}
+          </span>
+          <span>Nella KB dell'organizzazione<span className="block text-[12px] text-white/55">Gli utenti lo trovano e gli agenti lo usano nelle risposte; solo tu lo modifichi.</span></span>
+        </button>
+      )}
       <div className="mt-5 flex items-center gap-2">
         {d.drive_link && (
           <a href={d.drive_link} target="_blank" rel="noreferrer" data-testid="doc-drive-link"
@@ -88,16 +99,18 @@ function DocSheet({ d, meta, icon, onClose, onDelete }) {
             Apri su Drive <ExternalLink size={14} />
           </a>
         )}
-        <button type="button" data-testid="doc-delete" onClick={onDelete}
-          className={`h-11 rounded-full lg-glass text-[13px] text-white inline-flex items-center justify-center gap-1.5 ${d.drive_link ? "px-5" : "flex-1"}`}>
-          <Trash2 size={14} /> Elimina
-        </button>
+        {mine && (
+          <button type="button" data-testid="doc-delete" onClick={onDelete}
+            className={`h-11 rounded-full lg-glass text-[13px] text-white inline-flex items-center justify-center gap-1.5 ${d.drive_link ? "px-5" : "flex-1"}`}>
+            <Trash2 size={14} /> Elimina
+          </button>
+        )}
       </div>
     </GlassBottomSheet>
   );
 }
 
-export default function DocFolders({ docs, loading, meta, q, setQ, onDelete, icon }) {
+export default function DocFolders({ docs, loading, meta, q, setQ, onDelete, icon, orgKb }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const [fan, setFan] = useState(null);           // {key, hot}
@@ -117,7 +130,7 @@ export default function DocFolders({ docs, loading, meta, q, setQ, onDelete, ico
   const closeFolder = () => setParams((p) => { const n = new URLSearchParams(p); n.delete("cartella"); return n; });
   const add = () => navigate("/dashboard/chat", { state: { action: "info_upload", nonce: Date.now() } });
   const sheet = card && (
-    <DocSheet d={card} meta={meta[card.category] || meta.altro} icon={icon} onClose={() => setCard(null)}
+    <DocSheet d={docs.find((x) => x.doc_id === card.doc_id) || card} meta={meta[card.category] || meta.altro} icon={icon} orgKb={orgKb} onClose={() => setCard(null)}
       onDelete={() => { setCard(null); onDelete(card.doc_id); }} />
   );
 
@@ -152,7 +165,7 @@ export default function DocFolders({ docs, loading, meta, q, setQ, onDelete, ico
                   <span className="block text-[11px] text-white/60 mt-1 truncate">{kind(d)} · {day(d.created_at)}{d.chars ? ` · ${num(d.chars)} car.` : ""}</span>
                 </span>
               </button>
-              <button type="button" onClick={() => onDelete(d.doc_id)} aria-label="Elimina" className="px-3 text-white/40 active:text-red-300"><Trash2 size={15} /></button>
+              {d.mine !== false && <button type="button" onClick={() => onDelete(d.doc_id)} aria-label="Elimina" className="px-3 text-white/40 active:text-red-300"><Trash2 size={15} /></button>}
             </div>
           ))}
         </div>

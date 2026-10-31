@@ -286,7 +286,8 @@ Per gli artigiani c'è la lista **Clienti**, già pronta, con le **commesse** di
 Documenti è la tua **base di conoscenza**: tutto quello che hai caricato con Salva (file, foto, scontrini) e che Cerca usa per rispondere.
 - Vedi il totale, le categorie (lavoro, personale, finanza, salute…) e puoi filtrare per categoria.
 - Cerca per nome, parola chiave o anteprima.
-- Puoi rimuovere un documento.
+- Puoi rimuovere un documento tuo.
+- **KB dell'organizzazione** (amministratori): sulla scheda di un tuo documento l'icona dell'**edificio** (sul telefono: **Nella KB dell'organizzazione** nella sua scheda) lo mette nella conoscenza comune: lo vedono tutti gli utenti della tua organizzazione, con la scritta «organizzazione», e gli agenti lo usano per rispondere anche a loro. Solo tu puoi toglierlo o eliminarlo; chi non è della tua organizzazione non lo vede mai.
 - Per aggiungerne: Chat → Salva, con la graffetta (o condividendo un file dal telefono verso mAIPAL).
 - **Sul telefono** i documenti sono in **cartelle**, una per argomento (Lavoro, Ricevute, Finanza…), due per riga: le più piene in alto, ognuna con il colore del suo argomento. Dentro ci sono i file e anche le **informazioni registrate** con Salva (segnate **Info**).
   - In alto, sempre visibili anche scorrendo: quanti **documenti** (e quante sono info), quanti **caratteri** e quante **categorie**.
@@ -321,12 +322,12 @@ Dalle Impostazioni (popup del profilo → Impostazioni, o dal menu) gestisci:
 - **Verticale**: il tuo settore (Veterinario, Fitness, Artigiano); quello scelto è evidenziato con la spunta. Cambia gli agenti e le sezioni dedicate.
 - **Google Workspace**: collega Drive (cartella mAIPAL per file e allegati) e Calendar (eventi dai task).
 - **Microsoft**: collega OneDrive e Outlook.
-- **Dove salvo file ed eventi**: se hai collegato entrambi, scegli dove salvare i file e dove mettere gli eventi.
+- **Dove salvo file ed eventi**: se hai collegato entrambi, scegli dove salvare i file e dove mettere gli eventi. Se sei un **utente** di un'organizzazione colleghi solo il **calendario** (Google o Outlook): i file e le foto che mandi, anche sulle commesse, vanno nell'**archivio dell'amministratore** (il suo Drive o OneDrive), nella cartella del cliente, della commessa o della lista; qui vedi di chi è l'archivio.
 - **Telegram**: collega il bot (vedi "Telegram").
 - **Orologio**: collega il Galaxy Watch (vedi "Orologio").
 - **Notifiche**: gli avvisi di mAIPAL su questo dispositivo, anche con l'app chiusa (vedi "Notifiche").
 - **Team**: unisciti a un team con il codice ricevuto dall'amministratore, per condividere task e liste.
-- **Amministrazione** (solo amministratori): accessi e utenti. I team si creano e si gestiscono in **Team**.
+- **Organizzazione** (solo amministratori): utenti, limiti dell'abbonamento e regole di condivisione (vedi "Organizzazione"). I team si creano e si gestiscono in **Team**, i collaboratori in **Collaboratori**.
 
 Tema chiaro/scuro e lato del microfono non sono qui: sono nel popup del profilo.
 
@@ -356,15 +357,28 @@ mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anch
 - Se le hai bloccate per errore, riattivale dalle impostazioni del browser o del telefono.
 - Telegram, se collegato, continua a ricevere i suoi avvisi come prima.
 
+## Organizzazione
+<!-- id: organizzazione · verticale: tutti -->
+Ogni account fa parte di un'**organizzazione** (la tua impresa o il tuo studio): è quella che sottoscrive l'abbonamento. Nulla di un'organizzazione (utenti, team, collaboratori, commesse, liste, documenti) è visibile a chi è di un'altra.
+- **Chi entra**: chi sottoscrive diventa l'**amministratore** della sua organizzazione. Tutti gli altri entrano solo se un amministratore li ha aggiunti, con la stessa email (password o Google); altrimenti l'accesso viene rifiutato.
+- **Ruoli**: **amministratore** (aggiunge utenti e collaboratori, crea i team, decide le regole di condivisione, collega Google Drive o OneDrive come archivio dell'organizzazione, mette documenti nella KB dell'organizzazione, condivide liste, diari di commessa e task); **utente** (usa l'app e Telegram, collega il suo calendario, i suoi file vanno nell'archivio dell'amministratore); **collaboratore** (solo Telegram, sulle commesse abilitate: vedi "Collaboratori su Telegram").
+- **Impostazioni → Organizzazione** (amministratori): il nome, i limiti dell'abbonamento e quanti ne usi (**Utenti**, **Collaboratori**, **Amministratori**; per ora 5 utenti, 5 collaboratori, 1 amministratore).
+  - **Aggiungi** un utente con la sua email: compare tra gli invitati finché non fa il primo accesso. Se l'abbonamento prevede più amministratori puoi aggiungerlo come amministratore, o dare e togliere i diritti con lo **scudo**.
+  - **Sospendi** (non accede più, i suoi dati restano) e **Riattiva**; il **cestino** lo toglie dall'organizzazione e dai suoi team (quello che ha scritto nelle liste e commesse condivise resta).
+  - Chi ha sottoscritto resta sempre amministratore.
+- **Regole di condivisione**: **Gli utenti possono condividere** (spento: liste, diari di commessa, task e informazioni li condividono solo gli amministratori); **I nuovi collaboratori vedono telefono ed email dei clienti** (lo cambi poi per ognuno nella sua scheda).
+- **Prima dell'abbonamento** (installazione propria): gli amministratori sono le email scritte nel file `backend/data/access/org_admins.txt` sul server, una per riga, con nome dell'organizzazione e limiti facoltativi (`email ; Nome ; max_users=5 ; max_collaborators=5 ; max_admins=1`); l'esempio è in `org_admins.example.txt`. Il file si rilegge da solo quando cambia. Senza file l'unico amministratore è quello indicato in `ADMIN_EMAIL`. Gli account già presenti con la vecchia whitelist sono diventati utenti dell'organizzazione dell'amministratore, e le email in whitelist mai entrate sono suoi inviti.
+
 ## Team e condivisione
 <!-- id: team · verticale: tutti -->
+- I team sono gruppi di lavoro **dentro la tua organizzazione**: l'amministratore invita solo persone già aggiunte agli utenti.
 - Un account può far parte di **più team**. In Impostazioni → **Team** trovi:
   - gli **inviti** che hai ricevuto, con **Accetta** / **Rifiuta**: basta essere entrati con l'email invitata, il codice non serve. Quando vieni invitato ti arriva anche un avviso (Telegram e notifica);
   - **i tuoi team**, con quello **attivo**: liste, commesse e task condivisi «con il team» e i colleghi che vedi (nelle condivisioni, nelle ore del diario, con `@team`) sono quelli del team attivo. Lo cambi con **Usa questo**; da lì puoi anche uscire da un team;
   - i membri del team attivo;
   - la casella per entrare con un **codice**, se te l'hanno dato (serve comunque l'invito alla tua email).
 - Le liste e le commesse condivise con te **per nome** le vedi da qualsiasi tuo team, finché ne fate parte entrambi.
-- L'amministratore crea un nuovo team con il **+** nel cerchio: **ne fa subito parte** (diventa il suo team attivo se non ne aveva uno). Da ogni scheda cambia il nome, copia o rigenera il codice, invita o toglie le persone; se invita la propria email entra direttamente.
+- L'amministratore (dell'organizzazione) crea un nuovo team con il **+** nel cerchio: **ne fa subito parte** (diventa il suo team attivo se non ne aveva uno). Da ogni scheda cambia il nome, copia o rigenera il codice, invita o toglie le persone; se invita la propria email entra direttamente.
 - Puoi **condividere o assegnare task** (dal dettaglio del task), **condividere liste** (icona di condivisione della lista) e **condividere informazioni** salvate scrivendo `@nome` o `@team` nel messaggio.
 - **Liste condivise**: scegli tutto il team o le singole persone e, per ognuna (o per tutto il team), **Può modificare** oppure **Solo lettura**. Chi l'ha in sola lettura la vede (con la scritta «sola lettura») ma non può aggiungere, modificare o eliminare niente, nemmeno chiedendolo in chat; solo tu puoi eliminarla o cambiare con chi è condivisa.
 - **Diario di una commessa condiviso** (artigiani): nel diario della commessa tocca **Condivisione** nella barra in alto e scegli i colleghi del team, ognuno con **Può modificare** (scrive nel diario, ore, To Do, milestone, costi) o **Solo lettura** (vede tutto, costi compresi, senza cambiare niente). Ricevono un avviso; la trovano nel loro **Diario**, nella scheda del cliente con la scritta «condivisa da …». Solo chi ha la commessa nella sua lista Clienti la condivide; collaboratori esterni e avanzamento al cliente restano suoi. Chi esce dal team non la vede più.
@@ -382,7 +396,7 @@ mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anch
 ## Collaboratori su Telegram
 <!-- id: collaboratori · verticale: artigiano -->
 I collaboratori sono persone esterne (operai, subappaltatori) che usano **solo Telegram**: scrivono nel diario delle commesse che abiliti e chiedono informazioni su quelle commesse. Non hanno accesso all'app.
-- **Dove**: Impostazioni → **Collaboratori**: per l'amministratore e per ogni account che ha abilitato (nella whitelist). Ognuno collega i propri collaboratori alle commesse della propria lista Clienti.
+- **Dove**: Impostazioni → **Collaboratori**, solo per gli **amministratori** dell'organizzazione, fino al numero previsto dall'abbonamento (per ora 5; lo vedi nella casella, es. "2/5"). Gli utenti non aggiungono collaboratori. I collaboratori di un'organizzazione non sono mai visibili alle altre.
 - **Nuovo collaboratore**: nome e cognome (obbligatori), cellulare, email (facoltativa), ruolo, azienda, **costo orario** (facoltativo, €/h) e le commesse da abilitare. Il costo orario è quello usato per le sue ore nella sezione **Costi** di ogni commessa; puoi cambiarlo anche da lì (Costi → tariffa della persona) e la scheda del collaboratore si aggiorna. Se lo togli, per le sue ore vale la tariffa standard. Basta il cellulare per mandare l'invito: per i numeri italiani il +39 non serve, per un numero estero scrivi il prefisso (es. +41 …). Le commesse sono raggruppate per cliente: il pallino del cliente abilita (o toglie) tutte le sue commesse insieme, la freccia lo apre per sceglierle una per una (il trattino nel pallino indica che ne hai scelte solo alcune). Con **Invita** ottieni il codice e il messaggio di invito: **Invia su WhatsApp** apre WhatsApp con il messaggio già scritto (link e codice), oppure **Copia messaggio**. Il codice vale 7 giorni e si usa una volta sola.
 - **Collegamento**: il collaboratore apre il link su Telegram e preme Avvia (oppure scrive `/start codice`). Se hai indicato il telefono, gli viene chiesto di condividere il suo numero, che deve corrispondere. Quando si collega ricevi un avviso su Telegram.
 - **Cosa può fare**: scrivere cosa hanno fatto (anche a voce o con le foto) e fare domande, solo sulle sue commesse abilitate e non chiuse. **Su quale commessa**: se ne ha una sola, è sempre quella. Se ne ha più di una: quella che nomina nel messaggio (cliente o lavori); altrimenti quella di cui stava scrivendo, se l'ultimo messaggio è di **pochi minuti** prima ("ho fatto 10 ore dai Rossi" e subito dopo l'elenco dei lavori vanno entrambi lì); altrimenti quella del **cantiere in cui si trova** (ha toccato 📍 Sono arrivato), anche per le foto; solo se non si può capire, gli chiede di sceglierla dai pulsanti. Se una nota non è chiara e gli viene chiesto un chiarimento, la risposta ("giorno di ieri") completa la nota di prima. Sotto ogni voce salvata c'è **Annulla**, valido 10 minuti.

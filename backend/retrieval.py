@@ -341,8 +341,10 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
     job_logs_all: List[dict] = []
     forced: set = set()  # id() of candidates guaranteed into the result regardless of score
 
-    # ---- KB notes/documents (always) ----
-    kb_docs = await db.kb_chunks.find({"user_id": user_id}, {"_id": 0}).to_list(5000)
+    # ---- KB notes/documents (always): theirs and their organization's knowledge ----
+    me = await db.users.find_one({"user_id": user_id}, {"_id": 0, "tenant_id": 1}) or {}
+    kb_q = {"$or": [{"user_id": user_id}, {"tenant_kb": me["tenant_id"]}]} if me.get("tenant_id") else {"user_id": user_id}
+    kb_docs = await db.kb_chunks.find(kb_q, {"_id": 0}).to_list(5000)
     doc_siblings: dict = {}
     for c in kb_docs:
         item = {

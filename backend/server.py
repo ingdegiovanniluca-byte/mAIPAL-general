@@ -56,6 +56,7 @@ import verticals as vx
 import push_notify as push
 import site_presence as sp
 import client_updates as cu
+import access as orgaccess
 import milestone_templates as mtpl
 import fitness as fx
 
@@ -105,7 +106,8 @@ class User(BaseModel):
     work_address: Optional[str] = None
     created_at: Optional[str] = None
     telegram_chat_id: Optional[int] = None
-    role: Optional[str] = "user"
+    role: Optional[str] = "user"              # in their organization: "admin" or "user"
+    tenant_id: Optional[str] = None           # the organization (the subscription) the account belongs to
     org_id: Optional[str] = None              # the active team (lists, commesse, tasks shared with it)
     org_ids: Optional[List[str]] = None       # every team the account is in
     org_role: Optional[Literal["owner", "member"]] = None
@@ -115,6 +117,7 @@ class User(BaseModel):
     client_update_day: Optional[int] = None
     client_update_at: Optional[str] = None
     can_collaborators: Optional[bool] = None   # (computed by /auth/me: may link collaborators)
+    tenant: Optional[dict] = None              # (computed by /auth/me: the organization's name, plan and rules)
     business_vertical: Optional[Literal["veterinario", "fitness", "artigiano"]] = None
 
 
@@ -441,6 +444,8 @@ async def get_current_user(
     user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
     if not user_doc:
         raise HTTPException(status_code=401, detail="User not found")
+    if user_doc.get("revoked_at"):   # suspended or removed by their organization's administrator
+        raise HTTPException(status_code=401, detail="Accesso sospeso")
     return User(**user_doc)
 
 
@@ -540,13 +545,119 @@ async def _create_session(user_id: str) -> str:
     return session_token
 
 
-async def _check_whitelist(email: str) -> tuple[bool, bool]:
-    """Returns (is_admin_seed, is_allowed). Admins are always allowed."""
-    is_admin_seed = email == ADMIN_EMAIL
-    if is_admin_seed:
-        return True, True
-    allowed = await db.allowed_emails.find_one({"email": email})
-    return False, bool(allowed)
+# ============ ORGANIZATIONS (tenants) ============
+# Every account belongs to one organization - the unit that will subscribe. Who "subscribed"
+# (for now: listed in the local file, see access.py) comes in as the administrator of their own
+# organization; everyone else only when an administrator added them (an invitation by e-mail),
+# within the plan's limits (users, collaborators, administrators). Nothing of an organization -
+# its users, teams, collaborators - is ever shown to another one.
+
+NOT_ALLOWED_MSG = ("Il tuo account non è abilitato a mAIPAL: chiedi all'amministratore della tua organizzazione "
+                   "di aggiungerti agli utenti, con questa email.")
+
+
+async def _access_gate(email: str) -> Optional[tuple]:
+    """How an e-mail may come in: ("member", None) already in an organization, ("admin", entry)
+    listed as an organization's administrator, ("invite", invitation) added by one; None: not."""
+    email = (email or "").strip().lower()
+    u = await db.users.find_one({"email": email}, {"_id": 0})
+    if u and u.get("revoked_at"):
+        return None
+    if u and u.get("tenant_id"):
+        return ("member", None)
+    e = orgaccess.entry(email, ADMIN_EMAIL)
+    if e:
+        return ("admin", e)
+    inv = await db.tenant_invites.find_one({"email": email}, {"_id": 0})
+    return ("invite", inv) if inv else None
+
+
+async def _new_tenant(owner: dict, name: str = "", plan: Optional[dict] = None) -> dict:
+    t = {"id": f"ten_{uuid.uuid4().hex[:12]}", "name": name or f"Organizzazione di {_first_name(owner.get('name')) or owner.get('email')}",
+         "owner_user_id": owner["user_id"], "owner_email": owner.get("email"), "plan": plan or dict(orgaccess.DEFAULT_PLAN),
+         "sharing": {"users_share": True, "collab_contacts": False}, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.tenants.insert_one(t)
+    t.pop("_id", None)
+    return t
+
+
+async def _apply_gate(user_doc: dict, gate: tuple) -> dict:
+    """After the account is there: its organization (a new one for an administrator listed, the
+    inviting one for an invitation). -> the user doc, updated."""
+    kind, data = gate
+    upd = {}
+    if kind == "admin" and not user_doc.get("tenant_id"):
+        t = await _new_tenant(user_doc, data.get("org") or "", data.get("plan"))
+        upd = {"tenant_id": t["id"], "role": "admin"}
+    elif kind == "invite" and not user_doc.get("tenant_id"):
+        upd = {"tenant_id": data["tenant_id"], "role": "admin" if data.get("role") == "admin" else "user"}
+        await db.tenant_invites.delete_many({"email": user_doc["email"]})
+    if upd:
+        await db.users.update_one({"user_id": user_doc["user_id"]}, {"$set": upd})
+        user_doc = {**user_doc, **upd}
+    return user_doc
+
+
+async def _sharing_allowed(current: User) -> bool:
+    """The organization's rule: may its users (not only its administrators) share lists, commesse,
+    tasks and saved information with the others?"""
+    if current.role == "admin" or not current.tenant_id:
+        return True
+    t = await db.tenants.find_one({"id": current.tenant_id}, {"_id": 0, "sharing": 1}) or {}
+    return (t.get("sharing") or {}).get("users_share", True) is not False
+
+
+SHARE_NOT_ALLOWED = "Nella tua organizzazione le condivisioni le decide l'amministratore."
+
+
+async def _require_share_allowed(current: User) -> None:
+    if not await _sharing_allowed(current):
+        raise HTTPException(status_code=403, detail=SHARE_NOT_ALLOWED)
+
+
+async def _tenant_of(current: User) -> Optional[dict]:
+    return await db.tenants.find_one({"id": current.tenant_id}, {"_id": 0}) if current.tenant_id else None
+
+
+def _plan(tenant: Optional[dict]) -> dict:
+    """The plan's limits: the subscription's (for now the local file's, read live) or the stored ones."""
+    if not tenant:
+        return dict(orgaccess.DEFAULT_PLAN)
+    e = orgaccess.entry(tenant.get("owner_email") or "", ADMIN_EMAIL)
+    return {**orgaccess.DEFAULT_PLAN, **(tenant.get("plan") or {}), **((e or {}).get("plan") or {})}
+
+
+async def _migrate_tenants() -> None:
+    """Once the organizations exist: every account already in gets one (idempotent, at start).
+    The administrators listed get their own; everyone else had been let in by the installation's
+    administrator, so they are users of that organization, with its teams and collaborators."""
+    admins = orgaccess.admins(ADMIN_EMAIL)
+    users = await db.users.find({}, {"_id": 0}).to_list(10000)
+    for u in users:
+        if not u.get("tenant_id") and (u.get("email") or "").lower() in admins:
+            await _apply_gate(u, ("admin", admins[u["email"].lower()]))
+    users = await db.users.find({}, {"_id": 0}).to_list(10000)
+    main_owner = next((u for u in users if (u.get("email") or "").lower() == ADMIN_EMAIL and u.get("tenant_id")), None) \
+        or next((u for u in users if u.get("tenant_id") and (u.get("email") or "").lower() in admins), None)
+    main = main_owner.get("tenant_id") if main_owner else None
+    if not main:
+        return
+    for u in users:
+        if not u.get("tenant_id"):
+            await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"tenant_id": main, "role": "user"}})
+    known = {(u.get("email") or "").lower() for u in users}
+    for a in await db.allowed_emails.find({}, {"_id": 0}).to_list(5000):
+        em = (a.get("email") or "").lower()
+        if em and em not in known and em not in admins and not await db.tenant_invites.find_one({"email": em}, {"_id": 1}):
+            await db.tenant_invites.insert_one({"tenant_id": main, "email": em, "role": "user", "invited_by": "migrazione",
+                                                "invited_at": datetime.now(timezone.utc).isoformat()})
+    tenant_by_user = {u["user_id"]: u.get("tenant_id") for u in await db.users.find({}, {"_id": 0, "user_id": 1, "tenant_id": 1}).to_list(10000)}
+    for o in await db.organizations.find({}, {"_id": 0}).to_list(5000):
+        if not o.get("tenant_id"):
+            await db.organizations.update_one({"id": o["id"]}, {"$set": {"tenant_id": tenant_by_user.get(o.get("created_by")) or main}})
+    for c in await db.collaborators.find({}, {"_id": 0, "id": 1, "owner_user_id": 1, "tenant_id": 1}).to_list(10000):
+        if not c.get("tenant_id"):
+            await db.collaborators.update_one({"id": c["id"]}, {"$set": {"tenant_id": tenant_by_user.get(c.get("owner_user_id")) or main}})
 
 
 @api_router.post("/auth/register")
@@ -560,18 +671,11 @@ async def register(payload: RegisterRequest, response: Response):
     if not name:
         raise HTTPException(status_code=400, detail="Nome obbligatorio")
 
-    is_admin_seed, allowed = await _check_whitelist(email)
-    if not allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Il tuo account non è autorizzato ad accedere a mAIPAL. "
-                f"Contatta l'amministratore ({ADMIN_EMAIL}) per essere aggiunto alla whitelist."
-            ),
-        )
-
     if await db.users.find_one({"email": email}, {"_id": 0}):
         raise HTTPException(status_code=409, detail="Un account con questa email esiste già. Prova ad accedere.")
+    gate = await _access_gate(email)
+    if not gate:
+        raise HTTPException(status_code=403, detail=NOT_ALLOWED_MSG)
 
     user_id = f"user_{uuid.uuid4().hex[:12]}"
     user_doc = {
@@ -580,7 +684,7 @@ async def register(payload: RegisterRequest, response: Response):
         "name": name,
         "picture": None,
         "password_hash": _hash_password(payload.password),
-        "role": "admin" if is_admin_seed else "user",
+        "role": "user",
         "onboarded": False,
         "profession": None,
         "sector": None,
@@ -590,6 +694,8 @@ async def register(payload: RegisterRequest, response: Response):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user_doc)
+    user_doc.pop("_id", None)
+    user_doc = await _apply_gate(user_doc, gate)
 
     session_token = await _create_session(user_id)
     _set_session_cookie(response, session_token)
@@ -602,6 +708,10 @@ async def login(payload: LoginRequest, response: Response):
     user_doc = await db.users.find_one({"email": email}, {"_id": 0})
     if not user_doc or not user_doc.get("password_hash") or not _verify_password(payload.password, user_doc["password_hash"]):
         raise HTTPException(status_code=401, detail="Email o password errati")
+    gate = await _access_gate(email)
+    if not gate:
+        raise HTTPException(status_code=403, detail=NOT_ALLOWED_MSG)
+    user_doc = await _apply_gate(user_doc, gate)
 
     session_token = await _create_session(user_doc["user_id"])
     _set_session_cookie(response, session_token)
@@ -649,18 +759,16 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
     if not email:
         return RedirectResponse(f"{base}/?auth_error=no_email")
 
-    is_admin_seed, allowed = await _check_whitelist(email)
-    if not allowed:
+    gate = await _access_gate(email)
+    if not gate:
         return RedirectResponse(f"{base}/?auth_error=not_whitelisted")
 
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
-        # Ensure the admin role stays applied on every login for the admin email
-        role_update = {"role": "admin"} if is_admin_seed else {}
         await db.users.update_one(
             {"user_id": user_id},
-            {"$set": {"name": info.get("name"), "picture": info.get("picture"), **role_update}},
+            {"$set": {"name": info.get("name"), "picture": info.get("picture")}},
         )
         user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     else:
@@ -670,7 +778,7 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
             "email": email,
             "name": info.get("name", ""),
             "picture": info.get("picture"),
-            "role": "admin" if is_admin_seed else "user",
+            "role": "user",
             "onboarded": False,
             "profession": None,
             "sector": None,
@@ -680,6 +788,8 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.users.insert_one(user_doc)
+        user_doc.pop("_id", None)
+    user_doc = await _apply_gate(user_doc, gate)
 
     # Best-effort: persist Drive/Calendar credentials and auto-create the mAIPAL folder.
     # Never blocks login — Workspace setup failing here just means the user connects
@@ -696,7 +806,7 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
                 {"$set": integration_doc}, upsert=True,
             )
             creds = await gi.get_credentials(db, user_id)
-            if creds:
+            if creds and user_doc.get("role") == "admin":   # (the users' files go to the administrator's archive)
                 await gi.ensure_maipal_folder(db, user_id, creds)
         except Exception:
             logger.exception("Drive auto-setup at login failed")
@@ -711,7 +821,8 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
 
 @api_router.get("/auth/me", response_model=User)
 async def me(current: User = Depends(get_current_user)):
-    return current.model_copy(update={"can_collaborators": await _can_manage_collaborators(current)})
+    return current.model_copy(update={"can_collaborators": await _can_manage_collaborators(current),
+                                      "tenant": await _tenant_view(current)})
 
 
 @api_router.post("/auth/logout")
@@ -724,136 +835,167 @@ async def logout(request: Request, response: Response):
 
 
 async def require_admin(current: User = Depends(get_current_user)) -> User:
-    if (current.role or "user") != "admin":
-        raise HTTPException(status_code=403, detail="Solo amministratori")
+    """An administrator of their organization (only theirs is ever touched)."""
+    if (current.role or "user") != "admin" or not current.tenant_id:
+        raise HTTPException(status_code=403, detail="Solo l'amministratore della tua organizzazione")
     return current
 
 
-# ============ ADMIN: WHITELIST + USERS ============
-class AllowlistItem(BaseModel):
+# ============ THE ORGANIZATION (its administrator) ============
+# Its users (invited by e-mail, within the plan), their role (another administrator, if the
+# plan allows), suspended or removed; the plan's limits and what is used; the sharing rules.
+
+class TenantUserInvite(BaseModel):
     email: str
-    notes: Optional[str] = ""
+    role: Literal["user", "admin"] = "user"
 
 
-@api_router.get("/admin/allowlist")
-async def admin_list_allowed(current: User = Depends(require_admin)):
-    cursor = db.allowed_emails.find({}, {"_id": 0}).sort("added_at", -1)
-    return await cursor.to_list(500)
+class TenantUserPatch(BaseModel):
+    role: Optional[Literal["user", "admin"]] = None
+    suspended: Optional[bool] = None
 
 
-@api_router.post("/admin/allowlist")
-async def admin_add_allowed(item: AllowlistItem, current: User = Depends(require_admin)):
-    email = (item.email or "").strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Email non valida")
-    notes = (item.notes or "").strip()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await db.allowed_emails.update_one(
-        {"email": email},
-        {
-            "$set": {"notes": notes, "email": email},
-            "$setOnInsert": {"added_by": current.email, "added_at": now_iso},
-        },
-        upsert=True,
-    )
-    doc = await db.allowed_emails.find_one({"email": email}, {"_id": 0})
-    return doc
+class TenantPatch(BaseModel):
+    name: Optional[str] = None
+    users_share: Optional[bool] = None        # the users (not only the administrators) share lists, commesse, tasks
+    collab_contacts: Optional[bool] = None    # new collaborators see the clients' phone and e-mail
 
 
-@api_router.delete("/admin/allowlist/{email}")
-async def admin_remove_allowed(email: str, current: User = Depends(require_admin)):
-    email = (email or "").strip().lower()
-    if email == ADMIN_EMAIL:
-        raise HTTPException(status_code=400, detail="Impossibile rimuovere l'amministratore")
-    r = await db.allowed_emails.delete_one({"email": email})
-    if r.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Email non presente")
-    return {"ok": True}
+async def _tenant_usage(tenant: dict) -> dict:
+    members = await db.users.find({"tenant_id": tenant["id"]}, {"_id": 0, "user_id": 1, "role": 1, "revoked_at": 1}).to_list(5000)
+    invites = await db.tenant_invites.count_documents({"tenant_id": tenant["id"]})
+    collabs = await db.collaborators.count_documents({"tenant_id": tenant["id"]})
+    others = [m for m in members if m["user_id"] != tenant.get("owner_user_id")]
+    return {"users": len(others) + invites, "admins": sum(1 for m in members if m.get("role") == "admin"), "collaborators": collabs}
 
 
-@api_router.get("/admin/users")
-async def admin_list_users(current: User = Depends(require_admin)):
-    users = await db.users.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    # Attach last session info
-    out = []
-    for u in users:
-        last_sess = await db.user_sessions.find_one(
-            {"user_id": u.get("user_id")},
-            {"_id": 0, "created_at": 1, "expires_at": 1},
-            sort=[("created_at", -1)],
-        )
-        out.append({**u, "last_session_at": last_sess.get("created_at").isoformat() if last_sess and hasattr(last_sess.get("created_at"), "isoformat") else (last_sess or {}).get("created_at")})
+async def _require_seat(tenant: dict, role: str = "user") -> None:
+    plan, used = _plan(tenant), await _tenant_usage(tenant)
+    if used["users"] >= plan["max_users"]:
+        raise HTTPException(status_code=403, detail=f"Hai già {plan['max_users']} utenti, il massimo del tuo abbonamento.")
+    if role == "admin" and used["admins"] >= plan["max_admins"]:
+        raise HTTPException(status_code=403, detail="Il tuo abbonamento non prevede altri amministratori.")
+
+
+async def _tenant_view(current: User) -> Optional[dict]:
+    t = await _tenant_of(current)
+    if not t:
+        return None
+    out = {"id": t["id"], "name": t.get("name"), "is_owner": t.get("owner_user_id") == current.user_id,
+           "sharing": {"users_share": True, "collab_contacts": False, **(t.get("sharing") or {})}}
+    if current.role == "admin":
+        out.update(plan=_plan(t), usage=await _tenant_usage(t))
     return out
 
 
-@api_router.post("/admin/users/{user_id}/revoke")
-async def admin_revoke_user(user_id: str, current: User = Depends(require_admin)):
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
-    if user.get("email") == ADMIN_EMAIL:
-        raise HTTPException(status_code=400, detail="Impossibile revocare l'amministratore")
-    # Remove from whitelist, drop all active sessions and mark the user as revoked
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await db.allowed_emails.delete_one({"email": user.get("email")})
-    sessions = await db.user_sessions.delete_many({"user_id": user_id})
-    await db.users.update_one({"user_id": user_id}, {"$set": {"revoked_at": now_iso, "revoked_by": current.email}})
-    return {"ok": True, "email": user.get("email"), "sessions_removed": sessions.deleted_count}
+@api_router.get("/tenant")
+async def get_tenant(current: User = Depends(get_current_user)):
+    """The organization: for its administrators also its users, invitations, plan and usage."""
+    view = await _tenant_view(current)
+    if not view:
+        raise HTTPException(status_code=404, detail="Nessuna organizzazione")
+    if current.role == "admin":
+        t = await _tenant_of(current)
+        members = await db.users.find({"tenant_id": t["id"]}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "role": 1, "picture": 1,
+                                                               "revoked_at": 1, "created_at": 1}).to_list(5000)
+        view["members"] = [{**m, "suspended": bool(m.pop("revoked_at", None)), "owner": m["user_id"] == t.get("owner_user_id")}
+                           for m in sorted(members, key=lambda m: (m["user_id"] != t.get("owner_user_id"), (m.get("name") or "").lower()))]
+        view["invites"] = await db.tenant_invites.find({"tenant_id": t["id"]}, {"_id": 0}).sort("invited_at", -1).to_list(500)
+    return view
 
 
-@api_router.post("/admin/users/{user_id}/restore")
-async def admin_restore_user(user_id: str, current: User = Depends(require_admin)):
-    """Undo a revoke: put the email back in the whitelist and clear the revoked_at flag."""
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
-    email = (user.get("email") or "").strip().lower()
-    await db.allowed_emails.update_one(
-        {"email": email},
-        {"$set": {"email": email, "notes": "ripristinato dopo revoca"},
-         "$setOnInsert": {"added_by": current.email, "added_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True,
-    )
-    await db.users.update_one({"user_id": user_id}, {"$unset": {"revoked_at": "", "revoked_by": ""}})
-    return {"ok": True, "email": email}
+@api_router.patch("/tenant")
+async def patch_tenant(payload: TenantPatch, current: User = Depends(require_admin)):
+    t = await _tenant_of(current)
+    upd = {}
+    if payload.name is not None and payload.name.strip():
+        upd["name"] = payload.name.strip()[:120]
+    sharing = {"users_share": True, "collab_contacts": False, **(t.get("sharing") or {})}
+    for k in ("users_share", "collab_contacts"):
+        if getattr(payload, k) is not None:
+            sharing[k] = getattr(payload, k)
+    upd["sharing"] = sharing
+    await db.tenants.update_one({"id": t["id"]}, {"$set": upd})
+    return await get_tenant(current)
 
 
-@api_router.delete("/admin/users/{user_id}")
-async def admin_delete_user(user_id: str, current: User = Depends(require_admin)):
-    """Fully delete a user and every piece of data they own."""
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
-    if user.get("email") == ADMIN_EMAIL or user.get("role") == "admin":
-        raise HTTPException(status_code=400, detail="Impossibile eliminare l'amministratore")
+@api_router.post("/tenant/users")
+async def invite_tenant_user(payload: TenantUserInvite, current: User = Depends(require_admin)):
+    """A user of the organization: they come in with this e-mail (password or Google), as a user
+    or - if the plan allows - as another administrator."""
+    t = await _tenant_of(current)
+    email = (payload.email or "").strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=400, detail="Email non valida")
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing and existing.get("tenant_id") == t["id"]:
+        raise HTTPException(status_code=400, detail="Questa persona fa già parte della tua organizzazione")
+    if existing and existing.get("tenant_id"):
+        raise HTTPException(status_code=409, detail="Questa email usa già mAIPAL con un'altra organizzazione")
+    if await db.tenant_invites.find_one({"email": email}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="Questa email è già stata invitata")
+    if orgaccess.entry(email, ADMIN_EMAIL):
+        raise HTTPException(status_code=409, detail="Questa email ha una sua organizzazione")
+    await _require_seat(t, payload.role)
+    inv = {"tenant_id": t["id"], "email": email, "role": payload.role, "invited_by": current.email,
+           "invited_at": datetime.now(timezone.utc).isoformat()}
+    await db.tenant_invites.insert_one(inv)
+    inv.pop("_id", None)
+    if existing:   # an account already there (without an organization, maybe removed from one): in at once
+        await db.users.update_one({"user_id": existing["user_id"]}, {"$unset": {"revoked_at": "", "revoked_by": ""}})
+        await _apply_gate(existing, ("invite", inv))
+    return await get_tenant(current)
 
-    counts = {}
-    # per-user collections
-    for coll in [
-        "tasks", "todos", "journal_entries", "conversations",
-        "kb_chunks", "kb_documents", "user_sessions",
-    ]:
-        r = await db[coll].delete_many({"user_id": user_id})
-        counts[coll] = r.deleted_count
-    # Usage tracking (see usage_tracking.py) - never keeps metadata for a deleted account,
-    # per the tracking spec's privacy requirement. llm_calls/feature_events rows are
-    # anonymized (user_id -> null) rather than deleted outright: they still feed the
-    # aggregate usage_daily numbers (system-wide cost/token totals must stay accurate),
-    # they carry no prompt/response content to begin with, and the null user_id is the
-    # same "no owning user" shape already used for background-job calls. usage_daily rows
-    # for this user are removed outright since they're a derived per-user aggregate.
-    r = await db.llm_calls.update_many({"user_id": user_id}, {"$set": {"user_id": None}})
-    counts["llm_calls_anonymized"] = r.modified_count
-    r = await db.feature_events.update_many({"user_id": user_id}, {"$set": {"user_id": None}})
-    counts["feature_events_anonymized"] = r.modified_count
-    r = await db.usage_daily.delete_many({"user_id": user_id})
-    counts["usage_daily"] = r.deleted_count
-    # whitelist + user doc
-    r = await db.allowed_emails.delete_one({"email": user.get("email")})
-    counts["allowed_emails"] = r.deleted_count
-    r = await db.users.delete_one({"user_id": user_id})
-    counts["users"] = r.deleted_count
-    return {"ok": True, "email": user.get("email"), "deleted": counts}
+
+@api_router.delete("/tenant/invites/{email}")
+async def remove_tenant_invite(email: str, current: User = Depends(require_admin)):
+    await db.tenant_invites.delete_one({"tenant_id": current.tenant_id, "email": (email or "").strip().lower()})
+    return await get_tenant(current)
+
+
+async def _tenant_member_or_404(current: User, user_id: str) -> tuple:
+    t = await _tenant_of(current)
+    u = await db.users.find_one({"user_id": user_id, "tenant_id": t["id"]}, {"_id": 0}) if t else None
+    if not u:
+        raise HTTPException(status_code=404, detail="Utente non trovato nella tua organizzazione")
+    if u["user_id"] == t.get("owner_user_id"):
+        raise HTTPException(status_code=400, detail="Chi ha sottoscritto l'organizzazione resta sempre amministratore")
+    return t, u
+
+
+@api_router.patch("/tenant/users/{user_id}")
+async def patch_tenant_user(user_id: str, payload: TenantUserPatch, current: User = Depends(require_admin)):
+    """Another administrator (if the plan allows) or back to user; suspended (no access, data
+    kept) or active again."""
+    t, u = await _tenant_member_or_404(current, user_id)
+    upd = {}
+    if payload.role and payload.role != u.get("role"):
+        if payload.role == "admin":
+            plan, used = _plan(t), await _tenant_usage(t)
+            if used["admins"] >= plan["max_admins"]:
+                raise HTTPException(status_code=403, detail="Il tuo abbonamento non prevede altri amministratori.")
+        upd["role"] = payload.role
+    if payload.suspended is True and not u.get("revoked_at"):
+        upd.update(revoked_at=datetime.now(timezone.utc).isoformat(), revoked_by=current.email)
+        await db.user_sessions.delete_many({"user_id": user_id})
+    if payload.suspended is False and u.get("revoked_at"):
+        await db.users.update_one({"user_id": user_id}, {"$unset": {"revoked_at": "", "revoked_by": ""}})
+    if upd:
+        await db.users.update_one({"user_id": user_id}, {"$set": upd})
+    return await get_tenant(current)
+
+
+@api_router.delete("/tenant/users/{user_id}")
+async def remove_tenant_user(user_id: str, current: User = Depends(require_admin)):
+    """Out of the organization: no access any more, out of its teams; what they wrote in shared
+    lists and commesse stays there."""
+    t, u = await _tenant_member_or_404(current, user_id)
+    for oid in _memberships(u):
+        await _drop_membership(user_id, oid)
+    await db.users.update_one({"user_id": user_id}, {"$set": {"tenant_id": None, "role": "user", "org_id": None, "org_ids": [],
+                                                               "revoked_at": datetime.now(timezone.utc).isoformat(), "revoked_by": current.email}})
+    await db.user_sessions.delete_many({"user_id": user_id})
+    return await get_tenant(current)
 
 
 @api_router.post("/onboarding")
@@ -885,7 +1027,7 @@ async def update_profile(payload: ProfilePatch, current: User = Depends(get_curr
         await _apply_vertical(User(**user_doc), updates["business_vertical"])
         user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
     out = User(**user_doc)
-    return out.model_copy(update={"can_collaborators": await _can_manage_collaborators(out)})
+    return out.model_copy(update={"can_collaborators": await _can_manage_collaborators(out), "tenant": await _tenant_view(out)})
 
 
 # ============ PACCHETTI VERTICALI (see verticals.py) ============
@@ -906,6 +1048,7 @@ async def _apply_vertical(current: User, key: str) -> None:
             "name": f"Impresa di {(current.name or 'te').split(' ')[0]}",
             "join_code": _gen_org_code(),
             "created_by": current.user_id,
+            "tenant_id": current.tenant_id,
             "vertical": "artigiano",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -1049,7 +1192,7 @@ async def get_org(current: User = Depends(get_current_user)):
     for inv in await db.team_invites.find({"email": (current.email or "").lower()}, {"_id": 0}).to_list(50):
         if inv["org_id"] in ids:
             continue
-        o = await db.organizations.find_one({"id": inv["org_id"]}, {"_id": 0, "name": 1})
+        o = await db.organizations.find_one({"id": inv["org_id"], "tenant_id": current.tenant_id}, {"_id": 0, "name": 1})
         if o:
             invites.append({"org_id": inv["org_id"], "name": o.get("name"), "invited_by": inv.get("invited_by"), "invited_at": inv.get("invited_at")})
     org = orgs.get(current.org_id)
@@ -1066,7 +1209,7 @@ async def join_org(payload: OrgJoinPayload, current: User = Depends(get_current_
     """With the team's code (the account's e-mail must be invited): in the team, also when it is
     already in others."""
     code = (payload.code or "").strip().upper()
-    org = await db.organizations.find_one({"join_code": code}, {"_id": 0})
+    org = await db.organizations.find_one({"join_code": code, "tenant_id": current.tenant_id}, {"_id": 0})
     if not org:
         raise HTTPException(status_code=404, detail="Codice non valido")
     return await _accept_invite(current, org)
@@ -1087,7 +1230,7 @@ async def _accept_invite(current: User, org: dict) -> dict:
 @api_router.post("/org/invites/{org_id}/accept")
 async def accept_team_invite(org_id: str, current: User = Depends(get_current_user)):
     """The invitation seen in Impostazioni > Team: in the team (the e-mail is the proof, no code)."""
-    org = await db.organizations.find_one({"id": org_id}, {"_id": 0})
+    org = await db.organizations.find_one({"id": org_id, "tenant_id": current.tenant_id}, {"_id": 0})
     if not org:
         raise HTTPException(status_code=404, detail="Team non trovato")
     return await _accept_invite(current, org)
@@ -1105,8 +1248,10 @@ async def switch_org(payload: OrgSwitchPayload, current: User = Depends(get_curr
     udoc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or {}
     if payload.org_id not in _memberships(udoc):
         raise HTTPException(status_code=404, detail="Non fai parte di questo team")
-    org = await db.organizations.find_one({"id": payload.org_id}, {"_id": 0})
-    role = "owner" if (org or {}).get("created_by") == current.user_id else "member"
+    org = await db.organizations.find_one({"id": payload.org_id, "tenant_id": current.tenant_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    role = "owner" if org.get("created_by") == current.user_id else "member"
     await db.users.update_one({"user_id": current.user_id}, {"$set": {"org_id": payload.org_id, "org_role": role, "org_ids": _memberships(udoc)}})
     return {"ok": True, "org_id": payload.org_id}
 
@@ -1128,9 +1273,17 @@ async def _team_with_details(org: dict) -> dict:
     return {**org, "members": members, "invites": invites}
 
 
+async def _team_or_404(current: User, team_id: str) -> dict:
+    """A team of the administrator's own organization (no other one is ever touched)."""
+    org = await db.organizations.find_one({"id": team_id, "tenant_id": current.tenant_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="Team non trovato")
+    return org
+
+
 @api_router.get("/admin/teams")
 async def admin_list_teams(current: User = Depends(require_admin)):
-    orgs = await db.organizations.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    orgs = await db.organizations.find({"tenant_id": current.tenant_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
     return [await _team_with_details(o) for o in orgs]
 
 
@@ -1145,6 +1298,7 @@ async def admin_create_team(payload: OrgCreatePayload, current: User = Depends(r
         "name": name,
         "join_code": _gen_org_code(),
         "created_by": current.user_id,
+        "tenant_id": current.tenant_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.organizations.insert_one(org_doc)
@@ -1158,18 +1312,15 @@ async def admin_rename_team(team_id: str, payload: OrgRenamePayload, current: Us
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nome obbligatorio")
-    r = await db.organizations.update_one({"id": team_id}, {"$set": {"name": name}})
-    if r.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Team non trovato")
+    await _team_or_404(current, team_id)
+    await db.organizations.update_one({"id": team_id}, {"$set": {"name": name}})
     org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
     return await _team_with_details(org)
 
 
 @api_router.post("/admin/teams/{team_id}/regenerate-code")
 async def admin_regenerate_team_code(team_id: str, current: User = Depends(require_admin)):
-    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
-    if not org:
-        raise HTTPException(status_code=404, detail="Team non trovato")
+    await _team_or_404(current, team_id)
     new_code = _gen_org_code()
     await db.organizations.update_one({"id": team_id}, {"$set": {"join_code": new_code}})
     return {"join_code": new_code}
@@ -1177,9 +1328,7 @@ async def admin_regenerate_team_code(team_id: str, current: User = Depends(requi
 
 @api_router.delete("/admin/teams/{team_id}")
 async def admin_delete_team(team_id: str, current: User = Depends(require_admin)):
-    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
-    if not org:
-        raise HTTPException(status_code=404, detail="Team non trovato")
+    await _team_or_404(current, team_id)
     for m in await db.users.find(_team_q(team_id), {"_id": 0, "user_id": 1}).to_list(500):
         await _drop_membership(m["user_id"], team_id)
     await db.team_invites.delete_many({"org_id": team_id})
@@ -1191,13 +1340,14 @@ async def admin_delete_team(team_id: str, current: User = Depends(require_admin)
 async def admin_invite_to_team(team_id: str, payload: TeamInviteCreate, current: User = Depends(require_admin)):
     """An invitation by e-mail: the account sees it in Impostazioni > Team (and is told, if it
     already has the app), also when it is already in another team."""
-    org = await db.organizations.find_one({"id": team_id}, {"_id": 0})
-    if not org:
-        raise HTTPException(status_code=404, detail="Team non trovato")
+    org = await _team_or_404(current, team_id)
     email = (payload.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Email non valida")
-    invited = await db.users.find_one({"email": email}, {"_id": 0})
+    invited = await db.users.find_one({"email": email, "tenant_id": current.tenant_id}, {"_id": 0})
+    if not invited:   # only people of the organization: add them first among its users
+        raise HTTPException(status_code=400, detail="Questa email non è tra gli utenti della tua organizzazione: aggiungila prima "
+                                                    "in Impostazioni → Organizzazione.")
     if invited and team_id in _memberships(invited):
         raise HTTPException(status_code=400, detail="Questa persona fa già parte del team")
     if invited and invited["user_id"] == current.user_id:   # yourself: simply in
@@ -1225,12 +1375,14 @@ async def admin_invite_to_team(team_id: str, payload: TeamInviteCreate, current:
 
 @api_router.delete("/admin/teams/{team_id}/invites/{email}")
 async def admin_remove_team_invite(team_id: str, email: str, current: User = Depends(require_admin)):
+    await _team_or_404(current, team_id)
     await db.team_invites.delete_one({"org_id": team_id, "email": (email or "").strip().lower()})
     return {"ok": True}
 
 
 @api_router.delete("/admin/teams/{team_id}/members/{member_user_id}")
 async def admin_remove_team_member(team_id: str, member_user_id: str, current: User = Depends(require_admin)):
+    await _team_or_404(current, team_id)
     if not await _drop_membership(member_user_id, team_id):
         raise HTTPException(status_code=404, detail="Membro non trovato in questo team")
     return {"ok": True}
@@ -1518,7 +1670,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
     typed = _strip_attachment_lines(payload.display_content) if payload.display_content else payload.content.split("\n\nAllegati caricati", 1)[0]
     # @persone / @team: who the saved information is ALSO shared with (see _share_kb_docs)
     share_recipients, share_slugs, typed_clean = [], [], typed
-    if current.org_id and "@" in typed:
+    if current.org_id and "@" in typed and await _sharing_allowed(current):
         members = await db.users.find(_team_q(current.org_id), {"_id": 0, "user_id": 1, "name": 1, "email": 1, "telegram_chat_id": 1}).to_list(300)
         directory = mn.people_directory(members)
         typed_clean, share_slugs = mn.extract_people(typed, directory)
@@ -2656,7 +2808,33 @@ async def _connected_providers(user_id: str) -> set:
     return {d["provider"] for d in docs}
 
 
+async def _storage_user(user_id: str) -> str:
+    """Whose archive (Drive / OneDrive) a user's files go to: an organization's users don't
+    connect their own - their files go to its administrator's, under the client, the commessa or
+    the folder they belong to (the subscriber's first, else another administrator with one)."""
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "role": 1, "tenant_id": 1}) or {}
+    if u.get("role") == "admin" or not u.get("tenant_id"):
+        return user_id
+    t = await db.tenants.find_one({"id": u["tenant_id"]}, {"_id": 0, "owner_user_id": 1}) or {}
+    admins = [a["user_id"] for a in await db.users.find({"tenant_id": u["tenant_id"], "role": "admin"}, {"_id": 0, "user_id": 1}).to_list(50)]
+    admins.sort(key=lambda a: a != t.get("owner_user_id"))
+    for a in admins:
+        if await _connected_providers(a):
+            return a
+    return admins[0] if admins else user_id
+
+
+async def _storage_owner_view(current: User) -> Optional[dict]:
+    """For a user of an organization: whose archive their files go to (None for an administrator)."""
+    uid = await _storage_user(current.user_id)
+    if uid == current.user_id:
+        return None
+    u = await db.users.find_one({"user_id": uid}, {"_id": 0, "name": 1}) or {}
+    return {"name": u.get("name") or "l'amministratore", "targets": await _storage_targets(current.user_id)}
+
+
 async def _storage_targets(user_id: str) -> List[str]:
+    user_id = await _storage_user(user_id)
     conn = await _connected_providers(user_id)
     available = [t for t, p in (("google", "google"), ("onedrive", "microsoft")) if p in conn]
     u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "storage_targets": 1}) or {}
@@ -2677,6 +2855,7 @@ NO_CALENDAR_MSG = "Nessun calendario collegato: collega Google Calendar o il Cal
 
 
 async def _storage_folder_names(user_id: str) -> List[str]:
+    user_id = await _storage_user(user_id)
     names = []
     for t in await _storage_targets(user_id):
         try:
@@ -2708,6 +2887,7 @@ async def _storage_save(user_id: str, folder_name: Optional[str], tmp_path: str,
     always limited to the connected ones. `subfolders` nests further inside folder_name
     (e.g. Clienti / Rossi Mario / Bagno), each level found or created.
     -> {"saved": [...], "links": {target: url}, "web_view_link": first url, "errors": {...}}"""
+    user_id = await _storage_user(user_id)   # (a user's: the organization administrator's archive)
     targets = await _storage_targets(user_id)
     if only is not None:
         conn = await _connected_providers(user_id)
@@ -2905,6 +3085,7 @@ async def update_task(task_id: str, payload: dict, current: User = Depends(get_c
     payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None); payload.pop("org_id", None)
     if "visibility" in payload:
         if payload["visibility"] == "org" and current.org_id:
+            await _require_share_allowed(current)
             payload["org_id"] = current.org_id
         else:
             payload["visibility"] = "private"
@@ -3268,6 +3449,7 @@ async def toggle_task_favorite(task_id: str, current: User = Depends(get_current
 async def assign_task(task_id: str, payload: TaskAssignPayload, current: User = Depends(get_current_user)):
     if not current.org_id:
         raise HTTPException(status_code=400, detail="Serve un'organizzazione per assegnare i task")
+    await _require_share_allowed(current)
     task = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -3342,9 +3524,10 @@ async def list_collections(current: User = Depends(get_current_user)):
     pos = {cid: i for i, cid in enumerate(me.get("list_order") or [])}
     collections.sort(key=lambda c: (pos.get(c["id"], len(pos)), c["sort_order"]))
     await _add_sharing_info(collections, current)
+    storage_uid = await _storage_user(current.user_id)
     for c in collections:
         await _repair_field_keys(c)
-        _public_list_folder(c, current.user_id)
+        _public_list_folder(c, storage_uid)
     ids = [c["id"] for c in collections]
     if ids:
         counts = await db.collection_items.aggregate([
@@ -3425,6 +3608,8 @@ async def set_collection_sharing(collection_id: str, payload: CollectionSharingP
         raise HTTPException(status_code=403, detail="Solo chi ha creato la lista può cambiare con chi è condivisa.")
     if (payload.visibility == "org" or payload.user_ids) and not current.org_id:
         raise HTTPException(status_code=400, detail="Per condividere una lista devi far parte di un team.")
+    if payload.visibility == "org" or payload.user_ids:
+        await _require_share_allowed(current)
     shared = await _team_mate_ids(current, payload.user_ids)
     updates = {"visibility": payload.visibility if current.org_id else "private", "shared_with": shared,
                "org_id": current.org_id, "share_perms": _clean_perms(shared, payload.perms), "org_perm": payload.org_perm}
@@ -3448,6 +3633,8 @@ async def create_collection(payload: CollectionCreatePayload, current: User = De
     if payload.max_sub_items_per_item is not None and payload.max_sub_items_per_item < 1:
         raise HTTPException(status_code=400, detail="Il limite di Elementi per Campo deve essere almeno 1")
     name = payload.name.strip() or "Nuova lista"
+    if payload.visibility == "org" or payload.shared_with:
+        await _require_share_allowed(current)
     existing = await db.collections.find(_lists_query(current), {"_id": 0, "name": 1, "sort_order": 1}).to_list(500)
     if any((e.get("name") or "").strip().lower() == name.lower() for e in existing):
         raise HTTPException(status_code=400, detail=f"Esiste già una lista chiamata \"{name}\".")
@@ -3485,7 +3672,7 @@ async def get_collection(collection_id: str, current: User = Depends(get_current
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     await _repair_field_keys(coll)
-    return _public_list_folder((await _add_sharing_info([coll], current))[0], current.user_id)
+    return _public_list_folder((await _add_sharing_info([coll], current))[0], await _storage_user(current.user_id))
 
 
 @api_router.patch("/collections/{collection_id}")
@@ -3843,8 +4030,9 @@ async def list_sub_items(collection_id: str, item_id: str, current: User = Depen
         raise HTTPException(status_code=404, detail="Lista non trovata")
     cursor = db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "embedding": 0}).sort("created_at", -1)
     subs = await cursor.to_list(1000)
-    for sb in subs:   # each person's folder is on their own Drive
-        sb["drive_folder"] = (sb.pop("drive_folders", None) or {}).get(current.user_id)
+    uid = await _storage_user(current.user_id)
+    for sb in subs:   # the folder on the archive used (their own, or the organization administrator's)
+        sb["drive_folder"] = (sb.pop("drive_folders", None) or {}).get(uid)
     return subs
 
 
@@ -4010,10 +4198,11 @@ LIST_FOLDER_TIMEOUT = 40
 
 async def _ensure_list_folder(current: User, coll: dict) -> dict:
     """The list's folder on every chosen storage (made once, then reused)."""
-    existing = (coll.get("drive_folders") or {}).get(current.user_id)
+    uid = await _storage_user(current.user_id)
+    existing = (coll.get("drive_folders") or {}).get(uid)
     if existing and existing.get("ids"):
         return existing
-    targets = await _storage_targets(current.user_id)
+    targets = await _storage_targets(uid)
     if not targets:
         raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
     name = re.sub(r"[\\/:*?\"<>|]+", " ", coll.get("name") or "Lista").strip()[:100] or "Lista"
@@ -4023,15 +4212,15 @@ async def _ensure_list_folder(current: User, coll: dict) -> dict:
             # Drive's client blocks: in a thread, and never longer than LIST_FOLDER_TIMEOUT - a
             # stuck call used to leave the chat waiting forever on "crea la cartella su drive"
             if t == "google":
-                creds = await gi.get_credentials(db, current.user_id)
+                creds = await gi.get_credentials(db, uid)
                 if not creds:
                     raise RuntimeError("Google Drive non collegato")
-                parent = await asyncio.wait_for(gi.ensure_maipal_folder(db, current.user_id, creds), LIST_FOLDER_TIMEOUT)
+                parent = await asyncio.wait_for(gi.ensure_maipal_folder(db, uid, creds), LIST_FOLDER_TIMEOUT)
                 fid = await asyncio.wait_for(asyncio.to_thread(gi.find_or_create_subfolder_sync, creds, parent, name), LIST_FOLDER_TIMEOUT)
                 ids[t], links[t] = fid, f"https://drive.google.com/drive/folders/{fid}"
             else:
-                token = await ms.get_token(db, current.user_id)
-                fid = await asyncio.wait_for(ms.find_or_create_folder(db, current.user_id, token, name), LIST_FOLDER_TIMEOUT)
+                token = await ms.get_token(db, uid)
+                fid = await asyncio.wait_for(ms.find_or_create_folder(db, uid, token, name), LIST_FOLDER_TIMEOUT)
                 ids[t] = fid
                 try:
                     links[t] = await ms.item_web_url(token, fid)
@@ -4046,8 +4235,8 @@ async def _ensure_list_folder(current: User, coll: dict) -> dict:
     if not ids:
         raise HTTPException(status_code=500, detail="Cartella non creata: " + "; ".join(f"{STORAGE_LABELS[k]}: {v}" for k, v in errors.items()))
     info = {"name": name, "ids": ids, "links": links, "created_at": datetime.now(timezone.utc).isoformat()}
-    await db.collections.update_one({"id": coll["id"]}, {"$set": {"drive_folders": {**(coll.get("drive_folders") or {}), current.user_id: info}}})
-    coll.setdefault("drive_folders", {})[current.user_id] = info
+    await db.collections.update_one({"id": coll["id"]}, {"$set": {"drive_folders": {**(coll.get("drive_folders") or {}), uid: info}}})
+    coll.setdefault("drive_folders", {})[uid] = info
     return info
 
 
@@ -4058,7 +4247,8 @@ def _folder_where(info: dict) -> str:
 async def _ensure_storage_path(current: User, folder: str, subs: List[str]) -> dict:
     """mAIPAL/<folder>/<subs...> on every chosen storage, each level found or made (blocking
     Drive calls in a thread, each bounded by LIST_FOLDER_TIMEOUT). -> {"name", "ids", "links"}"""
-    targets = await _storage_targets(current.user_id)
+    uid = await _storage_user(current.user_id)
+    targets = await _storage_targets(uid)
     if not targets:
         raise HTTPException(status_code=400, detail=NO_STORAGE_MSG)
     path = [_drive_safe(folder)] + [_drive_safe(x) for x in subs if x]
@@ -4066,16 +4256,16 @@ async def _ensure_storage_path(current: User, folder: str, subs: List[str]) -> d
     for t in targets:
         try:
             if t == "google":
-                creds = await gi.get_credentials(db, current.user_id)
+                creds = await gi.get_credentials(db, uid)
                 if not creds:
                     raise RuntimeError("Google Drive non collegato")
-                fid = await asyncio.wait_for(gi.ensure_maipal_folder(db, current.user_id, creds), LIST_FOLDER_TIMEOUT)
+                fid = await asyncio.wait_for(gi.ensure_maipal_folder(db, uid, creds), LIST_FOLDER_TIMEOUT)
                 for name in path:
                     fid = await asyncio.wait_for(asyncio.to_thread(gi.find_or_create_subfolder_sync, creds, fid, name), LIST_FOLDER_TIMEOUT)
                 ids[t], links[t] = fid, f"https://drive.google.com/drive/folders/{fid}"
             else:
-                token = await ms.get_token(db, current.user_id)
-                fid = await asyncio.wait_for(ms.find_or_create_folder(db, current.user_id, token, path[0]), LIST_FOLDER_TIMEOUT)
+                token = await ms.get_token(db, uid)
+                fid = await asyncio.wait_for(ms.find_or_create_folder(db, uid, token, path[0]), LIST_FOLDER_TIMEOUT)
                 for name in path[1:]:
                     fid = await asyncio.wait_for(ms.find_or_create_child_folder(token, fid, name), LIST_FOLDER_TIMEOUT)
                 ids[t] = fid
@@ -4099,12 +4289,13 @@ async def create_commessa_folder(commessa_id: str, current: User = Depends(get_c
     """The commessa's folder, under its client's: mAIPAL/Clienti/<cliente>/<commessa> - the same
     place where its reports and diary photos are saved. Made once per person, then reused."""
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
-    existing = (sub.get("drive_folders") or {}).get(current.user_id)
+    uid = await _storage_user(current.user_id)
+    existing = (sub.get("drive_folders") or {}).get(uid)
     if existing and existing.get("ids"):
         return {"drive_folder": existing, "message": f"Cartella «{existing['name']}» già pronta."}
     view = _commessa_view(sub, client, clienti)
     info = await _ensure_storage_path(current, clienti.get("name") or vx.CLIENTI_NAME, [view["client_name"], view["title"]])
-    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"drive_folders": {**(sub.get("drive_folders") or {}), current.user_id: info}}})
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"drive_folders": {**(sub.get("drive_folders") or {}), uid: info}}})
     return {"drive_folder": info, "message": f"Cartella «{info['name']}» pronta su {_folder_where(info)}."}
 
 
@@ -4188,7 +4379,7 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
 
 
 async def _list_folder_reply(current: User, coll: dict, already: bool = False) -> dict:
-    had = bool(((coll.get("drive_folders") or {}).get(current.user_id) or {}).get("ids"))
+    had = bool(((coll.get("drive_folders") or {}).get(await _storage_user(current.user_id)) or {}).get("ids"))
     try:
         info = await _ensure_list_folder(current, coll)
     except HTTPException as he:
@@ -6912,6 +7103,8 @@ async def set_commessa_sharing(commessa_id: str, payload: CommessaSharingPayload
         raise HTTPException(status_code=403, detail="Solo chi ha la commessa nella sua lista Clienti può condividerla")
     if payload.user_ids and not current.org_id:
         raise HTTPException(status_code=400, detail="Per condividere una commessa devi far parte di un team.")
+    if payload.user_ids:
+        await _require_share_allowed(current)
     shared = await _team_mate_ids(current, payload.user_ids)
     perms = _clean_perms(shared, payload.perms)
     before = sub.get("shared_with") or []
@@ -7872,7 +8065,7 @@ class CollaboratorPayload(BaseModel):
     role: Optional[str] = ""
     company: Optional[str] = ""
     commesse: List[str] = []
-    show_client_contacts: bool = False
+    show_client_contacts: Optional[bool] = None   # (none: the organization's rule)
     hourly_rate: Optional[float] = None       # €/h: their default cost on the commesse (Costi can change it)
 
 
@@ -7891,15 +8084,13 @@ class CollaboratorPatch(BaseModel):
 
 
 async def _can_manage_collaborators(current: User) -> bool:
-    """The administrator and every account they enabled (in the whitelist) link their own collaborators."""
-    if current.role == "admin":
-        return True
-    return bool(current.email and await db.allowed_emails.find_one({"email": current.email.strip().lower()}, {"_id": 1}))
+    """The organization's administrators link its collaborators (Telegram only), within the plan."""
+    return current.role == "admin" and bool(current.tenant_id)
 
 
 async def _require_collab_manager(current: User) -> None:
     if not await _can_manage_collaborators(current):
-        raise HTTPException(status_code=403, detail="Il tuo account non è abilitato a gestire i collaboratori")
+        raise HTTPException(status_code=403, detail="I collaboratori li gestisce l'amministratore della tua organizzazione")
 
 
 def _collab_code() -> str:
@@ -7986,8 +8177,14 @@ async def _collab_invite(current: User, c: dict, views: dict) -> dict:
             "whatsapp_url": f"https://wa.me/{phone}?text={quote(msg)}" if phone else f"https://wa.me/?text={quote(msg)}"}
 
 
+def _org_collabs_q(current: User) -> dict:
+    """The organization's collaborators (any of its administrators manages them)."""
+    return {"$or": [{"tenant_id": current.tenant_id}, {"owner_user_id": current.user_id}]} if current.tenant_id \
+        else {"owner_user_id": current.user_id}
+
+
 async def _collab_or_404(current: User, collab_id: str) -> dict:
-    c = await db.collaborators.find_one({"id": collab_id, "owner_user_id": current.user_id}, {"_id": 0})
+    c = await db.collaborators.find_one({"id": collab_id, **_org_collabs_q(current)}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Collaboratore non trovato")
     return c
@@ -8013,7 +8210,7 @@ def _clean_collab_fields(d: dict) -> dict:
 async def list_collaborators(current: User = Depends(get_current_user)):
     await _require_collab_manager(current)
     views = await _collab_views(current)
-    docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    docs = await db.collaborators.find(_org_collabs_q(current), {"_id": 0}).sort("created_at", -1).to_list(500)
     rates = await _list_rates(current)
     return [_collab_public(c, views, rates) for c in docs]
 
@@ -8024,12 +8221,19 @@ async def create_collaborator(payload: CollaboratorPayload, current: User = Depe
     fields = _clean_collab_fields(payload.model_dump())
     if not fields.get("first_name") or not fields.get("last_name"):
         raise HTTPException(status_code=400, detail="Nome e cognome sono obbligatori")
+    tenant = await _tenant_of(current)
+    limit = _plan(tenant)["max_collaborators"]
+    if await db.collaborators.count_documents({"tenant_id": current.tenant_id}) >= limit:
+        raise HTTPException(status_code=403, detail=f"Hai già {limit} collaboratori, il massimo del tuo abbonamento.")
+    contacts = payload.show_client_contacts
+    if contacts is None:
+        contacts = bool(((tenant or {}).get("sharing") or {}).get("collab_contacts"))
     views = await _collab_views(current)
     now = datetime.now(timezone.utc)
     c = {
-        "id": f"collab_{uuid.uuid4().hex[:12]}", "owner_user_id": current.user_id, "org_id": current.org_id,
+        "id": f"collab_{uuid.uuid4().hex[:12]}", "owner_user_id": current.user_id, "org_id": current.org_id, "tenant_id": current.tenant_id,
         **fields, "commesse": [x for x in dict.fromkeys(payload.commesse) if x in views],
-        "show_client_contacts": payload.show_client_contacts, "status": "invited",
+        "show_client_contacts": contacts, "status": "invited",
         "code": _collab_code(), "code_expires_at": (now + timedelta(days=COLLAB_CODE_DAYS)).isoformat(),
         "telegram_chat_id": None, "linked_at": None, "last_message_at": None, "created_at": now.isoformat(),
     }
@@ -8095,7 +8299,7 @@ async def commessa_collaborators(commessa_id: str, current: User = Depends(get_c
     """From the commessa's diary: every collaborator, and whether they are enabled on it."""
     await _require_collab_manager(current)
     await _commessa_or_404(current, commessa_id, write=False)
-    docs = await db.collaborators.find({"owner_user_id": current.user_id}, {"_id": 0}).sort("first_name", 1).to_list(500)
+    docs = await db.collaborators.find(_org_collabs_q(current), {"_id": 0}).sort("first_name", 1).to_list(500)
     return [{"id": c["id"], "name": _collab_name(c), "company": c.get("company") or "", "role": c.get("role") or "",
              "status": c.get("status"), "enabled": commessa_id in (c.get("commesse") or [])} for c in docs]
 
@@ -10149,18 +10353,23 @@ async def kb_upload(file: UploadFile = File(...), current: User = Depends(get_cu
 @api_router.get("/kb/documents")
 async def list_kb_documents(current: User = Depends(get_current_user), q: Optional[str] = None, category: Optional[str] = None):
     import re as _re
-    query: dict = {"user_id": current.user_id}
+    # theirs, and the organization's knowledge (shared by an administrator: read-only for the others)
+    query: dict = {"$or": [{"user_id": current.user_id}, {"tenant_kb": current.tenant_id}]} if current.tenant_id \
+        else {"user_id": current.user_id}
     if category and category != "all":
         query["category"] = category
     if q:
         safe = _re.escape(q.strip())
-        query["$or"] = [
+        query = {"$and": [query, {"$or": [
             {"name": {"$regex": safe, "$options": "i"}},
             {"keywords": {"$regex": safe, "$options": "i"}},
             {"preview": {"$regex": safe, "$options": "i"}},
-        ]
+        ]}]}
     cursor = db.kb_documents.find(query, {"_id": 0}).sort("created_at", -1).limit(500)
     docs = await cursor.to_list(500)
+    for d in docs:
+        d["org_kb"] = bool(d.get("tenant_kb"))
+        d["mine"] = d.get("user_id") == current.user_id
 
     # Backfill: aggregate kb_chunks for doc_ids that don't have a kb_documents entry yet
     known_ids = {d["doc_id"] for d in docs}
@@ -10213,6 +10422,23 @@ async def list_kb_documents(current: User = Depends(get_current_user), q: Option
     return docs
 
 
+class OrgKbPayload(BaseModel):
+    shared: bool
+
+
+@api_router.put("/kb/documents/{doc_id}/org")
+async def set_kb_document_org(doc_id: str, payload: OrgKbPayload, current: User = Depends(require_admin)):
+    """An administrator's document in the organization's knowledge: every user of the organization
+    finds it (Documenti, the agents' answers), read-only; off again: theirs alone."""
+    doc = await db.kb_documents.find_one({"doc_id": doc_id, "user_id": current.user_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento non trovato tra i tuoi")
+    val = current.tenant_id if payload.shared else None
+    await db.kb_documents.update_one({"doc_id": doc_id}, {"$set": {"tenant_kb": val}})
+    await db.kb_chunks.update_many({"doc_id": doc_id, "user_id": current.user_id}, {"$set": {"tenant_kb": val}})
+    return {"doc_id": doc_id, "org_kb": bool(val)}
+
+
 @api_router.get("/kb/documents/categories")
 async def kb_categories(current: User = Depends(get_current_user)):
     pipe = [
@@ -10262,6 +10488,8 @@ async def integrations_status(current: User = Depends(get_current_user)):
         },
         "storage_targets": await _storage_targets(current.user_id),
         "calendar_targets": await _calendar_targets(current.user_id),
+        # a user's files go to the organization administrator's archive (they don't connect their own)
+        "storage_owner": await _storage_owner_view(current),
         "storage_choice": (user_doc or {}).get("storage_targets"),
         "calendar_choice": (user_doc or {}).get("calendar_targets"),
         "telegram": {
@@ -11887,23 +12115,11 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def start_services():
-    # ===== Seed admin + whitelist =====
+    # ===== Organizations: every account already in gets one (see _migrate_tenants) =====
     try:
-        await db.allowed_emails.update_one(
-            {"email": ADMIN_EMAIL},
-            {"$setOnInsert": {
-                "email": ADMIN_EMAIL,
-                "notes": "amministratore",
-                "added_by": "system",
-                "added_at": datetime.now(timezone.utc).isoformat(),
-            }},
-            upsert=True,
-        )
-        # If an admin user already exists, ensure role=admin
-        await db.users.update_many({"email": ADMIN_EMAIL}, {"$set": {"role": "admin"}})
-        logger.info(f"admin whitelist seeded for {ADMIN_EMAIL}")
+        await _migrate_tenants()
     except Exception:
-        logger.exception("failed to seed admin whitelist")
+        logger.exception("organizations migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)
         await db.job_logs.create_index([("commessa_id", 1), ("date", -1)])
         await db.job_logs.create_index([("user_id", 1), ("date", -1)])

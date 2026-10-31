@@ -374,7 +374,8 @@ export default function SettingsPage() {
     <Section mode={mode} id="google" testid="google-card" icon={Cloud} title="Google Workspace"
       badge={<>{status.google.connected && <ConnectedBadge />}{!status.google.configured && <NotConfiguredBadge />}</>}>
       <div className="text-sm text-white/60">
-        Drive: cartella <code className="text-black">mAIPAL</code> per file/allegati. Calendar: eventi dai task con scadenza.
+        {orgArchive ? "Calendar: eventi dai task con scadenza. (I file vanno nell'archivio dell'organizzazione.)"
+          : <>Drive: cartella <code className="text-black">mAIPAL</code> per file/allegati. Calendar: eventi dai task con scadenza.</>}
       </div>
       {status.google.connected && status.google.email && (
         <div className="kicker mt-2">connesso come · {status.google.email}</div>
@@ -403,7 +404,8 @@ export default function SettingsPage() {
     <Section mode={mode} id="microsoft" testid="microsoft-card" icon={Cloudy} title="Microsoft · OneDrive e Outlook"
       badge={<>{status.microsoft?.connected && <ConnectedBadge />}{!status.microsoft?.configured && <NotConfiguredBadge />}</>}>
       <div className="text-sm text-white/60">
-        OneDrive: i file vanno nella cartella dell'app (<code className="text-black">Apps/mAIPAL</code>). Calendario di Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.
+        {orgArchive ? "Calendario di Outlook: eventi dai task con scadenza. (I file vanno nell'archivio dell'organizzazione.)"
+          : <>OneDrive: i file vanno nella cartella dell'app (<code className="text-black">Apps/mAIPAL</code>). Calendario di Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.</>}
       </div>
       {status.microsoft?.connected && status.microsoft?.email && (
         <div className="kicker mt-2">connesso come · {status.microsoft.email}</div>
@@ -428,12 +430,19 @@ export default function SettingsPage() {
       </div>
     </Section>
   );
-  const secTargets = (mode) => ((status.google.connected || status.microsoft?.connected)) ? (
+  const orgArchive = status.storage_owner;   // a user of an organization: files in the administrator's archive
+  const secTargets = (mode) => ((status.google.connected || status.microsoft?.connected || orgArchive)) ? (
     <Section mode={mode} id="cloud-targets" testid="cloud-targets-card" icon={FolderSync} title="Dove salvo file ed eventi">
-      <div className="text-sm text-white/60">Puoi sceglierne uno o entrambi.</div>
+      <div className="text-sm text-white/60">{orgArchive ? "Il calendario è il tuo; i file vanno nell'archivio dell'organizzazione." : "Puoi sceglierne uno o entrambi."}</div>
+      {orgArchive && (
+        <div className="mt-3 text-sm text-white/80" data-testid="org-archive">
+          File e foto (anche delle commesse) vanno nell'archivio di <b>{orgArchive.name}</b>
+          {(orgArchive.targets || []).length ? ` (${orgArchive.targets.map((x) => (x === "google" ? "Google Drive" : "OneDrive")).join(" e ")})` : ": non l'ha ancora collegato"}, nella cartella del cliente o della commessa.
+        </div>
+      )}
       <div className="mt-4 space-y-3">
         {[
-          { kind: "storage", label: "Salva i file su", opts: [["google", "Google Drive", status.google.connected], ["onedrive", "OneDrive", status.microsoft?.connected]] },
+          ...(orgArchive ? [] : [{ kind: "storage", label: "Salva i file su", opts: [["google", "Google Drive", status.google.connected], ["onedrive", "OneDrive", status.microsoft?.connected]] }]),
           { kind: "calendar", label: "Sincronizza i task con", opts: [["google", "Google Calendar", status.google.connected], ["outlook", "Calendario di Outlook", status.microsoft?.connected]] },
         ].map((row) => {
           const chosen = status[row.kind === "storage" ? "storage_targets" : "calendar_targets"] || [];
@@ -540,8 +549,8 @@ export default function SettingsPage() {
       <TeamPanel />
     </Section>
   );
-  // collaborators on Telegram only: for now the Admin manages them (later the subscription's holder)
-  const secCollaborators = (mode) => (user?.role === "admin" || user?.can_collaborators) ? (
+  // collaborators on Telegram only: the organization's administrators manage them (within the plan)
+  const secCollaborators = (mode) => (user?.can_collaborators) ? (
     <Section mode={mode} id="collaborators" testid="collaborators-card-settings" icon={HardHat} title="Collaboratori"
       subtitle="Collaboratori esterni che scrivono nel diario delle commesse da Telegram, senza accesso all'app.">
       <PresenceHourRow />
@@ -550,8 +559,8 @@ export default function SettingsPage() {
     </Section>
   ) : null;
   const secAdmin = (mode) => (user?.role === "admin") ? (
-    <Section mode={mode} id="admin" testid="admin-card-settings" icon={Shield} title="Amministrazione"
-      subtitle="Whitelist accessi e utenti.">
+    <Section mode={mode} id="admin" testid="admin-card-settings" icon={Shield} title="Organizzazione"
+      subtitle="Utenti, limiti dell'abbonamento e regole di condivisione.">
       <AdminPage />
     </Section>
   ) : null;
@@ -572,8 +581,10 @@ export default function SettingsPage() {
     { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
     { id: "notifications", icon: Bell, title: "Notifiche", sub: "Promemoria e diario", on: false },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },
-    ...(user?.role === "admin" || user?.can_collaborators ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori", sub: "Solo Telegram", on: false }] : []),
-    ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Admin", full: "Amministrazione", sub: "Accessi e utenti", on: false }] : []),
+    ...(user?.can_collaborators ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori",
+      sub: user?.tenant?.plan ? `${user.tenant.usage?.collaborators || 0}/${user.tenant.plan.max_collaborators} · solo Telegram` : "Solo Telegram", on: false }] : []),
+    ...(user?.role === "admin" ? [{ id: "admin", icon: Shield, title: "Organizzazione", full: "Organizzazione",
+      sub: user?.tenant?.plan ? `${user.tenant.usage?.users || 0}/${user.tenant.plan.max_users} utenti` : "Utenti e regole", on: false }] : []),
   ];
   const panelTile = tiles.find((t) => t.id === panel);
 

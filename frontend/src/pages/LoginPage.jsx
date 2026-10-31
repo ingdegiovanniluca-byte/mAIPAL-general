@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import logo3 from "@/assets/logo3.png";
 
 const AUTH_ERROR_MESSAGES = {
-  not_whitelisted: "Il tuo account non è ancora abilitato. Contatta l'amministratore per essere aggiunto alla whitelist.",
+  not_whitelisted: "Il tuo account non è abilitato a mAIPAL: chiedi all'amministratore della tua organizzazione di aggiungerti agli utenti, con questa email.",
   denied: "Accesso negato da Google.",
   invalid_state: "Sessione di accesso scaduta, riprova.",
   oauth_failed: "Accesso con Google non riuscito, riprova.",

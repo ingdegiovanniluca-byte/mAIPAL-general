@@ -139,6 +139,11 @@ def interp(fields, job="Bagno"):
         return {"sections": out, "client": {"name": "Mario Rossi", "phone": "", "email": "", "address": ""}, "job_title": job, "summary": "ok"}
     return f
 
+# a milestone still ahead whatever the day the test runs
+import datetime as _dt
+DUE = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
+DUE_IT = _dt.date.fromisoformat(DUE).strftime("%d/%m/%Y")
+
 async def main():
     me = await server.update_profile(server.ProfilePatch(business_vertical="artigiano"), server.User(**U))
     cl = next(c for c in db.collections.docs if c.get("system_key") == "artigiano_clienti")
@@ -184,7 +189,7 @@ async def main():
     jl.interpret = said(hours=[{"who": "io", "hours": 6}, {"who": "Gino", "hours": 4}], materials=[{"name": "corrugato", "qty": 20, "unit": "m"}],
                         problems=["manca il miscelatore"], date="2026-10-10")
     await server._save_job_log(me, "6 ore io e 4 Gino, 20 m di corrugato, manca il miscelatore", commessa_id="s_bagno")
-    await server.create_milestone("s_bagno", server.MilestonePayload(title="Impianto idraulico", who="Pino", due_date="2026-10-30"), me)
+    await server.create_milestone("s_bagno", server.MilestonePayload(title="Impianto idraulico", who="Pino", due_date=DUE), me)
     # SAL: the empty fields from the diary, what was dictated wins
     wr.interpret = interp({"Lavori eseguiti": "Impianti completati", "Percentuale di avanzamento": "60%"})
     r = await server._generate_work_report(me, "SAL del Bagno dei Rossi: 60%, impianti completati", "sal")
@@ -193,7 +198,7 @@ async def main():
     print({k: f[k] for k in ("Periodo di riferimento", "Ore impiegate", "Materiali impiegati", "Problemi riscontrati", "Milestone")})
     assert f["Percentuale di avanzamento"] == "60%" and f["Lavori eseguiti"] == "Impianti completati"
     assert f["Ore impiegate"] == "10 h" and "20 m corrugato" in f["Materiali impiegati"] and "manca il miscelatore" in f["Problemi riscontrati"]
-    assert f["Periodo di riferimento"].startswith("dal 10/10/2026") and "Impianto idraulico: prevista entro il 30/10/2026" in f["Milestone"]
+    assert f["Periodo di riferimento"].startswith("dal 10/10/2026") and f"Impianto idraulico: prevista entro il {DUE_IT}" in f["Milestone"]
     # a second SAL: only what came after the first
     for x in db.work_reports.docs:
         x["created_at"] = "2026-10-12T10:00:00+00:00"

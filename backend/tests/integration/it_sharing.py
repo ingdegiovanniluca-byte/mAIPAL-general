@@ -106,7 +106,7 @@ import scheduled_actions as sa
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-U = {"user_id": "u1", "email": "a@b.it", "name": "Luca Rossi", "role": "admin", "telegram_chat_id": 77}
+U = {"user_id": "u1", "email": "a@b.it", "name": "Luca Rossi", "role": "admin", "telegram_chat_id": 77, "tenant_id": "ten_1"}
 db.users.docs.append(dict(U))
 tg.bot_token = lambda: "123:abc"
 NOTICES = []
@@ -183,13 +183,17 @@ async def denied(coro, code=403):
     raise AssertionError("not denied")
 
 
+# his organization (he is its administrator)
+db.tenants.docs.append({"id": "ten_1", "name": "Impresa Rossi", "owner_user_id": "u1", "owner_email": "a@b.it",
+                       "plan": {"max_users": 5, "max_collaborators": 5, "max_admins": 2}, "sharing": {"users_share": True, "collab_contacts": False}})
+
 async def main():
     # Luca (admin) and his team: Marco (whitelisted) and Sara; Pia is in another team
     db.users.docs[0].update(org_id="o1", role="admin")
-    for uid, name, email, org, chat in (("u2", "Marco Bianchi", "marco@b.it", "o1", 78), ("u3", "Sara Verdi", "sara@v.it", "o1", None),
-                                        ("u4", "Pia Neri", "pia@n.it", "o2", None)):
-        db.users.docs.append({"user_id": uid, "email": email, "name": name, "role": "user", "org_id": org, "telegram_chat_id": chat})
-    db.allowed_emails.docs.append({"email": "marco@b.it"})
+    # Marco and Sara are users of his organization, Pia of another one
+    for uid, name, email, org, chat, ten in (("u2", "Marco Bianchi", "marco@b.it", "o1", 78, "ten_1"), ("u3", "Sara Verdi", "sara@v.it", "o1", None, "ten_1"),
+                                             ("u4", "Pia Neri", "pia@n.it", "o2", None, "ten_2")):
+        db.users.docs.append({"user_id": uid, "email": email, "name": name, "role": "user", "org_id": org, "telegram_chat_id": chat, "tenant_id": ten})
     U2 = lambda: server.User(**next(u for u in db.users.docs if u["user_id"] == "u2"))
     U3 = lambda: server.User(**next(u for u in db.users.docs if u["user_id"] == "u3"))
     U4 = server.User(**next(u for u in db.users.docs if u["user_id"] == "u4"))
@@ -258,13 +262,15 @@ async def main():
     await server.set_commessa_sharing("s_bagno", server.CommessaSharingPayload(user_ids=["u3"]), me)
     await denied(server.get_job_commessa("s_bagno", current=U2()), 404)
 
-    # 3) collaborators: the admin and the accounts in the whitelist
+    # 3) collaborators: the organization's administrators (Marco made one, the plan allows 2)
+    assert not (await server.me(U2())).can_collaborators
+    await server.patch_tenant_user("u2", server.TenantUserPatch(role="admin"), me)
     assert (await server.me(me)).can_collaborators and (await server.me(U2())).can_collaborators
     assert not (await server.me(U3())).can_collaborators
     r = await server.create_collaborator(server.CollaboratorPayload(first_name="Gino", last_name="Neri", phone="333 1234567"), U2())
     assert r["collaborator"]["name"] == "Gino Neri" and next(c for c in db.collaborators.docs if c["id"] == r["collaborator"]["id"])["owner_user_id"] == "u2"
     assert [c["id"] for c in await server.list_collaborators(U2())] == [r["collaborator"]["id"]]
-    assert "non è abilitato" in await denied(server.create_collaborator(server.CollaboratorPayload(first_name="A", last_name="B"), U3()))
+    assert "amministratore" in await denied(server.create_collaborator(server.CollaboratorPayload(first_name="A", last_name="B"), U3()), 403)
     await denied(server.list_collaborators(U3()))
     # not on a team-mate's commessa shared with them (their collaborators work on their own)
     await server.set_commessa_sharing("s_bagno", server.CommessaSharingPayload(user_ids=["u2", "u3"]), me)   # Marco can write in it

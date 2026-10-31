@@ -1,0 +1,14 @@
+# Who may come into mAIPAL as the ADMINISTRATOR of an organization.
+# Until subscriptions are live, each line stands for someone who subscribed for their organization.
+#
+# Copy this file to org_admins.txt (same folder) and edit it on the server: it is read again
+# when it changes, no restart needed. Without org_admins.txt only ADMIN_EMAIL (.env) is admin.
+#
+# One administrator per line; only the e-mail is needed, the rest is optional:
+#   email ; Organization name ; max_users=N ; max_collaborators=N ; max_admins=N
+# Defaults: max_users=5, max_collaborators=5, max_admins=1.
+# The users and collaborators are then added by the administrator, in the app:
+# Impostazioni -> Organizzazione and Impostazioni -> Collaboratori.
+
+# mario.rossi@impresarossi.it ; Impresa Rossi ; max_users=5 ; max_collaborators=5 ; max_admins=1
+# anna@studiobianchi.it ; Studio Bianchi

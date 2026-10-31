@@ -89,3 +89,6 @@ credentials.json
 *.key
 .credentials
 frontend/node_modules/.cache/default-development/0.pack
+
+# the administrators allowed in (stands for the subscriptions): local to each server
+backend/data/access/org_admins.txt

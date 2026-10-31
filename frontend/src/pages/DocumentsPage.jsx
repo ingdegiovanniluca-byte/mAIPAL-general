@@ -3,10 +3,11 @@ import { api } from "@/lib/api";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { Input } from "@/components/ui/input";
 import DocFolders from "@/components/DocFolders";
+import { useAuth } from "@/auth/AuthContext";
 import { toast } from "sonner";
 import {
   FolderOpen, FileText, FileSpreadsheet, FileImage, FileType, File as FileIcon,
-  Search, X, Trash2, ExternalLink, Sparkles, MessageSquareText, LayoutGrid, Type, Cloud
+  Search, X, Trash2, ExternalLink, Sparkles, MessageSquareText, LayoutGrid, Type, Cloud, Building2
 } from "lucide-react";
 
 const CATEGORY_META = {
@@ -41,6 +42,9 @@ function fmtSize(bytes) {
 }
 
 export default function DocumentsPage() {
+  const { user } = useAuth();
+  // an administrator puts their documents in the organization's knowledge (the users read them)
+  const canOrgKb = user?.role === "admin" && !!user?.tenant_id;
   const [docs, setDocs] = useState([]);
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState("all");
@@ -88,6 +92,19 @@ export default function DocumentsPage() {
     });
   };
 
+  const toggleOrg = async (d) => {
+    const shared = !d.org_kb;
+    setDocs((ds) => ds.map((x) => (x.doc_id === d.doc_id ? { ...x, org_kb: shared } : x)));
+    try {
+      await api.put(`/kb/documents/${d.doc_id}/org`, { shared });
+      toast.success(shared ? "Nella KB dell'organizzazione: la trovano tutti gli utenti" : "Tolto dalla KB dell'organizzazione");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Errore");
+      setDocs((ds) => ds.map((x) => (x.doc_id === d.doc_id ? { ...x, org_kb: !shared } : x)));
+    }
+  };
+  const orgKb = { can: canOrgKb, toggle: toggleOrg };
+
   const total = docs.length;
   // filters: one row that scrolls sideways on mobile
   const catRowRef = useRef(null);
@@ -107,7 +124,7 @@ export default function DocumentsPage() {
 
   // the phone: one folder per topic, two per row (DocFolders); the computer keeps the cards
   if (isMobile) {
-    return <DocFolders docs={docs} loading={loading} meta={CATEGORY_META} q={q} setQ={setQ} onDelete={del} icon={extIcon} />;
+    return <DocFolders docs={docs} loading={loading} meta={CATEGORY_META} q={q} setQ={setQ} onDelete={del} icon={extIcon} orgKb={orgKb} />;
   }
 
   return (
@@ -199,9 +216,20 @@ export default function DocumentsPage() {
                       </div>
                     </div>
                   </div>
-                  <button data-testid="doc-delete" onClick={() => del(d.doc_id)} title="Elimina" className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Trash2 size={14} />
-                  </button>
+                  {d.mine !== false && (
+                    <span className="flex items-center gap-0.5 shrink-0">
+                      {canOrgKb && !d.legacy && (
+                        <button data-testid="doc-org-kb" onClick={() => toggleOrg(d)} aria-pressed={!!d.org_kb}
+                          title={d.org_kb ? "Togli dalla KB dell'organizzazione" : "Metti nella KB dell'organizzazione"}
+                          className={`p-1.5 rounded-full hover:bg-white/10 transition-opacity ${d.org_kb ? "text-white" : "text-white/40 opacity-0 group-hover:opacity-100"}`}>
+                          <Building2 size={14} />
+                        </button>
+                      )}
+                      <button data-testid="doc-delete" onClick={() => del(d.doc_id)} title="Elimina" className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Trash2 size={14} />
+                      </button>
+                    </span>
+                  )}
                 </div>
 
                 <div className="mt-3 flex items-center gap-1.5 flex-wrap">
@@ -213,6 +241,9 @@ export default function DocumentsPage() {
                   )}
                   {d.source_type === "chat" && (
                     <span className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md  text-white/60 bg-white/10">via chat</span>
+                  )}
+                  {d.org_kb && (
+                    <span data-testid="doc-org-badge" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md text-white bg-white/20 inline-flex items-center gap-1"><Building2 size={10} /> organizzazione</span>
                   )}
                   {d.shared_by?.name && (
                     <span data-testid="doc-shared-by" className="text-[10px] font-mono-tight uppercase tracking-widest px-2 py-0.5 rounded-md text-white bg-[#4E7FA8]">condivisa da {d.shared_by.name}</span>
