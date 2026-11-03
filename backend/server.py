@@ -8600,6 +8600,11 @@ async def _commessa_economics(clienti: dict, commessa_id: str, logs: Optional[li
 
 
 async def _check_budget_alert(clienti: dict, commessa_id: str) -> None:
+    await _budget_threshold_alert(clienti, commessa_id)
+    await _check_forecast_alert(clienti, commessa_id)
+
+
+async def _budget_threshold_alert(clienti: dict, commessa_id: str) -> None:
     """Once per threshold (80%, 100% of the quote): a note to the list's owner on Telegram.
     Lowered again (quote raised, costs removed), the thresholds re-arm."""
     try:
@@ -8642,12 +8647,215 @@ async def get_commessa_economics(commessa_id: str, current: User = Depends(get_c
         raise HTTPException(status_code=403, detail=COSTS_ADMIN_ONLY)
     e = await _commessa_economics(clienti, commessa_id)
     costs = clienti.get("costs") or {}
+    ctx = await _commessa_ctx(commessa_id)
+    forecast = await _margin_forecast(clienti, ctx[1], ctx[3], e) if ctx else None
     team = await _team_first_names(current)
     collabs = [c.get("first_name") for c in await db.collaborators.find({"owner_user_id": clienti.get("user_id")}, {"_id": 0, "first_name": 1}).to_list(500)]
     rates = costs.get("rates") or {}
-    return {**e, "default_rate": costs.get("default_rate"),
+    return {**e, "default_rate": costs.get("default_rate"), "forecast": forecast,
             "people": [{"who": n, "rate": _rate_of(rates, n)} for n in _econ_people(e, team, collabs)]}
 
+
+
+# ======================================================================================
+# QUOTE FROM HISTORY and MARGIN FORECAST. The commesse of the same kind already closed (chosen by
+# the model among the organization's own, by words if it can't): what they really cost (hours,
+# materials, expenses), their margin, how long they took, and the quotes lost for the price -> the
+# value that keeps that margin, and a check of the quote being uploaded. While the works go on: the
+# cost and margin at the end from the progress (planned activities, milestones or time), and the
+# expected end. Only numbers of the organization, computed - never made up.
+# ======================================================================================
+ESTIMATE_DAYS = 7
+CLOSED_FOR_HISTORY = ("completata", "archiviata")
+
+
+def _commessa_text(view: dict, sub: dict, quote: Optional[dict] = None) -> str:
+    survey = sub.get("survey") or {}
+    d = (quote or {}).get("data") or {}
+    parts = [view.get("title") or "", view.get("descrizione") or "", survey.get("requests") or "", survey.get("state") or "",
+             "; ".join(d.get("activities") or [])]
+    return " · ".join(" ".join(str(p).split()) for p in parts if p)[:1500]
+
+
+async def _history_rows(clienti: dict, skip_id: str) -> list:
+    """The organization's closed and lost commesse, with what they cost and were worth."""
+    commesse, _ = await _all_commesse(clienti)
+    out = []
+    for v in commesse:
+        st = vx.norm_stato(v["stato"])
+        if v["id"] == skip_id or st not in CLOSED_FOR_HISTORY + ("persa",):
+            continue
+        sub = await db.collection_sub_items.find_one({"id": v["id"]}, {"_id": 0, "embedding": 0}) or {}
+        quotes = await _commessa_quotes(v["id"])
+        row = {"id": v["id"], "title": v["title"], "client_name": v["client_name"], "stato": st, "text": _commessa_text(v, sub, quotes[0] if quotes else None)}
+        if st == "persa":
+            row.update(lost=(sub.get("lost_reason") or {}).get("category"), value=_quote_value(quotes[0]) if quotes else None)
+        else:
+            logs = await db.job_logs.find({"commessa_id": v["id"]}, {"_id": 0, "hours": 1, "materials": 1, "kind": 1, "date": 1, "problems": 1}).to_list(20000)
+            e = await _commessa_economics(clienti, v["id"], logs)
+            if not e["cost_total"] and not jl.totals(logs)["hours_total"]:
+                continue   # nothing recorded: no history to learn from
+            days = sorted(lg["date"] for lg in logs if lg.get("date") and not lg.get("kind"))
+            row.update(cost=e["cost_total"], labor=e["labor_total"], materials=e["materials_total"], extras=e["extras_total"],
+                       hours=jl.totals(logs)["hours_total"], value=e.get("budget"), complete=e["complete"],
+                       margin_pct=round(e["margin"] / e["budget"] * 100, 1) if e.get("budget") else None,
+                       days=(date.fromisoformat(days[-1]) - date.fromisoformat(days[0])).days + 1 if days else None)
+        out.append(row)
+    return out
+
+
+async def _history_estimate(clienti: dict, sub: dict, view: dict, refresh: bool = False, user_id: Optional[str] = None) -> dict:
+    """The estimate from the similar commesse (kept a week on the commessa; refresh: again)."""
+    cached = sub.get("history_estimate")
+    if cached and not refresh and cached.get("computed_at", "") >= (datetime.now(timezone.utc) - timedelta(days=ESTIMATE_DAYS)).isoformat():
+        return cached
+    now = datetime.now(timezone.utc).isoformat()
+    rows = await _history_rows(clienti, view["id"])
+    done = [r for r in rows if r["stato"] != "persa"]
+    quotes = await _commessa_quotes(view["id"])
+    target = _commessa_text(view, sub, quotes[0] if quotes else None)
+    if not done:
+        est = {"status": "no_history", "computed_at": now, "message": "Non ci sono ancora commesse completate con ore o costi registrati da confrontare."}
+    else:
+        cands = [{"id": r["id"], "text": r["text"]} for r in rows]
+        method = "ai"
+        try:
+            ids = await jl.pick_similar(target, cands, user_id=user_id or clienti.get("user_id"))
+        except Exception:
+            logger.exception("similar commesse: the model did not answer")
+            ids, method = jl.similar_by_words(target, cands), "parole"
+        by = {r["id"]: r for r in rows}
+        sim = [by[i] for i in ids if i in by and by[i]["stato"] != "persa"]
+        lost = [by[i] for i in ids if i in by and by[i]["stato"] == "persa"]
+        if not sim:
+            est = {"status": "no_similar", "computed_at": now, "method": method,
+                   "message": "Tra le commesse completate non ne trovo di simili a questa.",
+                   "lost_for_price": [{"title": r["title"], "value": r.get("value")} for r in lost if r.get("lost") == "prezzo"]}
+        else:
+            stat = lambda k: {"median": jl.median([r.get(k) for r in sim]), "min": min((r[k] for r in sim if r.get(k) is not None), default=None),
+                              "max": max((r[k] for r in sim if r.get(k) is not None), default=None)}
+            m = jl.median([r.get("margin_pct") for r in sim])
+            cost = stat("cost")
+            est = {"status": "ok", "computed_at": now, "method": method, "n": len(sim),
+                   "similar": [{k: r.get(k) for k in ("id", "title", "client_name", "cost", "hours", "value", "margin_pct", "days", "complete")} for r in sim],
+                   "cost": cost, "hours": stat("hours"), "days": stat("days"), "materials_median": jl.median([r.get("materials") for r in sim]),
+                   "labor_median": jl.median([r.get("labor") for r in sim]), "extras_median": jl.median([r.get("extras") for r in sim]),
+                   "margin_pct_median": m, "incomplete": sum(1 for r in sim if not r.get("complete")),
+                   "suggested_value": round(cost["median"] / (1 - m / 100), -1) if cost["median"] and m is not None and 0 < m < 90 else None,
+                   "lost_for_price": [{"title": r["title"], "value": r.get("value")} for r in lost if r.get("lost") == "prezzo"]}
+    await db.collection_sub_items.update_one({"id": view["id"]}, {"$set": {"history_estimate": est}})
+    return est
+
+
+def _value_check(est: dict, value: Optional[float]) -> str:
+    """One line on a value against the history (the quote being uploaded, the commessa's value)."""
+    if not value or (est or {}).get("status") != "ok" or not est["cost"]["median"]:
+        return ""
+    cost = est["cost"]["median"]
+    pct = round((value - cost) / value * 100)
+    line = f"📊 Nei tuoi {est['n']} lavori simili il costo è stato {jl._eur(cost)}: con {jl._eur(value)} il margine atteso è {pct}%"
+    if est.get("margin_pct_median") is not None:
+        line += f" (di solito {est['margin_pct_median']:.0f}%)"
+    if pct < 0:
+        line = "⚠️ " + line[2:] + ": rischi di lavorare in perdita"
+    elif est.get("margin_pct_median") is not None and pct < est["margin_pct_median"] - 5:
+        line = "⚠️ " + line[2:] + ": sotto il tuo solito"
+    lost = [x["value"] for x in est.get("lost_for_price") or [] if x.get("value")]
+    if lost and value >= min(lost):
+        line += f". Preventivi simili persi per il prezzo: {', '.join(jl._eur(x) for x in sorted(lost))}"
+    return line + "."
+
+
+async def _margin_forecast(clienti: dict, sub: dict, view: dict, e: dict) -> Optional[dict]:
+    """The commessa in progress at its end: progress (planned activities, else milestones, else the
+    time between start and planned end), cost and margin expected, expected end and delay."""
+    if vx.norm_stato(view["stato"]) not in (vx.WORKING_STATO, "sospesa") or not e.get("budget"):
+        return None
+    today = jl.today_local()
+    acts = [a for a in await db.job_activities.find({"commessa_id": view["id"]}, {"_id": 0, "status": 1}).to_list(1000) if a.get("status") != "annullata"]
+    ms = await db.job_milestones.find({"commessa_id": view["id"]}, {"_id": 0, "done": 1}).to_list(1000)
+    smap = clienti.get("system_sub_map") or {}
+    def day(v):
+        try:
+            return date.fromisoformat(str(v or "")[:10])
+        except ValueError:
+            return None
+    quotes = await _commessa_quotes(view["id"])
+    first = await db.job_logs.find({"commessa_id": view["id"], "kind": {"$exists": False}}, {"_id": 0, "date": 1}).to_list(20000)
+    start = day(_sysval(sub.get("data"), smap, "data_inizio")) or day(min((x["date"] for x in first if x.get("date")), default=None))
+    end = day(_sysval(sub.get("data"), smap, "data_fine")) or day(((quotes[0] if quotes else {}).get("data") or {}).get("end"))
+    progress, source = None, ""
+    if len(acts) >= 2:
+        progress, source = sum(1 for a in acts if a["status"] == "svolta") / len(acts), "attività pianificate svolte"
+    elif len(ms) >= 2:
+        progress, source = sum(1 for m in ms if m.get("done")) / len(ms), "milestone fatte"
+    elif start and end and end > start and start <= today:
+        progress, source = min(1.0, (today - start).days / (end - start).days), "tempo trascorso"
+    est = sub.get("history_estimate") or {}
+    hist = est["cost"]["median"] if est.get("status") == "ok" else None
+    f = jl.forecast(e["budget"], e["cost_total"], progress, hist)
+    if not f:
+        return None
+    out = {**f, "cost_now": e["cost_total"], "budget": e["budget"], "progress_pct": round(progress * 100) if progress is not None else None,
+           "progress_source": source, "planned_end": end.isoformat() if end else None, "expected_end": None, "delay_days": None,
+           "confidence": "media" if progress is not None and progress >= 0.3 and source != "tempo trascorso" else "bassa",
+           "hist_margin_pct": est.get("margin_pct_median") if est.get("status") == "ok" else None, "complete": e["complete"]}
+    if start and progress and 0.15 <= progress < 1 and source != "tempo trascorso" and today > start:
+        exp = start + timedelta(days=round((today - start).days / progress))
+        out["expected_end"] = exp.isoformat()
+        if end:
+            out["delay_days"] = (exp - end).days
+    return out
+
+
+def _forecast_line(f: dict) -> str:
+    line = (f"📈 A fine lavori: costi {jl._eur(f['cost'])}, margine {jl._eur(f['margin'])} ({f['margin_pct']:.0f}%)"
+            + (f", avanzamento {f['progress_pct']}% ({f['progress_source']})" if f.get("progress_pct") is not None else ", stima dallo storico"))
+    if f.get("expected_end"):
+        line += f", fine prevista {_short_it_date(f['expected_end'])}" + (f" (+{f['delay_days']} g)" if (f.get("delay_days") or 0) > 0 else "")
+    return line
+
+
+async def _check_forecast_alert(clienti: dict, commessa_id: str) -> None:
+    """Once per level - in loss, half the usual margin - when the progress says enough (25%)."""
+    try:
+        ctx = await _commessa_ctx(commessa_id)
+        if not ctx:
+            return
+        _cl, sub, _c, view = ctx
+        e = await _commessa_economics(clienti, commessa_id)
+        f = await _margin_forecast(clienti, sub, view, e)
+        econ_doc = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
+        sent = set(econ_doc.get("forecast_alerts") or [])
+        now_levels = set()
+        if f and (f.get("progress_pct") or 0) >= 25:
+            if f["margin"] < 0:
+                now_levels.add("perdita")
+            if f.get("hist_margin_pct") and f["margin_pct"] < f["hist_margin_pct"] / 2:
+                now_levels.add("basso")
+        new = now_levels - sent
+        if now_levels != sent:
+            await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"commessa_id": commessa_id, "forecast_alerts": sorted(now_levels)}}, upsert=True)
+        if not new:
+            return
+        owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+        if owner_doc:
+            head = "📉 Al ritmo attuale chiudi in perdita" if "perdita" in new else \
+                f"📉 Margine in calo (di solito {f['hist_margin_pct']:.0f}% nei lavori simili)"
+            await _notify_owner(User(**owner_doc), f"{head} su «{view['title']}» — {view['client_name']}.\n{_forecast_line(f)}.")
+    except Exception:
+        logger.exception("forecast alert failed")
+
+
+@api_router.get("/jobs/commesse/{commessa_id}/estimate")
+async def get_history_estimate(commessa_id: str, refresh: bool = False, current: User = Depends(get_current_user)):
+    clienti, sub, client = await _commessa_or_404(current, commessa_id, write=False)
+    if not await _sees_costs(current):
+        raise HTTPException(status_code=403, detail=COSTS_ADMIN_ONLY)
+    view = _commessa_view(sub, client, clienti)
+    est = await _history_estimate(clienti, sub, view, refresh=refresh, user_id=current.user_id)
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}
+    return {**est, "value": econ.get("budget"), "value_check": _value_check(est, econ.get("budget"))}
 
 
 # ======================================================================================
@@ -8834,7 +9042,15 @@ async def _quote_proposal(current: User, clienti: dict, sub: dict, view: dict, n
         msg += f"\n⚖️ Il valore della commessa ora è {jl._eur(econ['budget'])}: " + ("scegli quale tenere." if _is_org_admin(current) else "lo deciderà l'amministratore.")
     if feedback:
         msg += "\n" + feedback
-    return {"type": "quote", "quote": _quote_public(doc), "value": value, "current_budget": econ.get("budget"),
+    history = ""
+    if value and await _sees_costs(current):
+        try:
+            history = _value_check(await _history_estimate(clienti, sub, view, user_id=current.user_id), value)
+        except Exception:
+            logger.exception("history check of the quote failed")
+    if history:
+        msg += "\n" + history
+    return {"type": "quote", "quote": _quote_public(doc), "value": value, "current_budget": econ.get("budget"), "history_check": history,
             "current_description": view.get("descrizione") or "", "loss_feedback": feedback, "can_choose_value": _is_org_admin(current),
             "message": msg + "\nConfermi i dati?"}
 
@@ -14202,6 +14418,10 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
         week_exp = sum(float(x.get("amount") or 0) for lg in week(lgs) for x in lg.get("expenses") or [])
         if week_exp or e.get("extras_total"):
             lines.append(f"🧾 Spese: {jl._eur(week_exp)} questa settimana, {jl._eur(e.get('extras_total') or 0)} in tutto")
+        sub_c = await db.collection_sub_items.find_one({"id": c["id"]}, {"_id": 0, "embedding": 0}) or {}
+        fc = await _margin_forecast(clienti, sub_c, c, e) if sub_c else None
+        if fc:
+            lines.append(_forecast_line(fc))
         if e.get("budget"):
             flag = "🔴 " if e["used_pct"] >= 100 else "🟠 " if e["used_pct"] >= 80 else ""
             lines.append(f"{flag}💶 Margine {jl._eur(e['margin'])} = valore {jl._eur(e['budget'])} − costi {jl._eur(e['cost_total'])} "

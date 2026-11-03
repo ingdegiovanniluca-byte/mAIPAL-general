@@ -957,6 +957,7 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
       )}
       {!proposal.current_budget && proposal.value ? <div className="mt-2 text-[12px] text-white/60">Il valore della commessa diventa {eur(proposal.value)}.</div> : null}
       {proposal.loss_feedback && <div className="mt-3 text-[12.5px] text-[#F2C14E]" data-testid="quote-loss-feedback">{proposal.loss_feedback}</div>}
+      {proposal.history_check && <div className="mt-2 text-[12.5px] text-white/85" data-testid="quote-history-check">{proposal.history_check}</div>}
       {desc && (
         <div className="mt-3">
           <button type="button" onClick={() => setUseDesc((v) => !v)} aria-pressed={useDesc} className="flex items-center gap-2.5 text-[13px] text-white">
@@ -1233,6 +1234,56 @@ function PlanView({ commessa, activities, quotes, meId, isAdmin, canWrite, onCha
   );
 }
 
+// ===== The quote from history: the similar commesse already closed, what they really cost, the value that keeps the margin
+function HistoryEstimate({ commessa }) {
+  const [est, setEst] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = (refresh = false) => {
+    setBusy(true);
+    api.get(`/jobs/commesse/${commessa.id}/estimate`, { params: refresh ? { refresh: true } : {} }).then((r) => setEst(r.data))
+      .catch((e) => setEst({ status: "error", message: e.response?.data?.detail || "Stima non disponibile" })).finally(() => setBusy(false));
+  };
+  useEffect(() => { load(); }, [commessa.id]);
+  const rng = (x, fmt) => (x?.median == null ? "—" : `${fmt(x.median)}${x.min !== x.max ? ` (${fmt(x.min)}–${fmt(x.max)})` : ""}`);
+  return (
+    <div className="mt-4 pt-3 border-t border-white/[0.16]" data-testid="history-estimate">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 text-[10px] uppercase tracking-widest text-white/55">stima dai tuoi lavori simili</div>
+        <button type="button" onClick={() => load(true)} disabled={busy} aria-label="Aggiorna la stima" data-testid="estimate-refresh" className="p-1 text-white/70 disabled:opacity-50">
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+        </button>
+      </div>
+      {!est ? <div className="text-[12.5px] text-white/60 py-2">Cerco le commesse simili…</div> : est.status !== "ok" ? (
+        <div className="text-[12.5px] text-white/65 py-2" data-testid="estimate-empty">{est.message}
+          {(est.lost_for_price || []).length > 0 && ` Preventivi simili persi per il prezzo: ${est.lost_for_price.map((x) => x.value ? eur(x.value) : x.title).join(", ")}.`}</div>
+      ) : (
+        <div className="mt-1.5 text-[13.5px] text-white/90 space-y-1">
+          {est.suggested_value && (
+            <div className="text-[15px] font-semibold text-white" data-testid="estimate-value">
+              Valore consigliato ≈ {eur(est.suggested_value)}
+              <span className="block text-[12px] font-normal text-white/60">per tenere il margine dei simili ({Math.round(est.margin_pct_median)}%) sul costo atteso</span>
+            </div>
+          )}
+          <div>💶 Costo atteso {rng(est.cost, eur)}</div>
+          <div>⏱ Ore {rng(est.hours, (x) => `${fmtNum(x)} h`)}{est.days?.median ? ` · durata ${rng(est.days, (x) => `${fmtNum(x)} gg`)}` : ""}</div>
+          {est.margin_pct_median != null && <div>📈 Margine medio {Math.round(est.margin_pct_median)}%</div>}
+          {est.value_check && <div className="text-[12.5px] text-white/80" data-testid="estimate-check">{est.value_check}</div>}
+          {(est.lost_for_price || []).length > 0 && (
+            <div className="text-[12.5px] text-[#F2C14E]">Persi per il prezzo: {est.lost_for_price.map((x) => `${x.title}${x.value ? ` (${eur(x.value)})` : ""}`).join(", ")}</div>
+          )}
+          <details className="pt-0.5"><summary className="text-[12px] text-white/60 cursor-pointer">Su {est.n} {est.n === 1 ? "commessa" : "commesse"} simili</summary>
+            {est.similar.map((x) => (
+              <div key={x.id} className="text-[12.5px] text-white/75 py-0.5">{x.title} — {x.client_name}: {eur(x.cost)}{x.hours ? ` · ${fmtNum(x.hours)} h` : ""}
+                {x.margin_pct != null ? ` · margine ${Math.round(x.margin_pct)}%` : ""}{x.complete ? "" : " · costi incompleti"}</div>
+            ))}
+            <div className="text-[11.5px] text-white/50 pt-1">Numeri dal tuo diario e dai Costi: ore × tariffa, materiali × prezzo, altre spese. {est.method === "parole" ? "Simili per parole in comune." : "Simili scelte da mAIPAL tra le tue commesse."}</div>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ===== Lavori extra: done on the site, not in the quote - found in the diary, approved by the client, billed
 const EXTRA_DONE = ["approvato", "rifiutato", "compreso", "scartato"];
 function ExtraWorksView({ commessa, rows, onChanged }) {
@@ -1419,6 +1470,32 @@ function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, on
   );
 }
 
+// The margin at the end of the works, from the progress (or the history): how it is computed is said
+function ForecastBlock({ f }) {
+  const bad = f.margin < 0;
+  const low = !bad && f.hist_margin_pct != null && f.margin_pct < f.hist_margin_pct / 2;
+  return (
+    <div className="mt-3 rounded-2xl bg-white/[0.07] px-3.5 py-3" data-testid="costs-forecast">
+      <div className="text-[10px] uppercase tracking-widest text-white/55">previsione a fine lavori</div>
+      <div className="mt-1 flex items-baseline gap-2 flex-wrap">
+        <span className="text-[15px] font-semibold" style={{ color: bad ? "#F08A8A" : low ? "#F2C14E" : "#fff" }} data-testid="forecast-margin">
+          Margine {eur(f.margin)} ({Math.round(f.margin_pct)}%)
+        </span>
+        <span className="text-[12.5px] text-white/70">costi {eur(f.cost)}</span>
+      </div>
+      <div className="text-[12px] text-white/65 mt-1 leading-snug">
+        {f.basis === "andamento" ? `Al ritmo attuale: speso ${eur(f.cost_now)} con il ${f.progress_pct}% fatto (${f.progress_source}).`
+          : f.basis === "storico" ? `Stima dal costo dei tuoi lavori simili${f.progress_pct != null ? ` (avanzamento ${f.progress_pct}%, ancora poco per il ritmo)` : ""}.`
+          : "Lavori conclusi: è il costo registrato."}
+        {f.hist_margin_pct != null && ` Nei lavori simili il margine è stato ${Math.round(f.hist_margin_pct)}%.`}
+        {f.expected_end && ` Fine prevista ${shortDay(f.expected_end)}${f.delay_days > 0 ? ` (${f.delay_days} ${f.delay_days === 1 ? "giorno" : "giorni"} dopo il previsto)` : ""}.`}
+        {f.confidence === "bassa" && " Stima indicativa: diventa più affidabile con l'avanzare dei lavori."}
+        {!f.complete && " Ci sono ore o materiali senza tariffa: i costi sono per difetto."}
+      </div>
+    </div>
+  );
+}
+
 function CostsView({ commessaId, onChanged }) {
   const [open, setOpen] = useState(readOpen);
   const toggle = (k) => setOpen((o) => {
@@ -1480,6 +1557,7 @@ function CostsView({ commessaId, onChanged }) {
           <div className="mt-1.5 text-[12px] text-white/70" data-testid="costs-pct">
             {pct >= 100 ? `Preventivo superato: speso il ${Math.round(pct)}%` : `Speso il ${Math.round(pct || 0)}% del preventivo`}
           </div>
+          {e.forecast && <ForecastBlock f={e.forecast} />}
         </div>
       ) : <div className="text-[12px] text-white/55 pb-1">Inserisci il preventivo per vedere il margine.</div>}
       {!e.complete && (
@@ -2379,6 +2457,7 @@ export default function JobDiaryPage() {
         <>
           <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
             onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
+          {detail.can_see_costs && <HistoryEstimate commessa={c} />}
           {detail.is_admin && !ro && <ExtraWorksView commessa={c} rows={detail.extra_works || []} onChanged={() => loadDetail(selectedId)} />}
         </>
       ) : section === "pianificazione" ? (

@@ -884,6 +884,82 @@ async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[
     return out[:5]
 
 
+# ---- quotes from history: the commesse like this one, and what they really cost ----
+_SIM_STOP = set("""della delle dello degli nella nelle negli sulla sulle con per tra fra dal dai dalla anche come lavori lavoro
+commessa cliente casa via piano rifacimento""".split())
+
+
+def _sim_words(text: str) -> set:
+    return {w for w in _words(text) if len(w) >= 4 and w not in _SIM_STOP}
+
+
+def similar_by_words(target: str, candidates: list, n: int = 6) -> list:
+    """The candidates sharing most meaningful words with the target (no model). -> ids"""
+    tw = _sim_words(target)
+    if not tw:
+        return []
+    scored = []
+    for c in candidates:
+        cw = _sim_words(c.get("text") or "")
+        common = {w for w in tw if _said(w, cw)}
+        score = len(common) / len(tw)
+        if score >= 0.2:
+            scored.append((score, c["id"]))
+    return [i for _s, i in sorted(scored, key=lambda x: -x[0])[:n]]
+
+
+async def pick_similar(target: str, candidates: list, user_id: Optional[str] = None, channel: str = "web") -> list:
+    """The candidates that are the same kind of work as the target (same type of job, comparable
+    size), chosen by the model among the given ones only. -> ids (at most 8)"""
+    if not candidates or not (target or "").strip():
+        return []
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Ricevi una COMMESSA NUOVA e l'elenco delle commesse passate dell'impresa "
+        "(id: descrizione). Scegli solo quelle che sono lo STESSO TIPO DI LAVORO (es. rifacimento bagno con rifacimento bagno, "
+        "impianto elettrico di un appartamento con impianto elettrico di un appartamento) e di dimensione paragonabile, se si capisce. "
+        "Nel dubbio non sceglierla. Usa SOLO gli id dell'elenco. Rispondi SOLO con JSON: {\"ids\": [\"...\"]}"
+    )
+    user = f"COMMESSA NUOVA:\n{target[:3000]}\n\nCOMMESSE PASSATE:\n" + "\n".join(f"{c['id']}: {(c.get('text') or '')[:400]}" for c in candidates[:120])
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=500, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+    valid = {c["id"] for c in candidates}
+    return list(dict.fromkeys(str(i) for i in p.get("ids") or [] if str(i) in valid))[:8]
+
+
+def median(xs: list) -> Optional[float]:
+    xs = sorted(float(x) for x in xs if x is not None)
+    if not xs:
+        return None
+    k = len(xs) // 2
+    return round(xs[k] if len(xs) % 2 else (xs[k - 1] + xs[k]) / 2, 2)
+
+
+def forecast(budget: Optional[float], cost_now: float, progress: Optional[float], hist_cost: Optional[float] = None) -> Optional[dict]:
+    """The cost and margin at the end: today's cost / the progress (from 15% on), else what the
+    similar commesse cost (never less than spent). -> {"cost", "margin", "margin_pct", "basis"} or None"""
+    if not budget:
+        return None
+    if progress is not None and progress >= 0.999:
+        cost, basis = cost_now, "lavori conclusi"
+    elif progress is not None and progress >= 0.15 and cost_now > 0:
+        cost, basis = cost_now / progress, "andamento"
+    elif hist_cost:
+        cost, basis = max(cost_now, hist_cost), "storico"
+    else:
+        return None
+    cost = round(cost, 2)
+    margin = round(float(budget) - cost, 2)
+    return {"cost": cost, "margin": margin, "margin_pct": round(margin / float(budget) * 100, 1), "basis": basis}
+
+
 # ---- costs and margin ----
 # Hours x the person's hourly cost (or the default one), materials x their unit price, plus
 # the other costs entered by hand (scaffolding hire, disposal...), against the quote. The rates
