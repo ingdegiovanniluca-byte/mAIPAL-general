@@ -598,6 +598,33 @@ function LostSheet({ commessa, onClose, onSaved }) {
 }
 
 // ===== Every change of the commessa's parameters: who, when, from what to what
+// Closing a commessa with something still open: listed, and closed only if confirmed (AUT-CHI-01)
+function CloseCheckSheet({ check, onClose, onConfirm }) {
+  const [busy, setBusy] = useState(false);
+  const block = (title, rows) => rows?.length ? (
+    <div className="mt-3">
+      <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">{title}</div>
+      {rows.map((x, i) => <div key={i} className="text-[13.5px] text-white/90 py-0.5">• {x}</div>)}
+    </div>
+  ) : null;
+  return (
+    <GlassBottomSheet onClose={onClose} testid="close-check-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
+      <div className="kicker">· chiudere la commessa?</div>
+      <div className="text-[13px] text-white/70 mt-1">Ci sono ancora cose aperte. Chiudendo, le attività pianificate vengono annullate, i promemoria si fermano
+        e preparo il report finale nella cartella Report.</div>
+      {block("problemi aperti", check.problems)}
+      {block("attività non svolte", check.activities)}
+      <div className="mt-4 flex gap-2">
+        <button type="button" disabled={busy} data-testid="close-confirm" onClick={async () => { setBusy(true); await onConfirm(); setBusy(false); }}
+          className="flex-1 h-11 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Chiudi comunque
+        </button>
+        <button type="button" onClick={onClose} className="h-11 px-5 rounded-full lg-glass text-[14px] text-white">Annulla</button>
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
 function HistorySheet({ rows, onClose }) {
   const val = (v) => (v === null || v === undefined || v === "" ? "—" : String(v));
   return (
@@ -1924,6 +1951,7 @@ export default function JobDiaryPage() {
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [contactsOpen, setContactsOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  const [closeCheck, setCloseCheck] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [updatesOpen, setUpdatesOpen] = useState(false);   // the client's weekly progress on Telegram
   const [siteOpen, setSiteOpen] = useState(false);
@@ -2019,10 +2047,17 @@ export default function JobDiaryPage() {
   }, [commesse]);
 
   const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("diary"); };
-  const setStato = async (stato) => {
+  const setStato = async (stato, confirmClose = false) => {
     if (stato === "persa") { setLostOpen(true); return; }   // only with its reason
-    try { await api.patch(`/jobs/commesse/${selectedId}/stato`, { stato }); await reload(); }
-    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    try {
+      await api.patch(`/jobs/commesse/${selectedId}/stato`, { stato, confirm_close: confirmClose });
+      if (stato === "completata") toast.success("Commessa completata: preparo il report finale nella cartella Report");
+      setCloseCheck(null); await reload();
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      if (d?.code === "close_check") { setCloseCheck(d); return; }
+      toast.error((typeof d === "string" ? d : d?.message) || "Errore");
+    }
   };
   const delLog = (log) => {
     toast(log.kind === "stato" ? "Togliere questo cambio di stato dal diario?"
@@ -2461,6 +2496,7 @@ export default function JobDiaryPage() {
           onClick={() => setChatOpen(true)} />
       )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
+      {closeCheck && <CloseCheckSheet check={closeCheck} onClose={() => setCloseCheck(null)} onConfirm={() => setStato("completata", true)} />}
       {lostOpen && c && <LostSheet commessa={c} onClose={() => setLostOpen(false)} onSaved={() => { setLostOpen(false); reload(); }} />}
       {historyOpen && c && <HistorySheet rows={detail?.history || []} onClose={() => setHistoryOpen(false)} />}
       {contactsOpen && c && (

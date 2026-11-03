@@ -13,7 +13,7 @@ const KIND_META = {
   create_task: { label: "Crea task", icon: CheckSquare },
   list_delete: { label: "Elimina lista", icon: Trash2 },
   news_delete: { label: "Pulizia news", icon: Newspaper },
-  job_weekly: { label: "Riepilogo cantieri", icon: BarChart3 },
+  job_weekly: { label: "Report settimanale cantieri", icon: BarChart3 },
 };
 
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];

@@ -4,9 +4,11 @@ import { Check, Copy, Loader2, MessageCircle, Send, Eye } from "lucide-react";
 import { api } from "@/lib/api";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
-/* The client's weekly progress on Telegram, from the commessa's diary: the invitation (link and
+/* The client's weekly progress, from the commessa's diary: the invitation to Telegram (link and
    code, sent on WhatsApp like a collaborator's), on / off for this commessa, what they would get
-   now and "send it now". The message never has hours, costs, names or problems. */
+   now. With the organization's approval on (the default) the week's message is a DRAFT the
+   administrator approves, edits or discards - nothing reaches the client before; approved, it
+   goes on Telegram or, when the client isn't there, it is copied. Never hours, costs, names, problems. */
 
 const when = (iso) => (iso ? new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "short" }) : "");
 
@@ -24,9 +26,10 @@ export default function ClientUpdatesSheet({ commessa, onClose, onChanged }) {
   const [invite, setInvite] = useState(null);
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState("");
+  const [draftText, setDraftText] = useState("");
   const base = `/jobs/commesse/${commessa.id}/client-updates`;
   const load = async () => {
-    try { const r = await api.get(base); setSt(r.data); setPhone(r.data.phone || ""); }
+    try { const r = await api.get(base); setSt(r.data); setPhone(r.data.phone || ""); setDraftText(r.data.draft?.text || ""); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); onClose(); }
   };
   useEffect(() => { load(); }, [commessa.id]);
@@ -38,6 +41,15 @@ export default function ClientUpdatesSheet({ commessa, onClose, onChanged }) {
   const toggle = () => run("toggle", async () => { const r = await api.patch(base, { enabled: !st.enabled }); setSt(r.data); onChanged?.(); });
   const doPreview = () => run("preview", async () => { const r = await api.post(`${base}/preview`); setPreview(r.data.text || ""); });
   const send = () => run("send", async () => { const r = await api.post(`${base}/send`); setPreview(r.data.text); toast.success("Avanzamento inviato al cliente"); load(); });
+  const newDraft = () => run("draft", async () => { const r = await api.post(`${base}/draft`); setSt(r.data); setDraftText(r.data.draft?.text || ""); });
+  const decide = (action) => run(action, async () => {
+    const r = await api.post(`${base}/draft/decide`, { action, text: draftText });
+    if (action === "approve" && !r.data.linked) {
+      try { await navigator.clipboard.writeText(r.data.text); toast.success("Approvata e copiata: incollala nel messaggio al cliente"); }
+      catch { toast.success("Approvata: copia il testo e mandalo al cliente"); }
+    } else toast.success(r.data.message.replace(/^\S+\s/, ""));
+    setSt(r.data.state); setDraftText(r.data.state.draft?.text || ""); onChanged?.();
+  });
   const unlink = () => toast(`Scollegare ${st.client_name}? Non riceverà più gli aggiornamenti.`, {
     action: { label: "Scollega", onClick: () => run("unlink", async () => { const r = await api.delete(`${base}/link`); setSt(r.data); setInvite(null); }) },
     cancel: { label: "Annulla", onClick: () => {} }, duration: 7000,
@@ -55,9 +67,28 @@ export default function ClientUpdatesSheet({ commessa, onClose, onChanged }) {
       {!st ? <div className="kicker mt-4">caricamento…</div> : (
         <div className="mt-3 space-y-4">
           <p className="text-[13px] text-white/70 leading-snug">
-            Ogni {st.day_label} alle {st.at} il cliente riceve su Telegram un breve messaggio con i lavori fatti nella settimana, le milestone
-            completate e i prossimi lavori. Mai ore, costi, nomi o problemi. Tu ne ricevi una copia.
+            {st.approval
+              ? `Ogni ${st.day_label} alle ${st.at} preparo per il cliente un breve messaggio con i lavori fatti nella settimana e quelli previsti la prossima: ti arriva come bozza da approvare, modificare o scartare. Al cliente non parte niente senza la tua approvazione.`
+              : `Ogni ${st.day_label} alle ${st.at} il cliente riceve su Telegram un breve messaggio con i lavori fatti nella settimana e quelli previsti la prossima. Tu ne ricevi una copia.`}
+            {" "}Mai ore, costi, nomi o problemi.
           </p>
+          {st.draft && (
+            <div className="space-y-2" data-testid="client-draft">
+              <div className="text-[10px] uppercase tracking-widest text-white/55">bozza da approvare</div>
+              <textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} rows={8} data-testid="client-draft-text"
+                className="w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[13px] leading-relaxed text-white outline-none resize-y" />
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => decide("approve")} disabled={!!busy} data-testid="client-draft-approve" className={`${pill} bg-white text-[#403A3C] font-medium`}>
+                  {busy === "approve" ? <Loader2 size={14} className="animate-spin" /> : st.status === "active" ? <Send size={14} /> : <Copy size={14} />}
+                  {st.status === "active" ? "Approva e invia" : "Approva e copia"}
+                </button>
+                {draftText !== st.draft.text && (
+                  <button type="button" onClick={() => decide("save")} disabled={!!busy} className={`${pill} bg-white/15 text-white`}>Salva la modifica</button>
+                )}
+                <button type="button" onClick={() => decide("discard")} disabled={!!busy} data-testid="client-draft-discard" className={`${pill} text-white/70`}>Scarta</button>
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 text-[13px] text-white" data-testid="client-updates-status">
             <span className="h-2 w-2 rounded-full" style={{ background: st.status === "active" ? "#8ED973" : st.status === "invited" ? "#F2C14E" : "rgba(255,255,255,0.4)" }} />
             {st.status === "active" ? `Collegato su Telegram${st.linked_at ? ` dal ${when(st.linked_at)}` : ""}`
@@ -90,14 +121,20 @@ export default function ClientUpdatesSheet({ commessa, onClose, onChanged }) {
             className="w-full flex items-start gap-3 text-left text-sm text-white disabled:opacity-60">
             <Dot on={st.enabled} />
             <span>Avanzamento settimanale per questa commessa
-              <span className="block text-xs text-white/55">{st.enabled ? "Acceso: parte da solo quando il cliente è collegato." : "Spento: per questa commessa non parte niente."}</span>
+              <span className="block text-xs text-white/55">{!st.enabled ? "Spento: per questa commessa non parte niente." : st.approval ? "Acceso: ogni settimana ti preparo la bozza da approvare."
+                : "Acceso: parte da solo quando il cliente è collegato."}</span>
             </span>
           </button>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={doPreview} disabled={!!busy} data-testid="client-updates-preview" className={`${pill} bg-white/15 text-white`}>
               {busy === "preview" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Anteprima
             </button>
-            {st.status === "active" && (
+            {st.approval && !st.draft && (
+              <button type="button" onClick={newDraft} disabled={!!busy} data-testid="client-draft-new" className={`${pill} bg-white text-[#403A3C] font-medium`}>
+                {busy === "draft" ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Prepara la bozza
+              </button>
+            )}
+            {!st.approval && st.status === "active" && (
               <button type="button" onClick={send} disabled={!!busy} data-testid="client-updates-send" className={`${pill} bg-white text-[#403A3C] font-medium`}>
                 {busy === "send" ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Invia ora
               </button>

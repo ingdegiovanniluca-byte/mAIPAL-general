@@ -56,7 +56,7 @@ def _to_user_pydantic(doc):
     from server import User
     return User(**{k: doc.get(k) for k in [
         "user_id","email","name","picture","onboarded","profession","sector","verticals","interests","tone","created_at","role",
-        "org_id","org_role","telegram_chat_id","business_vertical",
+        "org_id","org_role","telegram_chat_id","business_vertical","tenant_id",
     ] if k in doc})
 
 
@@ -601,6 +601,18 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             except Exception as e:
                 await update.message.reply_text(f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
             return
+        if state.get("pending_client_draft") and _state_is_fresh(state):   # the client's draft, rewritten (AUT-WEEK-03)
+            await _set_state(db, chat_id, user["user_id"], pending_client_draft=None)
+            from server import _decide_client_draft, _show_client_draft, _commessa_ctx
+            sub_id = state["pending_client_draft"]
+            try:
+                out = await _decide_client_draft(sub_id, "save", content)
+                cx = await _commessa_ctx(sub_id)
+                link = await db.client_links.find_one({"item_id": cx[1].get("item_id")}, {"_id": 0}) or {}
+                await _show_client_draft(user, sub_id, cx[3], out["text"], bool(link.get("telegram_chat_id") and link.get("status") == "active"))
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+            return
         if state.get("pending_lost") and _state_is_fresh(state):   # the words of "Altro" for a lost quote
             await _set_state(db, chat_id, user["user_id"], pending_lost=None)
             from server import _quote_outcome
@@ -1110,6 +1122,29 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await _set_state(db, chat_id, user["user_id"], pending_activity={"id": rest, "kind": "add"})
             await ctx.bot.send_message(chat_id=chat_id, text="Cosa aggiungo da ricordare? (es. «porto i flessibili da 30 cm», «serve la flex»)")
+    elif data.startswith("cud:"):   # the client's weekly draft: approve, edit, discard (AUT-WEEK-03)
+        from server import _decide_client_draft, _commessa_ctx, _is_org_admin
+        _k, choice, sub_id = data.split(":", 2)
+        current = _to_user_pydantic(user)
+        cx = await _commessa_ctx(sub_id)
+        owner = await db.users.find_one({"user_id": cx[0].get("user_id")}, {"_id": 0, "user_id": 1, "tenant_id": 1}) if cx else None
+        if not owner or not _is_org_admin(current) or not (owner["user_id"] == user["user_id"]
+                                                         or (current.tenant_id and owner.get("tenant_id") == current.tenant_id)):
+            await ctx.bot.send_message(chat_id=chat_id, text="La bozza per il cliente la approva l'amministratore.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        if choice == "ed":
+            await _set_state(db, chat_id, user["user_id"], pending_client_draft=sub_id)
+            await ctx.bot.send_message(chat_id=chat_id, text="✏️ Scrivimi il testo come vuoi che arrivi al cliente (lo rivedi prima che parta).")
+            return
+        try:
+            out = await _decide_client_draft(sub_id, "approve" if choice == "ok" else "discard")
+            await ctx.bot.send_message(chat_id=chat_id, text=out["message"] + (f"\n\n{out['text']}" if out.get("status") == "approvata" else ""))
+        except Exception as e:
+            await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
     elif data.startswith(("qc:", "qx:", "qv:", "qo:", "qr:", "docc:")):   # quotes: confirm, discard, value, outcome, lost reason; a document's commessa
         from server import _confirm_quote, _choose_quote_value, _quote_outcome, LOST_CATEGORIES
         current = _to_user_pydantic(user)

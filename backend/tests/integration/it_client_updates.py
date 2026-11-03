@@ -218,9 +218,15 @@ async def main():
         == ["Posati i sanitari e il piatto doccia"]
     assert cu.safe_lines(["Manca il miscelatore", "Ritardo per colpa del fornitore"], "Manca il miscelatore. Ritardo per colpa del fornitore") == []
 
-    # 1) not linked yet: on for the commessa, friday at 17 by default
+    # this test: the organization chose no approval (straight to the client); the approval itself: it_commesse_e2e
+    _orig_settings = server._settings_of_user
+    async def no_approval(uid):
+        return {**(await _orig_settings(uid)), "client_report_approval": False}
+    server._settings_of_user = no_approval
+
+    # 1) not linked yet: on for the commessa, friday at 18 by default (the organization's weekly report)
     st = await server.get_client_updates("s_bagno", me)
-    assert st["status"] == "none" and st["enabled"] and (st["day"], st["at"], st["day_label"]) == (4, "17:00", "venerdì") and st["phone"] == "333 1234567"
+    assert st["status"] == "none" and st["enabled"] and (st["day"], st["at"], st["day_label"]) == (4, "18:00", "venerdì") and st["phone"] == "333 1234567"
     # the invitation: link and code, on WhatsApp to the client
     r = await server.invite_client_updates("s_bagno", server.ClientInvitePayload(), me)
     inv = r["invite"]
@@ -251,18 +257,18 @@ async def main():
     assert "Posati i sanitari" in given and "In cantiere dalle" not in given and "Stato:" not in given   # no presences, no events
     assert not [x for x in NOTICES if x[0] == 950]                                                        # nothing sent
 
-    # 3) on friday from 17:00, once
+    # 3) on friday from 18:00, once
     at = lambda d, hm: datetime.combine(d, datetime.strptime(hm, "%H:%M").time(), tzinfo=LOC).astimezone(timezone.utc)
     if friday == today:
-        assert await server._client_weekly_updates(at(friday, "16:59")) == 0
+        assert await server._client_weekly_updates(at(friday, "17:59")) == 0
     assert await server._client_weekly_updates(at(friday - timedelta(days=1), "18:00")) == 0   # thursday
     NOTICES.clear()
-    n = await server._client_weekly_updates(at(friday, "17:05"))
+    n = await server._client_weekly_updates(at(friday, "18:05"))
     assert n == 1, n                                       # the Bagno (the Tetto has nothing this week)
     sent = [t for c, t in NOTICES if c == 950]
     assert len(sent) == 1 and "Posati i sanitari e il piatto doccia" in sent[0]
     assert any(c == 77 and t.startswith("📤 Avanzamento settimanale inviato a Mario Rossi") for c, t in NOTICES)
-    assert await server._client_weekly_updates(at(friday, "18:00")) == 0          # not twice
+    assert await server._client_weekly_updates(at(friday, "18:30")) == 0          # not twice
     assert (await server.get_client_updates("s_bagno", me))["last_sent_at"]
 
     # 4) the client writes: a fixed answer; /stop and /start
@@ -273,12 +279,12 @@ async def main():
     next_friday = friday + timedelta(days=7)
     for sdoc in db.collection_sub_items.docs:
         (sdoc.get("client_updates") or {}).pop("last_checked", None)
-    assert await server._client_weekly_updates(at(next_friday, "17:30")) == 0       # stopped: nothing
+    assert await server._client_weekly_updates(at(next_friday, "18:30")) == 0       # stopped: nothing
     assert await ctg.handle(CUpd("/start")) and (await server.get_client_updates("s_bagno", me))["status"] == "active"
     # turned off for that commessa: nothing for it
     r = await server.patch_client_updates("s_bagno", server.ClientUpdatesPatch(enabled=False), me)
     assert not r["enabled"]
-    assert await server._client_weekly_updates(at(next_friday, "17:30")) == 0
+    assert await server._client_weekly_updates(at(next_friday, "18:30")) == 0
     await server.patch_client_updates("s_bagno", server.ClientUpdatesPatch(enabled=True), me)
     # an ordinary chat is not a client's
     assert not await ctg.handle(Upd(Msg("ciao")))

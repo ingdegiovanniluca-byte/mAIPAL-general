@@ -1011,6 +1011,10 @@ async def patch_tenant_settings(payload: Dict[str, Any], current: User = Depends
         raise HTTPException(status_code=400, detail=str(e))
     merged = {**((t or {}).get("settings") or {}), **clean}
     await db.tenants.update_one({"id": t["id"]}, {"$set": {"settings": merged}})
+    if {"weekly_report_day", "weekly_report_time"} & set(clean):   # the weekly report's action follows
+        st = osettings.settings({"settings": merged})
+        for u in await db.users.find({"tenant_id": t["id"]}, {"_id": 0, "user_id": 1}).to_list(1000):
+            await _sync_weekly_action(u["user_id"], st)
     return {"settings": osettings.settings({"settings": merged}), "defaults": osettings.DEFAULTS}
 
 
@@ -4197,6 +4201,11 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
             if new_data[skey] == "persa" and vx.norm_stato(_sysval((before or {}).get("data"), smap, "stato")) != "persa" \
                     and not (before or {}).get("lost_reason"):
                 raise HTTPException(status_code=400, detail="Per segnare la commessa come persa serve il motivo: segnala l'esito dal suo diario.")
+            if new_data[skey] == "completata" and vx.norm_stato(_sysval((before or {}).get("data"), smap, "stato")) != "completata" and before:
+                chk = await _close_check(sub_id)
+                if chk["problems"] or chk["activities"]:
+                    raise HTTPException(status_code=409, detail="Prima di chiudere: " + _close_check_text(chk).replace("\n", " · ")
+                                                                + ". Chiudila dal diario della commessa per confermare.")
         if before and not new_data.get(ckey) and (before.get("data") or {}).get(ckey):
             new_data[ckey] = before["data"][ckey]   # the code stays
     r = await db.collection_sub_items.update_one(
@@ -4212,6 +4221,8 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
         if old != new:
             client = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0, "embedding": 0})
             await _log_stato_change(current, coll, after, client, old, new)
+            if new == "completata":
+                _bg(_after_close(current, coll, sub_id))
     return after
 
 
@@ -5951,7 +5962,8 @@ async def generate_commessa_report(payload: CommessaReportPayload, current: User
     return await _generate_commessa_report(current, payload)
 
 
-async def _generate_commessa_report(current: User, payload: CommessaReportPayload, channel: str = "web") -> dict:
+async def _generate_commessa_report(current: User, payload: CommessaReportPayload, channel: str = "web",
+                                    template_name: Optional[str] = None) -> dict:
     """A report of a commessa for a period, with the parts the user picked (state summary, work
     done, hours, problems, materials, milestones, costs) - all from its diary: nothing dictated,
     nothing created (no client, no commessa). Several commesse fit the text -> {"status":
@@ -6062,7 +6074,7 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
                 fields["Non conteggiati"] = ", ".join(miss)
         sections.append({"title": titles[key], "fields": fields})
 
-    template_name = work_reports.COMMESSA_REPORT["name"]
+    template_name = template_name or work_reports.COMMESSA_REPORT["name"]
     company = ""
     if current.org_id:
         org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
@@ -6300,6 +6312,7 @@ LOST_CATEGORIES = {"prezzo": "Prezzo", "tempi": "Tempi", "concorrente": "Concorr
 
 class CommessaStatoPayload(BaseModel):
     stato: str
+    confirm_close: bool = False               # COMPLETATA with open problems / activities: confirmed (AUT-CHI-01)
     lost_category: Optional[str] = None       # PERSA: prezzo | tempi | concorrente | rinuncia_cliente | altro
     lost_reason: Optional[str] = None         # PERSA: in words
 
@@ -7171,7 +7184,7 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
     today = now.astimezone(LOCAL_TZ).date()
     days = [today.isoformat(), (today + timedelta(days=1)).isoformat()]
     sent = 0
-    for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$in": days}}, {"_id": 0}).to_list(2000):
+    for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$in": days}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(2000):
         eve, morning = _mat_reminder_times(t["due_date"])
         kind = "morning" if now >= morning else "eve" if now >= eve else None
         if not kind or (t.get("reminded") or {}).get(kind) == t["due_date"]:
@@ -7951,7 +7964,7 @@ async def _todo_reminders(now_utc: Optional[datetime] = None) -> int:
     today = now_local.date().isoformat()
     tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
     sent = 0
-    for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}}, {"_id": 0}).to_list(5000):
+    for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(5000):
         if not t.get("collaborator_id") or not t.get("due_date") or t.get("kind") == "materiale":
             continue
         kind = "before" if t["due_date"] == tomorrow else "due" if t["due_date"] == today else "late"
@@ -8410,7 +8423,7 @@ async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
     today = now_local.date().isoformat()
     tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
     sent = 0
-    for m in await db.job_milestones.find({"done": False, "due_date": {"$lte": tomorrow}}, {"_id": 0}).to_list(5000):
+    for m in await db.job_milestones.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(5000):
         kind = "before" if m["due_date"] == tomorrow else "due" if m["due_date"] == today else "late"
         if (m.get("reminded") or {}).get(kind) == m["due_date"]:
             continue
@@ -10409,6 +10422,8 @@ async def _presence_start(collab: dict, owner: Optional[User], view: Optional[di
     if open_:
         return (f"Hai già il tempo aperto su «{open_['commessa_title']}» dalle {sp.hhmm(_local(open_['start_at']))}: "
                 "quando hai finito tocca 📍 Ho finito (o scrivi «ho finito»).")
+    if loc and not (await _settings_of_user(owner.user_id if owner else collab.get("owner_user_id"))).get("save_position", True):
+        loc = None   # the organization chose not to keep positions (decision C.4)
     geo = await _commessa_geo(view["id"], view) if loc else None
     d = sp.distance_m(loc, geo)
     doc = {"id": f"ws_{uuid.uuid4().hex[:12]}", "collaborator_id": collab["id"], "user_id": collab.get("user_id"),
@@ -10456,10 +10471,14 @@ async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict], channe
     owner = User(**owner_doc)
     client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
     view = _commessa_view(sub, client, clienti)
+    st = await _settings_of_user(owner.user_id)
+    if not st.get("save_position", True):
+        loc = None   # decision C.4: no positions kept
+    lunch = int(st.get("lunch_break_minutes") or 0) if minutes >= 6 * 60 else 0   # PA-04: the lunch break, when set and the day is long enough
     geo = await _commessa_geo(view["id"], view) if loc else None
     d_end = sp.distance_m(loc, geo)
-    hours = sp.round_hours(minutes)
-    log = _presence_log(collab, owner, view, s_, at, minutes, 0, loc, d_end, channel)
+    hours = sp.round_hours(max(0, minutes - lunch))
+    log = _presence_log(collab, owner, view, s_, at, minutes, lunch, loc, d_end, channel)
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
     await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": at.astimezone(timezone.utc).isoformat(), "end_loc": loc,
@@ -11119,6 +11138,7 @@ async def _collab_reminder_loop():
                 await _activity_notifications()
                 await _user_day_briefs()
                 await _daily_site_summary()
+                await _weekly_programme()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
@@ -11144,9 +11164,12 @@ def _require_owner(current: User, clienti: dict) -> None:
         raise HTTPException(status_code=403, detail="Lo gestisce il titolare")
 
 
-def _client_schedule(owner_doc: dict) -> tuple:
+async def _client_schedule(owner_doc: dict) -> tuple:
+    """(weekday 0-6, HH:MM): the owner's own, else the organization's weekly report (Friday 18:00)."""
+    st = await _settings_of_user(owner_doc.get("user_id"))
     day = owner_doc.get("client_update_day")
-    return (cu.DEFAULT_DAY if day is None else int(day)), (owner_doc.get("client_update_at") or cu.DEFAULT_AT)
+    return (osettings.WEEKDAYS.index(st["weekly_report_day"]) if day is None else int(day)), \
+        (owner_doc.get("client_update_at") or st["weekly_report_time"])
 
 
 def _client_updates_on(sub: dict) -> bool:
@@ -11157,7 +11180,8 @@ async def _client_updates_state(clienti: dict, sub: dict, client: dict) -> dict:
     view = _commessa_view(sub, client, clienti)
     link = await db.client_links.find_one({"item_id": sub.get("item_id")}, {"_id": 0}) or {}
     owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0}) or {}
-    day, at = _client_schedule(owner_doc)
+    day, at = await _client_schedule(owner_doc)
+    st = await _settings_of_user(owner_doc.get("user_id"))
     expired = not link.get("code_expires_at") or link["code_expires_at"] < datetime.now(timezone.utc).isoformat()
     cup = sub.get("client_updates") or {}
     return {"client_name": view["client_name"], "phone": link.get("phone") or view.get("client_phone") or "",
@@ -11165,7 +11189,9 @@ async def _client_updates_state(clienti: dict, sub: dict, client: dict) -> dict:
                       "stopped" if link.get("telegram_chat_id") else "invited" if link.get("code") and not expired else "none",
             "linked_at": link.get("linked_at"), "code_expires_at": None if expired else link.get("code_expires_at"),
             "enabled": _client_updates_on(sub), "day": day, "day_label": cu.WEEKDAYS[day], "at": at,
-            "last_sent_at": cup.get("last_sent_at"), "last_text": cup.get("last_text")}
+            "last_sent_at": cup.get("last_sent_at"), "last_text": cup.get("last_text"),
+            "approval": bool(st.get("client_report_approval", True)),
+            "draft": cup.get("draft") if (cup.get("draft") or {}).get("status") == "pending" else None}
 
 
 async def _client_update_text(clienti: dict, sub: dict, client: dict, owner_name: str, day: Optional[date] = None) -> tuple:
@@ -11182,7 +11208,11 @@ async def _client_update_text(clienti: dict, sub: dict, client: dict, owner_name
     done = await cu.summarize(view["title"], notes, user_id=clienti.get("user_id")) if notes else []
     ms = await _commessa_milestones(sub["id"])
     reached = [m["title"] for m in ms if m["status"] == "done" and start.isoformat() <= (m.get("done_date") or "") <= day.isoformat()]
-    upcoming = [m["title"] for m in ms if m["status"] != "done"][:3]
+    nxt = day - timedelta(days=day.weekday()) + timedelta(days=7)   # the activities planned for next week (AUT-WEEK-02)
+    planned = [a["description"] for a in sorted(await db.job_activities.find({"commessa_id": sub["id"], "status": {"$in": list(ACTIVITY_OPEN)}}, {"_id": 0}).to_list(200),
+                                                key=lambda a: (a.get("date") or "", a.get("start_time") or ""))
+               if nxt.isoformat() <= (a.get("date") or "") <= (nxt + timedelta(days=6)).isoformat()]
+    upcoming = [x for x in dict.fromkeys(planned) if not cu._PRIVATE.search(x)][:5] or [m["title"] for m in ms if m["status"] != "done"][:3]
     if not done and not reached:
         return "", start
     return cu.message(view["title"], start, day, done, reached, upcoming, owner_name), start
@@ -11205,35 +11235,162 @@ async def _send_client_update(clienti: dict, sub: dict, client: dict, link: dict
     return text
 
 
+def _client_draft_kb(sub_id: str, linked: bool):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approva e invia" if linked else "✅ Approvata (la mando io)", callback_data=f"cud:ok:{sub_id}")],
+                                 [InlineKeyboardButton("✏️ Modifica", callback_data=f"cud:ed:{sub_id}"),
+                                  InlineKeyboardButton("🗑 Scarta", callback_data=f"cud:no:{sub_id}")]])
+
+
+async def _show_client_draft(owner_doc: dict, sub_id: str, view: dict, text: str, linked: bool) -> None:
+    head = (f"📝 *Bozza per il cliente* — {view['client_name']} · «{view['title']}»\n"
+            + ("Parte su Telegram solo quando la approvi." if linked else
+               "Il cliente non è collegato a Telegram: approvala e copiala per mandarla tu (WhatsApp, email).") + "\n\n")
+    await _tg_send(owner_doc.get("telegram_chat_id"), head + text, _client_draft_kb(sub_id, linked))
+
+
+async def _make_client_draft(clienti: dict, sub: dict, client: dict, owner_doc: dict, day: Optional[date] = None,
+                             notify: bool = True) -> Optional[dict]:
+    """AUT-WEEK-02/03: the client's message, as a draft for the administrator: nothing reaches the
+    client until it is approved. -> the draft, None when the week has no work to tell."""
+    day = day or jl.today_local()
+    text, start = await _client_update_text(clienti, sub, client, owner_doc.get("name") or "", day)
+    cup = {**(sub.get("client_updates") or {}), "last_checked": day.isoformat()}
+    draft = None
+    if text:
+        draft = {"id": f"cud_{uuid.uuid4().hex[:10]}", "text": text, "since": start.isoformat(), "status": "pending",
+                 "created_at": datetime.now(timezone.utc).isoformat()}
+        cup["draft"] = draft
+    await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"client_updates": cup}})
+    if draft and notify:
+        link = await db.client_links.find_one({"item_id": sub.get("item_id")}, {"_id": 0}) or {}
+        view = _commessa_view(sub, client, clienti)
+        await _show_client_draft(owner_doc, sub["id"], view, text, bool(link.get("telegram_chat_id") and link.get("status") == "active"))
+        push.fire_and_forget(db, owner_doc["user_id"], "📝 Bozza per il cliente da approvare", f"{view['client_name']} · «{view['title']}»",
+                             f"/dashboard/journal?commessa={sub['id']}", f"cud-{draft['id']}")
+    return draft
+
+
+async def _decide_client_draft(sub_id: str, action: str, text: Optional[str] = None) -> dict:
+    """approve (with the text, maybe edited) / save (the edited text, still a draft) / discard.
+    Approved: to the client on Telegram if linked, else it is the administrator who sends it (copy)."""
+    ctx = await _commessa_ctx(sub_id)
+    if not ctx:
+        raise HTTPException(status_code=404, detail="Commessa non trovata")
+    clienti, sub, client, view = ctx
+    cup = sub.get("client_updates") or {}
+    draft = cup.get("draft") or {}
+    if draft.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="Questa bozza non c'è più (già approvata o scartata).")
+    now = datetime.now(timezone.utc).isoformat()
+    body = (text or "").strip() or draft["text"]
+    if action == "discard":
+        cup["draft"] = {**draft, "status": "scartata", "decided_at": now}
+        await db.collection_sub_items.update_one({"id": sub_id}, {"$set": {"client_updates": cup}})
+        return {"status": "scartata", "message": "🗑 Bozza scartata: al cliente non parte niente."}
+    if action == "save":
+        cup["draft"] = {**draft, "text": body[:4000], "edited_at": now}
+        await db.collection_sub_items.update_one({"id": sub_id}, {"$set": {"client_updates": cup}})
+        return {"status": "pending", "message": "✏️ Bozza aggiornata.", "text": body}
+    link = await db.client_links.find_one({"item_id": sub.get("item_id")}, {"_id": 0}) or {}
+    linked = bool(link.get("telegram_chat_id") and link.get("status") == "active")
+    if linked:
+        if not await _send_telegram_text(link["telegram_chat_id"], body):
+            raise HTTPException(status_code=502, detail="Invio non riuscito, riprova tra poco")
+        cup.update({"last_sent_at": now, "last_text": body})
+    cup["draft"] = {**draft, "text": body, "status": "inviata" if linked else "approvata", "decided_at": now}
+    await db.collection_sub_items.update_one({"id": sub_id}, {"$set": {"client_updates": cup}})
+    return {"status": cup["draft"]["status"], "text": body, "linked": linked,
+            "message": f"📤 Inviata a {link.get('name') or view['client_name']} su Telegram." if linked else
+                       "✅ Approvata. Il cliente non è collegato: copia il testo e mandaglielo tu."}
+
+
 async def _client_weekly_updates(now_utc: Optional[datetime] = None) -> int:
-    """On each owner's day, from their hour: the week's message for every open commessa of the
-    clients linked (once a day at most per commessa). -> how many sent."""
+    """On the weekly day, from its hour (the owner's own, else the organization's: Friday 18:00):
+    for every open commessa worked in the week, the client's message. With the approval on (the
+    default, AUT-WEEK-03) it is a draft for the administrator - also for clients not on Telegram,
+    who get it copied; off: straight to the clients linked. Once a day per commessa. -> drafts / sent."""
     now = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
     today = now.date().isoformat()
-    sent = 0
-    for link in await db.client_links.find({"status": "active"}, {"_id": 0}).to_list(5000):
-        if not link.get("telegram_chat_id"):
-            continue
-        owner_doc = await db.users.find_one({"user_id": link["owner_user_id"]}, {"_id": 0})
+    done = 0
+    for clienti in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
+        owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
         if not owner_doc:
             continue
-        day, at = _client_schedule(owner_doc)
+        day, at = await _client_schedule(owner_doc)
         if now.weekday() != day or now.strftime("%H:%M") < at:
             continue
-        clienti = await db.collections.find_one({"id": link["collection_id"]}, {"_id": 0})
-        client = await db.collection_items.find_one({"id": link["item_id"]}, {"_id": 0, "embedding": 0})
-        if not clienti or not client:
-            continue
-        for sub in await db.collection_sub_items.find({"item_id": link["item_id"]}, {"_id": 0, "embedding": 0}).to_list(200):
+        approval = (await _settings_of_user(owner_doc["user_id"])).get("client_report_approval", True)
+        clients = {c["id"]: c for c in await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "embedding": 0}).to_list(5000)}
+        for sub in await db.collection_sub_items.find({"collection_id": clienti["id"]}, {"_id": 0, "embedding": 0}).to_list(5000):
+            client = clients.get(sub.get("item_id"))
             cup = sub.get("client_updates") or {}
-            if not _client_updates_on(sub) or vx.is_closed(_commessa_view(sub, client, clienti)["stato"]) \
+            if not client or not _client_updates_on(sub) or vx.is_closed(_commessa_view(sub, client, clienti)["stato"]) \
                     or cup.get("last_checked") == today:
                 continue
             try:
-                if await _send_client_update(clienti, sub, client, link, User(**owner_doc), now.date()):
-                    sent += 1
+                if approval:
+                    if await _make_client_draft(clienti, sub, client, owner_doc, now.date()):
+                        done += 1
+                    continue
+                link = await db.client_links.find_one({"item_id": sub.get("item_id"), "status": "active"}, {"_id": 0}) or {}
+                if link.get("telegram_chat_id") and await _send_client_update(clienti, sub, client, link, User(**owner_doc), now.date()):
+                    done += 1
             except Exception:
                 logger.exception("client weekly update failed")
+    return done
+
+
+async def _weekly_programme(now_utc: Optional[datetime] = None) -> int:
+    """AUT-WEEK-04: on the weekly day and hour, to every user and collaborator with something
+    planned next week: their activities by commessa (day, time, what to bring) and the problems
+    still open there. Once a week per organization. -> messages sent."""
+    now = now_utc or datetime.now(timezone.utc)
+    loc = now.astimezone(LOCAL_TZ)
+    today = loc.date()
+    sent = 0
+    for clienti in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
+        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+        if not owner or owner.get("week_programme_on") == today.isoformat():
+            continue
+        st = await _settings_of_user(owner["user_id"])
+        if osettings.WEEKDAYS[today.weekday()] != st["weekly_report_day"] or now < _at_local(today, st["weekly_report_time"]):
+            continue
+        await db.users.update_one({"user_id": owner["user_id"]}, {"$set": {"week_programme_on": today.isoformat()}})
+        mon = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        sun = mon + timedelta(days=6)
+        commesse, _ = await _all_commesse(clienti)
+        views = {v["id"]: v for v in commesse if vx.norm_stato(v["stato"]) == vx.WORKING_STATO}
+        if not views:
+            continue
+        people: dict = {}
+        for a in sorted(await db.job_activities.find({"commessa_id": {"$in": list(views)}, "status": {"$in": list(ACTIVITY_OPEN)}}, {"_id": 0}).to_list(5000),
+                        key=lambda a: (a.get("date") or "", a.get("start_time") or "99:99")):
+            if not mon.isoformat() <= (a.get("date") or "") <= sun.isoformat():
+                continue
+            for p in a.get("assignees") or []:
+                if (p.get("confirm") or {}).get("status") == "rifiutato":
+                    continue
+                people.setdefault(_worker_id(p), {"p": p, "by": {}})["by"].setdefault(a["commessa_id"], []).append(a)
+        open_by = {cid: [x for _lg, _i, x in await _open_problems(cid)] for cid in {c for e in people.values() for c in e["by"]}}
+        for e in people.values():
+            blocks = []
+            for cid, acts in e["by"].items():
+                v = views[cid]
+                ls = [f"🏗 *{v['title']}* — {v['client_name']}" + (f"\n📍 {v['address']}" if v.get("address") else "")]
+                for a in acts:
+                    d = date.fromisoformat(a["date"])
+                    tm = (f" · {a['start_time']}" + (f"–{a['end_time']}" if a.get("end_time") else "")) if a.get("start_time") else ""
+                    ls.append(f"• {jl.IT_WEEKDAYS[d.weekday()][:3]} {_short_it_date(a['date'])}{tm} — {a['description']}")
+                    for label, items in _items_by_category(a.get("items") or []):
+                        ls.append(f"   {label}: " + ", ".join(items))
+                if open_by.get(cid):
+                    ls.append("⚠️ Ancora aperto: " + "; ".join(open_by[cid][:5]))
+                blocks.append("\n".join(ls))
+            text = (f"📅 *La tua prossima settimana* (dal {_short_it_date(mon.isoformat())} al {_short_it_date(sun.isoformat())})\n\n"
+                    + "\n\n".join(blocks))
+            if await _tell_assignee(e["p"], text):
+                sent += 1
     return sent
 
 
@@ -11295,6 +11452,31 @@ async def preview_client_update(commessa_id: str, current: User = Depends(get_cu
     return {"text": text, "since": start.isoformat()}
 
 
+class ClientDraftPayload(BaseModel):
+    action: Literal["approve", "save", "discard"]
+    text: Optional[str] = None
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/client-updates/draft")
+async def new_client_draft(commessa_id: str, current: User = Depends(get_current_user)):
+    """The week's draft now (the administrator approves it here or on Telegram)."""
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0}) or current.model_dump()
+    draft = await _make_client_draft(clienti, sub, client, owner_doc, notify=False)
+    if not draft:
+        raise HTTPException(status_code=400, detail="Questa settimana non ci sono lavori nel diario da raccontare")
+    return await _client_updates_state(clienti, await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0}), client)
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/client-updates/draft/decide")
+async def decide_client_draft(commessa_id: str, payload: ClientDraftPayload, current: User = Depends(get_current_user)):
+    clienti, sub, client = await _client_commessa(current, commessa_id)
+    _require_org_admin(current, "La bozza per il cliente la approva l'amministratore.")
+    out = await _decide_client_draft(commessa_id, payload.action, payload.text)
+    state = await _client_updates_state(clienti, await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0}), client)
+    return {**out, "state": state}
+
+
 @api_router.post("/jobs/commesse/{commessa_id}/client-updates/send")
 async def send_client_update_now(commessa_id: str, current: User = Depends(get_current_user)):
     clienti, sub, client = await _client_commessa(current, commessa_id)
@@ -11342,12 +11524,45 @@ async def set_job_commessa_stato(commessa_id: str, payload: CommessaStatoPayload
         raise HTTPException(status_code=400, detail="Stato non valido")
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
     _require_org_admin(current, "Lo stato della commessa lo cambia l'amministratore.")
-    return await _set_commessa_stato(current, clienti, sub, client, stato, payload.lost_category, payload.lost_reason)
+    return await _set_commessa_stato(current, clienti, sub, client, stato, payload.lost_category, payload.lost_reason,
+                                     confirm_close=payload.confirm_close)
+
+
+async def _close_check(commessa_id: str) -> dict:
+    """What is still open on a commessa: its problems and its planned activities not done."""
+    problems = [p for _lg, _i, p in await _open_problems(commessa_id)]
+    acts = [a for a in await db.job_activities.find({"commessa_id": commessa_id, "status": {"$in": list(ACTIVITY_OPEN)}}, {"_id": 0}).to_list(500)]
+    return {"problems": problems, "activities": [f"{a['description']} ({_short_it_date(a['date'])})" for a in acts]}
+
+
+def _close_check_text(chk: dict) -> str:
+    parts = []
+    if chk["problems"]:
+        parts.append(f"{len(chk['problems'])} {'problema aperto' if len(chk['problems']) == 1 else 'problemi aperti'}: " + "; ".join(chk["problems"][:8]))
+    if chk["activities"]:
+        parts.append(f"{len(chk['activities'])} {'attività non svolta' if len(chk['activities']) == 1 else 'attività non svolte'}: " + "; ".join(chk["activities"][:8]))
+    return "\n".join(parts)
+
+
+async def _after_close(current: User, clienti: dict, commessa_id: str) -> None:
+    """AUT-CHI-02: the reminders and notifications of the commessa stop (planned activities
+    cancelled, To Do and milestones without reminders) and the final report goes to Report/."""
+    now = datetime.now(timezone.utc).isoformat()
+    for a in await db.job_activities.find({"commessa_id": commessa_id, "status": {"$in": list(ACTIVITY_OPEN)}}, {"_id": 0, "id": 1}).to_list(500):
+        await db.job_activities.update_one({"id": a["id"]}, {"$set": {"status": "annullata", "cancelled_reason": "commessa completata", "updated_at": now}})
+    await db.job_todos.update_many({"commessa_id": commessa_id, "done": False}, {"$set": {"reminders_off": True}})
+    await db.job_milestones.update_many({"commessa_id": commessa_id, "done": False}, {"$set": {"reminders_off": True}})
+    try:
+        include = [k for k, _ in work_reports.COMMESSA_PARTS if k != "costi" or await _sees_costs(current)]
+        await _generate_commessa_report(current, CommessaReportPayload(commessa_id=commessa_id, include=include, period="all"),
+                                        template_name="Report finale di commessa")
+    except Exception:
+        logger.exception("final report of %s failed", commessa_id)
 
 
 async def _set_commessa_stato(current: User, clienti: dict, sub: dict, client: Optional[dict], stato: str,
                               lost_category: Optional[str] = None, lost_reason: Optional[str] = None,
-                              channel: str = "web", why: str = "") -> dict:
+                              channel: str = "web", why: str = "", confirm_close: bool = False) -> dict:
     """The state of a commessa, by hand or by the agent (why: what caused it, for the diary).
     PERSA only with its reason (AUT-PRE-06)."""
     smap = clienti.get("system_sub_map") or {}
@@ -11362,12 +11577,20 @@ async def _set_commessa_stato(current: User, clienti: dict, sub: dict, client: O
                                                         "concorrente, rinuncia del cliente, altro) e descrivilo se è «altro».")
         extra_set = {"lost_reason": {"category": cat, "text": text, "by": _first_name(current.name),
                                      "at": datetime.now(timezone.utc).isoformat()}, "quote_outcome": "perso"}
+    closing = stato == "completata" and old != "completata"
+    if closing and not confirm_close:   # AUT-CHI-01: what is still open, listed, and confirmed before closing
+        chk = await _close_check(sub["id"])
+        if chk["problems"] or chk["activities"]:
+            raise HTTPException(status_code=409, detail={"code": "close_check", **chk,
+                                                         "message": "Prima di chiudere: " + _close_check_text(chk).replace("\n", " · ")})
     if stato == "completata" and not _sysval(data, smap, "data_fine"):
         data[smap.get("data_fine", "data_fine")] = jl.today_local().isoformat()
     await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"data": data, "embedding": None, **extra_set}})
     if old != stato:
         await _track_commessa_changes(current, clienti, sub["id"], sub.get("data") or {}, data, channel=channel)
         await _log_stato_change(current, clienti, {**sub, **extra_set, "data": data}, client, old, stato, why=why)
+    if closing:
+        _bg(_after_close(current, clienti, sub["id"]))
     return _commessa_view({**sub, **extra_set, "data": data}, client, clienti)
 
 
@@ -13654,7 +13877,8 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
     clienti = await _clienti_list(user)
     if not clienti:
         return "Non c'è ancora la lista Clienti con le commesse."
-    lo, hi, label = sa.period_range("last_week", now_local)
+    lo, hi, label = sa.period_range("this_week" if now_local.weekday() >= 4 else "last_week", now_local)
+    sees = await _sees_costs(user)
     commesse, _ = await _all_commesse(clienti)
     open_c = [c for c in commesse if not vx.is_closed(c["stato"])]
     ids = [c["id"] for c in commesse]
@@ -13663,10 +13887,14 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
     for lg in logs:
         by.setdefault(lg["commessa_id"], []).append(lg)
     week = lambda lgs: [x for x in lgs if not x.get("kind") and lo.isoformat() <= (x.get("date") or "") <= hi.isoformat()]
+    acts_by: dict = {}
+    for a in (await db.job_activities.find({"commessa_id": {"$in": ids}}, {"_id": 0}).to_list(20000) if ids else []):
+        if lo.isoformat() <= (a.get("date") or "") <= hi.isoformat() and a.get("status") != "annullata":
+            acts_by.setdefault(a["commessa_id"], []).append(a)
     lines = [f"🗓 *Cantieri — {label}*"]
-    worked = sorted([c for c in commesse if week(by.get(c["id"], []))],
-                    key=lambda c: -jl.totals(week(by[c["id"]]))["hours_total"])
-    all_week = [x for c in worked for x in week(by[c["id"]])]
+    worked = sorted([c for c in commesse if week(by.get(c["id"], [])) or acts_by.get(c["id"])],
+                    key=lambda c: -jl.totals(week(by.get(c["id"], [])))["hours_total"])
+    all_week = [x for c in worked for x in week(by.get(c["id"], []))]
     if not worked:
         lines.append("Nessuna voce di diario nella settimana.")
     else:
@@ -13675,20 +13903,39 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
         lines.append(f"Ore totali: *{jl._fmt_num(tot['hours_total'])} h*" + (f" ({per})" if per else ""))
     econs = {}
     for c in worked:
-        t = jl.totals(week(by[c["id"]]))
+        lgs = by.get(c["id"], [])
+        t = jl.totals(week(lgs))
         per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in t["by_person"].items())
         lines.append(f"\n*{c['title']}* — {c['client_name']}: {jl._fmt_num(t['hours_total'])} h" + (f" ({per})" if per else ""))
+        acts = acts_by.get(c["id"], [])
+        if acts:   # planned vs done
+            undone = [a["description"] for a in acts if a.get("status") != "svolta"]
+            lines.append(f"🛠 Attività: {len(acts) - len(undone)} svolte su {len(acts)} pianificate" + (f" (non svolte: {'; '.join(undone[:6])})" if undone else ""))
         if t["materials"]:
             lines.append(f"🧰 {jl.materials_line(t['materials'])}")
-        for p in t["problems"]:
-            lines.append(f"⚠️ {p['text']}")
-        econs[c["id"]] = e = await _commessa_economics(clienti, c["id"], by[c["id"]])
+        solved = sum(1 for lg in lgs for v in (lg.get("problem_status") or {}).values()
+                     if v.get("status") == "risolta" and v.get("at") and lo.isoformat() <= _local(v["at"]).date().isoformat() <= hi.isoformat())
+        open_n = len(await _open_problems(c["id"]))
+        if t["problems"] or solved or open_n:
+            parts = ([f"{len(t['problems'])} nuovi ({'; '.join(p['text'] for p in t['problems'][:5])})"] if t["problems"] else []) \
+                + ([f"{solved} risolti"] if solved else []) + [f"{open_n} ancora aperti"]
+            lines.append("⚠️ Problemi: " + ", ".join(parts))
+        if not sees:   # costs, expenses and margin: only who may see them (C.3)
+            continue
+        econs[c["id"]] = e = await _commessa_economics(clienti, c["id"], lgs)
+        week_exp = sum(float(x.get("amount") or 0) for lg in week(lgs) for x in lg.get("expenses") or [])
+        if week_exp or e.get("extras_total"):
+            lines.append(f"🧾 Spese: {jl._eur(week_exp)} questa settimana, {jl._eur(e.get('extras_total') or 0)} in tutto")
         if e.get("budget"):
             flag = "🔴 " if e["used_pct"] >= 100 else "🟠 " if e["used_pct"] >= 80 else ""
-            lines.append(f"{flag}💶 speso {jl._eur(e['cost_total'])} di {jl._eur(e['budget'])} ({e['used_pct']:.0f}%), margine {jl._eur(e['margin'])}")
+            lines.append(f"{flag}💶 Margine {jl._eur(e['margin'])} = valore {jl._eur(e['budget'])} − costi {jl._eur(e['cost_total'])} "
+                         f"(materiali {jl._eur(e['materials_total'])}, spese {jl._eur(e['extras_total'])}, manodopera {jl._eur(e['labor_total'])}) · "
+                         f"{e['used_pct']:.0f}% del valore speso")
+            if not e.get("complete"):
+                lines.append("   (alcune ore o materiali senza tariffa/prezzo: il margine è stimato per difetto)")
     # quotes at risk on the sites not worked last week
     risky = []
-    for c in open_c:
+    for c in open_c if sees else []:
         if c["id"] in econs:
             continue
         e = await _commessa_economics(clienti, c["id"], by.get(c["id"], []))
@@ -13733,24 +13980,56 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
     return "\n".join(lines)
 
 
+OLD_WEEKLY_SCHEDULE = {"freq": "weekly", "weekdays": [0], "time": "08:00"}
+WEEKLY_JOBS_TEXT = "Ogni settimana mandami il report dei cantieri"
+WEEKLY_JOBS_DESC = ("Il report della settimana per ogni commessa (AUT-WEEK-01): attività svolte rispetto alle pianificate, "
+                    "problemi emersi, risolti e aperti, ore per persona, materiali, spese della settimana e in tutto e margine "
+                    "(valore − materiali, spese e manodopera), con i cantieri fermi e le scadenze. Arriva su Telegram, se collegato, e resta qui. "
+                    "Giorno e ora si cambiano in Organizzazione → Commesse: orari e automatismi.")
+
+
+def _weekly_schedule(st: dict) -> dict:
+    return sa.normalize_schedule({"freq": "weekly", "weekdays": [osettings.WEEKDAYS.index(st["weekly_report_day"])],
+                                  "time": st["weekly_report_time"]})
+
+
+async def _sync_weekly_action(user_id: str, st: dict, only_old: bool = False) -> None:
+    """The weekly report's action follows the organization's day and time (only_old: just the
+    ones still at the old Monday 8:00, at the update)."""
+    q = {"user_id": user_id, "system_key": WEEKLY_JOBS_KEY}
+    for a in await db.scheduled_actions.find(q, {"_id": 0}).to_list(5):
+        if only_old and {k: a["schedule"].get(k) for k in OLD_WEEKLY_SCHEDULE} != OLD_WEEKLY_SCHEDULE:
+            continue
+        schedule = _weekly_schedule(st)
+        await db.scheduled_actions.update_one({"id": a["id"]}, {"$set": {
+            "schedule": schedule, "schedule_label": sa.schedule_label(schedule), "title": "Report settimanale cantieri",
+            "text": WEEKLY_JOBS_TEXT, "description": WEEKLY_JOBS_DESC,
+            "next_run_at": _dt_iso(sa.next_run_after(schedule, datetime.now(timezone.utc))) if a.get("enabled") else a.get("next_run_at")}})
+
+
+async def _migrate_weekly_actions() -> int:
+    n = 0
+    for a in await db.scheduled_actions.find({"system_key": WEEKLY_JOBS_KEY}, {"_id": 0, "user_id": 1, "schedule": 1}).to_list(10000):
+        if {k: (a.get("schedule") or {}).get(k) for k in OLD_WEEKLY_SCHEDULE} == OLD_WEEKLY_SCHEDULE:
+            await _sync_weekly_action(a["user_id"], await _settings_of_user(a["user_id"]), only_old=True)
+            n += 1
+    return n
+
+
 async def _ensure_weekly_jobs_action(user: User) -> None:
-    """The artigiano gets the Monday summary of the job sites as an action, once: paused or
-    deleted, it is never created again."""
-    if user.business_vertical != "artigiano":
+    """The artigiano's administrator gets the weekly report of the job sites as an action, once:
+    paused or deleted, it is never created again. Day and time: the organization's (Friday 18:00)."""
+    if user.business_vertical != "artigiano" or not _is_org_admin(user):
         return
     udoc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0, "system_actions": 1}) or {}
     if WEEKLY_JOBS_KEY in (udoc.get("system_actions") or []):
         return
     await db.users.update_one({"user_id": user.user_id}, {"$addToSet": {"system_actions": WEEKLY_JOBS_KEY}})
-    schedule = sa.normalize_schedule({"freq": "weekly", "weekdays": [0], "time": "08:00"})
+    schedule = _weekly_schedule(await _settings_of_user(user.user_id))
     now = datetime.now(timezone.utc)
     await db.scheduled_actions.insert_one({
         "id": f"sched_{uuid.uuid4().hex[:12]}", "user_id": user.user_id, "org_id": user.org_id, "system_key": WEEKLY_JOBS_KEY,
-        "text": "Ogni lunedì alle 8 mandami il riepilogo della settimana passata dei cantieri",
-        "title": "Riepilogo cantieri",
-        "description": ("Ogni lunedì alle 8:00 ti invia il riepilogo della settimana appena conclusa: ore per cantiere e per "
-                        "persona, materiali, problemi segnalati, costi rispetto al preventivo, cantieri fermi da più di una "
-                        "settimana e attività in scadenza. Arriva su Telegram, se collegato, e resta qui."),
+        "text": WEEKLY_JOBS_TEXT, "title": "Report settimanale cantieri", "description": WEEKLY_JOBS_DESC,
         "kind": "job_weekly", "schedule": schedule, "schedule_label": sa.schedule_label(schedule),
         "delivery": "telegram", "notify": False, "enabled": True,
         "next_run_at": _dt_iso(sa.next_run_after(schedule, now)), "last_run_at": None, "last_status": None,
@@ -14166,6 +14445,7 @@ async def start_services():
         logger.exception("organizations migration failed")
     try:
         await _migrate_commesse()
+        await _migrate_weekly_actions()
     except Exception:
         logger.exception("commesse migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)

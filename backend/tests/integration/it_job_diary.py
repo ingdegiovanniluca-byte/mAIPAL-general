@@ -214,7 +214,7 @@ async def main():
     await server.delete_job_log(lid, me)
     assert not any(l["id"] == lid for l in db.job_logs.docs)
     # stato -> chiusa (the old name of completata) sets the end date; list: in lavorazione first, completed last
-    v = await server.set_job_commessa_stato("s_bagno", server.CommessaStatoPayload(stato="chiusa"), me)
+    v = await server.set_job_commessa_stato("s_bagno", server.CommessaStatoPayload(stato="chiusa", confirm_close=True), me)
     assert v["stato"] == "completata" and v["data_fine"]
     rows = await server.list_job_commesse(me)
     print([(c["title"], c["stato"], c["entries"]) for c in rows])

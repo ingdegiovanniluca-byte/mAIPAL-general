@@ -137,8 +137,8 @@ async def main():
 
     # 1) the preconfigured action: created once with the vertical, never again after deleting it
     weekly = [a for a in db.scheduled_actions.docs if a.get("kind") == "job_weekly"]
-    assert len(weekly) == 1 and weekly[0]["enabled"] and weekly[0]["title"] == "Riepilogo cantieri"
-    assert weekly[0]["schedule"]["weekdays"] == [0] and weekly[0]["schedule"]["time"] == "08:00"
+    assert len(weekly) == 1 and weekly[0]["enabled"] and weekly[0]["title"] == "Report settimanale cantieri"
+    assert weekly[0]["schedule"]["weekdays"] == [4] and weekly[0]["schedule"]["time"] == "18:00"     # Friday 18:00 (the organization's)
     lst = await server.list_scheduled_actions(me)
     assert sum(1 for a in lst if a["kind"] == "job_weekly") == 1
     await server.delete_scheduled_action(weekly[0]["id"], me)
@@ -211,7 +211,7 @@ async def main():
     text = await server._job_weekly_summary(me, monday)
     print(text)
     assert "la settimana passata (dal 12 ottobre al 18 ottobre)" in text and "*Bagno* — Mario Rossi: 23 h" in text
-    assert "⚠️ manca il miscelatore" in text and "di € 500" in text and "🔴" in text
+    assert "⚠️ Problemi: 1 nuovi (manca il miscelatore), 1 ancora aperti" in text and "valore € 500" in text and "🔴" in text and "manodopera € 660" in text
     assert "«Cucina» (mai)" in text and "Caldaia" not in text
     assert "Montare i sanitari — Gino entro" in text
     # run as an action: delivered on Telegram
