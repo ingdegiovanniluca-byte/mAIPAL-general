@@ -2,6 +2,7 @@ import asyncio, os, sys, copy
 from datetime import datetime, timezone, timedelta
 os.environ.update(MONGO_URL="mongodb://x", DB_NAME="t", OPENAI_API_KEY="x")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+import verticals as vx
 import server, scheduled_actions as sa, list_updates as lu, usage_tracking as ut, retrieval
 
 def _get(doc, k):
@@ -116,7 +117,7 @@ async def main():
     assert len(cl) == 1 and cl[0]["name"] == "Clienti" and cl[0]["visibility"] == "org" and cl[0]["org_id"] == me.org_id
     assert [f["key"] for f in cl[0]["fields"]][:2] == ["nome", "telefono"]
     sub = {f["key"]: f for f in cl[0]["sub_item_fields"]}
-    assert sub["stato"]["options"] == ["preventivo", "in corso", "sospesa", "chiusa"] and "titolo" in sub
+    assert sub["stato"]["options"] == vx.COMMESSA_STATI and "titolo" in sub
     # idempotent
     await server._apply_vertical(me, "artigiano")
     assert len([c for c in db.collections.docs if c.get("system_key")]) == 1 and len(db.organizations.docs) == 1

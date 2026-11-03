@@ -2,15 +2,15 @@
 
 > Specifica: «SPEC_gestione_commesse» (da «Specifica funzionale v0.2 del 02/11/2026»).
 > Codice analizzato: branch `claude/analyze-main-branch-175dis`, 02/11/2026.
-> Stato: **fase 2 completata – in attesa delle decisioni sui punti in contrasto (§ C) prima dell'implementazione.**
+> Stato: **fase 3 in corso** – decisioni del titolare sui punti in contrasto registrate in § C (03/11/2026).
 
 ## A. Riepilogo
 
 | Stato | Quanti |
 |---|---|
-| ✅ Implementato | 5 |
+| ✅ Implementato | 7 |
 | 🟡 Parziale | 35 |
-| ❌ Mancante | 11 |
+| ❌ Mancante | 9 |
 | ⛔ Bloccato | 0 |
 | **Totale** | **51** |
 
@@ -49,11 +49,11 @@
 | ID | Area | Requisito sintetico | [P] | Stato | Riferimenti codice | Note |
 |---|---|---|---|---|---|---|
 | RNF-PERM-01 | Permessi | Permessi uguali su tutti i canali, nessuna rivelazione | | 🟡 | `_commessa_access`, `_commessa_or_404` (404 «Commessa non trovata»), `collab_telegram._targets_of` | App/chat/Telegram passano dagli stessi controlli e una commessa non accessibile risponde 404. Da verificare e uniformare: le risposte della chat che cercano per nome (retrieval) e i messaggi «non trovo» che citano il nome cercato. |
-| PERM-MATRIX | Permessi | Matrice 2.4 | | 🟡 | `require_admin`, `_can_manage_collaborators`, `_can_describe`, `_require_owner` | Fatto: whitelist, collaboratori, eliminazione (titolare, con codice). Mancano: User che non crea clienti/commesse né pianifica né registra l'esito; flag costi agli User; riepiloghi solo all'Admin. |
-| COLLAB-LEVEL | Permessi | Livello `WRITE`/`READ_WRITE` per commessa | P | ❌ | `collaborators.commesse` (lista di id) | Oggi tutti i collaboratori possono anche chiedere (= `READ_WRITE`). Serve un livello per commessa; default proposto `READ_WRITE` per non cambiare il comportamento attuale. |
-| DATA-CLIENTE | Dati | Entità Cliente 3.1 | | 🟡 | lista di sistema Clienti (`verticals.py`, `collection_items`) | Ci sono nome, indirizzo, telefono, email, note. Mancano tipo, CF/P.IVA, referente, cartella Drive del cliente come campo. |
-| DATA-COMMESSA | Dati | Entità Commessa 3.2 + storico | | 🟡 | sotto-elementi della lista Clienti, `_commessa_view`, `job_economics.budget` | Ci sono titolo, indirizzo, date, descrizione, valore (preventivo in Costi), stato, collaboratori. Mancano codice, orari standard, utenti assegnati come campo (oggi condivisione), esito preventivo, motivo perdita e **storico delle modifiche** (solo i cambi di stato sono nel diario). |
-| DATA-STATI | Dati | Stati e transizioni 3.3 | P | 🟡 | `verticals.COMMESSA_STATI`, `PATCH /jobs/commesse/{id}/stato` | 4 stati diversi da quelli della specifica; nessuna transizione automatica. Vedi § C.1. |
+| PERM-MATRIX | Permessi | Matrice 2.4 | | 🟡 | `_is_org_admin`, `_require_org_admin`, `_sees_costs`, `require_admin`, `_can_manage_collaborators` | Fase 1: clienti e commesse (creazione, modifica, eliminazione, stato) solo Admin su Liste, Chat e Telegram; costi agli User con regola di organizzazione (default No). Restano: pianificazione ed esito preventivo (fasi 4-5), riepiloghi solo all'Admin (fasi 6-7). |
+| COLLAB-LEVEL | Permessi | Livello `WRITE`/`READ_WRITE` per commessa | P | ✅ | `collaborators.levels`, `_collab_level`, `PUT /jobs/commesse/{id}/collaborators/{collab_id}` (level), `collab_telegram.process` | [P] Default `read_write` (comportamento precedente). Con `write` il collaboratore invia ma alle domande risponde che non può consultare. Scelta dal menu Collaboratori del diario. |
+| DATA-CLIENTE | Dati | Entità Cliente 3.1 | | ✅ | `verticals.CLIENTI_FIELDS` (tipo, cf_piva, referente), `_migrate_commesse` | Campi aggiunti alle liste Clienti esistenti con la migrazione; la cartella del cliente sul Drive resta calcolata (fase 2). |
+| DATA-COMMESSA | Dati | Entità Commessa 3.2 + storico | | 🟡 | `verticals.COMMESSA_FIELDS` (codice, ora_inizio, ora_fine), `_next_commessa_code`, `_track_commessa_changes`, `commessa_history`, `quote_outcome`, `lost_reason` | Fase 1: codice AAAA-NNN per organizzazione e anno (anche sulle esistenti), orari standard, storico delle modifiche (Liste, stato, valore, descrizione), esito e motivo di perdita. User assegnati = condivisione della commessa (esistente). Versioni del preventivo in fase 4. |
+| DATA-STATI | Dati | Stati e transizioni 3.3 | P | 🟡 | `verticals.COMMESSA_STATI`/`norm_stato`/`is_closed`, `_set_commessa_stato`, `_migrate_commesse`, `frontend/src/lib/commessaStati.js` | Fase 1: 7 stati + SOSPESA (decisione C.1), migrazione degli esistenti, PERSA solo con motivo, cambio solo da Admin. Transizioni automatiche (sopralluogo, preventivo, esito) in fase 4. |
 | DATA-DIARIO | Dati | Diario con sezioni e metadati | | 🟡 | `job_logs`, sezioni di `JobDiaryPage.jsx` (Diario, Ore, Problemi, Materiali, Costi, Milestone, To Do, Descrizione) | Voci con data, autore, canale (`web`/`telegram`), testo originale (`raw_text`), foto. Mancano le sezioni Sintesi, Sopralluogo, Preventivo, Pianificazione, Attività svolte, Spese (oggi dentro Costi), Reminder, Report. |
 | DATA-ATTIVITA | Dati | Attività pianificata + conferme | P | ❌ | (vicino: `job_todos`, `job_milestones`) | Da creare l'entità: orari, più assegnatari, materiale per categoria, stati, conferma per assegnatario. |
 | DATA-PRESENZA | Dati | Registrazione presenza 3.6 | | 🟡 | `work_sessions` / `site_presence.py`, `_presence_start/_stop` | Check-in/out, ore calcolate e arrotondate, pausa. Manca l'origine `TEMPO_REALE`/`DICHIARATA` esplicita (oggi «ore da approvare» per quelle scritte). |
@@ -81,7 +81,7 @@
 | AUT-PRE-07 | Preventivo | Storico delle perdite | | ❌ | — | |
 | RF-SVO-01 | Lavori | Pianificazione attività | P | 🟡 | To Do e Milestone (con collaboratore e scadenza) | Manca l'attività con orari, più assegnatari, materiale per categoria. |
 | RF-SVO-02..04 | Lavori | Note, check-in/out, reminder | 03 | ✅ | `_save_job_log`, presenze (📍, «sono arrivato», «ho finito alle 17:30»), promemoria materiali | Spese dai messaggi escluse (vedi AUT-SVO-01). |
-| AUT-SVO-01..03 | Lavori | Categorizzazione, file, reminder | | 🟡 | `jl.interpret` (ore, materiali, problemi) | Mancano: **spese** dai messaggi, attività svolta collegata, chiusura delle problematiche («risolto»), file in `Lavori/`/`Spese/`. |
+| AUT-SVO-01..03 | Lavori | Categorizzazione, file, reminder | | 🟡 | `jl.interpret` (ore, materiali, problemi, spese), `jl.clean_expenses`, `_save_log_expenses`, `jl.problems_resolved`, `_solve_problems`, `PATCH /jobs/logs/{id}/problems/{idx}` | Fase 1: spese dai messaggi (solo con importo scritto) nei Costi con fornitore e link alla nota; problematiche APERTA/RISOLTA (chiuse da un messaggio «risolto…» o a mano) con gravità. Restano attività svolte collegate (fase 5) e file in Lavori/Spese (fase 2). |
 | RF-CHI-01, AUT-CHI-01..02 | Chiusura | Chiusura e report finale | P | 🟡 | stato `chiusa`, report «Verbale di fine lavori», chiusura dell'accesso ai collaboratori | Mancano controllo di problemi/attività aperti, report finale automatico, stop di tutte le notifiche. |
 | AUT-G1-01..03 | Notifiche | G−1: reminder, conferma, aggiunte | 02 | 🟡 | `_material_reminders` (19:30), `_todo_reminders`, `_milestone_reminders` (dalle 08:00) | Mancano messaggio unico alle 18:00 con materiale per categoria, meteo, Confermo/Non posso, solleciti. |
 | AUT-DAY-01 | Notifiche | Messaggio del giorno fissato | | 🟡 | `_day_pin_refresh` (pin, edit, unpin) | Fatto per i collaboratori alle 06:00; mancano orario 07:00/inizio −1 h, materiale per categoria e invio anche agli User. |
@@ -92,21 +92,21 @@
 | AUT-WEEK-01 | Notifiche | Report settimanale con margine | | 🟡 | azione «Riepilogo cantieri» (lunedì 08:00) con ore, materiali, problemi, costi/preventivo | Spostare a venerdì 18:00 (configurabile) e aggiungere pianificate vs svolte e spese. |
 | AUT-WEEK-02..03 | Notifiche | Bozza cliente + approvazione | 03 | 🟡 | `client_updates.py` (invio automatico su Telegram, copia al titolare, anteprima) | Vedi § C.2: manca l'approvazione; manca l'invio email (nessuna integrazione mail). |
 | AUT-WEEK-04 | Notifiche | Programma settimanale agli operatori | | ❌ | — | |
-| CONFIG | Config | Parametri cap. 7 configurabili | | ❌ | costanti in `server.py` (`DAY_PIN_AT`, `PRESENCE_LATE_AT`, `COLLAB_REMIND_AT`…) | Da spostare in impostazioni di organizzazione. |
-| RNF-01 | NFR | Tracciabilità | | 🟡 | `job_logs` (`raw_text`, `channel`, `author_*`, `created_at`) | Manca `updated_by` e lo storico delle modifiche ai parametri. |
+| CONFIG | Config | Parametri cap. 7 configurabili | | 🟡 | `org_settings.py`, `GET/PATCH /tenant/settings`, Impostazioni → Organizzazione → «Commesse: orari e automatismi» | Fase 1: tutti i parametri del cap. 7 (+ tolleranza uscita, pausa pranzo PA-04, posizione C.4, approvazione report C.2) salvati per organizzazione e validati. Gli automatismi li leggono dalle fasi 4-7. |
+| RNF-01 | NFR | Tracciabilità | | 🟡 | `job_logs` (`raw_text`, `channel`, autore), `commessa_history` | Storico delle modifiche dei parametri aggiunto; `updated_by` sulle voci di diario da completare. |
 | RNF-02 | NFR | Italiano, Europe/Rome, formati | | ✅ | `LOCAL_TZ`, `_eur`, date in italiano | |
 | RNF-03 | NFR | Nessun duplicato; accorpamento | | ✅ | campi `reminded`, `reminded_on`, un promemoria per persona | |
 | RNF-04 | NFR | Ricevuta entro 10 s; asincrono | P | 🟡 | salvataggi su cloud in background | Le chiamate al modello sono sincrone (ricevuta di solito in pochi secondi). |
-| RNF-05 | NFR | Economici mai a collaboratori/cliente | | ✅ | `_collab_answer` (filtra costi/prezzi), `client_updates` (niente costi) | |
+| RNF-05 | NFR | Economici mai a collaboratori/cliente | | ✅ | `_collab_answer`, `client_updates`, `_sees_costs` | Collaboratori e cliente mai; User secondo la regola di organizzazione (default No). |
 | RNF-06 | NFR | Presenze: niente GPS di default | | 🟡 | pulsante 📍 con posizione | Vedi § C.4: oggi la posizione si manda al tocco del 📍 (mai tracciamento continuo). |
 
 **Già conformi oltre alla checklist**: collaboratori di più imprese su un solo Telegram; messaggio del giorno fissato con modifica e rimozione; ore scritte come «da approvare»; avanzamento al cliente senza costi né nomi.
 
 ## C. Punti da decidere prima di implementare (codice esistente in contrasto con la specifica)
 
-| # | Tema | Oggi | Specifica | Proposta meno distruttiva |
-|---|---|---|---|---|
-| C.1 | Stati della commessa | preventivo, in corso, sospesa, chiusa | NUOVA, SOPRALLUOGO, PREVENTIVO_INVIATO, IN_LAVORAZIONE, PERSA, COMPLETATA, ARCHIVIATA | Adottare i 7 stati con migrazione: preventivo → PREVENTIVO_INVIATO, in corso → IN_LAVORAZIONE, chiusa → COMPLETATA; tenere SOSPESA come stato in più. |
-| C.2 | Report settimanale al cliente | automatico su Telegram (scelta del titolare) | bozza approvata dall'Admin, poi email | Bozza con approvazione + invio su Telegram (già collegato al cliente) o copia; email quando ci sarà l'integrazione mail. |
-| C.3 | Costi agli User | visibili su commessa condivisa | flag di organizzazione, default No | Flag nelle regole di condivisione, default **No** come da specifica. |
-| C.4 | Vocali e posizione | vocali trascritti; 📍 manda la posizione | vocali esclusi; niente GPS | Tenere vocali e 📍 (già in uso), con un'opzione di organizzazione per spegnere la posizione. |
+| # | Tema | Oggi | Specifica | Proposta meno distruttiva | Decisione (03/11/2026) |
+|---|---|---|---|---|---|
+| C.1 | Stati della commessa | preventivo, in corso, sospesa, chiusa | NUOVA, SOPRALLUOGO, PREVENTIVO_INVIATO, IN_LAVORAZIONE, PERSA, COMPLETATA, ARCHIVIATA | Adottare i 7 stati con migrazione: preventivo → PREVENTIVO_INVIATO, in corso → IN_LAVORAZIONE, chiusa → COMPLETATA; tenere SOSPESA come stato in più. | ✔ 7 stati della specifica + SOSPESA; migrazione degli esistenti. |
+| C.2 | Report settimanale al cliente | automatico su Telegram (scelta del titolare) | bozza approvata dall'Admin, poi email | Bozza con approvazione + invio su Telegram (già collegato al cliente) o copia; email quando ci sarà l'integrazione mail. | ✔ Bozza da approvare dall'Admin; invio su Telegram al cliente (o copia), email quando ci sarà la posta. |
+| C.3 | Costi agli User | visibili su commessa condivisa | flag di organizzazione, default No | Flag nelle regole di condivisione, default **No** come da specifica. | ✔ Opzione di organizzazione, default No. |
+| C.4 | Vocali e posizione | vocali trascritti; 📍 manda la posizione | vocali esclusi; niente GPS | Tenere vocali e 📍 (già in uso), con un'opzione di organizzazione per spegnere la posizione. | ✔ Restano vocali e 📍; opzione di organizzazione per non salvare la posizione. |

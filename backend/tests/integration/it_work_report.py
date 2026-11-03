@@ -155,7 +155,7 @@ async def main():
     assert len(items) == 1 and items[0]["data"] == {"nome": "Mario Rossi", "telefono": "333 1234567", "indirizzo": "Via Roma 5, Torino"}
     subs = db.collection_sub_items.docs
     assert len(subs) == 1 and subs[0]["item_id"] == items[0]["id"]
-    assert subs[0]["data"]["titolo"] == "Rifacimento impianto elettrico cucina" and subs[0]["data"]["stato"] == "preventivo"
+    assert subs[0]["data"]["titolo"] == "Rifacimento impianto elettrico cucina" and subs[0]["data"]["stato"] == "nuova" and subs[0]["data"]["codice"]
     assert subs[0]["data"]["indirizzo_cantiere"] == "Via Roma 5, Torino"
     assert SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", "Rifacimento impianto elettrico cucina"]
     txt = doc_text(SAVED[-1]["bytes"])

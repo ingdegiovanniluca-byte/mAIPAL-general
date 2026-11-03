@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, MapPin, Square } from "lucide-react";
 import { api } from "@/lib/api";
+import { isClosed } from "@/lib/commessaStati";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
 /* "📍 Sono in cantiere" / "Ho finito" for the app's user (the owner, a colleague), in a commessa's
@@ -114,7 +115,7 @@ export default function PresencePill({ commessa, onChanged }) {
   if (open === undefined) return null;
   const here = open && open.commessa_id === commessa.id;
   const sheet = end && <EndSheet end={end} onClose={() => setEnd(null)} onSaved={onChanged} />;
-  if (!open && commessa.stato === "chiusa") return sheet || null;
+  if (!open && isClosed(commessa.stato)) return sheet || null;
   return (
     <>
       {open?.late_asked ? (

@@ -57,6 +57,7 @@ import push_notify as push
 import site_presence as sp
 import client_updates as cu
 import access as orgaccess
+import org_settings as osettings
 import milestone_templates as mtpl
 import fitness as fx
 
@@ -615,6 +616,39 @@ async def _require_share_allowed(current: User) -> None:
         raise HTTPException(status_code=403, detail=SHARE_NOT_ALLOWED)
 
 
+def _is_org_admin(current: User) -> bool:
+    """The organization's administrator (or an account outside any organization, on its own)."""
+    return current.role == "admin" or not current.tenant_id
+
+
+COMMESSE_ADMIN_ONLY = "Clienti e commesse li crea e li modifica l'amministratore della tua organizzazione."
+COSTS_ADMIN_ONLY = "Valore, costi e margine della commessa li vede l'amministratore."
+
+
+def _require_org_admin(current: User, detail: str = COMMESSE_ADMIN_ONLY) -> None:
+    if not _is_org_admin(current):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+async def _sees_costs(current: User) -> bool:
+    """Value, costs and margin: the administrators; the users only when the organization allows it."""
+    if _is_org_admin(current):
+        return True
+    t = await db.tenants.find_one({"id": current.tenant_id}, {"_id": 0, "sharing": 1}) or {}
+    return (t.get("sharing") or {}).get("users_see_costs") is True
+
+
+async def _org_settings_for(tenant_id: Optional[str]) -> dict:
+    """The organization's settings for the automations (org_settings.DEFAULTS when none)."""
+    t = await db.tenants.find_one({"id": tenant_id}, {"_id": 0, "settings": 1}) if tenant_id else None
+    return osettings.settings(t)
+
+
+async def _settings_of_user(user_id: Optional[str]) -> dict:
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "tenant_id": 1}) if user_id else None
+    return await _org_settings_for((u or {}).get("tenant_id"))
+
+
 async def _tenant_of(current: User) -> Optional[dict]:
     return await db.tenants.find_one({"id": current.tenant_id}, {"_id": 0}) if current.tenant_id else None
 
@@ -625,6 +659,41 @@ def _plan(tenant: Optional[dict]) -> dict:
         return dict(orgaccess.DEFAULT_PLAN)
     e = orgaccess.entry(tenant.get("owner_email") or "", ADMIN_EMAIL)
     return {**orgaccess.DEFAULT_PLAN, **(tenant.get("plan") or {}), **((e or {}).get("plan") or {})}
+
+
+async def _migrate_commesse() -> int:
+    """Specifica commesse (idempotent, at start): the Clienti lists get the new base attributes
+    (client type, tax code, contact person; commessa code, standard times) and the new states;
+    the commesse their state in today's names and a code AAAA-NNN (by creation, per year).
+    -> how many commesse changed."""
+    changed = 0
+    for coll in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(5000):
+        fields, fmap = vx.merge_system_fields(coll.get("fields"), vx.CLIENTI_FIELDS)
+        subs, smap = vx.merge_system_fields(coll.get("sub_item_fields"), vx.COMMESSA_FIELDS)
+        skey = smap.get("stato", "stato")
+        for f in subs:
+            if f.get("key") == skey:
+                extra = [o for o in (f.get("options") or []) if vx.norm_stato(o) not in vx.COMMESSA_STATI]
+                f["type"], f["options"] = "select", list(vx.COMMESSA_STATI) + extra
+        await db.collections.update_one({"id": coll["id"]}, {"$set": {"fields": _unique_field_keys(fields), "sub_item_fields": _unique_field_keys(subs),
+                                                                      "system_map": fmap, "system_sub_map": smap}})
+        coll = {**coll, "fields": fields, "sub_item_fields": subs, "system_map": fmap, "system_sub_map": smap}
+        ckey = smap.get("codice", "codice")
+        items = await db.collection_sub_items.find({"collection_id": coll["id"]}, {"_id": 0, "id": 1, "data": 1, "created_at": 1}).to_list(20000)
+        for sb in sorted(items, key=lambda x: x.get("created_at") or ""):
+            data = dict(sb.get("data") or {})
+            upd = False
+            if data.get(skey) and vx.norm_stato(data.get(skey)) != data.get(skey):
+                data[skey] = vx.norm_stato(data[skey])
+                upd = True
+            if not data.get(ckey):
+                year = int((sb.get("created_at") or "")[:4]) if (sb.get("created_at") or "")[:4].isdigit() else None
+                data[ckey] = await _next_commessa_code(coll, year)
+                upd = True
+            if upd:
+                await db.collection_sub_items.update_one({"id": sb["id"]}, {"$set": {"data": data}})
+                changed += 1
+    return changed
 
 
 async def _migrate_tenants() -> None:
@@ -859,6 +928,7 @@ class TenantPatch(BaseModel):
     name: Optional[str] = None
     users_share: Optional[bool] = None        # the users (not only the administrators) share lists, commesse, tasks
     collab_contacts: Optional[bool] = None    # new collaborators see the clients' phone and e-mail
+    users_see_costs: Optional[bool] = None    # the users see value, costs and margin of the commesse (default no)
 
 
 async def _tenant_usage(tenant: dict) -> dict:
@@ -882,7 +952,7 @@ async def _tenant_view(current: User) -> Optional[dict]:
     if not t:
         return None
     out = {"id": t["id"], "name": t.get("name"), "is_owner": t.get("owner_user_id") == current.user_id,
-           "sharing": {"users_share": True, "collab_contacts": False, **(t.get("sharing") or {})}}
+           "sharing": {"users_share": True, "collab_contacts": False, "users_see_costs": False, **(t.get("sharing") or {})}}
     if current.role == "admin":
         out.update(plan=_plan(t), usage=await _tenant_usage(t))
     return out
@@ -910,13 +980,32 @@ async def patch_tenant(payload: TenantPatch, current: User = Depends(require_adm
     upd = {}
     if payload.name is not None and payload.name.strip():
         upd["name"] = payload.name.strip()[:120]
-    sharing = {"users_share": True, "collab_contacts": False, **(t.get("sharing") or {})}
-    for k in ("users_share", "collab_contacts"):
+    sharing = {"users_share": True, "collab_contacts": False, "users_see_costs": False, **(t.get("sharing") or {})}
+    for k in ("users_share", "collab_contacts", "users_see_costs"):
         if getattr(payload, k) is not None:
             sharing[k] = getattr(payload, k)
     upd["sharing"] = sharing
     await db.tenants.update_one({"id": t["id"]}, {"$set": upd})
     return await get_tenant(current)
+
+
+@api_router.get("/tenant/settings")
+async def get_tenant_settings(current: User = Depends(require_admin)):
+    """Times, tolerances and thresholds of the commesse automations (specifica commesse, cap. 7)."""
+    t = await _tenant_of(current)
+    return {"settings": osettings.settings(t), "defaults": osettings.DEFAULTS}
+
+
+@api_router.patch("/tenant/settings")
+async def patch_tenant_settings(payload: Dict[str, Any], current: User = Depends(require_admin)):
+    t = await _tenant_of(current)
+    try:
+        clean = osettings.clean(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    merged = {**((t or {}).get("settings") or {}), **clean}
+    await db.tenants.update_one({"id": t["id"]}, {"$set": {"settings": merged}})
+    return {"settings": osettings.settings({"settings": merged}), "defaults": osettings.DEFAULTS}
 
 
 @api_router.post("/tenant/users")
@@ -3781,6 +3870,8 @@ async def create_collection_item(collection_id: str, payload: CollectionItemPayl
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     _require_list_edit(coll, current)
+    if coll.get("system_key") == vx.CLIENTI_KEY:   # clients: the organization's administrator (PA-09)
+        _require_org_admin(current)
     max_items = coll.get("max_items")
     if max_items:
         current_count = await db.collection_items.count_documents({"collection_id": collection_id})
@@ -3834,6 +3925,8 @@ async def update_collection_item(collection_id: str, item_id: str, payload: Coll
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     _require_list_edit(coll, current)
+    if coll.get("system_key") == vx.CLIENTI_KEY:
+        _require_org_admin(current)
     updates = {"data": payload.data, "embedding": None}
     if payload.visibility is not None:
         if payload.visibility == "org" and current.org_id:
@@ -3853,6 +3946,7 @@ async def delete_collection_item(collection_id: str, item_id: str, code: Optiona
         raise HTTPException(status_code=404, detail="Lista non trovata")
     _require_list_edit(coll, current)
     if coll.get("system_key") == vx.CLIENTI_KEY:   # the client's commesse take their diary with them
+        _require_org_admin(current)
         await _check_delete_code(current, collection_id, item_id, None, code)
         subs = await db.collection_sub_items.find({"collection_id": collection_id, "item_id": item_id}, {"_id": 0, "id": 1}).to_list(5000)
         await _delete_job_diaries([sb["id"] for sb in subs])
@@ -4042,6 +4136,8 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     _require_list_edit(coll, current)
+    if coll.get("system_key") == vx.CLIENTI_KEY:   # commesse: the organization's administrator
+        _require_org_admin(current)
     item = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="Campo non trovato")
@@ -4058,12 +4154,11 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
             if any(str((e.get("data") or {}).get(name_field["key"]) or "").strip().lower() == new_val for e in existing):
                 raise HTTPException(status_code=400, detail=f"Esiste già un elemento con {name_field['label']} \"{payload.data.get(name_field['key'])}\" in questo campo.")
     data = dict(payload.data or {})
-    if coll.get("system_key") == vx.CLIENTI_KEY:   # a new commessa: in corso from today, unless said otherwise
+    if coll.get("system_key") == vx.CLIENTI_KEY:   # a new commessa: "nuova" with its code, unless said otherwise
         smap = coll.get("system_sub_map") or {}
-        data.setdefault(smap.get("stato", "stato"), "in corso")
-        if not data.get(smap.get("stato", "stato")):
-            data[smap.get("stato", "stato")] = "in corso"
-        data.setdefault(smap.get("data_inizio", "data_inizio"), jl.today_local().isoformat())
+        data = await _stamp_commessa(coll, data, "nuova")
+        if vx.norm_stato(data.get(smap.get("stato", "stato"))) == "persa":
+            raise HTTPException(status_code=400, detail="Una commessa persa ha bisogno del motivo: segnala l'esito dal suo diario.")
     doc = {
         "id": f"sub_{uuid.uuid4().hex[:12]}",
         "collection_id": collection_id,
@@ -4083,15 +4178,28 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
         raise HTTPException(status_code=404, detail="Lista non trovata")
     _require_list_edit(coll, current)
     before = await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"_id": 0})
+    new_data = dict(payload.data or {})
+    if coll.get("system_key") == vx.CLIENTI_KEY:
+        _require_org_admin(current)
+        smap = coll.get("system_sub_map") or {}
+        skey, ckey = smap.get("stato", "stato"), smap.get("codice", "codice")
+        if skey in new_data:
+            new_data[skey] = vx.norm_stato(new_data.get(skey))
+            if new_data[skey] == "persa" and vx.norm_stato(_sysval((before or {}).get("data"), smap, "stato")) != "persa" \
+                    and not (before or {}).get("lost_reason"):
+                raise HTTPException(status_code=400, detail="Per segnare la commessa come persa serve il motivo: segnala l'esito dal suo diario.")
+        if before and not new_data.get(ckey) and (before.get("data") or {}).get(ckey):
+            new_data[ckey] = before["data"][ckey]   # the code stays
     r = await db.collection_sub_items.update_one(
-        {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": payload.data, "embedding": None}}
+        {"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"$set": {"data": new_data, "embedding": None}}
     )
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Elemento non trovato")
     after = await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id}, {"_id": 0})
     if coll.get("system_key") == vx.CLIENTI_KEY and before:   # a commessa's state change goes in its diary
         smap = coll.get("system_sub_map") or {}
-        old, new = _sysval(before.get("data"), smap, "stato"), _sysval(after.get("data"), smap, "stato")
+        await _track_commessa_changes(current, coll, sub_id, before.get("data") or {}, after.get("data") or {})
+        old, new = vx.norm_stato(_sysval(before.get("data"), smap, "stato")), vx.norm_stato(_sysval(after.get("data"), smap, "stato"))
         if old != new:
             client = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0, "embedding": 0})
             await _log_stato_change(current, coll, after, client, old, new)
@@ -4105,6 +4213,7 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, code: O
         raise HTTPException(status_code=404, detail="Lista non trovata")
     _require_list_edit(coll, current)
     if coll.get("system_key") == vx.CLIENTI_KEY:   # a commessa and its diary: only with the code from Telegram
+        _require_org_admin(current)
         if not await db.collection_sub_items.find_one({"id": sub_id, "collection_id": collection_id, "item_id": item_id}, {"_id": 1}):
             raise HTTPException(status_code=404, detail="Elemento non trovato")
         await _check_delete_code(current, collection_id, item_id, sub_id, code)
@@ -5508,7 +5617,8 @@ async def _find_or_create_commessa(clienti: dict, client: dict, job_title: str, 
             return sub, False
     if not job_title:
         return None, False
-    data = {tkey: job_title, smap.get("stato", "stato"): "preventivo"}
+    data = {tkey: job_title, smap.get("stato", "stato"): "nuova"}
+    data = await _stamp_commessa(clienti, data, "nuova")
     if address:
         data[smap.get("indirizzo_cantiere", "indirizzo_cantiere")] = address
     if description:
@@ -6173,8 +6283,13 @@ class JobPhotosPayload(BaseModel):
     images: List[str]
 
 
+LOST_CATEGORIES = {"prezzo": "Prezzo", "tempi": "Tempi", "concorrente": "Concorrente", "rinuncia_cliente": "Rinuncia del cliente", "altro": "Altro"}
+
+
 class CommessaStatoPayload(BaseModel):
     stato: str
+    lost_category: Optional[str] = None       # PERSA: prezzo | tempi | concorrente | rinuncia_cliente | altro
+    lost_reason: Optional[str] = None         # PERSA: in words
 
 
 def _first_name(name: Optional[str]) -> str:
@@ -6194,7 +6309,10 @@ def _commessa_view(sub: dict, client: Optional[dict], clienti: dict) -> dict:
     return {
         "id": sub["id"], "client_item_id": sub.get("item_id"), "collection_id": clienti["id"],
         "title": _sysval(d, smap, "titolo") or "Commessa senza titolo",
-        "stato": _sysval(d, smap, "stato") or "",
+        "stato": vx.norm_stato(_sysval(d, smap, "stato")),
+        "codice": _sysval(d, smap, "codice"),
+        "ora_inizio": _sysval(d, smap, "ora_inizio"), "ora_fine": _sysval(d, smap, "ora_fine"),
+        "quote_outcome": sub.get("quote_outcome"), "lost_reason": sub.get("lost_reason"),
         "address": _sysval(d, smap, "indirizzo_cantiere") or _sysval(cd, fmap, "indirizzo"),
         "data_inizio": _sysval(d, smap, "data_inizio"), "data_fine": _sysval(d, smap, "data_fine"),
         "descrizione": _sysval(d, smap, "descrizione"),
@@ -6292,7 +6410,7 @@ async def _resolve_commessa(clienti: dict, text: str, said_client: str, said_com
     commesse, clients = await _all_commesse(clienti)
     fmap = clienti.get("system_map") or {}
     name_key = fmap.get("nome", "nome")
-    open_ = [c for c in commesse if c["stato"] != "chiusa"]
+    open_ = [c for c in commesse if not vx.is_closed(c["stato"])]
     probe = " ".join(x for x in (text, said_client, said_commessa) if x)
     low = _norm_title(probe)
 
@@ -6309,7 +6427,7 @@ async def _resolve_commessa(clienti: dict, text: str, said_client: str, said_com
     if named_ids:
         by_title = [c for c in by_title if c["client_item_id"] in named_ids]
     if by_title:
-        opened = [c for c in by_title if c["stato"] != "chiusa"] or by_title
+        opened = [c for c in by_title if not vx.is_closed(c["stato"])] or by_title
         if len(opened) == 1:
             return {"commessa": opened[0]}
         hinted = next((c for c in opened if c["id"] == hint_id), None)
@@ -6348,10 +6466,67 @@ async def _resolve_commessa(clienti: dict, text: str, said_client: str, said_com
     return {"pick": _pick_rows(open_, await _last_activity([c["id"] for c in open_])), "reason": "none"}
 
 
-async def _new_commessa(clienti: dict, client: dict, title: str, stato: str = "in corso") -> dict:
+async def _next_commessa_code(clienti: dict, year: Optional[int] = None) -> str:
+    """The commessa's code AAAA-NNN, progressive per organization and year (specifica 3.2)."""
+    owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0, "tenant_id": 1}) or {}
+    scope = owner.get("tenant_id") or clienti["id"]
+    year = year or jl.today_local().year
+    cur = await db.commessa_counters.find_one({"scope": scope, "year": year}, {"_id": 0})
+    if cur:
+        await db.commessa_counters.update_one({"scope": scope, "year": year}, {"$inc": {"n": 1}})
+        n = (await db.commessa_counters.find_one({"scope": scope, "year": year}, {"_id": 0}) or {}).get("n") or (cur.get("n", 0) + 1)
+    else:
+        n = 1
+        await db.commessa_counters.insert_one({"scope": scope, "year": year, "n": 1})
+    return f"{year}-{n:03d}"
+
+
+async def _stamp_commessa(clienti: dict, data: dict, stato: str) -> dict:
+    """A new commessa's state (unless given) and its code."""
+    smap = clienti.get("system_sub_map") or {}
+    skey, ckey = smap.get("stato", "stato"), smap.get("codice", "codice")
+    data[skey] = vx.norm_stato(data.get(skey) or stato)
+    if not data.get(ckey):
+        data[ckey] = await _next_commessa_code(clienti)
+    return data
+
+
+def _field_labels(clienti: dict) -> dict:
+    return {f.get("key"): f.get("label") or f.get("key") for f in clienti.get("sub_item_fields") or []}
+
+
+async def _track_commessa_changes(current: User, clienti: dict, commessa_id: str, before: dict, after: dict,
+                                  channel: str = "web", extra: Optional[dict] = None) -> int:
+    """Every change of a commessa's parameters, kept: who, when, the field, the old and the new
+    value (specifica 3.2 / RF-CRE-05). extra: {label: (old, new)} for values kept elsewhere
+    (the value of the commessa, the outcome of the quote). -> how many changes."""
+    labels = _field_labels(clienti)
+    rows = []
+    for k in sorted(set(before or {}) | set(after or {})):
+        old, new = (before or {}).get(k), (after or {}).get(k)
+        if (old or "") != (new or ""):
+            rows.append((labels.get(k, k), old, new))
+    for label, (old, new) in (extra or {}).items():
+        if (old or "") != (new or ""):
+            rows.append((label, old, new))
+    now = datetime.now(timezone.utc).isoformat()
+    for label, old, new in rows:
+        await db.commessa_history.insert_one({"id": f"ch_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "field": label,
+                                              "old": old, "new": new, "by": current.user_id, "by_name": _first_name(current.name),
+                                              "channel": channel, "at": now})
+    return len(rows)
+
+
+async def _commessa_history(commessa_id: str, limit: int = 50) -> list:
+    rows = await db.commessa_history.find({"commessa_id": commessa_id}, {"_id": 0}).sort("at", -1).to_list(limit)
+    return rows
+
+
+async def _new_commessa(clienti: dict, client: dict, title: str, stato: str = "in lavorazione") -> dict:
     smap = clienti.get("system_sub_map") or {}
     data = {smap.get("titolo", "titolo"): (title or "Lavori").strip()[:80], smap.get("stato", "stato"): stato,
             smap.get("data_inizio", "data_inizio"): jl.today_local().isoformat()}
+    data = await _stamp_commessa(clienti, data, stato)
     doc = {"id": f"sub_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "item_id": client["id"],
            "data": data, "created_at": datetime.now(timezone.utc).isoformat()}
     await db.collection_sub_items.insert_one(doc)
@@ -6440,6 +6615,77 @@ async def _job_photos_to_cloud(user_id: str, log: dict, photo_ids: list) -> None
         logger.exception("job photos cloud copy failed")
 
 
+async def _save_log_expenses(current: User, clienti: dict, target: dict, log: dict, expenses: list, author: Optional[dict]) -> list:
+    """The expenses written in a note (with their amount) -> the commessa's costs (Spese e costi),
+    linked to the note. -> what was saved."""
+    if not expenses:
+        return []
+    saved = [{"id": f"xc_{uuid.uuid4().hex[:10]}", "label": x["description"], "amount": x["amount"], "supplier": x.get("supplier") or None,
+              "date": log.get("date") or jl.today_local().isoformat(), "by": (author or {}).get("first_name") or _first_name(current.name),
+              "log_id": log["id"], "channel": log.get("channel")} for x in expenses]
+    econ = await db.job_economics.find_one({"commessa_id": target["id"]}, {"_id": 0})
+    if econ:
+        await db.job_economics.update_one({"commessa_id": target["id"]}, {"$set": {"extras": (econ.get("extras") or []) + saved}})
+    else:
+        await db.job_economics.insert_one({"commessa_id": target["id"], "budget": None, "extras": saved, "alerts": []})
+    await db.job_logs.update_one({"id": log["id"]}, {"$set": {"expenses": [{k: x[k] for k in ("id", "label", "amount", "supplier")} for x in saved]}})
+    asyncio.create_task(_check_budget_alert(clienti, target["id"]))
+    return saved
+
+
+async def _open_problems(commessa_id: str) -> list:
+    """[(log, index, text)] of the commessa's problems still open."""
+    out = []
+    for lg in await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "id": 1, "problems": 1, "problem_status": 1}).to_list(20000):
+        for i, p in enumerate(lg.get("problems") or []):
+            if ((lg.get("problem_status") or {}).get(str(i)) or {}).get("status") != "risolta":
+                out.append((lg, i, p))
+    return out
+
+
+async def _set_problem_status(log_id: str, idx: int, resolved: bool, by: str, via_log: Optional[str] = None) -> None:
+    lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "problem_status": 1}) or {}
+    st = dict(lg.get("problem_status") or {})
+    st[str(idx)] = ({"status": "risolta", "by": by, "at": datetime.now(timezone.utc).isoformat(), "via_log": via_log}
+                    if resolved else {"status": "aperta"})
+    await db.job_logs.update_one({"id": log_id}, {"$set": {"problem_status": st}})
+
+
+async def _solve_problems(current: User, target: dict, log: dict, text: str, author: Optional[dict]) -> list:
+    """A note that says an open problem is solved closes it (AUT-SVO-01). -> the problems closed."""
+    open_ = [x for x in await _open_problems(target["id"]) if x[0]["id"] != log["id"]]
+    if not open_:
+        return []
+    hit = jl.problems_resolved(text, [p for _lg, _i, p in open_])
+    by = (author or {}).get("first_name") or _first_name(current.name)
+    for k in hit:
+        lg, i, _p = open_[k]
+        await _set_problem_status(lg["id"], i, True, by, via_log=log["id"])
+    return [open_[k][2] for k in hit]
+
+
+class ProblemPatch(BaseModel):
+    resolved: Optional[bool] = None
+    severity: Optional[Literal["bassa", "media", "alta"]] = None
+
+
+@api_router.patch("/jobs/logs/{log_id}/problems/{idx}")
+async def patch_job_problem(log_id: str, idx: int, payload: ProblemPatch, current: User = Depends(get_current_user)):
+    """A problem of the diary: solved (or open again), its severity."""
+    lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "commessa_id": 1, "problems": 1, "problem_severity": 1})
+    if not lg:
+        raise HTTPException(status_code=404, detail="Voce non trovata")
+    await _commessa_or_404(current, lg["commessa_id"])
+    if not 0 <= idx < len(lg.get("problems") or []):
+        raise HTTPException(status_code=404, detail="Problema non trovato")
+    if payload.resolved is not None:
+        await _set_problem_status(log_id, idx, payload.resolved, _first_name(current.name))
+    if payload.severity:
+        await db.job_logs.update_one({"id": log_id}, {"$set": {"problem_severity": {**(lg.get("problem_severity") or {}), str(idx): payload.severity}}})
+    full = await db.job_logs.find_one({"id": log_id}, {"_id": 0})
+    return next(p for p in jl.totals([full])["problems"] if p["idx"] == idx)
+
+
 def _job_log_message(log: dict, created: dict) -> str:
     when = _short_it_date(log.get("date"))
     head = f"📒 Diario di «{log.get('commessa_title')}»" + (f" — {log['client_name']}" if log.get("client_name") else "") + f" · {when}"
@@ -6447,7 +6693,7 @@ def _job_log_message(log: dict, created: dict) -> str:
     if created.get("client"):
         lines.append(f"👤 Cliente nuovo aggiunto alla lista Clienti: {log.get('client_name')}")
     if created.get("commessa"):
-        lines.append("🧱 Commessa nuova, stato «in corso»")
+        lines.append("🧱 Commessa nuova, stato «in lavorazione»")
     if log.get("hours_pending"):
         lines.append(f"⏳ Ore da approvare: {jl.hours_line(log['hours_pending'])}{_review_detail(log)}. "
                      "Contano quando il titolare le approva.")
@@ -6459,6 +6705,11 @@ def _job_log_message(log: dict, created: dict) -> str:
         lines.append(f"🧰 Materiali: {jl.materials_line(log['materials'])}")
     if log.get("problems"):
         lines.append("⚠️ Problemi: " + "; ".join(log["problems"]))
+    if log.get("problems_solved"):
+        lines.append("✅ Risolto: " + "; ".join(log["problems_solved"]))
+    if log.get("expenses_saved"):
+        lines.append("💶 Spese: " + "; ".join(f"{x['label']} {jl._eur(x['amount'])}" + (f" ({x['supplier']})" if x.get("supplier") else "")
+                                             for x in log["expenses_saved"]))
     if log.get("photos"):
         n = len(log["photos"])
         lines.append(f"📷 {n} foto" if n > 1 else "📷 1 foto")
@@ -6816,6 +7067,10 @@ JOB_LOG_QUESTION_MSG = ("Il Diario serve solo a scrivere note sulle commesse, qu
                         "e chiedi con il tasto della chat.")
 
 
+COMMESSA_NOT_FOUND_USER = ("Non l'ho salvato: non trovo questa commessa tra quelle che puoi usare. Clienti e commesse nuove "
+                           "li crea l'amministratore della tua organizzazione.")
+
+
 async def _save_job_log(current: User, text: str, images: Optional[List[str]] = None, commessa_id: Optional[str] = None,
                         hint_commessa_id: Optional[str] = None, new_client_name: Optional[str] = None,
                         conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None,
@@ -6882,20 +7137,25 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
                 + (parsed.get("doubt") or "Mi dici cosa avete fatto e per quale cliente o commessa?")}
     parsed = jl.ground(parsed, text)
 
+    may_create = _is_org_admin(current) or bool(author)   # a collaborator writes only on the commesse enabled
     if not target and client_item_id:
         client = await db.collection_items.find_one({"id": client_item_id, "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
         if not client:
             raise HTTPException(status_code=404, detail="Cliente non trovato")
         commesse, _ = await _all_commesse(clienti)
-        theirs = [c for c in commesse if c["client_item_id"] == client_item_id and c["stato"] != "chiusa"]
+        theirs = [c for c in commesse if c["client_item_id"] == client_item_id and not vx.is_closed(c["stato"])]
         if len(theirs) == 1:
             target = theirs[0]
         elif len(theirs) > 1:
             return {"status": "pick_commessa", "message": "Di quale commessa si tratta?", "clients": [], "new_commessa_for": [], "new_client_name": "",
                     "candidates": _pick_rows(theirs, await _last_activity([c["id"] for c in theirs])), "text": text}
+        elif not may_create:
+            return {"status": "invalid", "message": COMMESSA_NOT_FOUND_USER}
         else:
             sub = await _new_commessa(clienti, client, parsed.get("commessa") or "Lavori")
             target, created = _commessa_view(sub, client, clienti), {"commessa": True}
+    if not target and new_client_name and not may_create:
+        return {"status": "invalid", "message": COMMESSA_NOT_FOUND_USER}
     if not target and new_client_name:
         client = await _new_client(current, clienti, new_client_name)
         sub = await _new_commessa(clienti, client, parsed.get("commessa") or "Lavori")
@@ -6904,6 +7164,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         res = await _resolve_commessa(clienti, text, parsed.get("client") or "", parsed.get("commessa") or "", hint_commessa_id)
         if res.get("commessa"):
             target = res["commessa"]
+        elif res.get("create_for") and not may_create:
+            return {"status": "invalid", "message": COMMESSA_NOT_FOUND_USER}
         elif res.get("create_for"):
             sub = await _new_commessa(clienti, res["create_for"], res.get("title") or parsed.get("commessa") or "Lavori")
             target, created = _commessa_view(sub, res["create_for"], clienti), {"commessa": True}
@@ -6918,9 +7180,13 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
                    "Ho più clienti con questo nome: quale intendi?" if reason == "clients" else
                    "A quale commessa va questa voce?" if res.get("pick") else
                    "Non hai ancora commesse aperte: dimmi per quale cliente è (es. «dai Rossi…»).")
+            if not may_create:   # the choice only among what they can use; nothing new
+                if not res.get("pick"):
+                    return {"status": "invalid", "message": COMMESSA_NOT_FOUND_USER}
+                nc, msg = [], ("Di quale commessa si tratta?" if reason == "several" else "A quale commessa va questa voce?")
             return {"status": "pick_commessa", "message": msg, "candidates": res.get("pick") or [],
-                    "clients": res.get("clients") or [], "new_commessa_for": nc,
-                    "new_client_name": res.get("client_said") or "", "text": text}
+                    "clients": res.get("clients") or [] if may_create else [], "new_commessa_for": nc,
+                    "new_client_name": (res.get("client_said") or "") if may_create else "", "text": text}
 
     if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
         await _commessa_or_404(current, target["id"])
@@ -6979,6 +7245,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         if log["hours"] or log["materials"]:
             asyncio.create_task(_check_budget_alert(clienti, target["id"]))
         await _hours_claim_done(current, claim, log, author, target)
+        log["expenses_saved"] = await _save_log_expenses(current, clienti, target, log, parsed.get("expenses") or [], author)
+        log["problems_solved"] = await _solve_problems(current, target, log, text, author)
         n = len(photo_entry.get("photos") or [])
         msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
         todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"], raw=text) if planned else []
@@ -7002,6 +7270,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
     await _hours_claim_done(current, claim, log, author, target)
+    log["expenses_saved"] = await _save_log_expenses(current, clienti, target, log, parsed.get("expenses") or [], author)
+    log["problems_solved"] = await _solve_problems(current, target, log, text, author)
     if images:
         await _store_job_photos(current, log, images)
     if author:
@@ -7058,8 +7328,8 @@ async def list_job_commesse(current: User = Depends(get_current_user)):
     for c in commesse:
         a = act.get(c["id"]) or {}
         c.update({"last_day": a.get("last_day"), "entries": a.get("entries", 0), "hours_total": a.get("hours", 0)})
-    # in corso first, chiuse last; within a state the most recently worked on first
-    order = {s: i for i, s in enumerate(["in corso", "preventivo", "sospesa", "", "chiusa"])}
+    # in lavorazione first, then the ones still being prepared; closed ones last; within a state the most recently worked on first
+    order = {s: i for i, s in enumerate(["in lavorazione", "sopralluogo", "preventivo inviato", "nuova", "sospesa", "completata", "persa", "archiviata"])}
     commesse.sort(key=lambda c: c["last_day"] or "", reverse=True)
     commesse.sort(key=lambda c: order.get(c["stato"], 3))
     return commesse
@@ -7092,6 +7362,7 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     photos = sum(len(lg.get("photos") or []) for lg in light)
     todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
     econ = await _commessa_economics(clienti, commessa_id, light)
+    sees_costs = await _sees_costs(current)
     milestones = await _commessa_milestones(commessa_id)
     waiting = [lg["id"] for lg in light if lg.get("hours_pending")]   # a collaborator's hours, to approve
     to_approve = await db.job_logs.find({"id": {"$in": waiting}}, {"_id": 0, "embedding": 0}).to_list(500) if waiting else []
@@ -7102,7 +7373,9 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
             "on_site": await _on_site(commessa_id), "geo": sub.get("geo"),
             "milestones": milestones, "milestones_summary": _milestones_summary(milestones),
             "contacts": await _commessa_contacts(commessa_id),
-            "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")},
+            "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")} if sees_costs else None,
+            "can_see_costs": sees_costs, "is_admin": _is_org_admin(current),
+            "history": await _commessa_history(commessa_id) if _is_org_admin(current) else [],
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
             "stati": vx.COMMESSA_STATI,
@@ -7198,7 +7471,7 @@ def _valid_due(d: Optional[str]) -> Optional[str]:
 async def _assignable_collaborators(commessa_id: str) -> list:
     docs = await db.collaborators.find({"commesse": {"$in": [commessa_id]}}, {"_id": 0}).to_list(200)
     return [{"id": c["id"], "name": _collab_name(c), "first_name": c.get("first_name") or "", "company": c.get("company") or "",
-             "telegram": bool(c.get("telegram_chat_id")) and c.get("status") == "active"}
+             "telegram": bool(c.get("telegram_chat_id")) and c.get("status") == "active", "level": _collab_level(c, commessa_id)}
             for c in docs if c.get("status") in ("active", "invited")]
 
 
@@ -7923,6 +8196,7 @@ class ExtraCostPayload(BaseModel):
     label: str
     amount: float
     date: Optional[str] = None
+    supplier: Optional[str] = None           # who it was bought from
 
 
 class CostsPatch(BaseModel):
@@ -7987,6 +8261,8 @@ def _econ_people(e: dict, team: list, collabs: list) -> list:
 @api_router.get("/jobs/commesse/{commessa_id}/economics")
 async def get_commessa_economics(commessa_id: str, current: User = Depends(get_current_user)):
     clienti, _, _ = await _commessa_or_404(current, commessa_id, write=False)
+    if not await _sees_costs(current):
+        raise HTTPException(status_code=403, detail=COSTS_ADMIN_ONLY)
     e = await _commessa_economics(clienti, commessa_id)
     costs = clienti.get("costs") or {}
     team = await _team_first_names(current)
@@ -8021,7 +8297,11 @@ async def set_commessa_description(commessa_id: str, payload: CommessaDescriptio
                                            source="documento" if payload.file_name else "testo",
                                            file_name=(payload.file_name or "")[:200], doc_kind=(payload.doc_kind or "")[:20])
     budget = _num_or_none(payload.budget)
+    if budget is not None and budget > 0 and not _is_org_admin(current):
+        budget = None   # the value of the commessa: the administrator's
     if budget is not None and budget > 0:
+        old_budget = (await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}).get("budget")
+        await _track_commessa_changes(current, clienti, commessa_id, {}, {}, extra={"Valore": (old_budget, round(budget, 2))})
         await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {
             "commessa_id": commessa_id, "budget": round(budget, 2),
             "budget_source": {"file": payload.file_name, "at": datetime.now(timezone.utc).isoformat()} if payload.file_name else None}}, upsert=True)
@@ -8101,7 +8381,10 @@ async def read_commessa_document(commessa_id: str, file: UploadFile = File(...),
 async def patch_commessa_economics(commessa_id: str, payload: EconomicsPatch, current: User = Depends(get_current_user)):
     """The quote (what the client pays) of a commessa."""
     clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    _require_org_admin(current, COSTS_ADMIN_ONLY)
     budget = None if payload.clear_budget else _num_or_none(payload.budget)
+    old_budget = (await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}).get("budget")
+    await _track_commessa_changes(current, clienti, commessa_id, {}, {}, extra={"Valore": (old_budget, budget)})
     await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"commessa_id": commessa_id, "budget": budget}}, upsert=True)
     await _check_budget_alert(clienti, commessa_id)
     return await get_commessa_economics(commessa_id, current)
@@ -8111,12 +8394,15 @@ async def patch_commessa_economics(commessa_id: str, payload: EconomicsPatch, cu
 async def add_commessa_extra(commessa_id: str, payload: ExtraCostPayload, current: User = Depends(get_current_user)):
     """Another cost of the commessa: scaffolding hire, disposal, a subcontract..."""
     clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    if not await _sees_costs(current):
+        raise HTTPException(status_code=403, detail=COSTS_ADMIN_ONLY)
     label = " ".join((payload.label or "").split())[:120]
     amount = _num_or_none(payload.amount)
     if not label or amount is None:
         raise HTTPException(status_code=400, detail="Scrivi la voce e l'importo")
     extra = {"id": f"xc_{uuid.uuid4().hex[:10]}", "label": label, "amount": amount,
-             "date": (payload.date or jl.today_local().isoformat())[:10], "by": _first_name(current.name)}
+             "date": (payload.date or jl.today_local().isoformat())[:10], "by": _first_name(current.name),
+             "supplier": " ".join((payload.supplier or "").split())[:120] or None}
     econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0})
     if econ:
         await db.job_economics.update_one({"commessa_id": commessa_id}, {"$push": {"extras": extra}})
@@ -8129,6 +8415,8 @@ async def add_commessa_extra(commessa_id: str, payload: ExtraCostPayload, curren
 @api_router.delete("/jobs/commesse/{commessa_id}/extras/{extra_id}")
 async def delete_commessa_extra(commessa_id: str, extra_id: str, current: User = Depends(get_current_user)):
     clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    if not await _sees_costs(current):
+        raise HTTPException(status_code=403, detail=COSTS_ADMIN_ONLY)
     econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
     extras = [x for x in econ.get("extras") or [] if x.get("id") != extra_id]
     await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"extras": extras}})
@@ -8441,7 +8729,7 @@ async def commessa_collaborators(commessa_id: str, current: User = Depends(get_c
     await _commessa_or_404(current, commessa_id, write=False)
     docs = await db.collaborators.find(_org_collabs_q(current), {"_id": 0}).sort("first_name", 1).to_list(500)
     return [{"id": c["id"], "name": _collab_name(c), "company": c.get("company") or "", "role": c.get("role") or "",
-             "status": c.get("status"), "enabled": commessa_id in (c.get("commesse") or [])} for c in docs]
+             "status": c.get("status"), "enabled": commessa_id in (c.get("commesse") or []), "level": _collab_level(c, commessa_id)} for c in docs]
 
 
 class CommessaGeoPayload(BaseModel):
@@ -8466,8 +8754,16 @@ async def set_commessa_geo(commessa_id: str, payload: CommessaGeoPayload, curren
     return found
 
 
+COLLAB_LEVELS = ("read_write", "write")   # read_write: also asks about the commessa; write: only sends
+
+
 class CollabEnablePayload(BaseModel):
     enabled: bool
+    level: Optional[Literal["read_write", "write"]] = None
+
+
+def _collab_level(collab: dict, commessa_id: str) -> str:
+    return (collab.get("levels") or {}).get(commessa_id) or "read_write"
 
 
 @api_router.put("/jobs/commesse/{commessa_id}/collaborators/{collab_id}")
@@ -8481,7 +8777,11 @@ async def set_commessa_collaborator(commessa_id: str, collab_id: str, payload: C
     await _collab_or_404(current, collab_id)
     op = {"$addToSet": {"commesse": commessa_id}} if payload.enabled else {"$pull": {"commesse": commessa_id}}
     await db.collaborators.update_one({"id": collab_id}, op)
-    return {"ok": True, "enabled": payload.enabled}
+    c = await db.collaborators.find_one({"id": collab_id}, {"_id": 0}) or {}
+    if payload.level:
+        await db.collaborators.update_one({"id": collab_id}, {"$set": {"levels": {**(c.get("levels") or {}), commessa_id: payload.level}}})
+        c["levels"] = {**(c.get("levels") or {}), commessa_id: payload.level}
+    return {"ok": True, "enabled": payload.enabled, "level": _collab_level(c, commessa_id)}
 
 
 async def _collab_targets(collab: dict) -> list:
@@ -8498,7 +8798,7 @@ async def _collab_targets(collab: dict) -> list:
         return []
     commesse, _ = await _all_commesse(clienti)
     enabled = set(collab.get("commesse") or [])
-    return [(owner, clienti, v) for v in commesse if v["id"] in enabled and v["stato"] != "chiusa"]
+    return [(owner, clienti, v) for v in commesse if v["id"] in enabled and not vx.is_closed(v["stato"])]
 
 
 async def _collab_answer(collab: dict, owner: User, view: dict, question: str, history: list) -> str:
@@ -8862,7 +9162,7 @@ async def my_presence(current: User = Depends(get_current_user)):
 async def presence_start_app(commessa_id: str, payload: PresencePayload, current: User = Depends(get_current_user)):
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
     view = _commessa_view(sub, client, clienti)
-    if view["stato"] == "chiusa":
+    if vx.is_closed(view["stato"]):
         raise HTTPException(status_code=400, detail="La commessa è chiusa")
     worker = await _me_worker(current)
     open_ = await _open_presence(worker["id"])
@@ -9368,7 +9668,7 @@ async def _client_weekly_updates(now_utc: Optional[datetime] = None) -> int:
             continue
         for sub in await db.collection_sub_items.find({"item_id": link["item_id"]}, {"_id": 0, "embedding": 0}).to_list(200):
             cup = sub.get("client_updates") or {}
-            if not _client_updates_on(sub) or _commessa_view(sub, client, clienti)["stato"] == "chiusa" \
+            if not _client_updates_on(sub) or vx.is_closed(_commessa_view(sub, client, clienti)["stato"]) \
                     or cup.get("last_checked") == today:
                 continue
             try:
@@ -9479,24 +9779,49 @@ async def _notify_owner(owner: User, text: str) -> None:
 
 @api_router.patch("/jobs/commesse/{commessa_id}/stato")
 async def set_job_commessa_stato(commessa_id: str, payload: CommessaStatoPayload, current: User = Depends(get_current_user)):
-    if payload.stato not in vx.COMMESSA_STATI:
+    stato = vx.norm_stato(payload.stato)
+    if stato not in vx.COMMESSA_STATI:
         raise HTTPException(status_code=400, detail="Stato non valido")
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    _require_org_admin(current, "Lo stato della commessa lo cambia l'amministratore.")
+    return await _set_commessa_stato(current, clienti, sub, client, stato, payload.lost_category, payload.lost_reason)
+
+
+async def _set_commessa_stato(current: User, clienti: dict, sub: dict, client: Optional[dict], stato: str,
+                              lost_category: Optional[str] = None, lost_reason: Optional[str] = None,
+                              channel: str = "web", why: str = "") -> dict:
+    """The state of a commessa, by hand or by the agent (why: what caused it, for the diary).
+    PERSA only with its reason (AUT-PRE-06)."""
     smap = clienti.get("system_sub_map") or {}
-    data = {**(sub.get("data") or {}), smap.get("stato", "stato"): payload.stato}
-    if payload.stato == "chiusa" and not _sysval(data, smap, "data_fine"):
+    old = vx.norm_stato(_sysval(sub.get("data"), smap, "stato"))
+    data = {**(sub.get("data") or {}), smap.get("stato", "stato"): stato}
+    extra_set = {}
+    if stato == "persa" and old != "persa":
+        cat = (lost_category or "").strip().lower()
+        text = " ".join((lost_reason or "").split())[:500]
+        if cat not in LOST_CATEGORIES or (cat == "altro" and not text):
+            raise HTTPException(status_code=400, detail="Per segnare la commessa come persa scegli il motivo (prezzo, tempi, "
+                                                        "concorrente, rinuncia del cliente, altro) e descrivilo se è «altro».")
+        extra_set = {"lost_reason": {"category": cat, "text": text, "by": _first_name(current.name),
+                                     "at": datetime.now(timezone.utc).isoformat()}, "quote_outcome": "perso"}
+    if stato == "completata" and not _sysval(data, smap, "data_fine"):
         data[smap.get("data_fine", "data_fine")] = jl.today_local().isoformat()
-    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"data": data, "embedding": None}})
-    old = _sysval(sub.get("data"), smap, "stato")
-    if old != payload.stato:
-        await _log_stato_change(current, clienti, {**sub, "data": data}, client, old, payload.stato)
-    return _commessa_view({**sub, "data": data}, client, clienti)
+    await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"data": data, "embedding": None, **extra_set}})
+    if old != stato:
+        await _track_commessa_changes(current, clienti, sub["id"], sub.get("data") or {}, data, channel=channel)
+        await _log_stato_change(current, clienti, {**sub, **extra_set, "data": data}, client, old, stato, why=why)
+    return _commessa_view({**sub, **extra_set, "data": data}, client, clienti)
 
 
-async def _log_stato_change(current: User, clienti: dict, sub: dict, client: Optional[dict], old: str, new: str) -> dict:
-    """A state change, as a line of the commessa's diary: who, when, from what to what."""
+async def _log_stato_change(current: User, clienti: dict, sub: dict, client: Optional[dict], old: str, new: str,
+                            why: str = "") -> dict:
+    """A state change, as a line of the commessa's diary: who (or what), when, from what to what."""
     view = _commessa_view(sub, client, clienti)
-    text = (f"Stato cambiato da «{old}» a «{new}»" if old else f"Stato impostato a «{new}»") + f" da {_first_name(current.name)}."
+    text = (f"Stato cambiato da «{old}» a «{new}»" if old else f"Stato impostato a «{new}»") \
+        + (f" ({why})." if why else f" da {_first_name(current.name)}.")
+    if new == "persa" and sub.get("lost_reason"):
+        lr = sub["lost_reason"]
+        text += f" Motivo: {LOST_CATEGORIES.get(lr.get('category'), lr.get('category'))}" + (f" – {lr['text']}" if lr.get("text") else "") + "."
     log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "kind": "stato", "stato_from": old or None, "stato_to": new,
            "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
            "collection_id": clienti["id"], "collection_name": clienti.get("name"),
@@ -9525,7 +9850,8 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
     reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
-    view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))   # never for collaborators
+    if await _sees_costs(current):   # never for collaborators, nor for the users when the organization says so
+        view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))
     view["milestones_line"] = milestones_line(await _commessa_milestones(commessa_id))
     view["contacts_line"] = contacts_line(await _commessa_contacts(commessa_id))
     try:
@@ -11772,7 +12098,7 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
         return "Non c'è ancora la lista Clienti con le commesse."
     lo, hi, label = sa.period_range("last_week", now_local)
     commesse, _ = await _all_commesse(clienti)
-    open_c = [c for c in commesse if c["stato"] != "chiusa"]
+    open_c = [c for c in commesse if not vx.is_closed(c["stato"])]
     ids = [c["id"] for c in commesse]
     logs = await db.job_logs.find({"commessa_id": {"$in": ids}}, {"_id": 0, "embedding": 0}).to_list(50000) if ids else []
     by: dict = {}
@@ -11815,7 +12141,7 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
     # sites "in corso" standing still for more than a week
     still = []
     for c in open_c:
-        if c["stato"] != "in corso":
+        if c["stato"] != vx.WORKING_STATO:
             continue
         days = [x.get("date") for x in by.get(c["id"], []) if not x.get("kind") and x.get("date")]
         last = max(days) if days else None
@@ -12278,6 +12604,10 @@ async def start_services():
         await _migrate_tenants()
     except Exception:
         logger.exception("organizations migration failed")
+    try:
+        await _migrate_commesse()
+    except Exception:
+        logger.exception("commesse migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)
         await db.job_logs.create_index([("commessa_id", 1), ("date", -1)])
         await db.job_logs.create_index([("user_id", 1), ("date", -1)])

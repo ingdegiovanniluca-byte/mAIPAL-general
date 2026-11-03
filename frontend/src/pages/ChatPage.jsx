@@ -5,6 +5,7 @@ import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { isClosed } from "@/lib/commessaStati";
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -2522,7 +2523,7 @@ export default function ChatPage() {
                         {m.jobPick.candidates.map((c) => (
                           <button key={c.commessa_id} onClick={() => resolveJobPick(m.jobPick, { commessa_id: c.commessa_id })} disabled={streaming}
                             className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
-                            {c.title} · {c.client_name}{c.stato === "chiusa" ? " (chiusa)" : ""}
+                            {c.title} · {c.client_name}{isClosed(c.stato) ? ` (${c.stato})` : ""}
                           </button>
                         ))}
                         {m.jobPick.clients.map((c) => (
@@ -2550,7 +2551,7 @@ export default function ChatPage() {
                         {m.comPick.candidates.map((c) => (
                           <button key={c.commessa_id} onClick={() => resolveComPick(m.comPick, c.commessa_id)} disabled={streaming}
                             className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
-                            {c.title} · {c.client_name}{c.stato === "chiusa" ? " (chiusa)" : ""}
+                            {c.title} · {c.client_name}{isClosed(c.stato) ? ` (${c.stato})` : ""}
                           </button>
                         ))}
                       </div>

@@ -419,9 +419,12 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "7. \"times\": gli orari di arrivo/inizio (\"start\") e di fine/uscita (\"end\") in cantiere di chi scrive, "
         "come \"HH:MM\", solo se scritti (\"ho finito alle 17.10\" -> end \"17:10\"; \"dalle 8 alle 17\" -> start "
         "\"08:00\", end \"17:00\"); altrimenti null. Il giorno va in \"date\" (\"ieri\" -> ieri).\n"
+        "8. \"expenses\": le SPESE sostenute per la commessa con il loro importo SCRITTO nel messaggio (acquisti, noleggi, "
+        "trasporti: \"comprato nastro 8 €\" -> {\"description\": \"nastro\", \"amount\": 8, \"supplier\": \"\"}), con il fornitore se detto. "
+        "Senza importo scritto non è una spesa. Nessuna: [].\n"
         "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
         "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
-        "\"hours\": [], \"materials\": [], \"problems\": [], \"times\": {\"start\": null, \"end\": null}, "
+        "\"hours\": [], \"materials\": [], \"problems\": [], \"expenses\": [], \"times\": {\"start\": null, \"end\": null}, "
         "\"client\": \"\", \"commessa\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -452,6 +455,7 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "materials": mats,
         "problems": clean_problems(parsed.get("problems")),
         "times": clock_times(parsed.get("times"), text),
+        "expenses": clean_expenses(parsed.get("expenses"), text),
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),
     }
@@ -546,8 +550,11 @@ def totals(logs: list) -> dict:
             cur = mats.setdefault(k, {"name": m["name"], "unit": m.get("unit") or "", "qty": None})
             if m.get("qty") is not None:
                 cur["qty"] = round((cur["qty"] or 0) + float(m["qty"]), 3)
-        for p in lg.get("problems") or []:
-            problems.append({"date": lg.get("date"), "text": p, "log_id": lg.get("id")})
+        for i, p in enumerate(lg.get("problems") or []):
+            st = (lg.get("problem_status") or {}).get(str(i)) or {}
+            problems.append({"date": lg.get("date"), "text": p, "log_id": lg.get("id"), "idx": i,
+                             "status": st.get("status") or "aperta", "severity": (lg.get("problem_severity") or {}).get(str(i)) or "media",
+                             "resolved_at": st.get("at"), "resolved_by": st.get("by"), "author": lg.get("author_name")})
     pending_by = {}
     for x in pending:
         pending_by[x["who"]] = round(pending_by.get(x["who"], 0) + x["hours"], 2)
@@ -600,6 +607,41 @@ def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[f
     if budget:
         out["margin"] = round(float(budget) - cost_total, 2)
         out["used_pct"] = round(cost_total / float(budget) * 100, 1)
+    return out
+
+
+def clean_expenses(rows, raw: str) -> list:
+    """The expenses of a note: only with an amount written in it (never guessed)."""
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        desc = " ".join(str(r.get("description") or "").split())[:120]
+        try:
+            amount = round(float(str(r.get("amount")).replace(",", ".")), 2)
+        except (TypeError, ValueError):
+            continue
+        if not desc or amount <= 0 or not amount_in_text(amount, raw):
+            continue
+        out.append({"description": desc, "amount": amount, "supplier": " ".join(str(r.get("supplier") or "").split())[:120]})
+    return out
+
+
+_SOLVED = re.compile(r"\b(?:risolt\w*|sistemat\w*|riparat\w*|aggiustat\w*|sbloccat\w*|ripres\w*|(?:è|e'|sono)\s+arrivat\w*|"
+                     r"arrivat\w*\s+(?:il|la|i|le|lo|gli)\b|consegnat\w*|non\s+(?:c'è|ce)\s+più|tutto\s+ok|a\s+posto|risolve)", re.I)
+
+
+def problems_resolved(text: str, open_problems: list) -> list:
+    """The open problems a note says are solved ("risolto il problema del miscelatore", "è
+    arrivato il materiale"): a word of solution and most of the problem's words. -> indexes."""
+    if not _SOLVED.search(text or ""):
+        return []
+    said = set(_words(text))
+    out = []
+    for i, p in enumerate(open_problems):
+        words = [w for w in _words(p) if w not in {"manca", "mancano", "problema", "problemi", "non", "arrivato", "arrivata"}]
+        if words and sum(1 for w in words if _said(w, said)) / len(words) >= 0.5:
+            out.append(i)
     return out
 
 

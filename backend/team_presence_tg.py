@@ -5,6 +5,7 @@ list that are not closed. Also: the pauses, the evening's "are you still there?"
 to "how did it go?", which goes to that commessa's diary.
 """
 import logging
+import verticals as vx
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -35,8 +36,8 @@ async def _worker_and_targets(user_doc: dict):
         return _user_worker(user_doc), None, [], None
     owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0}) or user_doc
     commesse, _ = await _all_commesse(clienti)
-    open_ = [c for c in commesse if c["stato"] != "chiusa"]
-    open_.sort(key=lambda c: (c["stato"] != "in corso", c["title"].lower()))
+    open_ = [c for c in commesse if not vx.is_closed(c["stato"])]
+    open_.sort(key=lambda c: (c["stato"] != vx.WORKING_STATO, c["title"].lower()))
     return _user_worker(user_doc, clienti.get("user_id")), User(**owner_doc), open_, clienti
 
 

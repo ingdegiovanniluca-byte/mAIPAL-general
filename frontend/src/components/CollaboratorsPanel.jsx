@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Plus, Pencil, Trash2, Send, Copy, Check, Pause, Play, RefreshCw, MessageCircle, Minus, ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
+import { isClosed } from "@/lib/commessaStati";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
 /* Impostazioni > Collaboratori (Admin): people outside the app who only use Telegram - they
@@ -117,7 +118,7 @@ function CollaboratorDialog({ initial, commesse, onClose, onSaved }) {
   }));
   const groups = useMemo(() => {
     const by = new Map();
-    commesse.filter((c) => c.stato !== "chiusa" || f.commesse.includes(c.id)).forEach((c) => {
+    commesse.filter((c) => !isClosed(c.stato) || f.commesse.includes(c.id)).forEach((c) => {
       const key = c.client_item_id || c.client_name;
       const g = by.get(key) || { client: c.client_name, list: [] };
       g.list.push(c);
@@ -258,7 +259,7 @@ export default function CollaboratorsPanel() {
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {c.commesse.length ? c.commesse.map((j) => (
-                    <span key={j.id} className={`text-[11px] px-2 py-0.5 rounded-md bg-white/10 ${j.stato === "chiusa" ? "text-white/45 line-through" : "text-white/85"}`}>{j.title} · {j.client_name}</span>
+                    <span key={j.id} className={`text-[11px] px-2 py-0.5 rounded-md bg-white/10 ${isClosed(j.stato) ? "text-white/45 line-through" : "text-white/85"}`}>{j.title} · {j.client_name}</span>
                   )) : <span className="text-[11px] text-white/50">Nessuna commessa abilitata</span>}
                 </div>
                 <div className="mt-2 text-[11px] text-white/50">

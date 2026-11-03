@@ -35,6 +35,76 @@ function Toggle({ on, onClick, title, sub, testid }) {
   );
 }
 
+// the commesse automations: times, tolerances, thresholds (specifica commesse, cap. 7)
+const SETTING_ROWS = [
+  ["orari in cantiere", [
+    ["default_start_time", "Inizio previsto, se non indicato", "time"],
+    ["max_presence_hours", "Fine prevista: ore dall'arrivo", "num", "h"],
+    ["checkin_tolerance_minutes", "Tolleranza per l'arrivo", "num", "min"],
+    ["checkout_tolerance_minutes", "Tolleranza per l'uscita", "num", "min"],
+    ["lunch_break_minutes", "Pausa pranzo tolta dalle ore", "num", "min"],
+  ]],
+  ["messaggi su Telegram", [
+    ["day_before_reminder_time", "Promemoria del giorno prima", "time"],
+    ["confirmation_nudge_time", "Sollecito se non conferma", "time"],
+    ["confirmation_admin_alert_time", "Avviso a te se ancora nessuna conferma", "time"],
+    ["daily_message_time", "Messaggio del giorno (fissato)", "time"],
+    ["daily_message_lead_minutes", "…o prima dell'inizio di", "num", "min"],
+    ["missing_notes_time", "Domanda «com'è andata?» se mancano le note", "time"],
+    ["daily_summary_time", "Riepilogo serale per cantiere", "time"],
+    ["weekly_report_time", "Report settimanale (venerdì)", "time"],
+  ]],
+  ["preventivi e meteo", [
+    ["quote_followup_days", "Chiedi l'esito del preventivo ogni", "num", "giorni"],
+    ["quote_followup_max", "Al massimo", "num", "volte"],
+    ["weather_alert_rain_pct", "Avviso pioggia oltre", "num", "%"],
+    ["weather_alert_wind_kmh", "Avviso vento oltre", "num", "km/h"],
+  ]],
+];
+
+function AutomationSettings() {
+  const [st, setSt] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { api.get("/tenant/settings").then((r) => setSt(r.data.settings)).catch(() => setSt(null)); }, []);
+  const save = async (key, value) => {
+    if (String(value) === String(st[key])) return;
+    try { const r = await api.patch("/tenant/settings", { [key]: value }); setSt(r.data.settings); toast.success("Salvato"); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); setSt({ ...st }); }
+  };
+  if (!st) return null;
+  return (
+    <div className={card} data-testid="org-automations">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between text-left" aria-expanded={open}>
+        <span>
+          <span className="kicker block">· commesse: orari e automatismi</span>
+          <span className="block text-[12px] text-white/55 mt-1">Promemoria, controlli di arrivo e uscita, riepiloghi e solleciti su Telegram.</span>
+        </span>
+        <span className="text-white/60 text-[12px] shrink-0 ml-3">{open ? "chiudi" : "modifica"}</span>
+      </button>
+      {open && SETTING_ROWS.map(([title, rows]) => (
+        <div key={title} className="mt-3">
+          <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1">{title}</div>
+          {rows.map(([key, label, kind, unit]) => (
+            <label key={key} className="flex items-center gap-3 py-1.5 border-t border-white/[0.08] first:border-t-0">
+              <span className="flex-1 text-[13px] text-white/85">{label}</span>
+              <input type={kind === "time" ? "time" : "number"} defaultValue={st[key]} key={`${key}-${st[key]}`} data-testid={`setting-${key}`}
+                onBlur={(e) => save(key, kind === "time" ? e.target.value : Number(e.target.value))}
+                className="h-8 w-[92px] rounded-lg bg-white/10 px-2 text-[13px] text-white text-right outline-none" />
+              {unit && <span className="w-12 text-[11px] text-white/50">{unit}</span>}
+            </label>
+          ))}
+        </div>
+      ))}
+      {open && (
+        <div className="mt-3">
+          <Toggle on={st.save_position !== false} testid="setting-save-position" onClick={() => save("save_position", !(st.save_position !== false))}
+            title="Salva la posizione con il pulsante 📍" sub="Spento: arrivo e uscita si registrano senza posizione." />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const { user, refresh } = useAuth();
   const [t, setT] = useState(null);
@@ -153,7 +223,11 @@ export default function AdminPage() {
         <Toggle on={!!t.sharing?.collab_contacts} testid="org-rule-collab-contacts"
           onClick={() => run(() => api.patch("/tenant", { collab_contacts: !t.sharing?.collab_contacts }))}
           title="I nuovi collaboratori vedono telefono ed email dei clienti" sub="Lo puoi sempre cambiare per ogni collaboratore." />
+        <Toggle on={!!t.sharing?.users_see_costs} testid="org-rule-users-costs"
+          onClick={() => run(() => api.patch("/tenant", { users_see_costs: !t.sharing?.users_see_costs }))}
+          title="Gli utenti vedono valore, costi e margine delle commesse" sub="Spento: li vedono solo gli amministratori. I collaboratori non li vedono mai." />
       </div>
+      <AutomationSettings />
     </div>
   );
 }

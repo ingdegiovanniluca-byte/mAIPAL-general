@@ -167,7 +167,7 @@ async def main():
     r = await server._save_job_log(me, "da Verdi montato il motore del cancello")
     assert r["commessa_created"] and r["log"]["commessa_title"] == "Cancello" and "Commessa nuova" in r["message"]
     new = next(s for s in db.collection_sub_items.docs if s["id"] == r["log"]["commessa_id"])
-    assert new["item_id"] == "c_verdi" and new["data"]["stato"] == "in corso" and new["data"]["data_inizio"]
+    assert new["item_id"] == "c_verdi" and new["data"]["stato"] == "in lavorazione" and new["data"]["data_inizio"]
     # 5) a client not in the list: asked, never created silently; "è nuovo" -> client + commessa
     n_items = len(db.collection_items.docs)
     jl.interpret = said(client="Esposito", commessa="Impianto box")
@@ -213,12 +213,12 @@ async def main():
     assert out["photos"] == [] and not db.job_photos.docs
     await server.delete_job_log(lid, me)
     assert not any(l["id"] == lid for l in db.job_logs.docs)
-    # stato -> chiusa sets the end date; list: in corso first, chiuse last
+    # stato -> chiusa (the old name of completata) sets the end date; list: in lavorazione first, completed last
     v = await server.set_job_commessa_stato("s_bagno", server.CommessaStatoPayload(stato="chiusa"), me)
-    assert v["stato"] == "chiusa" and v["data_fine"]
+    assert v["stato"] == "completata" and v["data_fine"]
     rows = await server.list_job_commesse(me)
     print([(c["title"], c["stato"], c["entries"]) for c in rows])
-    assert rows[-1]["stato"] == "chiusa" and rows[0]["stato"] == "in corso"
+    assert rows[-1]["stato"] == "completata" and rows[0]["stato"] == "in lavorazione"
     try:
         await server.set_job_commessa_stato("s_bagno", server.CommessaStatoPayload(stato="boh"), me); assert False
     except HTTPException as he:
@@ -229,11 +229,11 @@ async def main():
     await server.set_job_commessa_stato("s_tetto", server.CommessaStatoPayload(stato="in corso"), me)
     await server.set_job_commessa_stato("s_tetto", server.CommessaStatoPayload(stato="in corso"), me)   # same: nothing
     ev = [l for l in db.job_logs.docs if l["commessa_id"] == "s_tetto" and l.get("kind") == "stato"]
-    assert len(ev) == 1 and ev[0]["text"] == "Stato cambiato da «preventivo» a «in corso» da Luca." and ev[0]["stato_to"] == "in corso"
+    assert len(ev) == 1 and ev[0]["text"] == "Stato cambiato da «preventivo inviato» a «in lavorazione» da Luca." and ev[0]["stato_to"] == "in lavorazione"
     sub = next(x for x in db.collection_sub_items.docs if x["id"] == "s_tetto")
     await server.update_sub_item(cl["id"], "c_bianchi", "s_tetto", server.CollectionSubItemPayload(data={**sub["data"], "stato": "sospesa"}), me)
     ev = [l for l in db.job_logs.docs if l["commessa_id"] == "s_tetto" and l.get("kind") == "stato"]
-    assert len(ev) == 2 and "«in corso» a «sospesa»" in ev[1]["text"]
+    assert len(ev) == 2 and "«in lavorazione» a «sospesa»" in ev[1]["text"]
     d = await server.get_job_commessa("s_tetto", current=me)
     assert d["totals"]["entries"] == n_before and d["commessa"]["client_email"] == ""
     try:
@@ -264,7 +264,7 @@ async def main():
     sysmsg = seen["messages"][0]["content"]
     assert out == {"answer": "Sul Tetto risultano 0 ore.", "is_entry": False}
     assert "Commessa: Tetto" in sysmsg and "Cliente: Anna Bianchi" in sysmsg and "Stato: sospesa" in sysmsg
-    assert "Stato cambiato da «preventivo» a «in corso»" in sysmsg and "Lavori proposti: rifacimento guaina" in sysmsg
+    assert "Stato cambiato da «preventivo inviato» a «in lavorazione»" in sysmsg and "Lavori proposti: rifacimento guaina" in sysmsg
     assert "Tempi indicativi" not in sysmsg   # empty fields are left out
     assert [m["role"] for m in seen["messages"]] == ["system", "user", "assistant", "user"]
 

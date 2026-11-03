@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { stateColor, isClosed } from "@/lib/commessaStati";
 import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,7 +19,6 @@ const fmtVal = (f, v) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
 };
 const filled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
-const STATO_COLOR = { "in corso": "#8ED973", preventivo: "#F2C14E", sospesa: "#E8A03F", chiusa: "rgba(255,255,255,0.35)" };
 
 // Gerarchia a 3 livelli:
 //   Livello 1 - Lista       (es. "Clienti", "Lezioni Pilates")
@@ -821,7 +821,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
       setFolderBusy(null);
     }
   };
-  const activeCount = subItems.filter((sb) => String(sb.data?.[subKey("stato")] || "").toLowerCase() !== "chiusa").length;
+  const activeCount = subItems.filter((sb) => !isClosed(sb.data?.[subKey("stato")])).length;
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
 
@@ -916,7 +916,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
               <div className="text-sm break-words">{filled(sub.data?.[subKey("indirizzo_cantiere")]) ? sub.data[subKey("indirizzo_cantiere")] : <span className="text-white/45">non indicata</span>}</div>
               <div className="mt-2 text-[10px] uppercase tracking-widest text-white/60">Stato</div>
               <div className="text-sm flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full shrink-0" style={{ background: STATO_COLOR[sub.data?.[subKey("stato")]] || "rgba(255,255,255,0.35)" }} />
+                <span className="h-2 w-2 rounded-full shrink-0" style={{ background: stateColor(sub.data?.[subKey("stato")]) }} />
                 {filled(sub.data?.[subKey("stato")]) ? String(sub.data[subKey("stato")]).charAt(0).toUpperCase() + String(sub.data[subKey("stato")]).slice(1) : "senza stato"}
               </div>
               {openSubs.has(sub.id) && (

@@ -156,13 +156,13 @@ async def main():
     assert not lu.about_jobs("crea una commessa", ["Spesa"])            # no Clienti list: nothing special
     assert not lu.about_jobs("crea una lista della spesa", names)
 
-    # 2) the list editor only sees Clienti, the commessa goes under the client, in corso from today
+    # 2) the list editor only sees Clienti, the commessa goes under the client, "nuova" with its code
     lu.interpret_list_request = interp_add_commessa("Bagno", "Mario Rossi")
     n_colls = len(db.collections.docs)
     r = await server._execute_list_update(me, "Crea una commessa nuova Bagno per il cliente Mario Rossi")
     assert r["status"] == "ok" and CATALOGS[-1] == ["Clienti"], (r, CATALOGS)
     sub = next(x for x in db.collection_sub_items.docs if x["item_id"] == "c_rossi")
-    assert sub["data"]["titolo"] == "Bagno" and sub["data"]["stato"] == "in corso" and sub["data"]["data_inizio"] == jl.today_local().isoformat()
+    assert sub["data"]["titolo"] == "Bagno" and sub["data"]["stato"] == "nuova" and sub["data"]["codice"]
     assert len(db.collections.docs) == n_colls
 
     # 3) even if it reaches "create a list" (Telegram, an old app): no new list, the commessa under the client
@@ -177,7 +177,7 @@ async def main():
                 "fields": {"titolo": "Tetto", "stato": "preventivo"}, "sub_items": [], "items": []}
     lu.interpret_list_request = with_state
     await server._execute_list_update(me, "aggiungi la commessa Tetto in preventivo ai Rossi")
-    assert next(x for x in db.collection_sub_items.docs if x["data"].get("titolo") == "Tetto")["data"]["stato"] == "preventivo"
+    assert next(x for x in db.collection_sub_items.docs if x["data"].get("titolo") == "Tetto")["data"]["stato"] == "preventivo inviato"   # (the old name, in today's)
     # other lists: as before
     assert not lu.about_jobs("aggiungi il latte alla spesa", names)
     print("ALL OK")

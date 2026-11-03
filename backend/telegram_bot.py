@@ -15,6 +15,7 @@ import os
 import asyncio
 import json as _json
 import logging
+import verticals as vx
 import re as _re
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -735,7 +736,7 @@ async def _run_work_report_flow(update_or_query, ctx, db, user, content, report_
                                    reply_markup=InlineKeyboardMarkup(buttons))
         return
     if rep.get("status") == "pick_commessa":   # report di commessa: which one
-        buttons = [[InlineKeyboardButton(f"{c['title']} · {c.get('client_name') or ''}" + (" (chiusa)" if c.get("stato") == "chiusa" else ""),
+        buttons = [[InlineKeyboardButton(f"{c['title']} · {c.get('client_name') or ''}" + (f" ({c.get('stato')})" if vx.is_closed(c.get("stato")) else ""),
                                          callback_data=f"comrep:{c['commessa_id']}")] for c in rep["candidates"]]
         await _set_state(db, chat_id, user["user_id"], pending_report_type=None,
                          pending_report_context={"report_type": report_type, "text": content, "work": True})

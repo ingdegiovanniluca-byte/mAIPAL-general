@@ -17,8 +17,17 @@ CLIENTI_FIELDS = [
     {"key": "email", "label": "Email", "type": "email"},
     {"key": "indirizzo", "label": "Indirizzo", "type": "text"},
     {"key": "note", "label": "Note", "type": "textarea"},
+    {"key": "tipo", "label": "Tipo", "type": "select", "options": ["privato", "azienda"]},
+    {"key": "cf_piva", "label": "Codice fiscale / P. IVA", "type": "text"},
+    {"key": "referente", "label": "Referente", "type": "text"},
 ]
-COMMESSA_STATI = ["preventivo", "in corso", "sospesa", "chiusa"]
+# the commessa's life (specifica commesse 3.3, + "sospesa" kept from before):
+#   nuova -> sopralluogo (first survey content) -> preventivo inviato (quote uploaded)
+#   -> in lavorazione (quote accepted) | persa (lost, with its reason) -> completata -> archiviata
+COMMESSA_STATI = ["nuova", "sopralluogo", "preventivo inviato", "in lavorazione", "sospesa", "persa", "completata", "archiviata"]
+LEGACY_STATI = {"preventivo": "preventivo inviato", "in corso": "in lavorazione", "chiusa": "completata"}
+CLOSED_STATI = {"persa", "completata", "archiviata"}   # out of the operational views: no work, no collaborators
+WORKING_STATO = "in lavorazione"                       # reminders and notifications only here
 COMMESSA_FIELDS = [
     {"key": "titolo", "label": "Titolo", "type": "text"},
     {"key": "indirizzo_cantiere", "label": "Indirizzo cantiere", "type": "text"},
@@ -26,7 +35,21 @@ COMMESSA_FIELDS = [
     {"key": "data_inizio", "label": "Data inizio", "type": "date"},
     {"key": "data_fine", "label": "Data fine", "type": "date"},
     {"key": "descrizione", "label": "Descrizione", "type": "textarea"},
+    {"key": "codice", "label": "Codice", "type": "text"},
+    {"key": "ora_inizio", "label": "Orario standard inizio", "type": "text"},
+    {"key": "ora_fine", "label": "Orario standard fine", "type": "text"},
 ]
+
+
+def norm_stato(stato: str) -> str:
+    """A commessa's state in today's names (the old ones read as the new: preventivo -> preventivo
+    inviato, in corso -> in lavorazione, chiusa -> completata); empty -> nuova."""
+    s = " ".join((stato or "").lower().replace("_", " ").split())
+    return LEGACY_STATI.get(s, s) or "nuova"
+
+
+def is_closed(stato: str) -> bool:
+    return norm_stato(stato) in CLOSED_STATI
 
 PACKS = {
     "artigiano": {

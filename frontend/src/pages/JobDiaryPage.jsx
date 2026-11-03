@@ -20,6 +20,7 @@ import SiteMapBand from "@/components/SiteMapBand";
 import PresencePill from "@/components/PresencePill";
 import OnSiteList from "@/components/OnSiteList";
 import { firstName, onSiteSummary } from "@/lib/onSite";
+import { stateColor, STATO_ORDER, isClosed, LOST_CATEGORIES } from "@/lib/commessaStati";
 
 // Diario di commessa (verticale artigiano):
 //   1. one card per client with its commesse and their state
@@ -29,7 +30,6 @@ import { firstName, onSiteSummary } from "@/lib/onSite";
 // The commessa's chat (ask about it, or write in its diary) opens from the round chat button
 // floating on the side and sits at the bottom, like the one in the Chat section.
 
-const STATO_COLOR = { "in corso": "#8ED973", preventivo: "#F2C14E", sospesa: "#E8A03F", chiusa: "rgba(255,255,255,0.35)" };
 const IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
 const IT_WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
 const dayLabel = (iso) => {
@@ -75,13 +75,12 @@ const fileToDataUri = (file) => new Promise((resolve, reject) => {
 function StatoPill({ stato }) {
   return (
     <span className="inline-flex items-center gap-1 text-[10.5px] px-2 py-0.5 rounded-full bg-white/10 text-white/85 whitespace-nowrap">
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: STATO_COLOR[stato] || "rgba(255,255,255,0.4)" }} />
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: stateColor(stato) }} />
       {stato || "senza stato"}
     </span>
   );
 }
 
-const STATO_ORDER = { "in corso": 0, preventivo: 1, sospesa: 2, "": 3, chiusa: 4 };
 
 const IT_MON_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -560,6 +559,99 @@ function MoneyInput({ value, onSave, placeholder, testid, unit = "€", wide = f
 const COSTS_OPEN_KEY = "maipal.costs.open";
 const readOpen = () => { try { return { labor: true, materials: true, ...JSON.parse(localStorage.getItem(COSTS_OPEN_KEY) || "{}") }; } catch { return { labor: true, materials: true }; } };
 
+// ===== A commessa lost: its reason is required (category + words), then the state changes
+function LostSheet({ commessa, onClose, onSaved }) {
+  const [cat, setCat] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { await api.patch(`/jobs/commesse/${commessa.id}/stato`, { stato: "persa", lost_category: cat, lost_reason: text }); toast.success("Commessa segnata come persa"); onSaved(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <GlassBottomSheet onClose={onClose} testid="lost-sheet" className="max-h-[85vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
+      <div className="kicker">· commessa persa</div>
+      <div className="text-lg font-semibold text-white mt-1">Perché non è stata accettata?</div>
+      <div className="mt-3 flex flex-wrap gap-2" data-testid="lost-categories">
+        {LOST_CATEGORIES.map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setCat(k)} data-testid={`lost-${k}`}
+            className={`px-3.5 py-1.5 rounded-full text-[13px] ${cat === k ? "bg-white text-[#403A3C] font-semibold" : "bg-white/10 text-white"}`}>{label}</button>
+        ))}
+      </div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} data-testid="lost-text" placeholder={cat === "altro" ? "Scrivi il motivo" : "Dettagli (facoltativi)"}
+        className="mt-3 w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[14px] text-white placeholder:text-white/40 outline-none resize-y" />
+      <div className="text-[11.5px] text-white/55 mt-1">Lo storico dei motivi ti aiuta con i prossimi preventivi.</div>
+      <div className="mt-4 flex gap-2">
+        <button type="button" onClick={save} disabled={busy || !cat || (cat === "altro" && !text.trim())} data-testid="lost-save"
+          className="flex-1 h-11 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Segna come persa
+        </button>
+        <button type="button" onClick={onClose} className="h-11 px-5 rounded-full lg-glass text-[14px] text-white">Annulla</button>
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
+// ===== Every change of the commessa's parameters: who, when, from what to what
+function HistorySheet({ rows, onClose }) {
+  const val = (v) => (v === null || v === undefined || v === "" ? "—" : String(v));
+  return (
+    <GlassBottomSheet onClose={onClose} testid="history-sheet" className="max-h-[85vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
+      <div className="kicker">· modifiche della commessa</div>
+      <div className="mt-2">
+        {rows.length === 0 && <div className="text-[13px] text-white/70 py-3">Nessuna modifica registrata.</div>}
+        {rows.map((h) => (
+          <div key={h.id} className="py-2.5 border-t border-white/[0.13] first:border-t-0" data-testid="history-row">
+            <div className="text-[14px] text-white"><b>{h.field}</b>: {val(h.old)} → {val(h.new)}</div>
+            <div className="text-[11.5px] text-white/55">{h.by_name} · {new Date(h.at).toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}{h.channel === "telegram" ? " · Telegram" : ""}</div>
+          </div>
+        ))}
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
+// ===== The problems of the commessa: open or solved (by a later note, or by hand), their severity
+const SEVERITY = { bassa: "#8ED973", media: "#F2C14E", alta: "#F08A8A" };
+const NEXT_SEVERITY = { bassa: "media", media: "alta", alta: "bassa" };
+function ProblemsBlock({ problems, canEdit, onChanged }) {
+  const open = problems.filter((p) => p.status !== "risolta");
+  const solved = problems.filter((p) => p.status === "risolta");
+  const patch = async (p, body) => {
+    try { await api.patch(`/jobs/logs/${p.log_id}/problems/${p.idx}`, body); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  if (!problems.length) return null;
+  const row = (p) => (
+    <div key={`${p.log_id}-${p.idx}`} className="flex items-start gap-3 py-2.5 border-t border-white/[0.13]" data-testid="problem-row">
+      <button type="button" disabled={!canEdit} onClick={() => patch(p, { resolved: p.status !== "risolta" })} aria-pressed={p.status === "risolta"}
+        aria-label={p.status === "risolta" ? "Riapri il problema" : "Segna come risolto"} data-testid="problem-toggle"
+        className={`mt-0.5 h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${p.status === "risolta" ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+        {p.status === "risolta" && <Check size={12} strokeWidth={2.8} />}
+      </button>
+      <span className="min-w-0 flex-1">
+        <span className={`block text-[14px] leading-snug ${p.status === "risolta" ? "text-white/55 line-through" : "text-white"}`}>{p.text}</span>
+        <span className="block text-[11.5px] text-white/50">
+          {shortDay(p.date)}{p.author ? ` · ${p.author}` : ""}{p.status === "risolta" ? ` · risolto${p.resolved_by ? ` da ${p.resolved_by}` : ""}` : ""}
+        </span>
+      </span>
+      <button type="button" disabled={!canEdit} onClick={() => patch(p, { severity: NEXT_SEVERITY[p.severity] || "media" })} data-testid="problem-severity"
+        className="shrink-0 inline-flex items-center gap-1 text-[10.5px] px-2 py-0.5 rounded-full bg-white/10 text-white/85" title="Gravità: tocca per cambiarla">
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: SEVERITY[p.severity] || SEVERITY.media }} />{p.severity}
+      </button>
+    </div>
+  );
+  return (
+    <div className="mt-1 mb-4" data-testid="problems-block">
+      <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">aperte {open.length} · risolte {solved.length}</div>
+      {open.map(row)}
+      {solved.length > 0 && <details className="mt-1"><summary className="text-[12px] text-white/60 cursor-pointer py-1.5">Risolte ({solved.length})</summary>{solved.map(row)}</details>}
+    </div>
+  );
+}
+
 // ===== The description of the activities to carry out: written here, dictated in the chat
 // («descrizione attività: …») or read from the site-survey report / the quote uploaded (the
 // quote also gives the commessa's value). Only its owner or an administrator changes it.
@@ -812,7 +904,7 @@ function CostsView({ commessaId, onChanged }) {
         <div key={x.id} className={row} data-testid="costs-extra-row">
           <span className="flex-1 min-w-0">
             <span className="block text-[14px] text-white/90 truncate">{x.label}</span>
-            <span className="block text-[11.5px] text-white/50">{shortDay(x.date)}{x.by ? ` · ${x.by}` : ""}</span>
+            <span className="block text-[11.5px] text-white/50">{shortDay(x.date)}{x.by ? ` · ${x.by}` : ""}{x.supplier ? ` · ${x.supplier}` : ""}{x.log_id ? " · dal diario" : ""}</span>
           </span>
           <span className="text-[14px] text-white">{eur(x.amount)}</span>
           <button type="button" onClick={() => delExtra(x)} aria-label="Elimina la spesa" className="p-1.5 text-white/55 hover:text-white"><Trash2 size={14} /></button>
@@ -1339,6 +1431,8 @@ export default function JobDiaryPage() {
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [contactsOpen, setContactsOpen] = useState(false);
+  const [lostOpen, setLostOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [updatesOpen, setUpdatesOpen] = useState(false);   // the client's weekly progress on Telegram
   const [siteOpen, setSiteOpen] = useState(false);
   const [tplOpen, setTplOpen] = useState(null);   // "apply" | "save"
@@ -1357,6 +1451,11 @@ export default function JobDiaryPage() {
   const [collabs, setCollabs] = useState(null);
   const loadCollabs = (id) => api.get(`/jobs/commesse/${id}/collaborators`).then((r) => setCollabs(r.data || [])).catch(() => setCollabs([]));
   useEffect(() => { if (isAdmin && selectedId) loadCollabs(selectedId); else setCollabs(null); }, [isAdmin, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setCollabLevel = async (x, level) => {
+    setCollabs((cs) => cs.map((c) => (c.id === x.id ? { ...c, level } : c)));
+    try { await api.put(`/jobs/commesse/${selectedId}/collaborators/${x.id}`, { enabled: true, level }); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); loadCollabs(selectedId); }
+  };
   const toggleCollab = async (x) => {
     setCollabs((cs) => cs.map((c) => (c.id === x.id ? { ...c, enabled: !x.enabled } : c)));
     try { await api.put(`/jobs/commesse/${selectedId}/collaborators/${x.id}`, { enabled: !x.enabled }); }
@@ -1422,13 +1521,14 @@ export default function JobDiaryPage() {
     commesse.forEach((c) => {
       const x = m[c.client_item_id] || (m[c.client_item_id] = { total: 0, active: 0 });
       x.total += 1;
-      if (c.stato !== "chiusa") x.active += 1;
+      if (!isClosed(c.stato)) x.active += 1;
     });
     return m;
   }, [commesse]);
 
   const openCommessa = (c) => { setSelectedId(c.id); setDetail((d) => (d?.commessa?.id === c.id ? d : null)); setLevel("diary"); };
   const setStato = async (stato) => {
+    if (stato === "persa") { setLostOpen(true); return; }   // only with its reason
     try { await api.patch(`/jobs/commesse/${selectedId}/stato`, { stato }); await reload(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
@@ -1481,8 +1581,9 @@ export default function JobDiaryPage() {
   );
 
   // ===== the diary of one commessa =====
-  const secAt = (i) => SECTIONS[(i + SECTIONS.length) % SECTIONS.length];
-  const secIdx = Math.max(0, SECTIONS.findIndex((x) => x.key === section));
+  const secs = SECTIONS.filter((x) => x.key !== "costi" || detail?.can_see_costs !== false);   // costs: who may see them
+  const secAt = (i) => secs[(i + secs.length) % secs.length];
+  const secIdx = Math.max(0, secs.findIndex((x) => x.key === section));
   const pickSection = (key) => { setSection(key); setMenu(null); };
   const onSwipeStart = (e) => { swipeX.current = e.touches?.[0]?.clientX ?? null; };
   const onSwipeEnd = (e) => {
@@ -1553,7 +1654,9 @@ export default function JobDiaryPage() {
           className="h-[30px] w-[30px] shrink-0 rounded-full flex items-center justify-center text-white lg-frost">
           <ArrowLeft size={16} />
         </button>
-        <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">{c.title}</h1>
+        <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">
+          {c.codice && <span className="text-white/50 font-normal mr-1.5" data-testid="commessa-code">{c.codice}</span>}{c.title}
+        </h1>
       </div>
       {/* me on site: "Sono in cantiere" / "Ho finito", like the collaborators on Telegram */}
       {access.shared_by != null && (
@@ -1567,7 +1670,8 @@ export default function JobDiaryPage() {
           the card's details (site, dates, phone, e-mail) */}
       <div ref={totalsRow} className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
-          ariaLabel="Cambia lo stato della commessa" onClick={ro ? undefined : () => setMenu((m) => (m === "stato" ? null : "stato"))} />
+          ariaLabel="Cambia lo stato della commessa" onClick={ro || detail.is_admin === false ? undefined : () => setMenu((m) => (m === "stato" ? null : "stato"))}
+          note={c.stato === "persa" && c.lost_reason ? (LOST_CATEGORIES.find(([k]) => k === c.lost_reason.category) || [])[1] : ""} />
         <InfoCard icon={ScrollText} label="Attività" testid="glance-descrizione" ariaLabel="La descrizione delle attività da svolgere"
           value={c.descrizione ? (c.descrizione.split("\n")[0].slice(0, 26) + (c.descrizione.length > 26 ? "…" : "")) : "da descrivere"}
           onClick={() => pickSection("descrizione")} />
@@ -1610,6 +1714,11 @@ export default function JobDiaryPage() {
         {access.is_owner && (
           <InfoCard icon={Send} label="Avanzamento" value="al cliente" testid="info-avanzamento"
             ariaLabel="Avanzamento settimanale al cliente su Telegram" onClick={() => setUpdatesOpen(true)} />
+        )}
+        {detail.is_admin && (
+          <InfoCard icon={RefreshCw} label="Modifiche" value={String((detail.history || []).length)} testid="info-modifiche"
+            note={(detail.history || [])[0] ? shortDay((detail.history[0].at || "").slice(0, 10)) : ""}
+            ariaLabel="Lo storico delle modifiche della commessa" onClick={() => setHistoryOpen(true)} />
         )}
         {isAdmin && collabs && (
           <InfoCard icon={HardHat} label="Collaboratori" value={String(collabs.filter((x) => x.enabled).length)} testid="info-collaboratori"
@@ -1701,6 +1810,9 @@ export default function JobDiaryPage() {
           {detail.hours_to_approve.map((lg) => <HoursToApprove key={lg.id} log={lg} onDone={() => loadDetail(selectedId)} />)}
         </div>
       )}
+      {section === "problemi" && (
+        <ProblemsBlock problems={t.problems || []} canEdit={!ro} onChanged={() => loadDetail(selectedId)} />
+      )}
       {section === "materiali" && toTake.length > 0 && (
         <div className="mt-1 mb-4" data-testid="materials-to-take">
           <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">da prendere</div>
@@ -1781,8 +1893,9 @@ export default function JobDiaryPage() {
         <div role="menu" aria-label="Collaboratori abilitati" data-testid="collab-menu" style={{ top: under(totalsRow.current) }} className="glass-panel absolute z-40 right-0 top-[112px] w-[280px] py-1">
           {collabs.length === 0 && <div className="px-5 py-3.5 text-[13px] text-white/75">Nessun collaboratore: aggiungili in Impostazioni → Collaboratori.</div>}
           {collabs.map((x) => (
-            <button key={x.id} type="button" role="menuitemcheckbox" aria-checked={x.enabled} onClick={() => toggleCollab(x)} data-testid={`collab-toggle-${x.id}`}
-              className="glass-row w-full flex items-center gap-3.5 px-5 py-3 text-left text-[15px] text-white">
+            <div key={x.id} className="relative">
+            <button type="button" role="menuitemcheckbox" aria-checked={x.enabled} onClick={() => toggleCollab(x)} data-testid={`collab-toggle-${x.id}`}
+              className={`glass-row w-full flex items-center gap-3.5 px-5 py-3 text-left text-[15px] text-white ${x.enabled ? "pr-[92px]" : ""}`}>
               <span className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${x.enabled ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
                 {x.enabled && <Check size={12} strokeWidth={2.8} />}
               </span>
@@ -1793,8 +1906,16 @@ export default function JobDiaryPage() {
                 )}
               </span>
             </button>
+            {x.enabled && (
+              <button type="button" onClick={() => setCollabLevel(x, x.level === "write" ? "read_write" : "write")} data-testid={`collab-level-${x.id}`}
+                title={x.level === "write" ? "Può solo inviare informazioni: tocca per fargli anche chiedere" : "Può inviare e chiedere: tocca perché possa solo inviare"}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-[10.5px] px-2 py-0.5 rounded-full bg-white/10 text-white/85">
+                {x.level === "write" ? "solo invia" : "invia e chiede"}
+              </button>
+            )}
+            </div>
           ))}
-          <div className="px-5 pt-2.5 pb-3 text-[11px] text-white/55 border-t border-white/[0.13]">Con il pallino possono scrivere e chiedere su questa commessa da Telegram</div>
+          <div className="px-5 pt-2.5 pb-3 text-[11px] text-white/55 border-t border-white/[0.13]">Con il pallino scrivono su questa commessa da Telegram; «invia e chiede» possono anche fare domande. I costi non li vedono mai.</div>
         </div>
       )}
       {menu === "periodo" && (
@@ -1840,6 +1961,8 @@ export default function JobDiaryPage() {
           onClick={() => setChatOpen(true)} />
       )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
+      {lostOpen && c && <LostSheet commessa={c} onClose={() => setLostOpen(false)} onSaved={() => { setLostOpen(false); reload(); }} />}
+      {historyOpen && c && <HistorySheet rows={detail?.history || []} onClose={() => setHistoryOpen(false)} />}
       {contactsOpen && c && (
         <GlassBottomSheet onClose={() => setContactsOpen(false)} testid="contacts-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
           <div className="text-lg font-semibold text-white mb-3">Contatti · {c.title}</div>

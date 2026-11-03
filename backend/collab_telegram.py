@@ -304,6 +304,11 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
                                        + "\n".join(f"• {p}" for p in log["problems"]))
         return
     if res["status"] == "question":
+        from server import _collab_level
+        if _collab_level(rec, view["id"]) == "write":   # on this commessa they send, they don't consult (COLLAB-LEVEL)
+            await _reply(update, f"Su «{view['title']}» puoi inviare informazioni (lavori, ore, materiali, foto) ma non consultarle: "
+                                 "per le domande rivolgiti a chi ti ha invitato.", reply_markup=await _keyboard_for(everyone))
+            return
         history = list(rec.get("tg_history") or [])
         try:
             answer = await _collab_answer(rec, owner, view, said, history)

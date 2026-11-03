@@ -238,7 +238,12 @@ async def main():
     det = await server.get_job_commessa("s_bagno", current=U2())
     assert det["access"] == {"perm": "read", "shared_by": "Luca Rossi", "is_owner": False} and det["shared_count"] == 0
     assert (await server.get_job_commessa("s_bagno", current=me))["shared_count"] == 2
+    # value, costs and margin: not to the users, unless the organization allows it (specifica C.3)
+    assert det["economics"] is None and det["can_see_costs"] is False
+    await denied(server.get_commessa_economics("s_bagno", current=U2()))
+    await server.patch_tenant(server.TenantPatch(users_see_costs=True), me)
     await server.get_commessa_economics("s_bagno", current=U2())                      # costs: visible
+    assert (await server.get_job_commessa("s_bagno", current=U2()))["economics"] is not None
     jl.interpret = said(hours=[{"who": "io", "hours": 2}])
     assert "sola lettura" in await denied(server._save_job_log(U2(), "oggi 2 ore di sopralluogo", commessa_id="s_bagno"))
     await denied(server.create_job_todo("s_bagno", server.JobTodoPayload(text="Ordinare i sanitari"), U2()))
