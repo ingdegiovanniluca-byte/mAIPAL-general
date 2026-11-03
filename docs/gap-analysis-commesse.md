@@ -8,9 +8,9 @@
 
 | Stato | Quanti |
 |---|---|
-| ✅ Implementato | 7 |
-| 🟡 Parziale | 35 |
-| ❌ Mancante | 9 |
+| ✅ Implementato | 13 |
+| 🟡 Parziale | 32 |
+| ❌ Mancante | 6 |
 | ⛔ Bloccato | 0 |
 | **Totale** | **51** |
 
@@ -62,18 +62,18 @@
 | RF-CAN-02 | Canali | Input multimodali | | 🟡 | foto e OCR (`_ocr_image_bytes`), `_extract_text_from_file` | Foto e testo su tutti i canali; PDF/Office solo nell'app (Documenti, Descrizione). **Telegram non gestisce i documenti** (PDF). PDF scansionati senza testo non letti. |
 | AUT-GEN-01 | Agente | Individuazione della commessa | | 🟡 | `_resolve_commessa`, `collab_telegram._choose`, `_open_presence` | 1 (citata), 2 (check-in aperto) e 4 (pulsanti) ci sono; manca il criterio 3 per **fase** (foto di sopralluogo → commesse nuove). |
 | AUT-GEN-02 | Agente | Estrazione + OCR manoscritti | | 🟡 | `_ocr_image_bytes` (KB), `read_document` | OCR presente per Salva e Descrizione; non nel diario per gli appunti manoscritti. |
-| AUT-GEN-03 | Agente | Conferma prima di salvare dati sensibili | P | 🟡 | `pick_commessa` («è un cliente nuovo?»), `DescriptionDocSheet` | Conferma per cliente nuovo e per il valore dal preventivo; manca un riepilogo uniforme per creazione commessa e spese. |
+| AUT-GEN-03 | Agente | Conferma prima di salvare dati sensibili | P | 🟡 | `_commessa_draft`, `_confirm_commessa_draft`, `POST /jobs/commesse/drafts/{id}`, Telegram `cmd:`, chat `commessaDraft`, `DescriptionDocSheet` | [P] Fase 3: riepilogo e conferma per creazione di cliente e commessa (chat, Telegram, Liste via chat) e per il valore dal preventivo. Le spese si salvano con ricevuta (e sono eliminabili in Costi), senza conferma: scelta coerente col criterio di accettazione di AUT-SVO-01; dati del preventivo in fase 4. |
 | AUT-GEN-04 | Agente | Chiede i dati mancanti | | ✅ | `jl.ground`, stato `non_chiara`, `amount_in_text` | Note non chiare non salvate, importi solo se scritti nel documento. |
-| AUT-GEN-05 | Agente | Ricevuta con sezione e link | | 🟡 | messaggi di `_save_job_log` | Indica commessa e cosa è stato salvato; il link al file su Drive non sempre. |
-| AUT-GEN-06 | Drive | Struttura cartelle | P | 🟡 | `_storage_save(subfolders=…)`, `create_commessa_folder` | `mAIPAL/Clienti/<cliente>/<commessa>`: mancano codice nel nome e sottocartelle per fase. |
-| AUT-GEN-07 | Drive | Nomenclatura file | parz. | ❌ | `_job_photos_to_cloud` («AAAA-MM-GG diario N.jpg») | Da sostituire con `<fase>_AAAAMMGG_<desc>` e suffisso `_02`. |
-| AUT-GEN-08 | Drive | Coda e retry | P | ❌ | salvataggio «best effort» | Da aggiungere coda con tentativi e avviso all'Admin dopo 24 h. |
-| RF-CRE-01..05 | Creazione | Cliente/commessa, assegnazioni, modifiche | 03 | 🟡 | Liste (app), `_new_client`, `_new_commessa`, `set_commessa_sharing`, `set_commessa_collaborator` | Creazione da Liste e implicita da una nota; manca «nuova commessa per …» con parametri da Chat/Telegram; manca lo storico delle modifiche. |
-| AUT-CRE-01 | Creazione | Duplicati cliente | P | 🟡 | `_resolve_commessa` («Ho più clienti con questo nome») | Somiglianza solo per nome normalizzato; manca il confronto «simile». |
-| AUT-CRE-02 | Creazione | Codice, diario, cartella, conferma | | 🟡 | `create_commessa_folder` (su richiesta) | Il diario esiste implicitamente; mancano il codice e la cartella automatica alla creazione. |
-| AUT-CRE-03 | Creazione | Avviso di abilitazione | P | 🟡 | avvisi su condivisione e abilitazione collaboratore | Collaboratori avvisati al collegamento; avviso per ogni nuova commessa abilitata da completare. |
+| AUT-GEN-05 | Agente | Ricevuta con sezione e link | | 🟡 | `_job_log_message`, `_confirm_commessa_draft`, `archive_files.path` | Ricevuta con commessa, sezioni (ore, materiali, problemi, risolti, spese) e cartella con link alla creazione. Il link al singolo file arriva sulla foto nel diario quando è salvato (il salvataggio è asincrono). |
+| AUT-GEN-06 | Drive | Struttura cartelle | P | ✅ | `archive_names.py`, `_commessa_archive_place`, `_commessa_dir`, `_ensure_commessa_folders` | [P] `mAIPAL/Clienti/<cliente>/<codice> – <commessa>/{Sopralluogo, Preventivi, Lavori, Spese, Report}` per le commesse nuove; quelle create prima tengono la cartella col solo titolo (nessun file spostato). |
+| AUT-GEN-07 | Drive | Nomenclatura file | parz. | ✅ | `archive_names.file_name/describe/unique`, `_archive_commessa_bytes`, `archive_files` | Nome `<fase>_AAAAMMGG_<descrizione>` (max 2 parole, data della nota o del caricamento), suffisso `_02` [P]; preventivi `preventivo_AAAAMMGG_vN`. |
+| AUT-GEN-08 | Drive | Coda e retry | P | ✅ | `_archive_try`, `_archive_retry` (nel ciclo ogni 5 minuti), `archive_files` (status queued, data_b64) | [P] File in coda con tentativi a intervalli crescenti (fino a 1 h) e un solo avviso all'Admin dopo 24 h di errori. |
+| RF-CRE-01..05 | Creazione | Cliente/commessa, assegnazioni, modifiche | 03 | 🟡 | Liste, `_commessa_draft`/`_confirm_commessa_draft` (Chat, Telegram), `set_commessa_sharing`, `set_commessa_collaborator`, `_track_commessa_changes` | Fase 3: creazione da Liste, Chat e Telegram con lo stesso risultato (record, codice, diario, cartelle); assegnazioni (condivisione User, collaboratori con livello); modifiche tracciate. |
+| AUT-CRE-01 | Creazione | Duplicati cliente | P | ✅ | `_client_matches` (stesso nome, nomi simili) | [P] Somiglianza: rapporto ≥ 0,75 o parole contenute o una parola quasi uguale; l'Admin sceglie il cliente esistente o «Cliente nuovo». |
+| AUT-CRE-02 | Creazione | Codice, diario, cartella, conferma | | ✅ | `_stamp_commessa`, `_after_new_commessa`, `_ensure_commessa_folders`, `_confirm_commessa_draft` | Codice, stato NUOVA, diario (implicito), cartella con sottocartelle creata entro 20 s (poi in background) e conferma all'Admin con il link. |
+| AUT-CRE-03 | Creazione | Avviso di abilitazione | P | ✅ | `_tell_enabled` (in `set_commessa_collaborator` e `update_collaborator`) | [P] Il collaboratore collegato riceve su Telegram commessa, cliente e indirizzo. Gli User ricevono già l'avviso di condivisione. |
 | RF-SOP-01..02 | Sopralluogo | Note/file e aggregazione | | 🟡 | diario (foto + testo), report «Primo sopralluogo» (`work_reports`) | Le note vanno nel diario generico, non in una sezione Sopralluogo. |
-| AUT-SOP-01..04 | Sopralluogo | Estrazione, struttura, file, stato | 02 | ❌ | — | Sezione strutturata, OCR degli appunti, nomi file e passaggio di stato da fare. |
+| AUT-SOP-01..04 | Sopralluogo | Estrazione, struttura, file, stato | 02 | 🟡 | `_job_photos_to_cloud` (cartella Sopralluogo per commesse nuove/in sopralluogo) | Fase 2: file del sopralluogo in `Sopralluogo/` con il nome della specifica. Sezione strutturata, OCR e cambio di stato in fase 4. |
 | RF-PRE-01..03 | Preventivo | Caricamento, versioni, esito | 02 | 🟡 | `POST /jobs/commesse/{id}/description/read` | Caricamento solo dall'app (Descrizione); mancano versioni ed esito. |
 | AUT-PRE-01..03 | Preventivo | Estrazione, salvataggio, stato e valore | 02 | 🟡 | `jl.read_document`, `set_commessa_description` | Estrae descrizione e importo (imponibile) con conferma; mancano voci, scadenze, cartella `Preventivi/`, stato. Se il valore è diverso oggi propone di sostituirlo (con spunta), non chiede «quale tenere». |
 | AUT-PRE-04 | Preventivo | Solleciti sull'esito | P | ❌ | — | |

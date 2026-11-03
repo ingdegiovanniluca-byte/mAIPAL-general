@@ -58,6 +58,7 @@ import site_presence as sp
 import client_updates as cu
 import access as orgaccess
 import org_settings as osettings
+import archive_names as an
 import milestone_templates as mtpl
 import fitness as fx
 
@@ -679,7 +680,8 @@ async def _migrate_commesse() -> int:
                                                                       "system_map": fmap, "system_sub_map": smap}})
         coll = {**coll, "fields": fields, "sub_item_fields": subs, "system_map": fmap, "system_sub_map": smap}
         ckey = smap.get("codice", "codice")
-        items = await db.collection_sub_items.find({"collection_id": coll["id"]}, {"_id": 0, "id": 1, "data": 1, "created_at": 1}).to_list(20000)
+        items = await db.collection_sub_items.find({"collection_id": coll["id"]}, {"_id": 0, "id": 1, "data": 1, "created_at": 1,
+                                                                                  "archive_folder_name": 1}).to_list(20000)
         for sb in sorted(items, key=lambda x: x.get("created_at") or ""):
             data = dict(sb.get("data") or {})
             upd = False
@@ -690,9 +692,12 @@ async def _migrate_commesse() -> int:
                 year = int((sb.get("created_at") or "")[:4]) if (sb.get("created_at") or "")[:4].isdigit() else None
                 data[ckey] = await _next_commessa_code(coll, year)
                 upd = True
-            if upd:
-                await db.collection_sub_items.update_one({"id": sb["id"]}, {"$set": {"data": data}})
-                changed += 1
+            extra = {}
+            if not sb.get("archive_folder_name"):   # the older ones keep the folder they had (their title)
+                extra["archive_folder_name"] = " ".join(str(data.get(smap.get("titolo", "titolo")) or "Commessa").split())
+            if upd or extra:
+                await db.collection_sub_items.update_one({"id": sb["id"]}, {"$set": {"data": data, **extra}})
+                changed += 1 if upd else 0
     return changed
 
 
@@ -4166,7 +4171,10 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
         "data": data,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.collection_sub_items.insert_one(doc)
+    if coll.get("system_key") == vx.CLIENTI_KEY:
+        await _after_new_commessa(coll, doc, item)
+    else:
+        await db.collection_sub_items.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
@@ -4403,7 +4411,8 @@ async def create_commessa_folder(commessa_id: str, current: User = Depends(get_c
     if existing and existing.get("ids"):
         return {"drive_folder": existing, "message": f"Cartella «{existing['name']}» già pronta."}
     view = _commessa_view(sub, client, clienti)
-    info = await _ensure_storage_path(current, clienti.get("name") or vx.CLIENTI_NAME, [view["client_name"], view["title"]])
+    folder, subs = _commessa_archive_place(clienti, sub, view)
+    info = await _ensure_storage_path(current, folder, subs)
     await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"drive_folders": {**(sub.get("drive_folders") or {}), uid: info}}})
     return {"drive_folder": info, "message": f"Cartella «{info['name']}» pronta su {_folder_where(info)}."}
 
@@ -4426,7 +4435,7 @@ async def _create_list_from_text(current: User, text: str, channel: str = "web",
     if clienti and lu.about_jobs(text, [clienti.get("name") or "", "clienti"]):
         # "crea una commessa per i Rossi": it goes under the client in the Clienti list, never a new list
         res = await _execute_list_update(current, text, collection_id=None, channel=channel)
-        if res.get("status") in ("ok", "error"):
+        if res.get("status") in ("ok", "error", "commessa_draft", "unclear", "invalid"):
             return res
         return {"status": "error", "message": res.get("message") or "Per quale cliente? Scrivimi il nome esatto (es. «crea la commessa Bagno per Mario Rossi»)."}
     try:
@@ -4555,6 +4564,9 @@ async def _execute_list_update(
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Scrivi cosa vuoi modificare nella lista")
+    if not op and current.business_vertical == "artigiano" and jl.new_commessa_said(text):
+        # "crea una nuova commessa per i Rossi": summary and confirmation, like from the diary (AUT-GEN-03)
+        return await _commessa_draft(current, text, channel)
 
     visible = await db.collections.find(_lists_query(current), {"_id": 0}).to_list(200)
     colls = [c for c in visible if _list_perm(c, current) in ("owner", "edit")]   # the read-only ones are not changed
@@ -5625,8 +5637,7 @@ async def _find_or_create_commessa(clienti: dict, client: dict, job_title: str, 
         data[smap.get("descrizione", "descrizione")] = description
     doc = {"id": f"sub_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "item_id": client["id"],
            "data": data, "created_at": datetime.now(timezone.utc).isoformat()}
-    await db.collection_sub_items.insert_one(doc)
-    doc.pop("_id", None)
+    await _after_new_commessa(clienti, doc, client)
     return doc, True
 
 
@@ -6058,8 +6069,8 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
     docx_bytes = work_reports.build_docx(template_name, view["client_name"] or None, view["title"] or None, sections, company=company)
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {view['client_name'] or view['title']} - {stamp}.docx".replace("/", "-")
-    folder = clienti.get("name") or vx.CLIENTI_NAME
-    subs = [x for x in (view["client_name"], view["title"]) if x]
+    _sub_doc = await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0}) or {"id": view["id"]}
+    folder, subs = _commessa_archive_place(clienti, _sub_doc, view, "report")
     drive_link, drive_folder, telegram_sent = await _deliver_work_report(
         current, docx_bytes, fname, folder, subs, f"📄 {template_name} — {view['title']}" + (f" ({view['client_name']})" if view["client_name"] else ""))
 
@@ -6522,6 +6533,16 @@ async def _commessa_history(commessa_id: str, limit: int = 50) -> list:
     return rows
 
 
+async def _after_new_commessa(clienti: dict, doc: dict, client: Optional[dict]) -> None:
+    """A new commessa (any way it was made): its folder name fixed, saved, its folders made."""
+    view = _commessa_view(doc, client, clienti)
+    doc["archive_folder_name"] = an.commessa_folder(view.get("codice"), view.get("title"))
+    await db.collection_sub_items.insert_one(doc)
+    doc.pop("_id", None)
+    if clienti.get("user_id"):
+        _bg(_ensure_commessa_folders(clienti["user_id"], clienti, doc, view))
+
+
 async def _new_commessa(clienti: dict, client: dict, title: str, stato: str = "in lavorazione") -> dict:
     smap = clienti.get("system_sub_map") or {}
     data = {smap.get("titolo", "titolo"): (title or "Lavori").strip()[:80], smap.get("stato", "stato"): stato,
@@ -6529,7 +6550,7 @@ async def _new_commessa(clienti: dict, client: dict, title: str, stato: str = "i
     data = await _stamp_commessa(clienti, data, stato)
     doc = {"id": f"sub_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "item_id": client["id"],
            "data": data, "created_at": datetime.now(timezone.utc).isoformat()}
-    await db.collection_sub_items.insert_one(doc)
+    await _after_new_commessa(clienti, doc, client)
     doc.pop("_id", None)
     return doc
 
@@ -6558,6 +6579,150 @@ def _data_uri_bytes(uri: str) -> Optional[bytes]:
         return None
 
 
+# ---- THE COMMESSA'S ARCHIVE (specifica AUT-GEN-06/07/08): every file of a commessa goes to the
+# administrator's Drive / OneDrive under Clienti/<cliente>/<codice> – <commessa>/<fase>, named
+# <fase>_AAAAMMGG_<descrizione>.<ext> (archive_names). Not connected or not answering: the file
+# waits in a queue (kept in mAIPAL meanwhile) and is tried again; after a day of errors the
+# administrator is told once.
+ARCHIVE_QUEUE_MAX_BYTES = 12 * 1024 * 1024
+ARCHIVE_ALERT_AFTER = timedelta(hours=24)
+
+
+def _commessa_dir(sub: dict, view: dict) -> str:
+    """The commessa's folder: fixed when it was created (the older ones keep their title)."""
+    return sub.get("archive_folder_name") or an.commessa_folder(view.get("codice"), view.get("title"))
+
+
+def _commessa_archive_place(clienti: dict, sub: dict, view: dict, phase: Optional[str] = None) -> tuple:
+    folder = clienti.get("name") or vx.CLIENTI_NAME
+    subs = [x for x in (view.get("client_name"), _commessa_dir(sub, view)) if x] + ([an.PHASES[phase]] if phase else [])
+    return folder, subs
+
+
+def _commessa_phase(view: dict, default: str = "lavori") -> str:
+    """Where a file sent on a commessa belongs by its moment: survey while it is new or being surveyed."""
+    return "sopralluogo" if vx.norm_stato(view.get("stato")) in ("nuova", "sopralluogo") else default
+
+
+async def _archive_commessa_bytes(user_id: str, clienti: dict, sub: dict, view: dict, phase: str, data: bytes, ext: str,
+                                  content_type: Optional[str], day: Optional[date] = None, description: str = "",
+                                  version: Optional[int] = None, meta: Optional[dict] = None) -> dict:
+    """A file of the commessa to its folder of the phase, with its name (unique in that folder).
+    -> the archive record {name, path, status: saved | queued, link}"""
+    folder, subs = _commessa_archive_place(clienti, sub, view, phase)
+    taken = [f["name"] for f in await db.archive_files.find({"commessa_id": sub["id"], "phase": phase}, {"_id": 0, "name": 1}).to_list(5000)]
+    name = an.unique(an.file_name(phase, day or jl.today_local(), description, ext, version), taken)
+    rec = {"id": f"arc_{uuid.uuid4().hex[:12]}", "commessa_id": sub["id"], "phase": phase, "name": name, "folder": folder, "subs": subs,
+           "path": " / ".join([folder] + subs + [name]), "user_id": user_id, "content_type": content_type, "status": "pending",
+           "attempts": 0, "link": None, "meta": meta or {}, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.archive_files.insert_one(rec)
+    rec.pop("_id", None)
+    await _archive_try(rec, data)
+    return await db.archive_files.find_one({"id": rec["id"]}, {"_id": 0, "data_b64": 0}) or rec
+
+
+async def _archive_try(rec: dict, data: Optional[bytes] = None) -> bool:
+    import base64 as _b64
+    if data is None:
+        data = _b64.b64decode(rec.get("data_b64") or "")
+    now = datetime.now(timezone.utc)
+    tmp_path = None
+    try:
+        if not await _storage_targets(await _storage_user(rec["user_id"])):
+            raise RuntimeError("archivio (Drive / OneDrive) non collegato")
+        ext = rec["name"].rsplit(".", 1)[-1] if "." in rec["name"] else "bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        res = await asyncio.wait_for(_storage_save(rec["user_id"], rec["folder"], tmp_path, rec["name"], rec.get("content_type"),
+                                                   subfolders=rec["subs"]), timeout=LIST_FOLDER_TIMEOUT)
+        link = res.get("web_view_link")
+        await db.archive_files.update_one({"id": rec["id"]}, {"$set": {"status": "saved", "link": link, "saved_at": now.isoformat(),
+                                                                       "data_b64": None, "last_error": None}})
+        await _archive_saved(rec, link)
+        return True
+    except Exception as e:
+        err = str(getattr(e, "detail", e))[:200]
+        upd = {"status": "queued", "attempts": int(rec.get("attempts") or 0) + 1, "last_error": err,
+               "first_failed_at": rec.get("first_failed_at") or now.isoformat(),
+               "next_try_at": (now + timedelta(minutes=min(60, 5 * 2 ** int(rec.get("attempts") or 0)))).isoformat()}
+        if not rec.get("data_b64") and len(data) <= ARCHIVE_QUEUE_MAX_BYTES:
+            upd["data_b64"] = _b64.b64encode(data).decode("ascii")
+        await db.archive_files.update_one({"id": rec["id"]}, {"$set": upd})
+        return False
+    finally:
+        if tmp_path:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+
+
+async def _archive_saved(rec: dict, link: Optional[str]) -> None:
+    """Once on the archive: the link where the file shows (a diary photo)."""
+    pid, log_id = (rec.get("meta") or {}).get("photo_id"), (rec.get("meta") or {}).get("log_id")
+    if pid:
+        await db.job_photos.update_one({"id": pid}, {"$set": {"drive_link": link}})
+        cur = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "photos": 1}) if log_id else None
+        if cur:
+            await db.job_logs.update_one({"id": log_id}, {"$set": {"photos": [{**p, "drive_link": link} if p.get("id") == pid else p
+                                                                              for p in cur.get("photos") or []]}})
+
+
+async def _archive_retry(now_utc: Optional[datetime] = None) -> int:
+    """The files waiting: tried again (backing off); after ARCHIVE_ALERT_AFTER of errors, the
+    administrator is told once. -> how many saved now."""
+    now = now_utc or datetime.now(timezone.utc)
+    saved = 0
+    for rec in await db.archive_files.find({"status": "queued"}, {"_id": 0}).to_list(200):
+        if rec.get("next_try_at") and rec["next_try_at"] > now.isoformat():
+            continue
+        if await _archive_try(rec):
+            saved += 1
+            continue
+        if not rec.get("alerted") and rec.get("first_failed_at") and rec["first_failed_at"] <= (now - ARCHIVE_ALERT_AFTER).isoformat():
+            owner_id = await _storage_user(rec["user_id"])
+            n = await db.archive_files.count_documents({"status": "queued", "user_id": rec["user_id"]})
+            od = await db.users.find_one({"user_id": owner_id}, {"_id": 0})
+            if od:
+                await _notify_owner(User(**od), f"⚠️ Da più di un giorno non riesco a salvare {n} file delle commesse sul tuo archivio "
+                                                f"(es. «{rec['name']}»): {rec.get('last_error') or 'errore'}. Restano in mAIPAL e li riprovo da solo: "
+                                                "controlla il collegamento a Drive / OneDrive in Impostazioni.")
+            await db.archive_files.update_many({"status": "queued", "user_id": rec["user_id"]}, {"$set": {"alerted": True}})
+    return saved
+
+
+async def _ensure_commessa_folders(owner_id: str, clienti: dict, sub: dict, view: dict) -> None:
+    """At creation (AUT-CRE-02): the commessa's folder inside its client's, with the phase
+    folders - best effort, in the background (nothing to do without an archive)."""
+    try:
+        uid = await _storage_user(owner_id)
+        if not await _storage_targets(uid):
+            return
+        od = await db.users.find_one({"user_id": owner_id}, {"_id": 0})
+        if not od:
+            return
+        folder, subs = _commessa_archive_place(clienti, sub, view)
+        info = await _ensure_storage_path(User(**od), folder, subs)
+        for ph in an.PHASES.values():
+            try:
+                await _ensure_storage_path(User(**od), folder, subs + [ph])
+            except Exception:
+                logger.warning("phase folder %s not made", ph)
+        cur = await db.collection_sub_items.find_one({"id": sub["id"]}, {"_id": 0, "drive_folders": 1}) or {}
+        await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"drive_folders": {**(cur.get("drive_folders") or {}), uid: info}}})
+    except Exception:
+        logger.exception("commessa folders not made")
+
+
+def _bg(coro) -> None:
+    """A background job kept alive until done."""
+    try:
+        task = asyncio.get_running_loop().create_task(coro)
+        _DAY_PIN_TASKS.add(task)
+        task.add_done_callback(_DAY_PIN_TASKS.discard)
+    except RuntimeError:
+        pass
+
+
 async def _store_job_photos(current: User, log: dict, images: List[str]) -> list:
     """Every photo is kept in mAIPAL (compressed), so the diary shows it even without a cloud;
     with Drive/OneDrive connected a copy also goes to Clienti/<cliente>/<commessa>."""
@@ -6581,38 +6746,37 @@ async def _store_job_photos(current: User, log: dict, images: List[str]) -> list
     if added:
         await db.job_logs.update_one({"id": log["id"]}, {"$set": {"photos": (log.get("photos") or []) + added}})
         log["photos"] = (log.get("photos") or []) + added
-        asyncio.create_task(_job_photos_to_cloud(current.user_id, log, [a["id"] for a in added]))
+        _bg(_job_photos_to_cloud(current.user_id, log, [a["id"] for a in added]))
     return added
 
 
 async def _job_photos_to_cloud(user_id: str, log: dict, photo_ids: list) -> None:
+    """The diary's photos to the commessa's archive: Sopralluogo while it is new or being
+    surveyed, Spese with an expense, else Lavori; named from the note (two words) and its day."""
     import base64 as _b64
     try:
-        if not await _storage_targets(user_id):
+        sub = await db.collection_sub_items.find_one({"id": log["commessa_id"]}, {"_id": 0})
+        clienti = await db.collections.find_one({"id": (sub or {}).get("collection_id")}, {"_id": 0}) if sub else None
+        if not sub or not clienti:
             return
-        folder = _drive_safe(log.get("collection_name") or vx.CLIENTI_NAME)
-        subs = [x for x in (log.get("client_name"), log.get("commessa_title")) if x]
-        for n, pid in enumerate(photo_ids, 1):
+        client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+        view = _commessa_view(sub, client, clienti)
+        cur = await db.job_logs.find_one({"id": log["id"]}, {"_id": 0, "expenses": 1, "raw_text": 1, "date": 1, "kind_phase": 1}) or {}
+        phase = cur.get("kind_phase") or ("spesa" if cur.get("expenses") else _commessa_phase(view))
+        said = cur.get("raw_text") or log.get("raw_text") or ""
+        said = "" if said.strip() == PHOTO_ONLY_TEXT else said
+        try:
+            day = date.fromisoformat((cur.get("date") or log.get("date") or "")[:10])
+        except ValueError:
+            day = jl.today_local()
+        for pid in photo_ids:
             ph = await db.job_photos.find_one({"id": pid}, {"_id": 0})
             if not ph:
                 continue
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(_b64.b64decode(ph["data_b64"]))
-                tmp_path = tmp.name
-            try:
-                res = await asyncio.wait_for(_storage_save(user_id, folder, tmp_path, f"{log.get('date')} diario {n}.jpg",
-                                                           "image/jpeg", subfolders=subs), timeout=LIST_FOLDER_TIMEOUT)
-                link = res.get("web_view_link")
-                await db.job_photos.update_one({"id": pid}, {"$set": {"drive_link": link}})
-                cur = await db.job_logs.find_one({"id": log["id"]}, {"_id": 0, "photos": 1})
-                if cur:
-                    await db.job_logs.update_one({"id": log["id"]}, {"$set": {"photos": [
-                        {**p, "drive_link": link} if p.get("id") == pid else p for p in cur.get("photos") or []]}})
-            finally:
-                try: os.unlink(tmp_path)
-                except Exception: pass
+            await _archive_commessa_bytes(user_id, clienti, sub, view, phase, _b64.b64decode(ph["data_b64"]), "jpg", "image/jpeg",
+                                          day=day, description=said, meta={"photo_id": pid, "log_id": log["id"]})
     except Exception:
-        logger.exception("job photos cloud copy failed")
+        logger.exception("job photos archive failed")
 
 
 async def _save_log_expenses(current: User, clienti: dict, target: dict, log: dict, expenses: list, author: Optional[dict]) -> list:
@@ -7067,6 +7231,161 @@ JOB_LOG_QUESTION_MSG = ("Il Diario serve solo a scrivere note sulle commesse, qu
                         "e chiedi con il tasto della chat.")
 
 
+# ---- A NEW COMMESSA FROM A MESSAGE (RF-CRE-02/03, AUT-CRE-01/02, AUT-GEN-03/04): "Nuova commessa
+# per Mario Rossi, rifacimento bagno in via Garibaldi 5 a Torino, inizio 10 novembre". The agent
+# reads only what is written, asks what is missing, checks clients with a similar name, shows a
+# summary and creates client and commessa (code, state "nuova", folders) only when confirmed.
+
+def _norm_client_name(name: str) -> str:
+    return " ".join(an.ascii_words(name))
+
+
+def _client_matches(clients: list, fmap: dict, name: str) -> tuple:
+    """-> (the client with that very name or None, [similar ones])"""
+    from difflib import SequenceMatcher
+    target = _norm_client_name(name)
+    tw = set(target.split())
+    exact, similar = None, []
+    for c in clients:
+        cname = _sysval(c.get("data"), fmap, "nome")
+        n = _norm_client_name(cname)
+        if not n:
+            continue
+        if n == target:
+            exact = {"id": c["id"], "name": cname}
+            continue
+        words = set(n.split())
+        if SequenceMatcher(None, n, target).ratio() >= 0.75 or (tw and (tw <= words or words <= tw)) \
+                or any(SequenceMatcher(None, a, b).ratio() >= 0.85 for a in tw for b in words if len(a) >= 4 and len(b) >= 4):
+            similar.append({"id": c["id"], "name": cname})
+    return exact, similar[:4]
+
+
+def _draft_summary(f: dict, client_line: str) -> str:
+    lines = ["🧱 Nuova commessa: controlla e conferma", f"👤 Cliente: {client_line}", f"🛠 Lavori: {f['title']}"]
+    lines.append(f"📍 Cantiere: {f['address']}" if f.get("address") else "📍 Cantiere: non indicato (servirà prima di pianificare le attività)")
+    if f.get("start") or f.get("end"):
+        lines.append("📅 " + " · ".join(x for x in (f"inizio {_short_it_date(f['start'])}" if f.get("start") else "",
+                                                     f"fine {_short_it_date(f['end'])}" if f.get("end") else "") if x))
+    if f.get("value"):
+        lines.append(f"💶 Valore: {jl._eur(f['value'])}")
+    if f.get("description"):
+        lines.append(f"📝 {f['description'][:300]}")
+    return "\n".join(lines)
+
+
+async def _commessa_draft(current: User, text: str, channel: str = "web") -> dict:
+    """-> {"status": "commessa_draft", "draft", "message"} | {"status": "unclear" | "invalid", "message"}"""
+    if not _is_org_admin(current):
+        return {"status": "invalid", "message": COMMESSE_ADMIN_ONLY}
+    clienti = await _ensure_clienti_list(current)
+    try:
+        f = await jl.read_new_commessa(text, current.user_id, channel)
+    except Exception:
+        logger.exception("new commessa reading failed")
+        return {"status": "unclear", "message": "Non sono riuscito a leggere i dati della commessa: riprova tra poco."}
+    missing = [label for key, label in (("client", "il cliente"), ("title", "il nome dei lavori")) if not f.get(key)]
+    if missing:
+        return {"status": "unclear", "message": f"Per creare la commessa mi manca {' e '.join(missing)}: scrivimelo, ad esempio «Nuova "
+                                                "commessa per Mario Rossi, rifacimento bagno in via Garibaldi 5, inizio 10 novembre»."}
+    fmap = clienti.get("system_map") or {}
+    clients = await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "id": 1, "data": 1}).to_list(5000)
+    exact, similar = _client_matches(clients, fmap, f["client"])
+    draft = {"id": f"cdr_{uuid.uuid4().hex[:12]}", "user_id": current.user_id, "collection_id": clienti["id"], "fields": f,
+             "client_id": (exact or {}).get("id"), "similar": [] if exact else similar, "status": "open", "channel": channel,
+             "text": text, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.commessa_drafts.insert_one(draft)
+    draft.pop("_id", None)
+    if exact:
+        client_line = f"{exact['name']} (già nella lista Clienti)"
+    elif similar:
+        client_line = f"{f['client']} – ho già clienti con un nome simile: {', '.join(x['name'] for x in similar)}. È uno di loro?"
+    else:
+        client_line = f"{f['client']} (nuovo: lo aggiungo alla lista Clienti)"
+    return {"status": "commessa_draft", "draft": _draft_public(draft), "message": _draft_summary(f, client_line)}
+
+
+def _draft_public(d: dict) -> dict:
+    """The choices of a draft: confirm (the client as it is), one of the similar clients, a new client, cancel."""
+    opts = []
+    if d.get("similar"):
+        opts += [{"key": f"c:{x['id']}", "label": f"È {x['name']}"} for x in d["similar"]]
+        opts.append({"key": "new", "label": f"Cliente nuovo: {d['fields']['client']}"})
+    else:
+        opts.append({"key": "ok", "label": "Crea la commessa"})
+    opts.append({"key": "no", "label": "Annulla"})
+    return {"id": d["id"], "fields": d["fields"], "options": opts}
+
+
+class DraftConfirmPayload(BaseModel):
+    choice: str = "ok"            # ok | new | c:<client id> | no
+
+
+@api_router.post("/jobs/commesse/drafts/{draft_id}")
+async def confirm_commessa_draft(draft_id: str, payload: DraftConfirmPayload, current: User = Depends(get_current_user)):
+    return await _confirm_commessa_draft(current, draft_id, payload.choice)
+
+
+async def _confirm_commessa_draft(current: User, draft_id: str, choice: str) -> dict:
+    d = await db.commessa_drafts.find_one({"id": draft_id, "user_id": current.user_id}, {"_id": 0})
+    if not d or d.get("status") != "open":
+        raise HTTPException(status_code=404, detail="Questa proposta di commessa non c'è più: riscrivimela.")
+    _require_org_admin(current)
+    if choice == "no":
+        await db.commessa_drafts.update_one({"id": draft_id}, {"$set": {"status": "cancelled"}})
+        return {"status": "cancelled", "message": "Ok, non ho creato niente."}
+    clienti = await db.collections.find_one({"id": d["collection_id"]}, {"_id": 0})
+    if not clienti:
+        raise HTTPException(status_code=404, detail="Lista Clienti non trovata")
+    f = d["fields"]
+    client = None
+    if choice.startswith("c:"):
+        cid = choice[2:]
+        if cid not in [x["id"] for x in d.get("similar") or []]:
+            raise HTTPException(status_code=400, detail="Scelta non valida")
+        client = await db.collection_items.find_one({"id": cid, "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
+    elif d.get("client_id") and choice == "ok":
+        client = await db.collection_items.find_one({"id": d["client_id"], "collection_id": clienti["id"]}, {"_id": 0, "embedding": 0})
+    elif d.get("similar") and choice != "new":
+        raise HTTPException(status_code=400, detail="Dimmi prima se il cliente è uno di quelli già in lista o è nuovo.")
+    created_client = False
+    if not client:
+        client = await _new_client(current, clienti, f["client"])
+        created_client = True
+    smap = clienti.get("system_sub_map") or {}
+    data = {smap.get("titolo", "titolo"): f["title"][:80]}
+    for key, val in (("indirizzo_cantiere", f.get("address")), ("data_inizio", f.get("start")), ("data_fine", f.get("end")),
+                     ("descrizione", f.get("description"))):
+        if val:
+            data[smap.get(key, key)] = val
+    data = await _stamp_commessa(clienti, data, "nuova")
+    doc = {"id": f"sub_{uuid.uuid4().hex[:12]}", "collection_id": clienti["id"], "item_id": client["id"], "data": data,
+           "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current.user_id, "created_channel": d.get("channel")}
+    view0 = _commessa_view(doc, client, clienti)
+    doc["archive_folder_name"] = an.commessa_folder(view0.get("codice"), view0.get("title"))
+    await db.collection_sub_items.insert_one(doc)
+    doc.pop("_id", None)
+    if f.get("value"):
+        await db.job_economics.update_one({"commessa_id": doc["id"]}, {"$set": {"commessa_id": doc["id"], "budget": f["value"]}}, upsert=True)
+    await _track_commessa_changes(current, clienti, doc["id"], {}, {}, channel=d.get("channel") or "web",
+                                  extra={"Creata": ("", f"{data.get(smap.get('codice', 'codice'))} – {f['title']}")})
+    await db.commessa_drafts.update_one({"id": draft_id}, {"$set": {"status": "done", "commessa_id": doc["id"]}})
+    view = _commessa_view(doc, client, clienti)
+    folder, subs = _commessa_archive_place(clienti, doc, view)
+    where = " / ".join([folder] + subs)
+    link = None
+    try:   # the folder within a short while (otherwise it goes on in the background)
+        await asyncio.wait_for(_ensure_commessa_folders(clienti.get("user_id") or current.user_id, clienti, doc, view), timeout=20)
+        df = (await db.collection_sub_items.find_one({"id": doc["id"]}, {"_id": 0, "drive_folders": 1}) or {}).get("drive_folders") or {}
+        info = next(iter(df.values()), None)
+        link = next((x for x in (info or {}).get("links", {}).values() if x), None)
+    except Exception:
+        logger.warning("commessa folder still being made")
+    msg = (f"✅ Commessa {view['codice']} «{view['title']}» creata per {view['client_name']}" + (" (cliente nuovo)" if created_client else "")
+           + ", stato «nuova». Il diario è pronto.\n📁 " + (f"Cartella: {where}\n{link}" if link else f"Cartella: {where}"))
+    return {"status": "created", "commessa": view, "client_created": created_client, "message": msg, "folder_link": link}
+
+
 COMMESSA_NOT_FOUND_USER = ("Non l'ho salvato: non trovo questa commessa tra quelle che puoi usare. Clienti e commesse nuove "
                            "li crea l'amministratore della tua organizzazione.")
 
@@ -7085,6 +7404,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Racconta cosa è stato fatto in cantiere")
+    if not author and not images and not commessa_id and jl.new_commessa_said(text):   # "nuova commessa per …": summary and confirmation
+        return await _commessa_draft(current, text, channel)
     clienti = await _ensure_clienti_list(current)
     team = []
     if current.org_id:
@@ -8311,20 +8632,6 @@ async def set_commessa_description(commessa_id: str, payload: CommessaDescriptio
     return {"descrizione": desc, "descrizione_info": meta, "budget": econ.get("budget")}
 
 
-async def _archive_commessa_file(user_id: str, clienti: dict, view: dict, tmp_path: str, name: str, content_type: Optional[str]) -> None:
-    """The document also goes in the archive (Drive / OneDrive: Clienti / client / commessa); best effort."""
-    try:
-        if await _storage_targets(user_id):
-            await asyncio.wait_for(_storage_save(user_id, _drive_safe(clienti.get("name") or vx.CLIENTI_NAME), tmp_path, name, content_type,
-                                                 subfolders=[x for x in (view.get("client_name"), view.get("title")) if x]),
-                                   timeout=LIST_FOLDER_TIMEOUT)
-    except Exception:
-        logger.exception("commessa document archive failed")
-    finally:
-        try: os.unlink(tmp_path)
-        except Exception: pass
-
-
 @api_router.post("/jobs/commesse/{commessa_id}/description/read")
 async def read_commessa_document(commessa_id: str, file: UploadFile = File(...), current: User = Depends(get_current_user)):
     """A site-survey report or a quote (pdf, docx, xlsx, txt, a photo): the activities to carry out
@@ -8367,12 +8674,12 @@ async def read_commessa_document(commessa_id: str, file: UploadFile = File(...),
         raise HTTPException(status_code=502, detail="Non sono riuscito a leggere il documento, riprova tra poco")
     if not res["description"]:
         raise HTTPException(status_code=400, detail="Nel documento non trovo una descrizione dei lavori")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext or 'bin'}") as tmp:
-        tmp.write(contents)
-        keep = tmp.name
-    task = asyncio.create_task(_archive_commessa_file(current.user_id, clienti, view, keep, name, file.content_type))
-    _DAY_PIN_TASKS.add(task)
-    task.add_done_callback(_DAY_PIN_TASKS.discard)
+    phase = {"preventivo": "preventivo", "sopralluogo": "sopralluogo"}.get(res["kind"], _commessa_phase(view))
+    version = None
+    if phase == "preventivo":
+        version = await db.archive_files.count_documents({"commessa_id": commessa_id, "phase": "preventivo"}) + 1
+    _bg(_archive_commessa_bytes(current.user_id, clienti, sub, view, phase, contents, ext or "bin", file.content_type,
+                                description="" if phase == "preventivo" else res.get("description", "")[:80], version=version))
     econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}
     return {**res, "file_name": name, "current_description": view.get("descrizione") or "", "current_budget": econ.get("budget")}
 
@@ -8688,9 +8995,12 @@ async def update_collaborator(collab_id: str, payload: CollaboratorPatch, curren
             raise HTTPException(status_code=400, detail="Il collaboratore non si è ancora collegato a Telegram")
         upd["status"] = payload.status
     old_first = c.get("first_name")
+    added = [x for x in upd.get("commesse") or [] if x not in (c.get("commesse") or [])]
     if upd:
         await db.collaborators.update_one({"id": collab_id}, {"$set": upd})
         c.update(upd)
+    if added:
+        await _tell_enabled(c, added, current, views)
     rates = await _list_rates(current)
     rate = None if payload.clear_hourly_rate else _num_or_none(payload.hourly_rate)
     if payload.clear_hourly_rate or rate is not None:
@@ -8775,13 +9085,30 @@ async def set_commessa_collaborator(commessa_id: str, collab_id: str, payload: C
         raise HTTPException(status_code=404, detail="Commessa non trovata")
     await _commessa_or_404(current, commessa_id)
     await _collab_or_404(current, collab_id)
+    before = await db.collaborators.find_one({"id": collab_id}, {"_id": 0}) or {}
     op = {"$addToSet": {"commesse": commessa_id}} if payload.enabled else {"$pull": {"commesse": commessa_id}}
     await db.collaborators.update_one({"id": collab_id}, op)
     c = await db.collaborators.find_one({"id": collab_id}, {"_id": 0}) or {}
+    if payload.enabled and commessa_id not in (before.get("commesse") or []):
+        await _tell_enabled(c, [commessa_id], current)
     if payload.level:
         await db.collaborators.update_one({"id": collab_id}, {"$set": {"levels": {**(c.get("levels") or {}), commessa_id: payload.level}}})
         c["levels"] = {**(c.get("levels") or {}), commessa_id: payload.level}
     return {"ok": True, "enabled": payload.enabled, "level": _collab_level(c, commessa_id)}
+
+
+async def _tell_enabled(collab: dict, commessa_ids: list, current: User, views: Optional[dict] = None) -> None:
+    """AUT-CRE-03: a linked collaborator enabled on a commessa is told on Telegram (name, client, site)."""
+    try:
+        views = views or await _collab_views(current)
+        for cid in commessa_ids:
+            v = views.get(cid)
+            if v:
+                await _tell_collaborator(collab, f"🔔 Sei abilitato sulla commessa «{v['title']}» — {v['client_name']}"
+                                                 + (f"\n📍 {v['address']}" if v.get("address") else "")
+                                                 + "\nQui puoi scrivere cosa fate, ore, materiali e foto.")
+    except Exception:
+        logger.exception("enabled notice failed")
 
 
 async def _collab_targets(collab: dict) -> list:
@@ -9561,6 +9888,7 @@ async def _collab_reminder_loop():
                 await _presence_late_check()
                 await _presence_day_note()
                 await _client_weekly_updates()
+                await _archive_retry()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
@@ -12436,6 +12764,8 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
                         "commessa_id": res["log"]["commessa_id"]}
             if res["status"] in ("planned", "description"):
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"], "commessa_id": res["commessa"]["id"]}
+            if res["status"] == "commessa_draft":
+                return {**base, "label": "Nuova commessa", "status": "ok", "message": res["message"], "commessa_draft": res["draft"]}
             if res["status"] == "material_doubt":
                 return {**base, "label": "Diario commessa", "status": "error",
                         "message": f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."}

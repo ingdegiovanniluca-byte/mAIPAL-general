@@ -206,7 +206,7 @@ async def main():
     txt = doc_text(SAVED[-1]["bytes"])
     for must in ("Report di commessa", "Mario Rossi", "Bagno", "piastrelle in ritardo", "Firma del tecnico"):
         assert must in txt, must
-    assert "tubo rotto" not in txt and SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", "Bagno"]
+    assert "tubo rotto" not in txt and SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", "Bagno", "Report"]   # (AUT-GEN-06: the Report folder)
     assert len(db.collection_sub_items.docs) == nsubs and len(db.collection_items.docs) == nitems    # nothing created
     line = [x for x in db.job_logs.docs if x.get("kind") == "report"][-1]
     assert line["commessa_id"] == "s_bagno" and line["text"] == "Report «Report di commessa» (dal 01/10/2026 al 24/10/2026) generato da Luca."

@@ -461,6 +461,65 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
     }
 
 
+# ---- a new commessa said in a message: "Nuova commessa per Mario Rossi, rifacimento bagno in via
+# Garibaldi 5 a Torino, inizio 10 novembre" (RF-CRE-02). Only what is written; asked when missing.
+_NEW_COMMESSA = re.compile(r"^\s*(?:(?:nuova|una\s+nuova)\s+commessa|(?:crea|creare|apri|aprire|aggiungi|inserisci)\s+(?:una\s+)?(?:nuova\s+)?commessa"
+                           r"|nuovo\s+lavoro\s+per|nuovo\s+cantiere\s+per)\b", re.I)
+
+
+def new_commessa_said(text: str) -> bool:
+    return bool(_NEW_COMMESSA.match(text or ""))
+
+
+async def read_new_commessa(text: str, user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """-> {"client", "title", "address", "start", "end", "value", "description"} - only what the
+    message says (dates YYYY-MM-DD, value a number written in it), "" / None otherwise."""
+    today = today_local()
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Il messaggio chiede di creare una NUOVA COMMESSA. "
+        f"Oggi è {IT_WEEKDAYS[today.weekday()]} {today.isoformat()}. Estrai SOLO ciò che è scritto:\n"
+        "\"client\": il cliente (persona o azienda) come scritto; \"title\": il nome breve dei lavori (es. \"Rifacimento bagno\"); "
+        "\"address\": l'indirizzo del cantiere; \"start\" e \"end\": date di inizio e fine previste in YYYY-MM-DD (\"10 novembre\" -> "
+        "la prossima data con quel giorno); \"value\": il valore/importo in euro come numero se scritto; \"description\": "
+        "i dettagli dei lavori se ce ne sono oltre al nome. Ciò che manca: stringa vuota (value null). MAI inventare.\n"
+        "Rispondi SOLO con JSON: {\"client\": \"\", \"title\": \"\", \"address\": \"\", \"start\": \"\", \"end\": \"\", \"value\": null, \"description\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=800, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": text}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+    said = set(_words(text))
+
+    def grounded_name(v: str) -> str:
+        v = " ".join(str(v or "").split())[:120]
+        words = _words(v)
+        return v if words and sum(1 for w in words if _said(w, said)) / len(words) >= 0.6 else ""
+
+    def day(v) -> str:
+        try:
+            d = date.fromisoformat(str(v or "")[:10])
+        except ValueError:
+            return ""
+        return d.isoformat() if today - timedelta(days=366) <= d <= today + timedelta(days=3 * 366) else ""
+
+    value = p.get("value")
+    try:
+        value = round(float(str(value).replace(",", ".")), 2) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        value = None
+    if value is not None and (value <= 0 or not amount_in_text(value, text)):
+        value = None
+    return {"client": grounded_name(p.get("client")), "title": grounded_name(p.get("title")),
+            "address": grounded_name(p.get("address")), "start": day(p.get("start")), "end": day(p.get("end")),
+            "value": value, "description": " ".join(str(p.get("description") or "").split())[:1000]}
+
+
 # ---- the commessa's description from a document: a site-survey report or a quote ----
 DOC_KINDS = ("preventivo", "sopralluogo", "altro")
 

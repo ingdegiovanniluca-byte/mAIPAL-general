@@ -779,6 +779,10 @@ export default function ChatPage() {
   // Diario di commessa: the commessa of the thread's last entry is the one meant when the
   // message names none; when the app can't tell, it asks with buttons.
   const appendJobLogResult = (res, images) => {
+    if (res.status === "commessa_draft") {   // a new commessa: its summary, confirmed with a button
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, commessaDraft: res.draft }] }));
+      return;
+    }
     if (res.status === "pick_commessa") {
       setThread((th) => ({ ...th, messages: [...th.messages, {
         role: "assistant", content: "📒 " + res.message,
@@ -844,6 +848,15 @@ export default function ChatPage() {
     }
   };
 
+  const resolveCommessaDraft = async (draft, key) => {
+    setStreaming(true);
+    try {
+      const r = await api.post(`/jobs/commesse/drafts/${draft.id}`, { choice: key });
+      setThread((th) => ({ ...th, messages: [...th.messages.map((m) => (m.commessaDraft === draft ? { ...m, commessaDraft: { ...draft, done: true } } : m)),
+        { role: "assistant", content: r.data.message, jobCommessaId: r.data.commessa?.id }] }));
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setStreaming(false); }
+  };
   const resolveJobMat = async (mat, choice) => {
     setStreaming(true);
     try {
@@ -1032,6 +1045,14 @@ export default function ChatPage() {
   };
 
   const appendListUpdateResult = (res) => {
+    if (res.status === "commessa_draft") {
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, commessaDraft: res.draft }] }));
+      return;
+    }
+    if (res.status === "unclear" || res.status === "invalid") {
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "⚠️ " + res.message }] }));
+      return;
+    }
     if (res.status === "ambiguous_list" || res.status === "ambiguous_item" || res.status === "ambiguous_sub_item") {
       const prompt = res.status === "ambiguous_list"
         ? "📋 A quale lista ti riferisci?"
@@ -2516,6 +2537,16 @@ export default function ChatPage() {
                           className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">🧰 Usati oggi</button>
                         <button onClick={() => resolveJobMat(m.jobMat, "da_prendere")} disabled={streaming} data-testid="job-mat-plan"
                           className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">📌 Da prendere</button>
+                      </div>
+                    )}
+                    {m.commessaDraft && !m.commessaDraft.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="commessa-draft-choices">
+                        {m.commessaDraft.options.map((o) => (
+                          <button key={o.key} onClick={() => resolveCommessaDraft(m.commessaDraft, o.key)} disabled={streaming} data-testid={`commessa-draft-${o.key.replace(":", "-")}`}
+                            className={`text-xs px-3 py-1.5 rounded-full disabled:opacity-50 ${o.key === "no" ? "bg-white/5 text-white/70" : "bg-white/10 hover:bg-white/20 text-white"}`}>
+                            {o.key === "ok" ? "✅ " : ""}{o.label}
+                          </button>
+                        ))}
                       </div>
                     )}
                     {m.jobPick && !m.jobPick.done && (

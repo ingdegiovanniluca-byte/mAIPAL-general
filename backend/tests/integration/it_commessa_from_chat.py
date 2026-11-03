@@ -156,19 +156,28 @@ async def main():
     assert not lu.about_jobs("crea una commessa", ["Spesa"])            # no Clienti list: nothing special
     assert not lu.about_jobs("crea una lista della spesa", names)
 
-    # 2) the list editor only sees Clienti, the commessa goes under the client, "nuova" with its code
-    lu.interpret_list_request = interp_add_commessa("Bagno", "Mario Rossi")
+    # 2) "crea una commessa …" from the chat: a summary to confirm (AUT-GEN-03), then the commessa under the client,
+    #    "nuova" with its code - never a new list
+    def new_job(title, client):
+        async def f(text, user_id=None, channel="web"):
+            return {"client": client, "title": title, "address": "", "start": "", "end": "", "value": None, "description": ""}
+        return f
+    jl.read_new_commessa = new_job("Bagno", "Mario Rossi")
     n_colls = len(db.collections.docs)
     r = await server._execute_list_update(me, "Crea una commessa nuova Bagno per il cliente Mario Rossi")
-    assert r["status"] == "ok" and CATALOGS[-1] == ["Clienti"], (r, CATALOGS)
+    assert r["status"] == "commessa_draft" and [o["key"] for o in r["draft"]["options"]] == ["ok", "no"], r
+    assert "Mario Rossi (già nella lista Clienti)" in r["message"] and "Bagno" in r["message"]
+    out = await server.confirm_commessa_draft(r["draft"]["id"], server.DraftConfirmPayload(choice="ok"), me)
+    assert out["status"] == "created" and out["commessa"]["client_name"] == "Mario Rossi"
     sub = next(x for x in db.collection_sub_items.docs if x["item_id"] == "c_rossi")
     assert sub["data"]["titolo"] == "Bagno" and sub["data"]["stato"] == "nuova" and sub["data"]["codice"]
     assert len(db.collections.docs) == n_colls
 
     # 3) even if it reaches "create a list" (Telegram, an old app): no new list, the commessa under the client
-    lu.interpret_list_request = interp_add_commessa("Cucina", "Mario Rossi")
+    jl.read_new_commessa = new_job("Cucina", "Mario Rossi")
     r = await server._create_list_from_text(me, "crea una nuova commessa Cucina per Mario Rossi")
-    assert r["status"] == "ok" and len(db.collections.docs) == n_colls
+    assert r["status"] == "commessa_draft" and len(db.collections.docs) == n_colls
+    await server.confirm_commessa_draft(r["draft"]["id"], server.DraftConfirmPayload(choice="ok"), me)
     assert any(x["data"].get("titolo") == "Cucina" and x["item_id"] == "c_rossi" for x in db.collection_sub_items.docs)
     # a state said stays
     lu.interpret_list_request = interp_add_commessa("Tetto", "Mario Rossi")

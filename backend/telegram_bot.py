@@ -333,6 +333,8 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
                               hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
     if res["status"] in ("ok", "question", "unclear", "invalid", "planned", "description"):
         answer = res["message"]
+    elif res["status"] == "commessa_draft":   # (the watch can't press buttons: confirmed from the app or Telegram)
+        answer = res["message"] + "\nConfermala dall'app o da Telegram."
     elif res["status"] == "material_doubt":
         answer = f"Non l'ho salvato: {res['message']} Riscrivilo dicendo «usati» o «da prendere»."
     else:
@@ -481,6 +483,9 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
                          job_commessa_id=res["log"]["commessa_id"], job_log_id=res["log"]["id"],
                          pending_job_context=None, last_user_message=content)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+        return
+    if res["status"] == "commessa_draft":   # a new commessa: the summary, confirmed with a button
+        await _send_commessa_draft(ctx, chat_id, res)
         return
     if res["status"] in ("planned", "description"):   # only materials to take (a reminder) / the commessa's description: no entry
         await _set_state(db, chat_id, user["user_id"], current_action="journal", job_commessa_id=res["commessa"]["id"],
@@ -930,8 +935,17 @@ async def _try_list_create(update, ctx, user, content, list_names) -> bool:
     except Exception as e:
         logger.exception("tg list create failed")
         res = {"status": "error", "message": str(getattr(e, "detail", None) or e)[:300]}
+    if res.get("status") == "commessa_draft":
+        await _send_commessa_draft(ctx, chat_id, res)
+        return True
     await ctx.bot.send_message(chat_id=chat_id, text=("📋 " if res.get("status") == "ok" else "⚠️ ") + res.get("message", ""))
     return True
+
+
+async def _send_commessa_draft(ctx, chat_id, res) -> None:
+    """A new commessa's summary with its buttons (confirm, a similar client, a new one, cancel)."""
+    buttons = [[InlineKeyboardButton(o["label"][:60], callback_data=f"cmd:{res['draft']['id']}:{o['key']}")] for o in res["draft"]["options"]]
+    await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None, collection_id=None,
@@ -955,6 +969,13 @@ async def _run_list_update_flow(update_or_query, ctx, db, user, content, op=None
         return
 
     status = res.get("status")
+    if status == "commessa_draft":
+        await _set_state(db, chat_id, user["user_id"], pending_list_update=None, pending_list_context=None)
+        await _send_commessa_draft(ctx, chat_id, res)
+        return
+    if status in ("unclear", "invalid"):
+        await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {res['message']}")
+        return
     if status in ("ambiguous_list", "ambiguous_item", "ambiguous_sub_item"):
         if status == "ambiguous_list":
             buttons = [[InlineKeyboardButton(c["name"][:60], callback_data=f"lstc:{c['collection_id']}")] for c in res["candidates"]]
@@ -1044,6 +1065,18 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _set_state(db, chat_id, user["user_id"], pending_job_context=None)
         await _run_job_log_flow(q, ctx, db, user, pctx["text"], images=pctx.get("images") or None,
                                 commessa_id=pctx["commessa_id"], material_choice=data.split(":", 1)[1])
+    elif data.startswith("cmd:"):   # a new commessa: confirmed, a similar client chosen, a new one, cancelled
+        from server import _confirm_commessa_draft
+        _, draft_id, choice = (data.split(":", 2) + ["", ""])[:3]
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        try:
+            out = await _confirm_commessa_draft(_to_user_pydantic(user), draft_id, choice)
+            await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+        except Exception as e:
+            await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
     elif data.startswith(("jobc:", "jobk:", "jobn:")):
         state = await _get_state(db, user["user_id"], chat_id)
         pctx = state.get("pending_job_context") or {}
