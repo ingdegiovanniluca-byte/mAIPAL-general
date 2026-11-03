@@ -828,6 +828,62 @@ def totals(logs: list) -> dict:
             "last_day": max((lg.get("date") for lg in logs if lg.get("date")), default=None)}
 
 
+# ---- extra works: done on the site, not in the quote (to be approved and billed) ----
+EXTRA_MIN_WORDS = 4
+
+
+def extra_candidate(text: str) -> bool:
+    """A note worth checking: some words of work, not a question."""
+    t = " ".join((text or "").split())
+    return len(_words(t)) >= EXTRA_MIN_WORDS and not is_plain_question(t)
+
+
+def covered_by(work: str, scope: list) -> Optional[str]:
+    """The quote's line that already holds this work (most of its words in it), or None."""
+    for line in scope or []:
+        if grounded(work, line, 0.75):
+            return line
+    return None
+
+
+async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[str] = None, channel: str = "web") -> list:
+    """The works DONE in a diary note that neither the quote's items and activities nor the
+    commessa's description cover. Conservative (in doubt: not extra); each work in the note's
+    own words (grounded), never one already in the scope. -> [{"work", "why"}]"""
+    if not extra_candidate(note) or not scope:
+        return []
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Ricevi (1) le voci e le attività del PREVENTIVO e la descrizione dei lavori "
+        f"della commessa «{commessa.get('title')}» e (2) una NOTA del diario di cantiere.\n"
+        "Trova nella nota i LAVORI ESEGUITI che NON rientrano in nessuna voce o attività del preventivo né nella descrizione: lavori "
+        "aggiuntivi, varianti chieste dal cliente, imprevisti risolti con lavoro in più.\n"
+        "Regole:\n- solo lavori GIÀ FATTI (non da fare, non problemi, non materiali da comprare o portare, non presenze);\n"
+        "- se un lavoro può rientrare in una voce, anche detta con altre parole o come parte di essa, NON è extra;\n"
+        "- nel dubbio NON è extra;\n- \"work\": il lavoro con le parole della nota, breve; \"why\": in una frase perché non rientra.\n"
+        "Rispondi SOLO con JSON: {\"extras\": [{\"work\": \"...\", \"why\": \"...\"}]}"
+    )
+    user = "PREVENTIVO E DESCRIZIONE:\n" + "\n".join(f"- {x}" for x in scope[:120]) + f"\n\nNOTA DEL DIARIO:\n{note[:4000]}"
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=800, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+    out = []
+    for e in p.get("extras") or []:
+        if not isinstance(e, dict):
+            continue
+        work = " ".join(str(e.get("work") or "").split()).strip(" .-•")[:200]
+        if not work or not grounded(work, note, 0.6) or covered_by(work, scope) or any(grounded(work, o["work"], 0.8) for o in out):
+            continue
+        out.append({"work": work[0].upper() + work[1:], "why": " ".join(str(e.get("why") or "").split())[:200]})
+    return out[:5]
+
+
 # ---- costs and margin ----
 # Hours x the person's hourly cost (or the default one), materials x their unit price, plus
 # the other costs entered by hand (scaffolding hire, disposal...), against the quote. The rates

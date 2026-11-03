@@ -610,10 +610,11 @@ function CloseCheckSheet({ check, onClose, onConfirm }) {
   return (
     <GlassBottomSheet onClose={onClose} testid="close-check-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
       <div className="kicker">· chiudere la commessa?</div>
-      <div className="text-[13px] text-white/70 mt-1">Ci sono ancora cose aperte. Chiudendo, le attività pianificate vengono annullate, i promemoria si fermano
+      <div className="text-[13px] text-white/70 mt-1">Ci sono ancora cose aperte (i lavori extra non approvati restano fuori dal valore). Chiudendo, le attività pianificate vengono annullate, i promemoria si fermano
         e preparo il report finale nella cartella Report.</div>
       {block("problemi aperti", check.problems)}
       {block("attività non svolte", check.activities)}
+      {block("lavori extra non approvati", check.extras)}
       <div className="mt-4 flex gap-2">
         <button type="button" disabled={busy} data-testid="close-confirm" onClick={async () => { setBusy(true); await onConfirm(); setBusy(false); }}
           className="flex-1 h-11 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
@@ -1228,6 +1229,110 @@ function PlanView({ commessa, activities, quotes, meId, isAdmin, canWrite, onCha
       )}
       {sheet && <ActivitySheet commessa={commessa} activity={sheet.activity} prefill={sheet.prefill} onClose={() => setSheet(null)}
         onSaved={() => { setSheet(null); onChanged(); }} />}
+    </div>
+  );
+}
+
+// ===== Lavori extra: done on the site, not in the quote - found in the diary, approved by the client, billed
+const EXTRA_DONE = ["approvato", "rifiutato", "compreso", "scartato"];
+function ExtraWorksView({ commessa, rows, onChanged }) {
+  const [list, setList] = useState(rows || []);
+  const [busy, setBusy] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState("");
+  const [showDone, setShowDone] = useState(false);
+  useEffect(() => { setList(rows || []); }, [rows]);
+  const run = async (key, fn, ok) => {
+    setBusy(key);
+    try { const r = await fn(); if (r.data?.extra_works) setList(r.data.extra_works); if (ok || r.data?.message) toast.success(ok || r.data.message.replace(/^\S+\s/, "")); onChanged?.(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(""); }
+  };
+  const act = (x, action, extra = {}) => run(`${x.id}:${action}`, () => api.patch(`/jobs/extra-works/${x.id}`, { action, ...extra }));
+  const scan = () => run("scan", async () => {
+    const r = await api.post(`/jobs/commesse/${commessa.id}/extra-works/scan`);
+    toast.success(r.data.found ? `Trovati ${r.data.found} possibili lavori extra` : `Controllate ${r.data.checked} note: nessun lavoro extra nuovo`);
+    return { data: { extra_works: r.data.extra_works } };
+  });
+  const add = () => { if (!text.trim()) return; run("add", () => api.post(`/jobs/commesse/${commessa.id}/extra-works`, { work: text }), "Aggiunto"); setText(""); setAdding(false); };
+  const variant = () => run("variant", async () => {
+    const r = await api.post(`/jobs/commesse/${commessa.id}/variante`, { extra_ids: [] });
+    window.open(`${API}/work/reports/${r.data.report.id}/download`, "_blank");
+    return { data: { extra_works: r.data.extra_works } };
+  }, "Variante pronta: è anche nella cartella Preventivi");
+  const open = list.filter((x) => !EXTRA_DONE.includes(x.status));
+  const done = list.filter((x) => EXTRA_DONE.includes(x.status));
+  const toApprove = open.filter((x) => x.status === "extra");
+  const btn = "text-[12px] px-3 py-1.5 rounded-full bg-white/10 text-white active:opacity-70 disabled:opacity-50";
+  const row = (x) => (
+    <div key={x.id} className={`py-2.5 border-t border-white/[0.13] ${EXTRA_DONE.includes(x.status) ? "opacity-70" : ""}`} data-testid="extra-work">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0 text-[14px] text-white leading-snug break-words">{x.work}</div>
+        <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/85" data-testid="extra-status">{x.status_label}</span>
+      </div>
+      <div className="text-[11.5px] text-white/55 mt-0.5">
+        {[x.date && shortDay(x.date), x.author, x.by_hand ? "aggiunto a mano" : x.quote_version ? `non nel preventivo v${x.quote_version}` : "non nel preventivo"].filter(Boolean).join(" · ")}
+      </div>
+      {x.why && <div className="text-[12.5px] text-white/70 mt-0.5">{x.why}</div>}
+      {(x.hours > 0 || (x.materials || []).length > 0 || x.note_cost) && (
+        <div className="text-[12px] text-white/60 mt-0.5">Nella nota: {[x.hours > 0 && `${fmtNum(x.hours)} h`, (x.materials || []).map(matLabel).join(", "),
+          x.note_cost ? `costo registrato ${eur(x.note_cost)}` : ""].filter(Boolean).join(" · ")}</div>
+      )}
+      {x.status === "da_valutare" && (
+        <div className="mt-2 flex gap-1.5 flex-wrap">
+          <button type="button" disabled={!!busy} onClick={() => act(x, "extra")} className={btn} data-testid="extra-yes">💶 È un extra</button>
+          <button type="button" disabled={!!busy} onClick={() => act(x, "compreso")} className={btn} data-testid="extra-in-quote">✅ Nel preventivo</button>
+          <button type="button" disabled={!!busy} onClick={() => act(x, "scartato")} className={btn} data-testid="extra-no">🗑 Non è un lavoro</button>
+        </div>
+      )}
+      {x.status === "extra" && (
+        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+          <span className="text-[12px] text-white/70">Importo per il cliente</span>
+          <MoneyInput value={x.amount} onSave={(n) => act(x, "update", { amount: n })} placeholder="0" testid="extra-amount" wide />
+          <button type="button" disabled={!!busy} onClick={() => act(x, "approvato")} className={btn} data-testid="extra-approved">👍 Approvato dal cliente</button>
+          <button type="button" disabled={!!busy} onClick={() => act(x, "rifiutato")} className={btn}>✋ Rifiutato</button>
+        </div>
+      )}
+      {x.status === "approvato" && x.amount ? <div className="text-[12px] text-white/70 mt-0.5">{eur(x.amount)} aggiunti al valore della commessa</div> : null}
+    </div>
+  );
+  return (
+    <div className="mt-4 pt-3 border-t border-white/[0.16]" data-testid="extra-works">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 text-[10px] uppercase tracking-widest text-white/55">lavori extra</div>
+        <button type="button" onClick={scan} disabled={!!busy} data-testid="extra-scan" className="text-[12px] text-white/80 inline-flex items-center gap-1 active:opacity-70">
+          {busy === "scan" ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />} Controlla il diario
+        </button>
+        <button type="button" onClick={() => setAdding((v) => !v)} aria-label="Aggiungi un lavoro extra" data-testid="extra-add" className="p-1 text-white/70"><Plus size={14} /></button>
+      </div>
+      {adding && (
+        <div className="mt-2 flex gap-2">
+          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} autoFocus placeholder="Es. presa in più in bagno"
+            className="h-9 flex-1 min-w-0 rounded-xl bg-white/10 px-3 text-[13.5px] text-white placeholder:text-white/40 outline-none" data-testid="extra-add-text" />
+          <button type="button" onClick={add} className="h-9 px-3 rounded-full bg-white text-[#403A3C] text-[13px] font-medium">Aggiungi</button>
+        </div>
+      )}
+      {!list.length && (
+        <div className="py-3 text-[12.5px] text-white/65" data-testid="extra-empty">
+          Confronto ogni nota del diario con il preventivo e la descrizione: se trovo un lavoro fatto che lì non c'è te lo segnalo qui e su Telegram,
+          così puoi farlo approvare al cliente e fatturarlo.
+        </div>
+      )}
+      {open.map(row)}
+      {toApprove.length > 0 && (
+        <button type="button" onClick={variant} disabled={!!busy} data-testid="extra-variant"
+          className="mt-2 h-10 px-4 rounded-full bg-white text-[#403A3C] text-[13.5px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50">
+          {busy === "variant" ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Prepara la variante per il cliente ({toApprove.length})
+        </button>
+      )}
+      {done.length > 0 && (
+        <div className="mt-1">
+          <button type="button" onClick={() => setShowDone((v) => !v)} className="text-[12px] text-white/60 py-1 inline-flex items-center gap-1">
+            {showDone ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Decisi ({done.length})
+          </button>
+          {showDone && done.map(row)}
+        </div>
+      )}
     </div>
   );
 }
@@ -2271,8 +2376,11 @@ export default function JobDiaryPage() {
       {section === "sopralluogo" ? (
         <SurveyView commessa={c} survey={detail.survey} logs={detail.survey_logs || []} canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
       ) : section === "preventivo" ? (
-        <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
-          onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
+        <>
+          <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
+            onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
+          {detail.is_admin && !ro && <ExtraWorksView commessa={c} rows={detail.extra_works || []} onChanged={() => loadDetail(selectedId)} />}
+        </>
       ) : section === "pianificazione" ? (
         <PlanView commessa={c} activities={detail.activities || []} quotes={detail.quotes || []} meId={detail.me_id} isAdmin={!!detail.is_admin}
           canWrite={!ro} onChanged={() => loadDetail(selectedId)} />

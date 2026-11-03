@@ -4203,7 +4203,7 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
                 raise HTTPException(status_code=400, detail="Per segnare la commessa come persa serve il motivo: segnala l'esito dal suo diario.")
             if new_data[skey] == "completata" and vx.norm_stato(_sysval((before or {}).get("data"), smap, "stato")) != "completata" and before:
                 chk = await _close_check(sub_id)
-                if chk["problems"] or chk["activities"]:
+                if chk["problems"] or chk["activities"] or chk["extras"]:
                     raise HTTPException(status_code=409, detail="Prima di chiudere: " + _close_check_text(chk).replace("\n", " · ")
                                                                 + ". Chiudila dal diario della commessa per confermare.")
         if before and not new_data.get(ckey) and (before.get("data") or {}).get(ckey):
@@ -7624,6 +7624,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     log["expenses_saved"] = await _save_log_expenses(current, clienti, target, log, parsed.get("expenses") or [], author)
     log["problems_solved"] = await _solve_problems(current, target, log, text, author)
     log["activities_done"] = await _activities_from_note(current, target, log, text, author)
+    if not survey:
+        _bg(_extra_works_from_log(current, target, log))
     if images:
         await _store_job_photos(current, log, images)
     if survey:
@@ -7733,6 +7735,7 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")} if sees_costs else None,
             "can_see_costs": sees_costs, "is_admin": _is_org_admin(current), "me_id": current.user_id,
             "activities": await _commessa_activities(commessa_id),
+            "extra_works": await _commessa_extra_works(commessa_id, clienti, sees_costs) if _is_org_admin(current) else [],
             "survey_logs": sorted(await db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300),
                                   key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True),
             "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await _commessa_quotes(commessa_id)],
@@ -9144,6 +9147,267 @@ async def _commessa_quotes(commessa_id: str) -> list:
     rows = await db.job_quotes.find({"commessa_id": commessa_id, "status": "confirmed"}, {"_id": 0, "data_b64": 0}).sort("version", -1).to_list(50)
     return rows
 
+
+
+# ======================================================================================
+# EXTRA WORKS: done on the site but not in the quote - found in the diary, to be approved by the
+# client and billed (a variant). The agent only proposes: the administrator decides (an extra, in the
+# quote already, not a work); an amount is only the one the administrator writes; approved by the
+# client, it is added to the commessa's value. Never shown to the collaborators.
+# ======================================================================================
+EXTRA_OPEN = ("da_valutare", "extra")
+EXTRA_STATUS_LABEL = {"da_valutare": "da valutare", "extra": "da far approvare", "approvato": "approvato dal cliente",
+                      "rifiutato": "rifiutato dal cliente", "compreso": "nel preventivo", "scartato": "non è un lavoro"}
+EXTRA_ADMIN_ONLY = "I lavori extra li gestisce l'amministratore."
+
+
+async def _extras_scope(commessa_id: str, sub: dict, clienti: dict) -> tuple:
+    """(what the client already pays for: the last quote's items and activities, the description,
+    the extras already approved; the quote's version or None)"""
+    quotes = await _commessa_quotes(commessa_id)
+    last = quotes[0] if quotes else None
+    d = (last or {}).get("data") or {}
+    scope = [x.get("description") for x in d.get("items") or [] if isinstance(x, dict) and x.get("description")]
+    scope += [x for x in d.get("activities") or [] if x]
+    desc = _sysval(sub.get("data"), clienti.get("system_sub_map") or {}, "descrizione") or ""
+    scope += [ln.strip(" -•\t") for ln in str(desc).splitlines() if len(ln.strip(" -•\t")) > 3]
+    scope += [x["work"] for x in await db.job_extra_works.find({"commessa_id": commessa_id, "status": {"$in": ["approvato", "compreso"]}},
+                                                              {"_id": 0, "work": 1}).to_list(500)]
+    return [x for x in dict.fromkeys(" ".join(str(x).split()) for x in scope) if x], (last or {}).get("version")
+
+
+def _extra_kb(xid: str):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[InlineKeyboardButton("💶 Sì, è un extra", callback_data=f"xw:extra:{xid}")],
+                                 [InlineKeyboardButton("✅ È nel preventivo", callback_data=f"xw:compreso:{xid}"),
+                                  InlineKeyboardButton("🗑 Non è un lavoro", callback_data=f"xw:scartato:{xid}")]])
+
+
+def _extra_note_line(x: dict) -> str:
+    bits = []
+    if x.get("hours"):
+        bits.append(f"{jl._fmt_num(x['hours'])} h")
+    if x.get("materials"):
+        bits.append(jl.materials_line(x["materials"]))
+    return ("Nella stessa nota: " + " · ".join(bits)) if bits else ""
+
+
+async def _extra_works_from_log(current: User, target: dict, log: dict, notify: bool = True) -> list:
+    """A diary note checked against the quote: the works not in it become proposals for the
+    administrator (Telegram, push, the Preventivo section). -> the proposals made"""
+    try:
+        if log.get("presence") or log.get("kind") or log.get("section") == "sopralluogo" or not jl.extra_candidate(log.get("raw_text") or log.get("text") or ""):
+            return []
+        ctx = await _commessa_ctx(target["id"])
+        if not ctx or vx.norm_stato(ctx[3]["stato"]) not in (vx.WORKING_STATO, "sospesa"):
+            return []
+        clienti, sub, _client, view = ctx
+        scope, version = await _extras_scope(target["id"], sub, clienti)
+        if not scope:
+            return []
+        note = log.get("raw_text") or log.get("text") or ""
+        found = await jl.find_extras(note, scope, view, user_id=clienti.get("user_id"), channel=log.get("channel") or "web")
+        await db.job_logs.update_one({"id": log["id"]}, {"$set": {"extras_checked": True}})
+        if not found:
+            return []
+        known = [x["work"] for x in await db.job_extra_works.find({"commessa_id": target["id"]}, {"_id": 0, "work": 1}).to_list(1000)]
+        out = []
+        for f in found:
+            if any(jl.grounded(f["work"], k, 0.8) or jl.grounded(k, f["work"], 0.8) for k in known):
+                continue
+            hours = round(sum(float(h.get("hours") or 0) for h in log.get("hours") or []), 2)
+            x = {"id": f"xw_{uuid.uuid4().hex[:10]}", "commessa_id": target["id"], "collection_id": clienti["id"], "work": f["work"],
+                 "why": f["why"], "log_ids": [log["id"]], "date": log.get("date"), "author": log.get("author_name") or "",
+                 "hours": hours, "materials": log.get("materials") or [], "quote_version": version, "status": "da_valutare",
+                 "amount": None, "created_at": datetime.now(timezone.utc).isoformat()}
+            await db.job_extra_works.insert_one(dict(x))
+            known.append(x["work"])
+            out.append(x)
+        if out and notify:
+            owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+            for x in out:
+                text = (f"💡 *Possibile lavoro extra* su «{view['title']}» — {view['client_name']}\n«{x['work']}»"
+                        + (f"\n{x['why']}" if x["why"] else "") + (f"\n{_extra_note_line(x)}" if _extra_note_line(x) else "")
+                        + f"\nNon lo trovo nel preventivo{f' v{version}' if version else ''} né nella descrizione. È un extra da far approvare al cliente?")
+                if owner:
+                    await _tg_send(owner.get("telegram_chat_id"), text, _extra_kb(x["id"]))
+                    push.fire_and_forget(db, owner["user_id"], "💡 Possibile lavoro extra", f"«{x['work']}» · {view['title']}",
+                                         f"/dashboard/journal?commessa={target['id']}", f"xw-{x['id']}")
+        return out
+    except Exception:
+        logger.exception("extra works check failed")
+        return []
+
+
+async def _commessa_extra_works(commessa_id: str, clienti: dict, sees_costs: bool) -> list:
+    rows = await db.job_extra_works.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000)
+    rows.sort(key=lambda x: (x.get("status") not in EXTRA_OPEN, x.get("date") or ""), reverse=False)
+    costs = clienti.get("costs") or {}
+    out = []
+    for x in rows:
+        v = {**x, "status_label": EXTRA_STATUS_LABEL.get(x["status"], x["status"])}
+        if sees_costs:   # what that note's hours and materials cost (a reference, never the price to the client)
+            logs = await db.job_logs.find({"id": {"$in": x.get("log_ids") or []}}, {"_id": 0, "embedding": 0}).to_list(20)
+            e = jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"))
+            v["note_cost"] = e["cost_total"] if (e["labor"] or e["materials"]) else None
+        else:
+            v.pop("amount", None)
+        out.append(v)
+    return out
+
+
+async def _decide_extra_work(current: User, xid: str, action: str, amount: Optional[float] = None, work: Optional[str] = None) -> dict:
+    x = await db.job_extra_works.find_one({"id": xid}, {"_id": 0})
+    if not x:
+        raise HTTPException(status_code=404, detail="Lavoro extra non trovato")
+    clienti, sub, client = await _commessa_or_404(current, x["commessa_id"])
+    _require_org_admin(current, EXTRA_ADMIN_ONLY)
+    now = datetime.now(timezone.utc).isoformat()
+    upd = {"updated_at": now, "decided_by": _first_name(current.name)}
+    if work is not None and work.strip():
+        upd["work"] = " ".join(work.split())[:200]
+    if amount is not None:
+        if amount < 0:
+            raise HTTPException(status_code=400, detail="Importo non valido")
+        upd["amount"] = round(float(amount), 2)
+    msg = ""
+    if action in ("extra", "compreso", "scartato", "rifiutato"):
+        upd["status"] = action
+        msg = {"extra": "💶 Segnato come lavoro extra da far approvare al cliente. In Preventivo → Lavori extra metti l'importo e prepari la variante.",
+               "compreso": "✅ Ok, è nel preventivo: non te lo segnalo più.", "scartato": "🗑 Ok, tolto.",
+               "rifiutato": "Segnato come rifiutato dal cliente."}[action]
+    elif action == "approvato":   # the client said yes: its amount goes on the commessa's value
+        amt = upd.get("amount", x.get("amount"))
+        if not amt:
+            raise HTTPException(status_code=400, detail="Scrivi l'importo concordato con il cliente")
+        if x["status"] != "approvato":
+            econ = await db.job_economics.find_one({"commessa_id": x["commessa_id"]}, {"_id": 0}) or {}
+            old = econ.get("budget")
+            new = round(float(old or 0) + float(amt), 2)
+            await _track_commessa_changes(current, clienti, x["commessa_id"], {}, {}, extra={"Valore": (old, new)})
+            await db.job_economics.update_one({"commessa_id": x["commessa_id"]}, {"$set": {"commessa_id": x["commessa_id"], "budget": new}}, upsert=True)
+            await _check_budget_alert(clienti, x["commessa_id"])
+            view = _commessa_view(sub, client, clienti)
+            await _job_event(current, clienti, view, "extra", f"💶 Lavoro extra approvato dal cliente: {upd.get('work', x['work'])} "
+                                                             f"({jl._eur(amt)}), valore della commessa {jl._eur(new)}.")
+            msg = f"💶 Approvato: {jl._eur(amt)} aggiunti al valore della commessa (ora {jl._eur(new)})."
+        upd["status"] = "approvato"
+    elif action != "update":
+        raise HTTPException(status_code=400, detail="Azione non valida")
+    await db.job_extra_works.update_one({"id": xid}, {"$set": upd})
+    return {"message": msg or "Aggiornato.", "extra": {**x, **upd}}
+
+
+class ExtraWorkPatch(BaseModel):
+    action: Literal["extra", "compreso", "scartato", "approvato", "rifiutato", "update"]
+    amount: Optional[float] = None
+    work: Optional[str] = None
+
+
+@api_router.patch("/jobs/extra-works/{xid}")
+async def patch_extra_work(xid: str, payload: ExtraWorkPatch, current: User = Depends(get_current_user)):
+    out = await _decide_extra_work(current, xid, payload.action, payload.amount, payload.work)
+    clienti, _sub, _c = await _commessa_or_404(current, out["extra"]["commessa_id"], write=False)
+    return {"message": out["message"], "extra_works": await _commessa_extra_works(out["extra"]["commessa_id"], clienti, await _sees_costs(current))}
+
+
+class ExtraWorkNew(BaseModel):
+    work: str
+    amount: Optional[float] = None
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/extra-works")
+async def add_extra_work(commessa_id: str, payload: ExtraWorkNew, current: User = Depends(get_current_user)):
+    """An extra written by hand (the administrator knows it already)."""
+    clienti, _sub, _c = await _commessa_or_404(current, commessa_id)
+    _require_org_admin(current, EXTRA_ADMIN_ONLY)
+    work = " ".join((payload.work or "").split())[:200]
+    if not work:
+        raise HTTPException(status_code=400, detail="Descrivi il lavoro extra")
+    await db.job_extra_works.insert_one({"id": f"xw_{uuid.uuid4().hex[:10]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
+                                         "work": work, "why": "", "log_ids": [], "date": jl.today_local().isoformat(), "author": _first_name(current.name),
+                                         "hours": 0, "materials": [], "quote_version": None, "status": "extra",
+                                         "amount": round(float(payload.amount), 2) if payload.amount else None,
+                                         "created_at": datetime.now(timezone.utc).isoformat(), "by_hand": True})
+    return {"extra_works": await _commessa_extra_works(commessa_id, clienti, await _sees_costs(current))}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/extra-works/scan")
+async def scan_extra_works(commessa_id: str, current: User = Depends(get_current_user)):
+    """The diary notes not checked yet (the last 60), against the quote: the proposals in the section."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    _require_org_admin(current, EXTRA_ADMIN_ONLY)
+    scope, _v = await _extras_scope(commessa_id, sub, clienti)
+    if not scope:
+        raise HTTPException(status_code=400, detail="Per confrontare il diario serve il preventivo (o la descrizione dei lavori) della commessa.")
+    view = _commessa_view(sub, client, clienti)
+    logs = [lg for lg in await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
+            if not lg.get("extras_checked") and not lg.get("kind") and not lg.get("presence") and lg.get("section") != "sopralluogo"]
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
+    sem = asyncio.Semaphore(4)
+    async def one(lg):
+        async with sem:
+            return await _extra_works_from_log(current, view, lg, notify=False)
+    found = [x for r in await asyncio.gather(*(one(lg) for lg in logs[:60])) for x in r]
+    return {"checked": min(len(logs), 60), "found": len(found),
+            "extra_works": await _commessa_extra_works(commessa_id, clienti, await _sees_costs(current))}
+
+
+class VariantPayload(BaseModel):
+    extra_ids: List[str] = []
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/variante")
+async def make_variant(commessa_id: str, payload: VariantPayload, current: User = Depends(get_current_user)):
+    """The document for the client (Lavori extra / variante, with the signatures) from the extras
+    chosen: only what is written in them; an amount missing stays "da definire"."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    _require_org_admin(current, EXTRA_ADMIN_ONLY)
+    rows = [x for x in await db.job_extra_works.find({"commessa_id": commessa_id, "status": "extra"}, {"_id": 0}).to_list(500)
+            if not payload.extra_ids or x["id"] in payload.extra_ids]
+    if not rows:
+        raise HTTPException(status_code=400, detail="Nessun lavoro extra da far approvare")
+    view = _commessa_view(sub, client, clienti)
+    today = jl.today_local()
+    mats = [m for x in rows for m in x.get("materials") or []]
+    total = round(sum(float(x["amount"]) for x in rows if x.get("amount")), 2)
+    missing = any(not x.get("amount") for x in rows)
+    sections = [
+        {"title": "Dati della commessa", "fields": {"Cliente": view["client_name"], "Commessa": view["title"] + (f" ({view.get('codice')})" if view.get("codice") else ""),
+                                                    "Indirizzo del cantiere": view.get("address") or "", "Data": today.strftime("%d/%m/%Y"),
+                                                    "Redatto da": current.name or ""}},
+        {"title": "Lavori aggiuntivi", "fields": {
+            "Descrizione dei lavori": "\n".join(f"- {x['work']}" + (f" ({_short_it_date(x['date'])})" if x.get("date") else "") for x in rows),
+            "Materiali": jl.materials_line(mats) if mats else "—",
+            "Importi": "\n".join(f"- {x['work']}: {jl._eur(x['amount']) if x.get('amount') else 'da definire'}" for x in rows),
+            "Totale lavori extra": (jl._eur(total) + (" (più le voci da definire)" if missing else "")) if total else "da definire"}},
+        {"title": "Note", "fields": {"Note e condizioni": "I lavori sopra descritti non sono compresi nel preventivo accettato e vengono "
+                                                         "eseguiti e fatturati in aggiunta, alle condizioni del preventivo, dopo l'approvazione del cliente."}},
+    ]
+    company = ""
+    if current.org_id:
+        org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
+        company = (org or {}).get("name") or ""
+    name = work_reports.BUILTIN_TEMPLATES["variante"]["name"]
+    docx_bytes = work_reports.build_docx(name, view["client_name"] or None, view["title"] or None, sections, company=company)
+    n = await db.work_reports.count_documents({"commessa_id": commessa_id, "report_type": "variante"}) + 1
+    fname = an.file_name("preventivo", today, "variante", "docx", version=n)
+    folder, subs = _commessa_archive_place(clienti, sub, view, "preventivo")
+    link, drive_folder, tg_sent = await _deliver_work_report(current, docx_bytes, fname, folder, subs, f"📄 {name} — {view['title']}")
+    import base64 as _b64
+    doc = {"id": f"wrep_{uuid.uuid4().hex[:12]}", "status": "ok", "user_id": current.user_id, "org_id": current.org_id,
+           "report_type": "variante", "template_name": name, "collection_id": clienti["id"], "client_item_id": view["client_item_id"],
+           "client_name": view["client_name"] or None, "client_created": False, "commessa_id": commessa_id, "commessa_title": view["title"],
+           "commessa_created": False, "sections": sections, "summary": f"{len(rows)} lavori extra" + (f", {jl._eur(total)}" if total else ""),
+           "company": company, "drive_path": [folder] + subs, "version": n, "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
+           "docx_filename": fname, "drive_link": link, "drive_folder": drive_folder, "telegram_sent": tg_sent,
+           "extra_ids": [x["id"] for x in rows], "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.work_reports.insert_one(doc)
+    await db.job_extra_works.update_many({"id": {"$in": doc["extra_ids"]}}, {"$set": {"variant_report_id": doc["id"]}})
+    doc.pop("_id", None)
+    doc.pop("docx_b64", None)
+    await _log_report_event(current, doc, f"Variante per i lavori extra ({len(rows)}) preparata da {_first_name(current.name)}.", "web")
+    return {"report": doc, "extra_works": await _commessa_extra_works(commessa_id, clienti, await _sees_costs(current))}
 
 
 # ======================================================================================
@@ -11532,7 +11796,9 @@ async def _close_check(commessa_id: str) -> dict:
     """What is still open on a commessa: its problems and its planned activities not done."""
     problems = [p for _lg, _i, p in await _open_problems(commessa_id)]
     acts = [a for a in await db.job_activities.find({"commessa_id": commessa_id, "status": {"$in": list(ACTIVITY_OPEN)}}, {"_id": 0}).to_list(500)]
-    return {"problems": problems, "activities": [f"{a['description']} ({_short_it_date(a['date'])})" for a in acts]}
+    extras = await db.job_extra_works.find({"commessa_id": commessa_id, "status": {"$in": list(EXTRA_OPEN)}}, {"_id": 0}).to_list(500)
+    return {"problems": problems, "activities": [f"{a['description']} ({_short_it_date(a['date'])})" for a in acts],
+            "extras": [f"{x['work']} ({EXTRA_STATUS_LABEL[x['status']]})" for x in extras]}
 
 
 def _close_check_text(chk: dict) -> str:
@@ -11541,6 +11807,8 @@ def _close_check_text(chk: dict) -> str:
         parts.append(f"{len(chk['problems'])} {'problema aperto' if len(chk['problems']) == 1 else 'problemi aperti'}: " + "; ".join(chk["problems"][:8]))
     if chk["activities"]:
         parts.append(f"{len(chk['activities'])} {'attività non svolta' if len(chk['activities']) == 1 else 'attività non svolte'}: " + "; ".join(chk["activities"][:8]))
+    if chk.get("extras"):
+        parts.append(f"{len(chk['extras'])} {'lavoro extra non approvato' if len(chk['extras']) == 1 else 'lavori extra non approvati'}: " + "; ".join(chk["extras"][:8]))
     return "\n".join(parts)
 
 
@@ -11580,7 +11848,7 @@ async def _set_commessa_stato(current: User, clienti: dict, sub: dict, client: O
     closing = stato == "completata" and old != "completata"
     if closing and not confirm_close:   # AUT-CHI-01: what is still open, listed, and confirmed before closing
         chk = await _close_check(sub["id"])
-        if chk["problems"] or chk["activities"]:
+        if chk["problems"] or chk["activities"] or chk["extras"]:
             raise HTTPException(status_code=409, detail={"code": "close_check", **chk,
                                                          "message": "Prima di chiudere: " + _close_check_text(chk).replace("\n", " · ")})
     if stato == "completata" and not _sysval(data, smap, "data_fine"):
@@ -13920,6 +14188,14 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
             parts = ([f"{len(t['problems'])} nuovi ({'; '.join(p['text'] for p in t['problems'][:5])})"] if t["problems"] else []) \
                 + ([f"{solved} risolti"] if solved else []) + [f"{open_n} ancora aperti"]
             lines.append("⚠️ Problemi: " + ", ".join(parts))
+        if sees:
+            xs = await db.job_extra_works.find({"commessa_id": c["id"], "status": {"$in": list(EXTRA_OPEN)}}, {"_id": 0}).to_list(200)
+            if xs:
+                tbd = [x for x in xs if x["status"] == "da_valutare"]
+                todo = [x for x in xs if x["status"] == "extra"]
+                amt = sum(float(x.get("amount") or 0) for x in todo)
+                lines.append("💡 Lavori extra: " + ", ".join(([f"{len(tbd)} da valutare"] if tbd else [])
+                                                         + ([f"{len(todo)} da far approvare" + (f" ({jl._eur(amt)})" if amt else "")] if todo else [])))
         if not sees:   # costs, expenses and margin: only who may see them (C.3)
             continue
         econs[c["id"]] = e = await _commessa_economics(clienti, c["id"], lgs)

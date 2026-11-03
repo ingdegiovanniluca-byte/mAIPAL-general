@@ -1122,6 +1122,18 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await _set_state(db, chat_id, user["user_id"], pending_activity={"id": rest, "kind": "add"})
             await ctx.bot.send_message(chat_id=chat_id, text="Cosa aggiungo da ricordare? (es. «porto i flessibili da 30 cm», «serve la flex»)")
+    elif data.startswith("xw:"):   # a possible extra work found in the diary: an extra, in the quote, not a work
+        from server import _decide_extra_work
+        _k, choice, xid = data.split(":", 2)
+        try:
+            out = await _decide_extra_work(_to_user_pydantic(user), xid, choice)
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+        except Exception as e:
+            await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
     elif data.startswith("cud:"):   # the client's weekly draft: approve, edit, discard (AUT-WEEK-03)
         from server import _decide_client_draft, _commessa_ctx, _is_org_admin
         _k, choice, sub_id = data.split(":", 2)
