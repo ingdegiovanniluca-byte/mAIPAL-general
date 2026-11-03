@@ -191,10 +191,10 @@ async def main():
     for c in db.collaborators.docs:
         c.pop("day_pin", None)
     PINS.clear()
-    assert await server._collab_day_briefs(at(0, "05:59")) == 0 and not PINS
+    assert await server._collab_day_briefs(at(0, "06:59")) == 0 and not PINS
 
-    # 1) 6:00: Gino's message of the day, pinned; Pino has nothing: none
-    assert await server._collab_day_briefs(at(0, "06:00")) == 1
+    # 1) 7:00 (the organization's time, specifica AUT-DAY-01): Gino's message of the day, pinned; Pino has nothing: none
+    assert await server._collab_day_briefs(at(0, "07:00")) == 1
     op, chat, mid, text, kb = PINS[-1]
     print(text)
     assert op == "send" and chat == 900 and len(PINS) == 1
@@ -240,7 +240,7 @@ async def main():
 
     # 5) the next day: yesterday's unpinned, today's sent
     PINS.clear()
-    assert await server._collab_day_briefs(at(1, "06:00")) == 1
+    assert await server._collab_day_briefs(at(1, "07:00")) == 1
     assert ("unpin", 900, mid) in [(p[0], p[1], p[2]) for p in PINS]
     assert [p for p in PINS if p[0] == "send" and p[1] == 900] and "• Tracce cucina" in [p for p in PINS if p[0] == "send"][0][3]
     # Pino has nothing: his old one unpinned, no new one

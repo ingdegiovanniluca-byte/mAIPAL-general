@@ -8,9 +8,9 @@
 
 | Stato | Quanti |
 |---|---|
-| ✅ Implementato | 20 |
-| 🟡 Parziale | 28 |
-| ❌ Mancante | 3 |
+| ✅ Implementato | 30 |
+| 🟡 Parziale | 20 |
+| ❌ Mancante | 1 |
 | ⛔ Bloccato | 0 |
 | **Totale** | **51** |
 
@@ -55,8 +55,8 @@
 | DATA-COMMESSA | Dati | Entità Commessa 3.2 + storico | | 🟡 | `verticals.COMMESSA_FIELDS` (codice, ora_inizio, ora_fine), `_next_commessa_code`, `_track_commessa_changes`, `commessa_history`, `quote_outcome`, `lost_reason` | Fase 1: codice AAAA-NNN per organizzazione e anno (anche sulle esistenti), orari standard, storico delle modifiche (Liste, stato, valore, descrizione), esito e motivo di perdita. User assegnati = condivisione della commessa (esistente). Versioni del preventivo in fase 4. |
 | DATA-STATI | Dati | Stati e transizioni 3.3 | P | ✅ | `verticals.COMMESSA_STATI`, `_set_commessa_stato`, `_survey_started`, `_confirm_quote`, `_quote_outcome` | [P] 7 stati + SOSPESA (C.1); transizioni automatiche: prima nota di sopralluogo → SOPRALLUOGO; preventivo confermato → PREVENTIVO_INVIATO; accettato → IN_LAVORAZIONE; perso (motivo obbligatorio) → PERSA. L'Admin può sempre forzare. |
 | DATA-DIARIO | Dati | Diario con sezioni e metadati | | 🟡 | `job_logs` (section, kind, channel, raw_text), sezioni del diario: Diario, Ore, Problemi, Materiali, Costi, Milestone, To Do, Descrizione, Sopralluogo, Preventivo | Fase 4: sezioni Sopralluogo e Preventivo. Mancano Pianificazione/Attività svolte (fase 5), Reminder e Report come sezioni (fase 7). |
-| DATA-ATTIVITA | Dati | Attività pianificata + conferme | P | ❌ | (vicino: `job_todos`, `job_milestones`) | Da creare l'entità: orari, più assegnatari, materiale per categoria, stati, conferma per assegnatario. |
-| DATA-PRESENZA | Dati | Registrazione presenza 3.6 | | 🟡 | `work_sessions` / `site_presence.py`, `_presence_start/_stop` | Check-in/out, ore calcolate e arrotondate, pausa. Manca l'origine `TEMPO_REALE`/`DICHIARATA` esplicita (oggi «ore da approvare» per quelle scritte). |
+| DATA-ATTIVITA | Dati | Attività pianificata + conferme | P | ✅ | `job_activities` (descrizione, data, inizio/fine, assegnatari con conferma, cose da portare per categoria, info, stato, origine), `_new_activity`, `_activity_status` | Stati pianificata → confermata → in corso → svolta / annullata; origine admin / preventivo / messaggio. |
+| DATA-PRESENZA | Dati | Registrazione presenza 3.6 | | ✅ | `work_sessions` (+ `origin` tempo_reale/dichiarata), `_presence_start/_stop` | Origine TEMPO_REALE / DICHIARATA salvata; pausa pranzo da `lunch_break_minutes`. |
 | DATA-REMINDER | Dati | Reminder 3.7 | | 🟡 | `job_todos` (kind `materiale`), promemoria task | Promemoria materiali e To Do con data; mancano reminder con ora, destinatari multipli espliciti e stato `ATTIVO/INVIATO/ANNULLATO`. |
 | RF-CAN-01 | Canali | Parità Liste / Chat / Telegram | | 🟡 | `_save_job_log` condiviso da chat, app e Telegram | Note, ore, materiali, presenze: sì. Creazione commessa, preventivo, pianificazione: solo in parte o solo app. |
 | RF-CAN-02 | Canali | Input multimodali | | 🟡 | foto e OCR (`_ocr_image_bytes`), `_read_file_text`, `_ingest_commessa_document`, Telegram `_msg_document` | Fase 4: PDF/Office/foto anche su Telegram (documenti), appunti manoscritti letti. Vocali inclusi (decisione C.4, PA-01 superato). Restano i PDF scansionati senza testo (chiesta una foto). |
@@ -79,16 +79,16 @@
 | AUT-PRE-04 | Preventivo | Solleciti sull'esito | P | ✅ | `_quote_followups` (nel ciclo), impostazioni `quote_followup_days/max` | [P] Dopo N giorni e poi ogni N, o alla scadenza di validità se prima, al massimo M solleciti, con pulsanti Accettato / Perso / In attesa. |
 | AUT-PRE-05..06 | Preventivo | Accettato → pianificazione; Perso → motivo | 06 | 🟡 | `_quote_outcome`, `LostSheet`, Telegram `qo:/qr:` | Accettato → IN_LAVORAZIONE con l'elenco delle attività del preventivo da pianificare; Perso → motivo obbligatorio (categorie [P] + testo). La trasformazione in attività pianificate con date e assegnatari arriva con la Pianificazione (fase 5). |
 | AUT-PRE-07 | Preventivo | Storico delle perdite | | ✅ | `_loss_feedback` | Al caricamento di un preventivo: se almeno 2 degli ultimi preventivi persi per lavori simili (parole in comune) hanno lo stesso motivo, l'Admin lo vede nel riepilogo. |
-| RF-SVO-01 | Lavori | Pianificazione attività | P | 🟡 | To Do e Milestone (con collaboratore e scadenza) | Manca l'attività con orari, più assegnatari, materiale per categoria. |
+| RF-SVO-01 | Lavori | Pianificazione attività | P | ✅ | sezione Pianificazione (PlanView, ActivitySheet), `POST /jobs/commesse/{id}/activities`, `_plan_from_message` («pianifica…»), «Da pianificare (dal preventivo)» | Solo Admin; serve l'indirizzo del cantiere; più assegnatari; materiale per categoria. |
 | RF-SVO-02..04 | Lavori | Note, check-in/out, reminder | 03 | ✅ | `_save_job_log`, presenze (📍, «sono arrivato», «ho finito alle 17:30»), promemoria materiali | Spese dai messaggi escluse (vedi AUT-SVO-01). |
-| AUT-SVO-01..03 | Lavori | Categorizzazione, file, reminder | | 🟡 | `jl.interpret` (ore, materiali, problemi, spese), `jl.clean_expenses`, `_save_log_expenses`, `jl.problems_resolved`, `_solve_problems`, `PATCH /jobs/logs/{id}/problems/{idx}` | Fase 1: spese dai messaggi (solo con importo scritto) nei Costi con fornitore e link alla nota; problematiche APERTA/RISOLTA (chiuse da un messaggio «risolto…» o a mano) con gravità. Restano attività svolte collegate (fase 5) e file in Lavori/Spese (fase 2). |
+| AUT-SVO-01..03 | Lavori | Categorizzazione, file, reminder | | ✅ | `jl.interpret` (ore, materiali, problemi, spese), `_save_log_expenses`, `jl.problems_resolved`, `_activities_from_note` (attività svolta da una nota), archivio per fase | Spese dai messaggi (solo con importo scritto) nei Costi; problematiche APERTA/RISOLTA con gravità; attività pianificata segnata svolta da una nota e collegata; file in Lavori/Spese. |
 | RF-CHI-01, AUT-CHI-01..02 | Chiusura | Chiusura e report finale | P | 🟡 | stato `chiusa`, report «Verbale di fine lavori», chiusura dell'accesso ai collaboratori | Mancano controllo di problemi/attività aperti, report finale automatico, stop di tutte le notifiche. |
-| AUT-G1-01..03 | Notifiche | G−1: reminder, conferma, aggiunte | 02 | 🟡 | `_material_reminders` (19:30), `_todo_reminders`, `_milestone_reminders` (dalle 08:00) | Mancano messaggio unico alle 18:00 con materiale per categoria, meteo, Confermo/Non posso, solleciti. |
-| AUT-DAY-01 | Notifiche | Messaggio del giorno fissato | | 🟡 | `_day_pin_refresh` (pin, edit, unpin) | Fatto per i collaboratori alle 06:00; mancano orario 07:00/inizio −1 h, materiale per categoria e invio anche agli User. |
-| AUT-DAY-02 | Notifiche | Mancato arrivo | | ❌ | — | Serve l'orario di inizio atteso (attività / standard / 09:00). |
-| AUT-DAY-03 | Notifiche | Mancata uscita | | 🟡 | `_presence_late_check` (19:00), `_presence_forgotten` (14 h) | Da basare sull'orario di fine atteso + tolleranza, con avviso all'Admin e uscita `DICHIARATA`. |
-| AUT-DAY-04 | Notifiche | Note mancanti | | 🟡 | `_presence_day_note` («com'è andata?»), `_collab_remind_due` (18:00) | Allineare all'orario configurabile (19:00) e alla condizione «presenza senza note». |
-| AUT-DAY-05 | Notifiche | Riepilogo giornaliero all'Admin | | 🟡 | `_daily_summary_loop` (21:00, task e to-do) | Manca il riepilogo per cantiere (presenti, ore, attività, problemi, spese, anomalie). |
+| AUT-G1-01..03 | Notifiche | G−1: reminder, conferma, aggiunte | 02 | ✅ | `_activity_notifications` (G−1 alle 18:00, sollecito 21:00, avviso Admin 07:00), `_g1_message` (materiali per categoria, info, problemi aperti, meteo `weather.py`), pulsanti acf/acn/aca, `_activity_confirm`, `_activity_add_item` | Meteo Open-Meteo dietro interfaccia sostituibile, soglie dell'organizzazione. |
+| AUT-DAY-01 | Notifiche | Messaggio del giorno fissato | | ✅ | `_collab_day_briefs` / `_user_day_briefs`, `_day_pin_due` (07:00 o inizio −1 h), `_activity_day_rows` | Fissato e aggiornato; attività con cose da portare; ✅ Fatto. |
+| AUT-DAY-02 | Notifiche | Mancato arrivo | | ✅ | `_activity_notifications` (mancato arrivo), `_expected_start` | Inizio atteso: attività → ora della commessa → orario standard; tolleranza configurabile; operatore e Admin avvisati. |
+| AUT-DAY-03 | Notifiche | Mancata uscita | | ✅ | `_presence_late_check` + `_expected_end` | Fine attesa (attività / commessa / inizio + ore max) + tolleranza; resta l'orario fisso se impostato esplicitamente. |
+| AUT-DAY-04 | Notifiche | Note mancanti | | ✅ | `_collab_remind_due` (missing_notes_time 19:00, giorni lavorativi o giorno con attività), `_presence_day_note` | Allineare all'orario configurabile (19:00) e alla condizione «presenza senza note». |
+| AUT-DAY-05 | Notifiche | Riepilogo giornaliero all'Admin | | ✅ | `_daily_site_summary` (20:00, per cantiere: presenti e orari, problemi nuovi, spese, uscite mancanti, attività non svolte) | Manca il riepilogo per cantiere (presenti, ore, attività, problemi, spese, anomalie). |
 | AUT-WEEK-01 | Notifiche | Report settimanale con margine | | 🟡 | azione «Riepilogo cantieri» (lunedì 08:00) con ore, materiali, problemi, costi/preventivo | Spostare a venerdì 18:00 (configurabile) e aggiungere pianificate vs svolte e spese. |
 | AUT-WEEK-02..03 | Notifiche | Bozza cliente + approvazione | 03 | 🟡 | `client_updates.py` (invio automatico su Telegram, copia al titolare, anteprima) | Vedi § C.2: manca l'approvazione; manca l'invio email (nessuna integrazione mail). |
 | AUT-WEEK-04 | Notifiche | Programma settimanale agli operatori | | ❌ | — | |

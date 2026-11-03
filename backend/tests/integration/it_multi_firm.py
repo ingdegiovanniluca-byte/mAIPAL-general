@@ -250,12 +250,12 @@ async def main():
     assert ANSWERS[-1]["view"]["id"] == "s_bagno"
     assert rec(ca).get("tg_history") and not rec(cb).get("tg_history")
 
-    # 5) one reminder at 18:00, not one per firm, with the commesse of both
+    # 5) one reminder at 19:00 (missing notes), not one per firm, with the commesse of both
     BOT_SENT.clear()
     tomorrow = jl.today_local() + timedelta(days=1)
     while tomorrow.weekday() >= 5:
         tomorrow += timedelta(days=1)
-    at = datetime.combine(tomorrow, datetime.min.time(), tzinfo=server.LOCAL_TZ).replace(hour=18, minute=30)
+    at = datetime.combine(tomorrow, datetime.min.time(), tzinfo=server.LOCAL_TZ).replace(hour=19, minute=30)
     assert await server._collab_remind_due(at.astimezone(timezone.utc)) == 1
     to_gino = [m for m in BOT_SENT if m[0] == GINO]
     assert len(to_gino) == 1 and buttons(to_gino[0][2]) == ["clc:s_bagno", "clc:s_tetto"]

@@ -107,6 +107,7 @@ const SECTIONS = [
   { key: "descrizione", label: "Descrizione" },
   { key: "sopralluogo", label: "Sopralluogo" },
   { key: "preventivo", label: "Preventivo" },
+  { key: "pianificazione", label: "Pianificazione" },
 ];
 const PERIODS = [
   { key: "week", label: "Questa settimana" },
@@ -956,6 +957,251 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
         <button type="button" onClick={discard} className="h-11 px-5 rounded-full lg-glass text-[14px] text-white">Annulla</button>
       </div>
     </GlassBottomSheet>
+  );
+}
+
+// ===== Pianificazione: the planned activities - when, who (and whether they confirmed), what to bring
+const ACT_CATEGORIES = [["materiali", "Materiali"], ["attrezzi", "Attrezzi"], ["dpi", "DPI"], ["documenti", "Documenti"]];
+const ACT_STATUS = { pianificata: ["Pianificata", "#F2C14E"], confermata: ["Confermata", "#8ED973"], in_corso: ["In corso", "#7FC8F8"],
+  svolta: ["Svolta", "rgba(255,255,255,0.55)"], annullata: ["Annullata", "rgba(255,255,255,0.35)"] };
+const CONFIRM_MARK = { confermato: "✓", rifiutato: "✗", in_attesa: "…" };
+const actWhen = (a) => [shortDay(a.date), a.start_time && (a.end_time ? `${a.start_time}–${a.end_time}` : `ore ${a.start_time}`)].filter(Boolean).join(" · ");
+const normDesc = (x) => (x || "").toLowerCase().replace(/[^a-z0-9àèéìòù]+/g, " ").trim();
+
+function ActivitySheet({ commessa, activity, prefill, onClose, onSaved }) {
+  const isNew = !activity;
+  const [people, setPeople] = useState([]);
+  const [desc, setDesc] = useState(activity?.description || prefill || "");
+  const [day, setDay] = useState(activity?.date || todayIso());
+  const [start, setStart] = useState(activity?.start_time || "");
+  const [end, setEnd] = useState(activity?.end_time || "");
+  const [chosen, setChosen] = useState((activity?.assignees || []).map((p) => `${p.type}:${p.id}`));
+  const [items, setItems] = useState(isNew ? [] : activity.items || []);
+  const [itemText, setItemText] = useState("");
+  const [itemCat, setItemCat] = useState("materiali");
+  const [info, setInfo] = useState(activity?.info || "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get(`/jobs/commesse/${commessa.id}/plan-people`).then((r) => setPeople(r.data || [])).catch(() => setPeople([])); }, [commessa.id]);
+  const toggle = (k) => setChosen((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
+  const assignees = () => chosen.map((k) => { const [type, ...id] = k.split(":"); return { type, id: id.join(":") }; });
+  const addItem = async () => {
+    const text = itemText.trim();
+    if (!text) return;
+    if (isNew) setItems((cur) => [...cur, { id: `new-${cur.length}`, category: itemCat, text }]);
+    else {
+      try { const r = await api.post(`/jobs/activities/${activity.id}/items`, { text, category: itemCat }); setItems((cur) => [...cur, r.data]); }
+      catch (e) { toast.error(e.response?.data?.detail || "Errore"); return; }
+    }
+    setItemText("");
+  };
+  const removeItem = async (it) => {
+    if (!isNew) {
+      try { await api.delete(`/jobs/activities/${activity.id}/items/${it.id}`); } catch (e) { toast.error(e.response?.data?.detail || "Errore"); return; }
+    }
+    setItems((cur) => cur.filter((x) => x.id !== it.id));
+  };
+  const save = async () => {
+    if (!desc.trim()) { toast.error("Scrivi l'attività"); return; }
+    if (!day) { toast.error("Scegli il giorno"); return; }
+    setBusy(true);
+    try {
+      if (isNew) {
+        await api.post(`/jobs/commesse/${commessa.id}/activities`, { description: desc, date: day, start_time: start || null, end_time: end || null,
+          assignees: assignees(), items: items.map(({ category, text }) => ({ category, text })), info: info || null, origin: prefill ? "preventivo" : "admin" });
+        toast.success(chosen.length ? "Pianificata: l'ho mandata a chi la svolge" : "Pianificata");
+      } else {
+        await api.patch(`/jobs/activities/${activity.id}`, { description: desc, date: day, start_time: start || "", end_time: end || "", assignees: assignees(), info });
+        toast.success("Attività aggiornata");
+      }
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
+    finally { setBusy(false); }
+  };
+  const cancelActivity = async () => {
+    try { await api.patch(`/jobs/activities/${activity.id}`, { status: "annullata" }); toast.success("Attività annullata"); onSaved(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const field = "h-10 rounded-xl bg-white/10 px-3 text-[14px] text-white placeholder:text-white/40 outline-none";
+  const chip = (on) => `shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs ${on ? "lg-bubble text-white font-medium" : "bg-white/10 text-white/75"}`;
+  return (
+    <GlassBottomSheet onClose={onClose} testid="activity-sheet" className="max-h-[92vh] md:left-1/2 md:right-auto md:w-[580px] md:-translate-x-1/2 md:bottom-8">
+      <div className="kicker">· {isNew ? "pianifica un'attività" : "modifica l'attività"}</div>
+      <div className="mt-2 space-y-3.5">
+        <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={2} autoFocus={isNew && !prefill} placeholder="Es. Smontaggio sanitari"
+          data-testid="activity-desc" className="w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[14px] text-white placeholder:text-white/40 outline-none resize-none" />
+        <input type="date" value={day} onChange={(e) => setDay(e.target.value)} data-testid="activity-date" className={`${field} w-full`} />
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-[11px] text-white/60">Inizio
+            <input type="time" value={start} onChange={(e) => setStart(e.target.value)} data-testid="activity-start" className={`${field} w-full mt-0.5`} /></label>
+          <label className="text-[11px] text-white/60">Fine (facoltativa)
+            <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} data-testid="activity-end" className={`${field} w-full mt-0.5`} /></label>
+        </div>
+        <div className="text-[11.5px] text-white/55 -mt-2">Senza ora d'inizio vale quella dell'organizzazione.</div>
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">chi la svolge</div>
+          <div className="flex gap-1.5 flex-wrap" data-testid="activity-people">
+            {people.map((p) => (
+              <button key={`${p.type}:${p.id}`} type="button" onClick={() => toggle(`${p.type}:${p.id}`)} className={chip(chosen.includes(`${p.type}:${p.id}`))}
+                data-testid={`activity-person-${p.id}`}>
+                {p.telegram && <Send size={10} strokeWidth={2} />} {p.name}{p.company ? ` · ${p.company}` : ""}
+              </button>
+            ))}
+            {!people.length && <span className="text-[12px] text-white/55">Nessuno da assegnare: aggiungi utenti o abilita collaboratori sulla commessa.</span>}
+          </div>
+          <div className="text-[11.5px] text-white/55 mt-1">Chi ha Telegram (<Send size={9} className="inline" />) la riceve subito e il giorno prima conferma se c'è.</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">da portare</div>
+          {ACT_CATEGORIES.map(([k, label]) => {
+            const list = items.filter((i) => i.category === k);
+            return list.length ? (
+              <div key={k} className="mb-1">
+                <span className="text-[12px] text-white/60">{label}: </span>
+                {list.map((i) => (
+                  <span key={i.id} className="inline-flex items-center gap-1 mr-1.5 mb-1 px-2 py-0.5 rounded-full bg-white/10 text-[12.5px] text-white/90">
+                    {i.text}<button type="button" onClick={() => removeItem(i)} aria-label="Togli" className="text-white/55"><X size={11} /></button>
+                  </span>
+                ))}
+              </div>
+            ) : null;
+          })}
+          <div className="flex gap-2 mt-1">
+            <select value={itemCat} onChange={(e) => setItemCat(e.target.value)} data-testid="activity-item-cat" className={`${field} w-[118px] [&>option]:text-black`}>
+              {ACT_CATEGORIES.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+            <input value={itemText} onChange={(e) => setItemText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addItem())}
+              placeholder="Es. flex, casco, DICO" data-testid="activity-item-text" className={`${field} flex-1 min-w-0`} />
+            <button type="button" onClick={addItem} aria-label="Aggiungi" data-testid="activity-item-add" className="h-10 w-10 shrink-0 rounded-full bg-white/15 inline-flex items-center justify-center"><Plus size={16} /></button>
+          </div>
+        </div>
+        <textarea value={info} onChange={(e) => setInfo(e.target.value)} rows={2} placeholder="Informazioni utili (chiavi, accessi, parcheggio…)"
+          data-testid="activity-info" className="w-full rounded-2xl bg-white/10 px-3.5 py-2.5 text-[13.5px] text-white placeholder:text-white/40 outline-none resize-none" />
+      </div>
+      <div className="mt-4 flex gap-2">
+        <button type="button" onClick={save} disabled={busy} data-testid="activity-save"
+          className="flex-1 h-11 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {isNew ? "Pianifica" : "Salva"}
+        </button>
+        {!isNew && activity.status !== "annullata" && activity.status !== "svolta" && (
+          <button type="button" onClick={cancelActivity} data-testid="activity-cancel" className="h-11 px-4 rounded-full lg-glass text-[14px] text-white">Annulla attività</button>
+        )}
+        <button type="button" onClick={onClose} className="h-11 px-5 rounded-full lg-glass text-[14px] text-white">Chiudi</button>
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
+function ActivityCard({ a, meId, isAdmin, canWrite, onEdit, onChanged }) {
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState("");
+  const mine = (a.assignees || []).find((p) => p.type === "user" && p.id === meId);
+  const open = ["pianificata", "confermata", "in_corso"].includes(a.status);
+  const [label, color] = ACT_STATUS[a.status] || ACT_STATUS.pianificata;
+  const call = async (fn, ok) => { try { const r = await fn(); toast.success(ok || r.data?.message || "Fatto"); onChanged(); } catch (e) { toast.error(e.response?.data?.detail || "Errore"); } };
+  const confirm = (status) => {
+    let reason = "";
+    if (status === "rifiutato") { reason = window.prompt("Perché non puoi esserci? Lo dico all'amministratore.") ?? null; if (reason === null) return; }
+    call(() => api.post(`/jobs/activities/${a.id}/confirm`, { status, reason }));
+  };
+  const addItem = () => { if (!text.trim()) return; call(() => api.post(`/jobs/activities/${a.id}/items`, { text }), "Aggiunto"); setText(""); setAdding(false); };
+  const btn = "text-[12px] px-3 py-1.5 rounded-full bg-white/10 text-white active:opacity-70";
+  return (
+    <div className={`py-3 border-t border-white/[0.13] ${open ? "" : "opacity-70"}`} data-testid="activity-card">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-semibold text-white leading-snug break-words">{a.description}</div>
+          <div className="text-[12px] text-white/60 mt-0.5">{actWhen(a)}{a.origin === "preventivo" ? " · dal preventivo" : ""}</div>
+        </div>
+        <span className="shrink-0 inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/90" data-testid="activity-status">
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />{label}</span>
+        {isAdmin && canWrite && open && (
+          <button type="button" onClick={() => onEdit(a)} aria-label="Modifica" data-testid="activity-edit" className="p-1 text-white/60"><Pencil size={14} /></button>
+        )}
+      </div>
+      {(a.assignees || []).length > 0 && (
+        <div className="flex gap-1.5 flex-wrap mt-1.5">
+          {a.assignees.map((p) => {
+            const st = p.confirm?.status || "in_attesa";
+            return (
+              <span key={`${p.type}:${p.id}`} title={p.confirm?.reason || ""} data-testid="activity-assignee"
+                className={`text-[11.5px] px-2 py-0.5 rounded-full ${st === "confermato" ? "bg-[#8ED973]/20 text-white" : st === "rifiutato" ? "bg-[#F08A8A]/25 text-white" : "bg-white/10 text-white/75"}`}>
+                {CONFIRM_MARK[st]} {p.name}{st === "rifiutato" && p.confirm?.reason ? ` — ${p.confirm.reason}` : ""}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {ACT_CATEGORIES.some(([k]) => (a.items || []).some((i) => i.category === k)) && (
+        <div className="mt-1.5 text-[13px] text-white/85 space-y-0.5">
+          {ACT_CATEGORIES.map(([k, lbl]) => {
+            const list = (a.items || []).filter((i) => i.category === k);
+            return list.length ? <div key={k}><span className="text-white/55">{lbl}:</span> {list.map((i) => i.text).join(", ")}</div> : null;
+          })}
+        </div>
+      )}
+      {a.info && <div className="mt-1 text-[12.5px] text-white/70">ℹ️ {a.info}</div>}
+      {open && (mine || (isAdmin && canWrite)) && (
+        <div className="mt-2 flex gap-1.5 flex-wrap" data-testid="activity-actions">
+          {mine && (mine.confirm?.status || "in_attesa") !== "confermato" && <button type="button" onClick={() => confirm("confermato")} className={btn} data-testid="activity-confirm">👍 Ci sono</button>}
+          {mine && (mine.confirm?.status || "in_attesa") !== "rifiutato" && <button type="button" onClick={() => confirm("rifiutato")} className={btn} data-testid="activity-refuse">✋ Non posso</button>}
+          <button type="button" onClick={() => setAdding((v) => !v)} className={btn} data-testid="activity-add-item">➕ Da portare</button>
+          <button type="button" onClick={() => call(() => api.post(`/jobs/activities/${a.id}/done`), "Attività svolta")} className={btn} data-testid="activity-done">✅ Svolta</button>
+        </div>
+      )}
+      {adding && (
+        <div className="mt-2 flex gap-2">
+          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addItem()} autoFocus placeholder="Cosa portare"
+            className="h-9 flex-1 min-w-0 rounded-xl bg-white/10 px-3 text-[13.5px] text-white placeholder:text-white/40 outline-none" data-testid="activity-item-input" />
+          <button type="button" onClick={addItem} className="h-9 px-3 rounded-full bg-white text-[#403A3C] text-[13px] font-medium">Aggiungi</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlanView({ commessa, activities, quotes, meId, isAdmin, canWrite, onChanged }) {
+  const [sheet, setSheet] = useState(null);   // {activity} | {prefill}
+  const [showPast, setShowPast] = useState(false);
+  const acts = activities || [];
+  const open = acts.filter((a) => ["pianificata", "confermata", "in_corso"].includes(a.status));
+  const past = acts.filter((a) => !["pianificata", "confermata", "in_corso"].includes(a.status)).reverse();
+  const planned = new Set(acts.map((a) => normDesc(a.description)));
+  const fromQuote = isAdmin ? ((quotes || [])[0]?.data?.activities || []).filter((x) => !planned.has(normDesc(x))) : [];
+  const card = (a) => <ActivityCard key={a.id} a={a} meId={meId} isAdmin={isAdmin} canWrite={canWrite} onEdit={(x) => setSheet({ activity: x })} onChanged={onChanged} />;
+  return (
+    <div data-testid="job-plan">
+      {isAdmin && canWrite && (
+        <div className="mt-1.5 flex items-center justify-center text-[12px] text-white/80">
+          <button type="button" onClick={() => setSheet({})} data-testid="activity-new" className="inline-flex items-center gap-1.5 active:opacity-70"><Plus size={13} /> Pianifica un'attività</button>
+        </div>
+      )}
+      {fromQuote.length > 0 && canWrite && (
+        <div className="mt-3 pt-3 border-t border-white/[0.16]" data-testid="plan-from-quote">
+          <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">da pianificare (dal preventivo)</div>
+          {fromQuote.map((x, i) => (
+            <button key={i} type="button" onClick={() => setSheet({ prefill: x })} className="w-full text-left flex items-center gap-2 py-1.5 text-[13.5px] text-white/85 active:opacity-70">
+              <CalendarDays size={13} className="shrink-0 text-white/55" /><span className="flex-1">{x}</span><ChevronRight size={14} className="text-white/45" />
+            </button>
+          ))}
+        </div>
+      )}
+      {open.length ? <div className="mt-3">{open.map(card)}</div> : (
+        <div className="mt-3 py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="plan-empty">
+          {isAdmin ? "Nessuna attività pianificata. Pianificala qui o scrivi in chat, ad esempio «pianifica smontaggio sanitari giovedì alle 8 con Marco, portare il flex»: chi la svolge la riceve su Telegram, conferma il giorno prima e riceve il meteo."
+            : "Nessuna attività pianificata per questa commessa."}
+        </div>
+      )}
+      {past.length > 0 && (
+        <div className="mt-2">
+          <button type="button" onClick={() => setShowPast((v) => !v)} className="text-[12px] text-white/60 py-1 inline-flex items-center gap-1" data-testid="plan-past-toggle">
+            {showPast ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Svolte e annullate ({past.length})
+          </button>
+          {showPast && past.map(card)}
+        </div>
+      )}
+      {sheet && <ActivitySheet commessa={commessa} activity={sheet.activity} prefill={sheet.prefill} onClose={() => setSheet(null)}
+        onSaved={() => { setSheet(null); onChanged(); }} />}
+    </div>
   );
 }
 
@@ -1992,6 +2238,9 @@ export default function JobDiaryPage() {
       ) : section === "preventivo" ? (
         <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
           onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
+      ) : section === "pianificazione" ? (
+        <PlanView commessa={c} activities={detail.activities || []} quotes={detail.quotes || []} meId={detail.me_id} isAdmin={!!detail.is_admin}
+          canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
       ) : section === "descrizione" ? (
         <DescriptionView commessa={c} canEdit={!ro && (access.is_owner || me?.role === "admin")} budget={detail.economics?.budget}
           onChanged={() => loadDetail(selectedId)} />

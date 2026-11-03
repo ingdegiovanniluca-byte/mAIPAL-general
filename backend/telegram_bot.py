@@ -588,6 +588,19 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             return
         if await _answer_pending_job(update, ctx, db, user, state, content):
             return
+        if state.get("pending_activity") and _state_is_fresh(state):   # "perché non puoi?" / "cosa aggiungo?" (AUT-G1-02/03)
+            from server import _activity_confirm, _activity_add_item
+            pa = state["pending_activity"]
+            await _set_state(db, chat_id, user["user_id"], pending_activity=None)
+            try:
+                if pa.get("kind") == "reason":
+                    await update.message.reply_text(await _activity_confirm(pa["id"], f"usr_{user['user_id']}", "rifiutato", content))
+                else:
+                    item = await _activity_add_item(pa["id"], content, (user.get("name") or "").split(" ")[0] or "Io")
+                    await update.message.reply_text(f"➕ Aggiunto ({item['category']}): {item['text']}.")
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+            return
         if state.get("pending_lost") and _state_is_fresh(state):   # the words of "Altro" for a lost quote
             await _set_state(db, chat_id, user["user_id"], pending_lost=None)
             from server import _quote_outcome
@@ -1074,6 +1087,29 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _set_state(db, chat_id, user["user_id"], pending_job_context=None)
         await _run_job_log_flow(q, ctx, db, user, pctx["text"], images=pctx.get("images") or None,
                                 commessa_id=pctx["commessa_id"], material_choice=data.split(":", 1)[1])
+    elif data.startswith(("acf:", "acn:", "aca:", "udone:")):   # a planned activity: confirm, can't, add, done
+        from server import _activity_confirm, _activity_done, _job_event, _commessa_ctx
+        kind, rest = data.split(":", 1)
+        worker = f"usr_{user['user_id']}"
+        if kind == "udone":
+            aid = rest.split(":", 1)[-1]
+            a = await db.job_activities.find_one({"id": aid}, {"_id": 0})
+            if not a or not any(p.get("type") == "user" and p.get("id") == user["user_id"] for p in a.get("assignees") or []):
+                await ctx.bot.send_message(chat_id=chat_id, text="Non risulti assegnato a questa attività.")
+                return
+            if await _activity_done(aid, (user.get("name") or "").split(" ")[0]):
+                cx = await _commessa_ctx(a["commessa_id"])
+                if cx:
+                    await _job_event(_to_user_pydantic(user), cx[0], cx[3], "attivita", f"✅ Attività svolta: {a['description']} (segnata da {(user.get('name') or '').split(' ')[0]} su Telegram).")
+            await ctx.bot.send_message(chat_id=chat_id, text=f"✅ «{a['description']}» segnata come svolta.")
+        elif kind == "acf":
+            await ctx.bot.send_message(chat_id=chat_id, text=await _activity_confirm(rest, worker, "confermato"))
+        elif kind == "acn":
+            await _set_state(db, chat_id, user["user_id"], pending_activity={"id": rest, "kind": "reason"})
+            await ctx.bot.send_message(chat_id=chat_id, text="Mi dici in breve perché non puoi? Avviso l'amministratore.")
+        else:
+            await _set_state(db, chat_id, user["user_id"], pending_activity={"id": rest, "kind": "add"})
+            await ctx.bot.send_message(chat_id=chat_id, text="Cosa aggiungo da ricordare? (es. «porto i flessibili da 30 cm», «serve la flex»)")
     elif data.startswith(("qc:", "qx:", "qv:", "qo:", "qr:", "docc:")):   # quotes: confirm, discard, value, outcome, lost reason; a document's commessa
         from server import _confirm_quote, _choose_quote_value, _quote_outcome, LOST_CATEGORIES
         current = _to_user_pydantic(user)

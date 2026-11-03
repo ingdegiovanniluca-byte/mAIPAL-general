@@ -286,13 +286,14 @@ async def main():
     g = sessions("k1")[-1]
     g["start_at"] = at_local(yesterday, 8).isoformat()
     n_tg, n_not = len(TG), len(NOTICES)
-    assert await server._presence_late_check(at_local(yesterday, 18, 55)) == 0                  # not yet
-    assert await server._presence_late_check(at_local(yesterday, 19, 5)) == 1
+    # (no hour chosen by the owner: the expected end, check-in 8:00 + 9 h + 30 min of tolerance - AUT-DAY-03)
+    assert await server._presence_late_check(at_local(yesterday, 17, 25)) == 0                  # not yet
+    assert await server._presence_late_check(at_local(yesterday, 17, 35)) == 1
     ask = TG[-1]
     assert ask[0] == 900 and "Sei ancora in cantiere su «Bagno»? Risulti lì dalle 08:00" in ask[1] and btns(ask[2]) == [f"pls:y:{g['id']}", f"pls:n:{g['id']}"]
     told = NOTICES[-1]
     assert told[0] == 77 and "risulta ancora in cantiere *Gino Neri* su «Bagno» (dalle 08:00)" in told[1]
-    assert await server._presence_late_check(at_local(yesterday, 19, 30)) == 0                  # asked once
+    assert await server._presence_late_check(at_local(yesterday, 18, 0)) == 0                   # asked once
     rep = await tap(f"pls:n:{g['id']}")
     assert rep[-1][0].startswith("🚪 A che ora sei andato via?")
     times = btns(rep[-1][1])

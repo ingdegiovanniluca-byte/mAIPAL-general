@@ -718,6 +718,82 @@ def quote_outcome_said(text: str) -> Optional[dict]:
     return None
 
 
+# ---- planned activities (specifica 3.5, RF-SVO-01, AUT-SVO-01) ----
+ITEM_CATEGORIES = ("materiali", "attrezzi", "dpi", "documenti")
+_CAT_WORDS = [("dpi", re.compile(r"\b(?:dpi|casco|caschi|guant\w+|scarpe\s+antinfortunistiche|imbrago|imbraghi|occhiali|mascherin\w+|cuffi\w+|giubbin\w+)\b", re.I)),
+              ("attrezzi", re.compile(r"\b(?:flex|smerigliatric\w+|trapan\w+|avvitator\w+|scal[ae]\b|ponteggi\w*|martell\w+|pinz\w+|chiav[ei]\b|livell\w+|"
+                                      r"betoniera|demolitor\w+|tassellator\w+|sega|seghetto|cacciavit\w+|metro\b|attrezz\w+|utensil\w+|carotatric\w+)\b", re.I)),
+              ("documenti", re.compile(r"\b(?:document\w+|dico|certificat\w+|progett\w+|disegn\w+|planimetri\w+|schem\w+|permess\w+|modul\w+|bolla|bolle|fattur\w+)\b", re.I))]
+
+
+def item_category(text: str) -> str:
+    """The category of something to bring (Materiali / Attrezzi / DPI / Documenti)."""
+    for cat, rx in _CAT_WORDS:
+        if rx.search(text or ""):
+            return cat
+    return "materiali"
+
+
+_PLAN_SAID = re.compile(r"^\s*(?:pianifica|programma|organizza|metti\s+in\s+programma|pianificare)\b", re.I)
+_DONE_WORDS = re.compile(r"\b(?:fatt[oaie]|finit[oaie]|terminat[oaie]|completat[oaie]|concluso|conclusa|smontat\w*|montat\w*|posat\w*|"
+                         r"installat\w*|rifatt\w*|demolit\w*|sostituit\w*|eseguit\w*|realizzat\w*|chius[oa])\b", re.I)
+
+
+def plan_said(text: str) -> bool:
+    return bool(_PLAN_SAID.match(text or ""))
+
+
+def activity_done(text: str, descriptions: list) -> list:
+    """The planned activities a note says were carried out ("smontati i sanitari" -> "smontaggio
+    sanitari"): a word of doing and most of the activity's words. -> indexes."""
+    if not _DONE_WORDS.search(text or ""):
+        return []
+    said = set(_words(text))
+    out = []
+    for i, d in enumerate(descriptions):
+        words = _words(d)
+        if words and sum(1 for w in words if _said(w, said) or any(w[:5] == x[:5] for x in said if len(x) >= 5)) / len(words) >= 0.5:
+            out.append(i)
+    return out
+
+
+async def read_activity(text: str, people: list, user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """"Pianifica smontaggio sanitari il 12/11 alle 8 con Gino e Marco, portare i flessibili" ->
+    {"description", "date", "start", "end", "assignees": [names among `people`], "items": [str], "info"}."""
+    today = today_local()
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Il messaggio PIANIFICA un'attività di cantiere. "
+        f"Oggi è {IT_WEEKDAYS[today.weekday()]} {today.isoformat()}. Persone che possono essere assegnate: {', '.join(people) or 'nessuna'}.\n"
+        "Estrai SOLO ciò che è scritto: \"description\": l'attività in breve; \"date\": il giorno (YYYY-MM-DD; \"domani\", \"il 12\", \"giovedì\"); "
+        "\"start\" e \"end\": orari HH:MM se scritti; \"assignees\": i nomi delle persone assegnate SCELTI dall'elenco; "
+        "\"items\": materiale, attrezzi, DPI o documenti da portare, uno per elemento; \"info\": altre informazioni utili. MAI inventare.\n"
+        "Rispondi SOLO con JSON: {\"description\": \"\", \"date\": \"\", \"start\": \"\", \"end\": \"\", \"assignees\": [], \"items\": [], \"info\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=800, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": text}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+    try:
+        d = date.fromisoformat(str(p.get("date") or "")[:10])
+        day = d.isoformat() if today - timedelta(days=1) <= d <= today + timedelta(days=366) else ""
+    except ValueError:
+        day = ""
+    def hhmm(v):
+        mm = re.fullmatch(r"(\d{1,2})[:.](\d{2})", str(v or "").strip())
+        return f"{int(mm.group(1)):02d}:{mm.group(2)}" if mm and int(mm.group(1)) < 24 and int(mm.group(2)) < 60 and _clock_said(f"{int(mm.group(1)):02d}:{mm.group(2)}", text) else ""
+    names = {n.lower(): n for n in people}
+    return {"description": " ".join(str(p.get("description") or "").split())[:200], "date": day, "start": hhmm(p.get("start")), "end": hhmm(p.get("end")),
+            "assignees": [names[str(x).lower()] for x in (p.get("assignees") or []) if str(x).lower() in names],
+            "items": [" ".join(str(x).split())[:160] for x in (p.get("items") or []) if str(x or "").strip()][:20],
+            "info": " ".join(str(p.get("info") or "").split())[:500]}
+
+
 def _mat_key(m: dict) -> tuple:
     return (" ".join((m.get("name") or "").lower().split()), (m.get("unit") or "").lower().strip("."))
 

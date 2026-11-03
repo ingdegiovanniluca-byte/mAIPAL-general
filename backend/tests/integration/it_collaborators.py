@@ -316,10 +316,11 @@ async def main():
     assert await send(900, "altro") and "numero massimo" in REPLIES[-1][0]
     await db.collaborators.update_one({"id": c0["id"]}, {"$set": {"msg_count": 0}})
 
-    # 10) the end-of-day reminder: Mon-Fri from 18:00, only if nothing written today, once a day
-    monday_1830 = datetime(2026, 10, 12, 16, 30, tzinfo=timezone.utc)   # 18:30 in Rome
-    assert await server._collab_remind_due(datetime(2026, 10, 12, 14, 0, tzinfo=timezone.utc)) == 0   # 16:00
-    assert await server._collab_remind_due(datetime(2026, 10, 11, 16, 30, tzinfo=timezone.utc)) == 0  # Sunday
+    # 10) the end-of-day reminder (missing notes, AUT-DAY-04): on the working days from the organization's
+    #     hour (default 19:00), only if nothing written today, once a day
+    monday_1830 = datetime(2026, 10, 12, 17, 30, tzinfo=timezone.utc)   # 19:30 in Rome
+    assert await server._collab_remind_due(datetime(2026, 10, 12, 16, 50, tzinfo=timezone.utc)) == 0  # 18:50
+    assert await server._collab_remind_due(datetime(2026, 10, 11, 17, 30, tzinfo=timezone.utc)) == 0  # Sunday
     db.job_logs.docs = [x for x in db.job_logs.docs if x.get("date") != "2026-10-12"]
     assert await server._collab_remind_due(monday_1830) == 1
     assert BOT_SENT[-1][0] == 900 and "cosa avete fatto oggi" in BOT_SENT[-1][1] and buttons(BOT_SENT[-1][2]) == ["clc:s_bagno"]

@@ -333,6 +333,17 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         return
     rec = active[0]
     text = (msg.text or "").strip()
+    held = next((r for r in active if r.get("pending_activity")), None)
+    if held and text and not text.startswith("/"):   # the answer to "perché non puoi?" / "cosa aggiungo?" (AUT-G1-02/03)
+        from server import _activity_confirm, _activity_add_item, _collab_name
+        pa = held["pending_activity"]
+        await db.collaborators.update_one({"id": held["id"]}, {"$set": {"pending_activity": None}})
+        if pa.get("kind") == "reason":
+            await _reply(update, await _activity_confirm(pa["id"], held["id"], "rifiutato", text), reply_markup=await _keyboard_for(active))
+        else:
+            item = await _activity_add_item(pa["id"], text, _collab_name(held))
+            await _reply(update, f"➕ Aggiunto ({item['category']}): {item['text']}. Lo trovi nel messaggio del giorno.", reply_markup=await _keyboard_for(active))
+        return
     if text.startswith("/") and text.split()[0].lower() not in ("/inizio", "/fine"):
         cmd = text.split()[0].lower()
         await _reply(update, (HELP if cmd in ("/help", "/start", "/aiuto") else
@@ -558,6 +569,23 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             except Exception:
                 pass
         await _reply(update, answer)
+        return
+    if data.startswith(("acf:", "acn:", "aca:")):   # a planned activity: confirm, can't (why?), add something to remember
+        from server import _activity_confirm
+        kind, aid = data.split(":", 1)
+        act = await db.job_activities.find_one({"id": aid}, {"_id": 0, "assignees": 1})
+        mine = next((r for r in active if act and any(p.get("id") == r["id"] for p in act.get("assignees") or [])), None)
+        if not mine:
+            await _reply(update, "Non risulti assegnato a questa attività.")
+            return
+        if kind == "acf":
+            await _reply(update, await _activity_confirm(aid, mine["id"], "confermato"))
+        elif kind == "acn":
+            await db.collaborators.update_one({"id": mine["id"]}, {"$set": {"pending_activity": {"id": aid, "kind": "reason"}}})
+            await _reply(update, "Mi dici in breve perché non puoi? Avviso l'amministratore.")
+        else:
+            await db.collaborators.update_one({"id": mine["id"]}, {"$set": {"pending_activity": {"id": aid, "kind": "add"}}})
+            await _reply(update, "Cosa aggiungo da ricordare? (es. «porto i flessibili da 30 cm», «serve la flex»)")
         return
     if data.startswith("cmat:"):   # the answer to "usati oggi o da prendere?"
         choice = data[5:]
