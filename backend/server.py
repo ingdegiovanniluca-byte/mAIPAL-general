@@ -7512,6 +7512,15 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
         await _commessa_or_404(current, target["id"])
 
+    outcome = jl.quote_outcome_said(text) if not author and not images and _is_org_admin(current) else None
+    if outcome and parsed.get("kind") != "descrizione":   # "il preventivo dei Rossi è stato accettato" (RF-PRE-03)
+        if outcome["outcome"] == "perso" and not outcome["category"] and not outcome["reason"]:
+            return {"status": "unclear", "commessa": target,
+                    "message": f"Perché è stato perso il preventivo di «{target['title']}»? Scrivimelo, es. «preventivo {target['title']} perso per il "
+                               "prezzo» (prezzo, tempi, concorrente, rinuncia del cliente o altro)."}
+        return await _quote_outcome(current, target["id"], outcome["outcome"], outcome["category"] or ("altro" if outcome["reason"] else None),
+                                    outcome["reason"], channel=channel)
+
     if parsed.get("kind") == "descrizione":
         if not _can_describe(current, clienti):
             raise HTTPException(status_code=403, detail=DESCRIPTION_OWNER_ONLY)
@@ -7588,6 +7597,9 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"], **review_fields,
         "photos": [], "channel": channel, "conv_id": conv_id, "created_at": now, "embedding": None,
     }
+    survey = not author and _is_survey(target, text)   # the survey: the administrator and the users, never a collaborator
+    if survey:
+        log.update(section="sopralluogo", kind_phase="sopralluogo")
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
     await _hours_claim_done(current, claim, log, author, target)
@@ -7595,12 +7607,17 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     log["problems_solved"] = await _solve_problems(current, target, log, text, author)
     if images:
         await _store_job_photos(current, log, images)
+    if survey:
+        await _survey_started(current, target["id"])
+        _bg(_survey_after(current, target["id"], log["id"] if images else None))
     if author:
         _push_collab_entry(current, {**log, "photos": log.get("photos") or images or []}, author)
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="diario", channel=channel, trigger="utente", org_id=current.org_id)
     if log["hours"] or log["materials"]:
         asyncio.create_task(_check_budget_alert(clienti, target["id"]))
     msg = _job_log_message(log, created)
+    if survey:
+        msg += "\n🔎 Nella sezione Sopralluogo" + (" (leggo anche gli appunti nelle foto)" if images else "") + "."
     if claim["missing"]:
         msg += ("\nNon so a che ora sei arrivato" if claim["missing"] == "start" else "\nNon so a che ora hai finito") \
             + ": per le ore scrivimi l'orario di arrivo e di fine, es. «ieri dalle 8 alle 17.10»."
@@ -7696,6 +7713,10 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
             "contacts": await _commessa_contacts(commessa_id),
             "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")} if sees_costs else None,
             "can_see_costs": sees_costs, "is_admin": _is_org_admin(current),
+            "survey_logs": sorted(await db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300),
+                                  key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True),
+            "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await _commessa_quotes(commessa_id)],
+            "quote_outcome": sub.get("quote_outcome"),
             "history": await _commessa_history(commessa_id) if _is_org_admin(current) else [],
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
@@ -8591,6 +8612,505 @@ async def get_commessa_economics(commessa_id: str, current: User = Depends(get_c
     rates = costs.get("rates") or {}
     return {**e, "default_rate": costs.get("default_rate"),
             "people": [{"who": n, "rate": _rate_of(rates, n)} for n in _econ_people(e, team, collabs)]}
+
+
+
+# ======================================================================================
+# SOPRALLUOGO and PREVENTIVO (specifica commesse 5.2, 5.3)
+# The survey: notes, photos, handwritten notes (read), documents sent by the administrator or a
+# user while the commessa is new or being surveyed (or saying "sopralluogo") go in its section
+# Sopralluogo, organized by the agent; the first one moves it to "sopralluogo". The quote: read
+# (totals, items, dates, activities), confirmed by who uploads it, kept as a version (v1, v2…);
+# it moves the commessa to "preventivo inviato", gives its value (asked when different), and
+# waits for its outcome - asked again every few days - accepted (in lavorazione, the
+# activities to plan), lost (with its reason) or still waiting.
+# ======================================================================================
+SURVEY_STATES = ("nuova", "sopralluogo")
+DOC_MAX_BYTES = 15 * 1024 * 1024
+
+
+async def _commessa_ctx(commessa_id: str) -> Optional[tuple]:
+    """(clienti list, commessa sub-item, client item, view) of a commessa, whoever asks."""
+    sub = await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0, "embedding": 0})
+    clienti = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0}) if sub else None
+    if not sub or not clienti:
+        return None
+    client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
+    return clienti, sub, client, _commessa_view(sub, client, clienti)
+
+
+def _is_survey(view: dict, text: str) -> bool:
+    return vx.norm_stato(view.get("stato")) in SURVEY_STATES or jl.survey_said(text)
+
+
+async def _survey_started(current: User, commessa_id: str) -> None:
+    """The first survey content: nuova -> sopralluogo (AUT-SOP-04)."""
+    ctx = await _commessa_ctx(commessa_id)
+    if ctx and vx.norm_stato(ctx[3]["stato"]) == "nuova":
+        await _set_commessa_stato(current, ctx[0], ctx[1], ctx[2], "sopralluogo", why="primo contenuto di sopralluogo")
+
+
+async def _survey_after(current: User, commessa_id: str, log_id: Optional[str]) -> None:
+    """In the background: the photos of a survey note read (handwritten notes, AUT-SOP-01),
+    then the section organized again (AUT-SOP-02)."""
+    import base64 as _b64
+    try:
+        if log_id:
+            lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "photos": 1})
+            ocr = []
+            for p in (lg or {}).get("photos") or []:
+                ph = await db.job_photos.find_one({"id": p.get("id")}, {"_id": 0, "data_b64": 1})
+                if not ph:
+                    continue
+                try:
+                    txt = await _ocr_image_bytes(_b64.b64decode(ph["data_b64"]), "appunti.jpg", current.user_id)
+                except Exception:
+                    logger.exception("survey photo reading failed")
+                    continue
+                if txt and "[NO_TEXT]" not in txt and len(txt.strip()) >= 15:
+                    ocr.append({"photo_id": p.get("id"), "text": txt.strip()[:6000]})
+            if ocr:
+                await db.job_logs.update_one({"id": log_id}, {"$set": {"ocr": ocr}})
+        await _survey_refresh(current, commessa_id)
+    except Exception:
+        logger.exception("survey update failed")
+
+
+async def _survey_refresh(current: User, commessa_id: str) -> Optional[dict]:
+    ctx = await _commessa_ctx(commessa_id)
+    if not ctx:
+        return None
+    logs = await db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0}).to_list(500)
+    logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
+    entries = []
+    for lg in logs:
+        parts = [lg.get("text") or ""] + [f"(appunti trascritti) {o['text']}" for o in lg.get("ocr") or []] \
+            + ([f"(documento {lg.get('doc_name')}) {lg['doc_text']}"] if lg.get("doc_text") else [])
+        entries.append({"date": lg.get("date"), "author": lg.get("author_name"), "text": "\n".join(x for x in parts if x)})
+    if not entries:
+        return None
+    summary = await jl.survey_summary(entries, ctx[3], user_id=current.user_id)
+    survey = {**summary, "entries": len(entries), "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"survey": survey}})
+    return survey
+
+
+async def _read_file_text(name: str, contents: bytes, user_id: str) -> str:
+    """The text of a document or a photo (read with the vision model): "" when unreadable."""
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    if ext in DESC_DOC_IMAGES:
+        txt = await _ocr_image_bytes(_downscale_image_bytes(contents), name, user_id)
+        return "" if "[NO_TEXT]" in (txt or "") else (txt or "")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext or 'bin'}") as tmp:
+        tmp.write(contents)
+        path = tmp.name
+    try:
+        return await asyncio.to_thread(_extract_text_from_file, path, name)
+    finally:
+        try: os.unlink(path)
+        except Exception: pass
+
+
+async def _loss_feedback(clienti: dict, view: dict) -> str:
+    """AUT-PRE-07: what the lost quotes of similar works say ("gli ultimi 3 preventivi persi per
+    bagni erano per il prezzo"). "" when there is not enough to say."""
+    words = {w for w in an.ascii_words(f"{view.get('title')} {view.get('descrizione') or ''}") if len(w) >= 4 and w not in an._STOP}
+    if not words:
+        return ""
+    lost = []
+    for sb in await db.collection_sub_items.find({"collection_id": clienti["id"], "lost_reason": {"$exists": True}}, {"_id": 0, "embedding": 0}).to_list(2000):
+        if sb["id"] == view["id"] or not sb.get("lost_reason"):
+            continue
+        v = _commessa_view(sb, None, clienti)
+        common = words & {w for w in an.ascii_words(f"{v['title']} {v.get('descrizione') or ''}") if len(w) >= 4}
+        if common:
+            lost.append((sb["lost_reason"].get("at") or "", sb["lost_reason"].get("category"), sorted(common)[0]))
+    if len(lost) < 2:
+        return ""
+    lost.sort(reverse=True)
+    recent = lost[:5]
+    cats = {}
+    for _at, c, _w in recent:
+        cats[c] = cats.get(c, 0) + 1
+    cat, n = max(cats.items(), key=lambda x: x[1])
+    if n < 2:
+        return ""
+    word = recent[0][2]
+    return (f"📉 Attenzione: {n} degli ultimi {len(recent)} preventivi persi per lavori simili («{word}») "
+            f"erano per {LOST_CATEGORIES.get(cat, cat).lower()}.")
+
+
+def _quote_without_money(q: dict) -> dict:
+    """A quote for who doesn't see the economics: its activities and dates, no amounts."""
+    d = dict(q.get("data") or {})
+    for k in ("total", "taxable", "vat", "payments"):
+        d.pop(k, None)
+    d["items"] = [{"description": it.get("description")} for it in d.get("items") or []]
+    return {**q, "data": d}
+
+
+def _quote_public(q: dict) -> dict:
+    return {k: v for k, v in q.items() if k not in ("data_b64", "_id")}
+
+
+def _quote_value(q: dict) -> Optional[float]:
+    d = q.get("data") or {}
+    return d.get("taxable") or d.get("total")
+
+
+def _quote_summary(view: dict, q: dict) -> str:
+    d = q.get("data") or {}
+    lines = [f"📄 Preventivo per «{view['title']}» — {view['client_name']}"]
+    if d.get("total") or d.get("taxable"):
+        lines.append("💶 " + " · ".join(x for x in (f"imponibile {jl._eur(d['taxable'])}" if d.get("taxable") else "",
+                                                    f"totale {jl._eur(d['total'])}" if d.get("total") else "") if x))
+    else:
+        lines.append("💶 Totale: non lo trovo nel documento")
+    if d.get("items"):
+        lines.append(f"🧾 {len(d['items'])} voci")
+    dates = [x for x in (f"inizio {_short_it_date(d['start'])}" if d.get("start") else "", f"fine {_short_it_date(d['end'])}" if d.get("end") else "",
+                         f"offerta valida fino al {_short_it_date(d['validity'])}" if d.get("validity") else "") if x]
+    if dates:
+        lines.append("📅 " + " · ".join(dates))
+    if d.get("payments"):
+        lines.append("💳 " + "; ".join(d["payments"][:3]))
+    if d.get("activities"):
+        lines.append("🛠 Attività:\n" + "\n".join(f"• {a}" for a in d["activities"][:12]))
+    return "\n".join(lines)
+
+
+async def _quote_proposal(current: User, clienti: dict, sub: dict, view: dict, name: str, contents: bytes,
+                          content_type: Optional[str], text: str, channel: str = "web") -> dict:
+    """The quote read, waiting for the confirmation of who uploaded it (AUT-PRE-01, AUT-GEN-03)."""
+    import base64 as _b64
+    q = await jl.read_quote(text, view, user_id=current.user_id, channel=channel)
+    if not (q["activities"] or q["items"] or q["total"] or q["taxable"]):
+        raise HTTPException(status_code=400, detail="Nel documento non trovo i dati di un preventivo (totale, voci o attività).")
+    doc = {"id": f"qt_{uuid.uuid4().hex[:12]}", "commessa_id": view["id"], "status": "proposed", "file_name": name,
+           "content_type": content_type, "data_b64": _b64.b64encode(contents).decode("ascii") if len(contents) <= ARCHIVE_QUEUE_MAX_BYTES else None,
+           "data": q, "uploaded_by": current.user_id, "uploaded_by_name": _first_name(current.name), "channel": channel,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.job_quotes.insert_one(doc)
+    econ = await db.job_economics.find_one({"commessa_id": view["id"]}, {"_id": 0, "budget": 1}) or {}
+    feedback = await _loss_feedback(clienti, view)
+    value = _quote_value(doc)
+    msg = _quote_summary(view, doc)
+    if value and econ.get("budget") and abs(float(econ["budget"]) - value) >= 0.01:
+        msg += f"\n⚖️ Il valore della commessa ora è {jl._eur(econ['budget'])}: " + ("scegli quale tenere." if _is_org_admin(current) else "lo deciderà l'amministratore.")
+    if feedback:
+        msg += "\n" + feedback
+    return {"type": "quote", "quote": _quote_public(doc), "value": value, "current_budget": econ.get("budget"),
+            "current_description": view.get("descrizione") or "", "loss_feedback": feedback, "can_choose_value": _is_org_admin(current),
+            "message": msg + "\nConfermi i dati?"}
+
+
+async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[str] = None, description_text: Optional[str] = None,
+                         description_mode: str = "sostituisci") -> dict:
+    """The quote confirmed: its version, its file in Preventivi, the commessa "preventivo inviato",
+    its value (set when empty; when different the administrator chooses), its description when empty."""
+    import base64 as _b64
+    q = await db.job_quotes.find_one({"id": quote_id}, {"_id": 0})
+    if not q or q.get("status") != "proposed":
+        raise HTTPException(status_code=404, detail="Questo preventivo non è più da confermare.")
+    ctx = await _commessa_ctx(q["commessa_id"])
+    if not ctx:
+        raise HTTPException(status_code=404, detail="Commessa non trovata")
+    clienti, sub, client, view = ctx
+    await _commessa_or_404(current, view["id"])          # who confirms may write on it
+    version = await db.job_quotes.count_documents({"commessa_id": view["id"], "status": "confirmed"}) + 1
+    now = datetime.now(timezone.utc).isoformat()
+    archived = None
+    if q.get("data_b64"):
+        ext = (q["file_name"].rsplit(".", 1)[-1] if "." in q["file_name"] else "pdf").lower()
+        archived = await _archive_commessa_bytes(current.user_id, clienti, sub, view, "preventivo", _b64.b64decode(q["data_b64"]), ext,
+                                                 q.get("content_type"), version=version, meta={"quote_id": quote_id})
+    upd = {"status": "confirmed", "version": version, "confirmed_at": now, "confirmed_by": current.user_id, "data_b64": None,
+           "archive_path": (archived or {}).get("path"), "archive_link": (archived or {}).get("link"), "followups": {"count": 0, "last_at": None}}
+    lines = [f"✅ Preventivo v{version} di «{view['title']}» salvato" + (f" in {archived['path'].rsplit(' / ', 1)[0]}" if archived else "") + "."]
+    # the state
+    if vx.norm_stato(view["stato"]) in ("nuova", "sopralluogo", "persa"):
+        view = await _set_commessa_stato(current, clienti, sub, client, "preventivo inviato", why=f"preventivo v{version} caricato")
+        lines.append("La commessa ora è «preventivo inviato»: ti chiederò l'esito.")
+    # the value
+    value = _quote_value(q)
+    econ = await db.job_economics.find_one({"commessa_id": view["id"]}, {"_id": 0, "budget": 1}) or {}
+    budget = econ.get("budget")
+    if value and not budget:
+        await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"commessa_id": view["id"], "budget": value}}, upsert=True)
+        await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (None, value)})
+        lines.append(f"💶 Valore della commessa: {jl._eur(value)}.")
+    elif value and abs(float(budget) - value) >= 0.01:
+        if _is_org_admin(current) and value_choice == "new":
+            await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"budget": value}})
+            await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (budget, value)})
+            lines.append(f"💶 Valore aggiornato: {jl._eur(value)} (era {jl._eur(budget)}).")
+        elif _is_org_admin(current) and value_choice == "keep":
+            lines.append(f"💶 Valore tenuto: {jl._eur(budget)}.")
+        else:
+            upd["value_pending"] = True
+            lines.append(f"⚖️ Il preventivo dice {jl._eur(value)}, il valore della commessa è {jl._eur(budget)}: lo sceglie l'amministratore.")
+            await _ask_value_choice(clienti, view, quote_id, value, budget)
+    # the description, when empty (or as chosen in the app)
+    d = q.get("data") or {}
+    if description_text is not None and description_text.strip():
+        await _set_commessa_description(current, clienti, view["id"], description_text, description_mode, source="documento",
+                                        file_name=q["file_name"], doc_kind="preventivo")
+    elif not view.get("descrizione") and d.get("description"):
+        await _set_commessa_description(current, clienti, view["id"], d["description"], "sostituisci", source="documento",
+                                        file_name=q["file_name"], doc_kind="preventivo")
+    await db.job_quotes.update_one({"id": quote_id}, {"$set": upd})
+    await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Preventivo": ("", f"v{version}")})
+    await _job_event(current, clienti, view, "preventivo",
+                     f"📄 Preventivo v{version} caricato da {_first_name(current.name)}"
+                     + (f": {('imponibile ' + jl._eur(d['taxable'])) if d.get('taxable') else ('totale ' + jl._eur(d['total']))}" if (d.get("taxable") or d.get("total")) else "")
+                     + (f", valido fino al {_short_it_date(d['validity'])}" if d.get("validity") else "") + ".")
+    feedback = await _loss_feedback(clienti, view)
+    if feedback:
+        lines.append(feedback)
+    return {"status": "confirmed", "quote": _quote_public({**q, **upd}), "message": "\n".join(lines)}
+
+
+async def _ask_value_choice(clienti: dict, view: dict, quote_id: str, value: float, budget: float) -> None:
+    """The administrator chooses which value to keep (Telegram buttons; the app shows it too)."""
+    owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+    if not owner or not owner.get("telegram_chat_id") or not tg.bot_token():
+        return
+    try:
+        from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"Usa {jl._eur(value)}", callback_data=f"qv:{quote_id}:new"),
+                                    InlineKeyboardButton(f"Tieni {jl._eur(budget)}", callback_data=f"qv:{quote_id}:keep")]])
+        await Bot(token=tg.bot_token()).send_message(chat_id=owner["telegram_chat_id"], reply_markup=kb,
+                                                     text=f"⚖️ Nuovo preventivo per «{view['title']}» — {view['client_name']}: {jl._eur(value)}. "
+                                                          f"Il valore della commessa è {jl._eur(budget)}: quale tengo?")
+    except Exception:
+        logger.exception("value choice message failed")
+
+
+async def _choose_quote_value(current: User, quote_id: str, choice: str) -> dict:
+    _require_org_admin(current, COSTS_ADMIN_ONLY)
+    q = await db.job_quotes.find_one({"id": quote_id}, {"_id": 0})
+    if not q:
+        raise HTTPException(status_code=404, detail="Preventivo non trovato")
+    ctx = await _commessa_ctx(q["commessa_id"])
+    clienti, _sub, _client, view = ctx
+    await _commessa_or_404(current, view["id"])
+    value = _quote_value(q)
+    budget = (await db.job_economics.find_one({"commessa_id": view["id"]}, {"_id": 0, "budget": 1}) or {}).get("budget")
+    if choice == "new" and value:
+        await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"commessa_id": view["id"], "budget": value}}, upsert=True)
+        await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (budget, value)})
+        msg = f"💶 Valore di «{view['title']}» aggiornato a {jl._eur(value)}."
+    else:
+        msg = f"💶 Valore di «{view['title']}» tenuto a {jl._eur(budget)}."
+    await db.job_quotes.update_one({"id": quote_id}, {"$set": {"value_pending": False}})
+    return {"message": msg}
+
+
+async def _job_event(current: User, clienti: dict, view: dict, kind: str, text: str) -> dict:
+    """A line of the diary that is not an entry (like a state change): a quote, its outcome."""
+    log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "kind": kind, "user_id": current.user_id, "org_id": current.org_id,
+           "author_name": _first_name(current.name), "collection_id": clienti["id"], "collection_name": clienti.get("name"),
+           "client_item_id": view["client_item_id"], "client_name": view["client_name"], "commessa_id": view["id"],
+           "commessa_title": view["title"], "date": jl.today_local().isoformat(), "raw_text": text, "text": text, "hours": [],
+           "materials": [], "problems": [], "photos": [], "channel": "web", "created_at": datetime.now(timezone.utc).isoformat(), "embedding": None}
+    await db.job_logs.insert_one(log)
+    log.pop("_id", None)
+    return log
+
+
+QUOTE_OUTCOMES = ("accettato", "perso", "in_attesa")
+
+
+async def _quote_outcome(current: User, commessa_id: str, outcome: str, category: Optional[str] = None,
+                         reason: Optional[str] = None, channel: str = "web") -> dict:
+    """The quote's outcome (RF-PRE-03), by the administrator: accepted -> in lavorazione and the
+    activities to plan (AUT-PRE-05); lost -> persa with its reason (AUT-PRE-06); still waiting."""
+    _require_org_admin(current, "L'esito del preventivo lo registra l'amministratore.")
+    if outcome not in QUOTE_OUTCOMES:
+        raise HTTPException(status_code=400, detail="Esito non valido")
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    view = _commessa_view(sub, client, clienti)
+    last = (await db.job_quotes.find({"commessa_id": commessa_id, "status": "confirmed"}, {"_id": 0}).sort("version", -1).to_list(1) or [None])[0]
+    now = datetime.now(timezone.utc).isoformat()
+    if outcome == "perso":
+        view = await _set_commessa_stato(current, clienti, sub, client, "persa", category, reason, channel=channel)
+        msg = f"📉 «{view['title']}» segnata come persa ({LOST_CATEGORIES.get(category, category)})."
+    elif outcome == "accettato":
+        await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"quote_outcome": "accettato"}})
+        if vx.norm_stato(view["stato"]) != vx.WORKING_STATO:
+            view = await _set_commessa_stato(current, clienti, {**sub, "quote_outcome": "accettato"}, client, vx.WORKING_STATO,
+                                             channel=channel, why="preventivo accettato")
+        acts = ((last or {}).get("data") or {}).get("activities") or []
+        msg = f"✅ Preventivo accettato: «{view['title']}» è in lavorazione."
+        if acts:
+            msg += ("\n🗓 Attività del preventivo da pianificare:\n" + "\n".join(f"• {a}" for a in acts[:12])
+                    + "\nPianificale con data e assegnatari nella sezione Pianificazione del diario (o scrivimi «pianifica … il 12/11 con Gino»).")
+    else:
+        await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"quote_outcome": "in_attesa"}})
+        msg = f"⏳ Preventivo di «{view['title']}» ancora in attesa: te lo richiederò."
+    if last:
+        await db.job_quotes.update_one({"id": last["id"]}, {"$set": {"outcome": outcome, "outcome_at": now,
+                                                                     **({"followups": {**(last.get("followups") or {}), "waiting_since": now}} if outcome == "in_attesa" else {})}})
+    await _track_commessa_changes(current, clienti, commessa_id, {}, {}, channel=channel,
+                                  extra={"Esito preventivo": (sub.get("quote_outcome") or "", outcome)})
+    if outcome != "perso":   # (lost: the state change already says it)
+        await _job_event(current, clienti, view, "preventivo", f"Esito del preventivo: {outcome.replace('_', ' ')} (da {_first_name(current.name)}).")
+    return {"status": "commessa_update", "commessa": _commessa_view((await _commessa_ctx(commessa_id))[1], client, clienti),
+            "message": msg, "activities": ((last or {}).get("data") or {}).get("activities") or []}
+
+
+async def _quote_followups(now_utc: Optional[datetime] = None) -> int:
+    """AUT-PRE-04: a confirmed quote without outcome - after N days and then every N days, or at
+    its validity's end when earlier, at most M times (the organization's settings) - asked to
+    the administrator on Telegram with the buttons Accettato / Perso / In attesa."""
+    now = now_utc or datetime.now(timezone.utc)
+    today = now.astimezone(LOCAL_TZ).date()
+    sent = 0
+    for q in await db.job_quotes.find({"status": "confirmed", "outcome": {"$in": [None, "in_attesa"]}}, {"_id": 0, "data_b64": 0}).to_list(2000):
+        ctx = await _commessa_ctx(q["commessa_id"])
+        if not ctx or vx.norm_stato(ctx[3]["stato"]) != "preventivo inviato":
+            continue
+        latest = (await db.job_quotes.find({"commessa_id": q["commessa_id"], "status": "confirmed"}, {"_id": 0, "id": 1, "version": 1}).sort("version", -1).to_list(1) or [{}])[0]
+        if latest.get("id") != q["id"]:
+            continue
+        clienti, _sub, _client, view = ctx
+        st = await _settings_of_user(clienti.get("user_id"))
+        fu = q.get("followups") or {}
+        count = int(fu.get("count") or 0)
+        if count >= int(st["quote_followup_max"]):
+            continue
+        base = datetime.fromisoformat(fu.get("last_at") or fu.get("waiting_since") or q["confirmed_at"])
+        due = base + timedelta(days=int(st["quote_followup_days"]))
+        validity = (q.get("data") or {}).get("validity")
+        by_validity = bool(validity) and not fu.get("validity_asked") and date.fromisoformat(validity) <= today
+        if now < due and not by_validity:
+            continue
+        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+        if not owner or not owner.get("telegram_chat_id") or not tg.bot_token():
+            continue
+        try:
+            from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Accettato", callback_data=f"qo:{view['id']}:accettato"),
+                                        InlineKeyboardButton("❌ Perso", callback_data=f"qo:{view['id']}:perso"),
+                                        InlineKeyboardButton("⏳ In attesa", callback_data=f"qo:{view['id']}:in_attesa")]])
+            days = (today - date.fromisoformat(q["confirmed_at"][:10])).days
+            await Bot(token=tg.bot_token()).send_message(
+                chat_id=owner["telegram_chat_id"], reply_markup=kb,
+                text=(f"📄 Il preventivo v{q.get('version')} di «{view['title']}» — {view['client_name']} è senza esito da {days} giorni"
+                      + (f" (offerta valida fino al {_short_it_date(validity)})" if validity else "") + ". Com'è andata?"))
+        except Exception:
+            logger.exception("quote follow-up failed")
+            continue
+        await db.job_quotes.update_one({"id": q["id"]}, {"$set": {"followups": {**fu, "count": count + 1, "last_at": now.isoformat(),
+                                                                                "validity_asked": fu.get("validity_asked") or by_validity}}})
+        sent += 1
+    return sent
+
+
+async def _ingest_commessa_document(current: User, commessa_id: str, name: str, contents: bytes, content_type: Optional[str],
+                                    hint: Optional[str] = None, caption: str = "", channel: str = "web") -> dict:
+    """A document (pdf, Office, a photo of a sheet) sent on a commessa by the administrator or a
+    user, from the app or Telegram: a quote -> its proposal to confirm; a survey or anything
+    else -> an entry of the diary (Sopralluogo while surveying), the file in the archive."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    if not contents:
+        raise HTTPException(status_code=400, detail="Il file è vuoto")
+    if len(contents) > DOC_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Il file è troppo grande (massimo 15 MB)")
+    name = os.path.basename(name or "documento").strip() or "documento"
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    view = _commessa_view(sub, client, clienti)
+    try:
+        text = await _read_file_text(name, contents, current.user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("commessa document not readable")
+        raise HTTPException(status_code=400, detail="Non riesco ad aprire questo file: controlla che non sia danneggiato o protetto.")
+    if len((text or "").strip()) < 20:
+        raise HTTPException(status_code=400, detail="Non riesco a leggere il testo del documento: se è una scansione, mandane una foto.")
+    kind = hint if hint in ("preventivo", "sopralluogo") else None
+    doc = None
+    if not kind:
+        doc = await jl.read_document(text, view, user_id=current.user_id, channel=channel)
+        kind = doc["kind"]
+    if kind == "preventivo":
+        return await _quote_proposal(current, clienti, sub, view, name, contents, content_type, text, channel)
+    doc = doc or await jl.read_document(text, view, user_id=current.user_id, channel=channel)
+    survey = kind == "sopralluogo" or _is_survey(view, caption)
+    phase = "sopralluogo" if survey else _commessa_phase(view)
+    shown = (caption + "\n" if caption else "") + (doc.get("description") or "")
+    log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
+           "collection_id": clienti["id"], "collection_name": clienti.get("name"), "client_item_id": view["client_item_id"],
+           "client_name": view["client_name"], "commessa_id": view["id"], "commessa_title": view["title"],
+           "date": jl.today_local().isoformat(), "raw_text": caption or f"Documento {name}", "text": f"📎 {name}\n{shown}".strip(),
+           "hours": [], "materials": [], "problems": [], "photos": [], "channel": channel, "created_at": datetime.now(timezone.utc).isoformat(),
+           "embedding": None, "doc_name": name, "doc_text": text[:20000], "kind_phase": phase, **({"section": "sopralluogo"} if survey else {})}
+    await db.job_logs.insert_one(log)
+    log.pop("_id", None)
+    arc = await _archive_commessa_bytes(current.user_id, clienti, sub, view, phase, contents, ext or "bin", content_type,
+                                        description=caption or doc.get("description", "")[:60], meta={"log_id": log["id"]})
+    await db.job_logs.update_one({"id": log["id"]}, {"$set": {"doc_archive": {"path": arc.get("path"), "link": arc.get("link"), "status": arc.get("status")}}})
+    msg = f"📎 «{name}» salvato nel diario di «{view['title']}»" + (" (Sopralluogo)" if survey else "") + f".\n📁 {arc.get('path')}"
+    if survey:
+        await _survey_started(current, view["id"])
+        _bg(_survey_after(current, view["id"], None))
+    return {"type": "entry", "log": _public_log(log), "message": msg, "commessa": view, "kind": "sopralluogo" if survey else (doc.get("kind") or "altro"),
+            "doc_description": doc.get("description") or "", "file_name": name}
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/documents")
+async def upload_commessa_document(commessa_id: str, file: UploadFile = File(...), hint: Optional[str] = Form(None),
+                                   caption: Optional[str] = Form(None), current: User = Depends(get_current_user)):
+    """From the diary: a survey's notes or documents, a quote (hint: sopralluogo | preventivo; none: recognized)."""
+    return await _ingest_commessa_document(current, commessa_id, file.filename or "documento", await file.read(), file.content_type,
+                                           hint=hint, caption=(caption or "").strip())
+
+
+class QuoteConfirmPayload(BaseModel):
+    value_choice: Optional[Literal["new", "keep"]] = None
+    description_text: Optional[str] = None
+    description_mode: Literal["sostituisci", "aggiungi"] = "sostituisci"
+
+
+@api_router.post("/jobs/quotes/{quote_id}/confirm")
+async def confirm_quote(quote_id: str, payload: QuoteConfirmPayload, current: User = Depends(get_current_user)):
+    return await _confirm_quote(current, quote_id, payload.value_choice, payload.description_text, payload.description_mode)
+
+
+@api_router.post("/jobs/quotes/{quote_id}/discard")
+async def discard_quote(quote_id: str, current: User = Depends(get_current_user)):
+    q = await db.job_quotes.find_one({"id": quote_id}, {"_id": 0, "commessa_id": 1, "status": 1})
+    if not q or q.get("status") != "proposed":
+        raise HTTPException(status_code=404, detail="Questo preventivo non è più da confermare.")
+    await _commessa_or_404(current, q["commessa_id"])
+    await db.job_quotes.update_one({"id": quote_id}, {"$set": {"status": "discarded", "data_b64": None}})
+    return {"ok": True, "message": "Ok, il preventivo non è stato salvato."}
+
+
+class QuoteValuePayload(BaseModel):
+    choice: Literal["new", "keep"]
+
+
+@api_router.post("/jobs/quotes/{quote_id}/value")
+async def choose_quote_value(quote_id: str, payload: QuoteValuePayload, current: User = Depends(get_current_user)):
+    return await _choose_quote_value(current, quote_id, payload.choice)
+
+
+class QuoteOutcomePayload(BaseModel):
+    outcome: Literal["accettato", "perso", "in_attesa"]
+    lost_category: Optional[str] = None
+    lost_reason: Optional[str] = None
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/quote/outcome")
+async def set_quote_outcome(commessa_id: str, payload: QuoteOutcomePayload, current: User = Depends(get_current_user)):
+    return await _quote_outcome(current, commessa_id, payload.outcome, payload.lost_category, payload.lost_reason)
+
+
+async def _commessa_quotes(commessa_id: str) -> list:
+    rows = await db.job_quotes.find({"commessa_id": commessa_id, "status": "confirmed"}, {"_id": 0, "data_b64": 0}).sort("version", -1).to_list(50)
+    return rows
 
 
 # ---- THE DESCRIPTION OF THE ACTIVITIES (the commessa's scope): written or dictated by its owner
@@ -9889,6 +10409,7 @@ async def _collab_reminder_loop():
                 await _presence_day_note()
                 await _client_weekly_updates()
                 await _archive_retry()
+                await _quote_followups()
         except Exception:
             logger.exception("collaborator reminder loop iteration failed")
         await asyncio.sleep(300)
@@ -12762,7 +13283,7 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             if res["status"] == "ok":
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"],
                         "commessa_id": res["log"]["commessa_id"]}
-            if res["status"] in ("planned", "description"):
+            if res["status"] in ("planned", "description", "commessa_update"):
                 return {**base, "label": "Diario commessa", "status": "ok", "message": res["message"], "commessa_id": res["commessa"]["id"]}
             if res["status"] == "commessa_draft":
                 return {**base, "label": "Nuova commessa", "status": "ok", "message": res["message"], "commessa_draft": res["draft"]}

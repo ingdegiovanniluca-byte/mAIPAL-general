@@ -105,6 +105,8 @@ const SECTIONS = [
   { key: "milestone", label: "Milestone" },
   { key: "todo", label: "To Do" },
   { key: "descrizione", label: "Descrizione" },
+  { key: "sopralluogo", label: "Sopralluogo" },
+  { key: "preventivo", label: "Preventivo" },
 ];
 const PERIODS = [
   { key: "week", label: "Questa settimana" },
@@ -725,7 +727,7 @@ function DescriptionDocSheet({ commessa, doc, onClose, onSaved }) {
   );
 }
 
-function DescriptionView({ commessa, canEdit, budget, onChanged }) {
+function DescriptionView({ commessa, canEdit, budget, onChanged, isAdmin }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -744,10 +746,15 @@ function DescriptionView({ commessa, canEdit, budget, onChanged }) {
     setReading(true);
     const fd = new FormData();
     fd.append("file", file);
-    try { const r = await api.post(`/jobs/commesse/${commessa.id}/description/read`, fd); setDoc(r.data); }
+    try {
+      const r = await api.post(`/jobs/commesse/${commessa.id}/documents`, fd);
+      if (r.data.type === "quote") setQuote(r.data);   // a quote: its sheet (it also fills the description)
+      else { toast.success(r.data.message.split("\n")[0]); onChanged(); if (r.data.doc_description) setDoc({ description: r.data.doc_description, file_name: r.data.file_name, kind: r.data.kind, amount: null, current_description: text }); }
+    }
     catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a leggere il documento"); }
     finally { setReading(false); if (fileRef.current) fileRef.current.value = ""; }
   };
+  const [quote, setQuote] = useState(null);
   const action = "inline-flex items-center gap-1.5 active:opacity-70 disabled:opacity-50";
   return (
     <div data-testid="job-description">
@@ -791,6 +798,245 @@ function DescriptionView({ commessa, canEdit, budget, onChanged }) {
         </div>
       )}
       {doc && <DescriptionDocSheet commessa={commessa} doc={doc} onClose={() => setDoc(null)} onSaved={() => { setDoc(null); onChanged(); }} />}
+      {quote && <QuoteSheet commessa={commessa} proposal={quote} onClose={() => setQuote(null)} onSaved={() => { setQuote(null); onChanged(); }} />}
+    </div>
+  );
+}
+
+// ===== The survey (Sopralluogo): the section organized by the agent, its notes, photos, documents
+const SURVEY_PARTS = [["date_participants", "Data e partecipanti"], ["state", "Stato di fatto e misure"], ["requests", "Lavori richiesti dal cliente"],
+  ["issues", "Criticità e vincoli"], ["materials", "Materiali ipotizzati"]];
+const DOC_ACCEPT = ".pdf,.docx,.xlsx,.txt,.md,image/*";
+
+function UploadAction({ commessaId, hint, label, onResult }) {
+  const ref = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const go = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    if (hint) fd.append("hint", hint);
+    try { const r = await api.post(`/jobs/commesse/${commessaId}/documents`, fd); onResult(r.data); }
+    catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a leggere il documento"); }
+    finally { setBusy(false); if (ref.current) ref.current.value = ""; }
+  };
+  return (
+    <>
+      <button type="button" onClick={() => ref.current?.click()} disabled={busy} data-testid={`upload-${hint || "doc"}`}
+        className="inline-flex items-center gap-1.5 active:opacity-70 disabled:opacity-50">
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} {busy ? "Leggo il documento…" : label}
+      </button>
+      <input ref={ref} type="file" accept={DOC_ACCEPT} className="hidden" onChange={(e) => go(e.target.files?.[0])} />
+    </>
+  );
+}
+
+function SurveyView({ commessa, survey, logs, canWrite, onChanged }) {
+  const [quote, setQuote] = useState(null);
+  const entries = (logs || []).filter((lg) => lg.section === "sopralluogo");
+  const onResult = (r) => { if (r.type === "quote") setQuote(r); else { toast.success(r.message.split("\n")[0]); onChanged(); } };
+  return (
+    <div data-testid="job-survey">
+      {canWrite && (
+        <div className="mt-1.5 flex items-center justify-center gap-5 text-[12px] text-white/80">
+          <UploadAction commessaId={commessa.id} hint="sopralluogo" label="Carica appunti, foto o documenti" onResult={onResult} />
+        </div>
+      )}
+      {survey ? (
+        <div className="mt-3 pt-3 border-t border-white/[0.16]" data-testid="survey-summary">
+          {SURVEY_PARTS.filter(([k]) => survey[k]).map(([k, label]) => (
+            <div key={k} className="mb-3">
+              <div className="text-[10px] uppercase tracking-widest text-white/55 mb-0.5">{label}</div>
+              <div className="text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap">{survey[k]}</div>
+            </div>
+          ))}
+          <div className="text-[11.5px] text-white/50">Riorganizzato da mAIPAL da {survey.entries} {survey.entries === 1 ? "nota" : "note"} · non aggiunge niente che non sia scritto</div>
+        </div>
+      ) : (
+        <div className="mt-3 py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="survey-empty">
+          Nessuna nota di sopralluogo. Mandale dalla chat della commessa o da Telegram (testo, voce, foto, foto degli appunti scritti a mano, PDF):
+          finché la commessa è nuova o in sopralluogo, o se scrivi «sopralluogo», finiscono qui e le riordino io.
+        </div>
+      )}
+      {entries.length > 0 && (
+        <div className="mt-2">
+          <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">note, foto e documenti</div>
+          {entries.map((lg) => (
+            <div key={lg.id} className="py-2.5 border-t border-white/[0.13]" data-testid="survey-entry">
+              <div className="text-[11.5px] text-white/50">{shortDay(lg.date)} · {lg.author_name}{(lg.photos || []).length ? ` · ${lg.photos.length} foto` : ""}</div>
+              <div className="text-[13.5px] text-white/90 whitespace-pre-wrap leading-snug">{lg.text}</div>
+              {(lg.ocr || []).map((o) => (
+                <details key={o.photo_id} className="mt-1"><summary className="text-[12px] text-white/60 cursor-pointer">Appunti trascritti</summary>
+                  <div className="text-[12.5px] text-white/80 whitespace-pre-wrap mt-1">{o.text}</div></details>
+              ))}
+              {lg.doc_archive?.link && <a href={lg.doc_archive.link} target="_blank" rel="noreferrer" className="text-[12px] text-white/70 underline">Apri il documento</a>}
+            </div>
+          ))}
+        </div>
+      )}
+      {quote && <QuoteSheet commessa={commessa} proposal={quote} onClose={() => setQuote(null)} onSaved={() => { setQuote(null); onChanged(); }} />}
+    </div>
+  );
+}
+
+// ===== The quote: read, checked and confirmed (its value, its description), its versions and outcome
+function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
+  const q = proposal.quote || {};
+  const d = q.data || {};
+  const differs = proposal.value && proposal.current_budget && Math.abs(proposal.current_budget - proposal.value) >= 0.01;
+  const [valueChoice, setValueChoice] = useState(differs ? "new" : null);
+  const [desc, setDesc] = useState(d.description || "");
+  const [mode, setMode] = useState(proposal.current_description ? "aggiungi" : "sostituisci");
+  const [useDesc, setUseDesc] = useState(!proposal.current_description);
+  const [busy, setBusy] = useState(false);
+  const seg = (on) => `px-3 py-1 rounded-full text-[12px] transition-colors ${on ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`;
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/jobs/quotes/${q.id}/confirm`, { value_choice: differs && proposal.can_choose_value ? valueChoice : null,
+        ...(useDesc && desc.trim() ? { description_text: desc, description_mode: mode } : {}) });
+      toast.success(r.data.message.split("\n")[0]); onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(false); }
+  };
+  const discard = async () => { try { await api.post(`/jobs/quotes/${q.id}/discard`); } catch { /* gone already */ } onClose(); };
+  return (
+    <GlassBottomSheet onClose={discard} testid="quote-sheet" className="max-h-[92vh] md:left-1/2 md:right-auto md:w-[580px] md:-translate-x-1/2 md:bottom-8">
+      <div className="kicker">· preventivo</div>
+      <div className="text-lg font-semibold text-white mt-1 break-words">{q.file_name}</div>
+      <div className="text-[12.5px] text-white/60 mt-0.5">Controlla i dati letti dal documento: li salvo solo quando confermi.</div>
+      <div className="mt-3 rounded-2xl bg-white/[0.06] px-3.5 py-3 text-[13.5px] text-white/90 space-y-1" data-testid="quote-data">
+        {(d.taxable || d.total) ? <div>💶 {d.taxable ? `Imponibile ${eur(d.taxable)}` : ""}{d.taxable && d.total ? " · " : ""}{d.total ? `Totale ${eur(d.total)}` : ""}</div>
+          : <div className="text-white/60">Totale non trovato nel documento</div>}
+        {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
+        {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+        {(d.items || []).length > 0 && (
+          <details><summary className="cursor-pointer text-white/75">{d.items.length} voci</summary>
+            {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
+          </details>
+        )}
+      </div>
+      {differs && proposal.can_choose_value && (
+        <div className="mt-3 text-[13px] text-white/85" data-testid="quote-value-choice">
+          Valore della commessa:
+          <span className="ml-2 inline-flex rounded-full bg-white/10 p-0.5">
+            <button type="button" onClick={() => setValueChoice("new")} className={seg(valueChoice === "new")}>Usa {eur(proposal.value)}</button>
+            <button type="button" onClick={() => setValueChoice("keep")} className={seg(valueChoice === "keep")}>Tieni {eur(proposal.current_budget)}</button>
+          </span>
+        </div>
+      )}
+      {!proposal.current_budget && proposal.value ? <div className="mt-2 text-[12px] text-white/60">Il valore della commessa diventa {eur(proposal.value)}.</div> : null}
+      {proposal.loss_feedback && <div className="mt-3 text-[12.5px] text-[#F2C14E]" data-testid="quote-loss-feedback">{proposal.loss_feedback}</div>}
+      {desc && (
+        <div className="mt-3">
+          <button type="button" onClick={() => setUseDesc((v) => !v)} aria-pressed={useDesc} className="flex items-center gap-2.5 text-[13px] text-white">
+            <span className={`h-5 w-5 rounded-full flex items-center justify-center ${useDesc ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>{useDesc && <Check size={12} strokeWidth={2.8} />}</span>
+            Usa le attività come descrizione della commessa
+          </button>
+          {useDesc && (
+            <>
+              <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={6} data-testid="quote-desc"
+                className="mt-2 w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[13.5px] leading-relaxed text-white outline-none resize-y" />
+              {proposal.current_description && (
+                <span className="inline-flex rounded-full bg-white/10 p-0.5 mt-1">
+                  <button type="button" onClick={() => setMode("sostituisci")} className={seg(mode === "sostituisci")}>Sostituisci</button>
+                  <button type="button" onClick={() => setMode("aggiungi")} className={seg(mode === "aggiungi")}>Aggiungi in fondo</button>
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      <div className="mt-4 flex gap-2">
+        <button type="button" onClick={confirm} disabled={busy} data-testid="quote-confirm"
+          className="flex-1 h-11 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Conferma il preventivo
+        </button>
+        <button type="button" onClick={discard} className="h-11 px-5 rounded-full lg-glass text-[14px] text-white">Annulla</button>
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
+const OUTCOME_LABEL = { accettato: "Accettato", perso: "Perso", in_attesa: "In attesa" };
+
+function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, onLost }) {
+  const [proposal, setProposal] = useState(null);
+  const last = (quotes || [])[0];
+  const d = last?.data || {};
+  const setOutcome = async (o) => {
+    if (o === "perso") { onLost(); return; }
+    try { const r = await api.post(`/jobs/commesse/${commessa.id}/quote/outcome`, { outcome: o }); toast.success(r.data.message.split("\n")[0]); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const chooseValue = async (choice) => {
+    try { const r = await api.post(`/jobs/quotes/${last.id}/value`, { choice }); toast.success(r.data.message); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const btn = "text-[12px] px-3 py-1.5 rounded-full bg-white/10 text-white active:opacity-70";
+  return (
+    <div data-testid="job-quote">
+      {canWrite && (
+        <div className="mt-1.5 flex items-center justify-center gap-5 text-[12px] text-white/80">
+          <UploadAction commessaId={commessa.id} hint="preventivo" label={last ? "Carica una nuova versione" : "Carica il preventivo"}
+            onResult={(r) => (r.type === "quote" ? setProposal(r) : (toast.success(r.message.split("\n")[0]), onChanged()))} />
+        </div>
+      )}
+      {!last ? (
+        <div className="mt-3 py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="quote-empty">
+          Nessun preventivo. Caricalo qui o mandalo su Telegram (PDF, Word o foto): leggo totale, voci, date e attività e lo salvo quando confermi.
+        </div>
+      ) : (
+        <div className="mt-3 pt-3 border-t border-white/[0.16]">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[15px] font-semibold text-white">Versione {last.version}</span>
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/85" data-testid="quote-outcome">{OUTCOME_LABEL[outcome] || "esito da registrare"}</span>
+            {last.archive_link && <a href={last.archive_link} target="_blank" rel="noreferrer" className="text-[12px] text-white/70 underline">apri</a>}
+          </div>
+          <div className="text-[13.5px] text-white/85 mt-1 space-y-0.5">
+            {(d.taxable || d.total) ? <div>💶 {d.taxable ? `Imponibile ${eur(d.taxable)}` : ""}{d.taxable && d.total ? " · " : ""}{d.total ? `Totale ${eur(d.total)}` : ""}</div> : null}
+            {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
+            {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+          </div>
+          {last.value_pending && isAdmin && (
+            <div className="mt-2 text-[12.5px] text-white/85" data-testid="quote-value-pending">
+              Il valore del preventivo è diverso da quello della commessa:
+              <button type="button" onClick={() => chooseValue("new")} className={`${btn} ml-2`}>Usa il nuovo</button>
+              <button type="button" onClick={() => chooseValue("keep")} className={`${btn} ml-1`}>Tieni l'attuale</button>
+            </div>
+          )}
+          {isAdmin && outcome !== "accettato" && commessa.stato !== "persa" && (
+            <div className="mt-3 flex gap-2 flex-wrap" data-testid="quote-outcome-actions">
+              <button type="button" onClick={() => setOutcome("accettato")} className={btn}>✅ Accettato</button>
+              <button type="button" onClick={() => setOutcome("perso")} className={btn}>❌ Perso</button>
+              <button type="button" onClick={() => setOutcome("in_attesa")} className={btn}>⏳ In attesa</button>
+            </div>
+          )}
+          {(d.activities || []).length > 0 && (
+            <div className="mt-3">
+              <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">attività previste</div>
+              {d.activities.map((a, i) => <div key={i} className="text-[13.5px] text-white/85 py-0.5">• {a}</div>)}
+            </div>
+          )}
+          {(d.items || []).length > 0 && (
+            <details className="mt-2"><summary className="text-[12px] text-white/60 cursor-pointer py-1">Voci ({d.items.length})</summary>
+              {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
+            </details>
+          )}
+          {quotes.length > 1 && (
+            <div className="mt-3">
+              <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">versioni precedenti</div>
+              {quotes.slice(1).map((v) => (
+                <div key={v.id} className="text-[12.5px] text-white/70 py-0.5">v{v.version} · {shortDay((v.confirmed_at || "").slice(0, 10))}
+                  {(v.data?.taxable || v.data?.total) ? ` · ${eur(v.data.taxable || v.data.total)}` : ""}
+                  {v.archive_link && <a href={v.archive_link} target="_blank" rel="noreferrer" className="ml-2 underline">apri</a>}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {proposal && <QuoteSheet commessa={commessa} proposal={proposal} onClose={() => setProposal(null)} onSaved={() => { setProposal(null); onChanged(); }} />}
     </div>
   );
 }
@@ -1297,7 +1543,7 @@ function CommessaChat({ commessa, onClose, onSaved }) {
   // "usati o da prendere?" is asked with two buttons
   const saveEntry = async (body, images, fromIdx = null, materialChoice = null) => {
     const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id, ...(materialChoice ? { material_choice: materialChoice } : {}) });
-    const ok = r.data.status === "ok" || r.data.status === "planned" || r.data.status === "description";
+    const ok = ["ok", "planned", "description", "commessa_update"].includes(r.data.status);
     const ask = r.data.status === "material_doubt" ? { body, images } : null;
     setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false, matAsk: null } : m)),
       { role: "assistant", content: r.data.message, saved: ok, matAsk: ask }]);
@@ -1741,7 +1987,12 @@ export default function JobDiaryPage() {
       </div>
 
       {/* Costi, Milestone, To Do and Descrizione: their own content instead of the period and the days */}
-      {section === "descrizione" ? (
+      {section === "sopralluogo" ? (
+        <SurveyView commessa={c} survey={detail.survey} logs={detail.survey_logs || []} canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
+      ) : section === "preventivo" ? (
+        <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
+          onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
+      ) : section === "descrizione" ? (
         <DescriptionView commessa={c} canEdit={!ro && (access.is_owner || me?.role === "admin")} budget={detail.economics?.budget}
           onChanged={() => loadDetail(selectedId)} />
       ) : section === "costi" ? (

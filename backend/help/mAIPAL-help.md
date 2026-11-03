@@ -194,6 +194,18 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - **Valore della commessa dal preventivo**: se il documento è un preventivo con un totale, propongo come valore l'**imponibile** (senza IVA; il totale se l'imponibile non c'è), già selezionato: salvando va nel **Preventivo** della sezione Costi, per il margine e gli avvisi all'80% e al 100%. Uso solo un importo scritto nel documento; se non trovo un totale chiaro, lo scrivi tu in Costi.
 - Le risposte della chat della commessa e quelle ai collaboratori su Telegram tengono conto della descrizione.
 
+**Sopralluogo**
+- Le note di sopralluogo le mandano l'amministratore e gli utenti (non i collaboratori), dalla chat della commessa, dall'agente Diario o da Telegram: testo, voce, foto, **foto degli appunti scritti a mano**, PDF e documenti. Finché la commessa è **nuova** o **in sopralluogo** (o se scrivi «sopralluogo»), finiscono nella sezione **Sopralluogo**, anche se arrivano in momenti diversi.
+- Gli appunti scritti a mano nelle foto vengono **letti e trascritti**; la sezione viene riordinata da mAIPAL in: data e partecipanti, stato di fatto e misure, lavori richiesti dal cliente, criticità e vincoli, materiali ipotizzati (solo quello che è scritto), con l'elenco di note, foto e documenti e i link ai file.
+- Alla prima nota di sopralluogo la commessa passa da «nuova» a «sopralluogo». I file vanno nella cartella **Sopralluogo** dell'archivio (es. `sopralluogo_20261028_tetto.jpg`).
+
+**Preventivo**
+- Il preventivo lo caricano l'amministratore e gli utenti: sezione **Preventivo** → **Carica il preventivo** (PDF, Word o foto), oppure mandandolo come documento su Telegram (se non è chiaro di quale commessa è, te lo chiede). mAIPAL legge **totale e imponibile, voci, date di inizio e fine, validità dell'offerta, pagamenti, attività e materiali** e ti mostra il riepilogo: salva solo quando **confermi**.
+- Ogni nuovo preventivo della stessa commessa è una **nuova versione** (v1, v2…): le precedenti restano consultabili, i file sono in **Preventivi** (`preventivo_<data>_v2.pdf`).
+- Con il preventivo la commessa passa a **preventivo inviato**. Il **valore della commessa** si imposta da solo se era vuoto (l'imponibile, o il totale); se è diverso lo sceglie l'**amministratore** (nella scheda di conferma, in Preventivo o con i pulsanti su Telegram). Se la commessa non ha ancora una descrizione, prende le attività del preventivo.
+- **Esito** (solo amministratore): **Accettato** (la commessa passa **in lavorazione** e ti elenca le attività del preventivo da pianificare), **Perso** (serve il motivo: prezzo, tempi, concorrente, rinuncia del cliente o altro) o **In attesa**. Lo registri dalla sezione Preventivo, scrivendolo ("il preventivo dei Rossi è stato accettato", "preventivo bagno perso per il prezzo") o rispondendo ai **solleciti**: se un preventivo resta senza esito, su Telegram te lo richiedo dopo 7 giorni e poi ogni 7 (o alla scadenza dell'offerta, se prima), al massimo 4 volte (si cambia in Organizzazione → Commesse: orari e automatismi).
+- Quando carichi un preventivo, se gli ultimi preventivi persi per lavori simili avevano lo stesso motivo te lo segnalo (es. «2 degli ultimi 3 preventivi persi per lavori simili («bagno») erano per prezzo»).
+
 **Contatti utili**
 - Il riquadro **Contatti** in alto apre i contatti della commessa: gli altri artigiani e le persone del lavoro (idraulico, elettricista, direttore lavori, fornitori, amministratore…), con ruolo, telefono, email e una nota. Tocca il numero per chiamare, l'email per scrivere.
 - **Aggiungi** un contatto: se il nome è già usato su un'altra commessa, ruolo, telefono ed email si compilano da soli.

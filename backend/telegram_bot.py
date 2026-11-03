@@ -331,7 +331,7 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     conv = None if new_conv else await db.conversations.find_one({"conv_id": conv_id}, {"_id": 0, "job_commessa_id": 1})
     res = await _save_job_log(_to_user_pydantic(user_doc), content, images=images,
                               hint_commessa_id=(conv or {}).get("job_commessa_id"), conv_id=conv_id, channel=channel)
-    if res["status"] in ("ok", "question", "unclear", "invalid", "planned", "description"):
+    if res["status"] in ("ok", "question", "unclear", "invalid", "planned", "description", "commessa_update"):
         answer = res["message"]
     elif res["status"] == "commessa_draft":   # (the watch can't press buttons: confirmed from the app or Telegram)
         answer = res["message"] + "\nConfermala dall'app o da Telegram."
@@ -347,7 +347,7 @@ async def _job_log_turn(db, user_doc: dict, content: str, conv_id: str, new_conv
     fields = {"updated_at": now_iso}
     if res["status"] == "ok":
         fields["job_commessa_id"] = res["log"]["commessa_id"]
-    elif res["status"] in ("planned", "description"):
+    elif res["status"] in ("planned", "description", "commessa_update"):
         fields["job_commessa_id"] = res["commessa"]["id"]
     if new_conv:
         await db.conversations.insert_one({"conv_id": conv_id, "user_id": user_doc["user_id"], "action": "journal", "channel": channel,
@@ -487,7 +487,7 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
     if res["status"] == "commessa_draft":   # a new commessa: the summary, confirmed with a button
         await _send_commessa_draft(ctx, chat_id, res)
         return
-    if res["status"] in ("planned", "description"):   # only materials to take (a reminder) / the commessa's description: no entry
+    if res["status"] in ("planned", "description", "commessa_update"):   # materials to take / the description / a quote's outcome: no entry
         await _set_state(db, chat_id, user["user_id"], current_action="journal", job_commessa_id=res["commessa"]["id"],
                          pending_job_context=None)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
@@ -587,6 +587,15 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
             await _run_work_revise_flow(update, ctx, db, user, state["pending_work_revise"], content)
             return
         if await _answer_pending_job(update, ctx, db, user, state, content):
+            return
+        if state.get("pending_lost") and _state_is_fresh(state):   # the words of "Altro" for a lost quote
+            await _set_state(db, chat_id, user["user_id"], pending_lost=None)
+            from server import _quote_outcome
+            try:
+                out = await _quote_outcome(_to_user_pydantic(user), state["pending_lost"], "perso", "altro", content, channel="telegram")
+                await update.message.reply_text(out["message"])
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
             return
         if state.get("pending_report_type"):
             await _run_report_flow(update, ctx, db, user, content, state["pending_report_type"])
@@ -1065,6 +1074,49 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _set_state(db, chat_id, user["user_id"], pending_job_context=None)
         await _run_job_log_flow(q, ctx, db, user, pctx["text"], images=pctx.get("images") or None,
                                 commessa_id=pctx["commessa_id"], material_choice=data.split(":", 1)[1])
+    elif data.startswith(("qc:", "qx:", "qv:", "qo:", "qr:", "docc:")):   # quotes: confirm, discard, value, outcome, lost reason; a document's commessa
+        from server import _confirm_quote, _choose_quote_value, _quote_outcome, LOST_CATEGORIES
+        current = _to_user_pydantic(user)
+        parts = data.split(":")
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        try:
+            if parts[0] == "qc":
+                out = await _confirm_quote(current, parts[1], parts[2] if len(parts) > 2 and parts[2] in ("new", "keep") else None)
+                await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+            elif parts[0] == "qx":
+                from server import db as _db
+                await _db.job_quotes.update_one({"id": parts[1], "status": "proposed"}, {"$set": {"status": "discarded", "data_b64": None}})
+                await ctx.bot.send_message(chat_id=chat_id, text="Ok, il preventivo non è stato salvato.")
+            elif parts[0] == "qv":
+                out = await _choose_quote_value(current, parts[1], parts[2])
+                await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+            elif parts[0] == "qo":
+                if parts[2] == "perso":   # the reason first (AUT-PRE-06)
+                    kb = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"qr:{parts[1]}:{key}")] for key, label in LOST_CATEGORIES.items()])
+                    await ctx.bot.send_message(chat_id=chat_id, text="Perché non è stato accettato?", reply_markup=kb)
+                else:
+                    out = await _quote_outcome(current, parts[1], parts[2], channel="telegram")
+                    await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+            elif parts[0] == "qr":
+                if parts[2] == "altro":
+                    await _set_state(db, chat_id, user["user_id"], pending_lost=parts[1])
+                    await ctx.bot.send_message(chat_id=chat_id, text="Scrivimi il motivo in poche parole.")
+                else:
+                    out = await _quote_outcome(current, parts[1], "perso", parts[2], "", channel="telegram")
+                    await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+            elif parts[0] == "docc":
+                state = await _get_state(db, user["user_id"], chat_id)
+                pdoc = state.get("pending_doc") or {}
+                await _set_state(db, chat_id, user["user_id"], pending_doc=None)
+                if not pdoc.get("file_id"):
+                    await ctx.bot.send_message(chat_id=chat_id, text="Ho perso il documento: rimandalo.")
+                    return
+                await _ingest_tg_document(ctx, chat_id, db, user, parts[1], pdoc)
+        except Exception as e:
+            await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
     elif data.startswith("cmd:"):   # a new commessa: confirmed, a similar client chosen, a new one, cancelled
         from server import _confirm_commessa_draft
         _, draft_id, choice = (data.split(":", 2) + ["", ""])[:3]
@@ -1351,6 +1403,71 @@ async def _run_drive_pending_flow(update_or_query, ctx, db, user, pending_id, te
     await _set_state(db, chat_id, user["user_id"], pending_drive_upload_id=None)
 
 
+async def _ingest_tg_document(ctx, chat_id, db, user, commessa_id: str, pdoc: dict) -> None:
+    """A document sent on Telegram, on its commessa: a quote -> its summary to confirm; anything
+    else -> the diary (Sopralluogo while surveying) and the archive."""
+    from server import _ingest_commessa_document
+    tg_file = await ctx.bot.get_file(pdoc["file_id"])
+    raw = bytes(await tg_file.download_as_bytearray())
+    res = await _ingest_commessa_document(_to_user_pydantic(user), commessa_id, pdoc.get("name") or "documento", raw, pdoc.get("mime"),
+                                          caption=pdoc.get("caption") or "", channel="telegram")
+    if res.get("type") == "quote":
+        qid = res["quote"]["id"]
+        rows = []
+        if res.get("value") and res.get("current_budget") and res.get("can_choose_value") and abs(float(res["current_budget"]) - res["value"]) >= 0.01:
+            rows.append([InlineKeyboardButton("✅ Conferma, usa il nuovo valore", callback_data=f"qc:{qid}:new")])
+            rows.append([InlineKeyboardButton("✅ Conferma, tieni il valore attuale", callback_data=f"qc:{qid}:keep")])
+        else:
+            rows.append([InlineKeyboardButton("✅ Conferma il preventivo", callback_data=f"qc:{qid}")])
+        rows.append([InlineKeyboardButton("Annulla", callback_data=f"qx:{qid}")])
+        await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=InlineKeyboardMarkup(rows))
+    else:
+        await _set_state(db, chat_id, user["user_id"], current_action="journal", job_commessa_id=commessa_id)
+        await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+
+
+async def _msg_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Artigiano: a PDF / Office document / image file on a commessa (a quote, survey notes…).
+    The commessa: named in the caption, or the one of the conversation, else asked."""
+    from server import db, _clienti_list, _resolve_commessa, _all_commesse
+    import verticals as _vx
+    chat_id = update.effective_chat.id
+    user = await _get_user_by_chat(db, chat_id)
+    if not user:
+        await update.message.reply_text("Devi prima collegare l'account: apri mAIPAL → Impostazioni → Telegram e usa /start <codice>.")
+        return
+    if user.get("business_vertical") != "artigiano":
+        await update.message.reply_text("Per salvare un documento usa l'app (Documenti) oppure mandamelo come foto.")
+        return
+    d = update.message.document
+    caption = (update.message.caption or "").strip()
+    pdoc = {"file_id": d.file_id, "name": d.file_name or "documento", "mime": d.mime_type, "caption": caption}
+    current = _to_user_pydantic(user)
+    clienti = await _clienti_list(current)
+    if not clienti:
+        await update.message.reply_text("Non hai ancora la lista Clienti.")
+        return
+    state = await _get_state(db, user["user_id"], chat_id)
+    hint = state.get("job_commessa_id") if _state_is_fresh(state) else None
+    res = await _resolve_commessa(clienti, caption, "", "", hint) if caption or hint else {}
+    if res.get("commessa"):
+        await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
+        try:
+            await _ingest_tg_document(ctx, chat_id, db, user, res["commessa"]["id"], pdoc)
+        except Exception as e:
+            logger.exception("tg document failed")
+            await update.message.reply_text(f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+        return
+    commesse, _ = await _all_commesse(clienti)
+    open_ = [c for c in commesse if not _vx.is_closed(c["stato"])][:10]
+    if not open_:
+        await update.message.reply_text("Non hai commesse aperte su cui salvarlo.")
+        return
+    await _set_state(db, chat_id, user["user_id"], pending_doc=pdoc)
+    await update.message.reply_text("📎 Di quale commessa è questo documento?", reply_markup=InlineKeyboardMarkup(
+        [[InlineKeyboardButton(f"{c['title']} · {c['client_name']}"[:60], callback_data=f"docc:{c['id']}")] for c in open_]))
+
+
 async def _msg_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from server import db, _drive_smart_upload_core, _image_bytes_to_journal_data_uri, _ocr_and_save_image_to_kb
     chat_id = update.effective_chat.id
@@ -1467,6 +1584,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.PHOTO, _msg_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, _msg_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _msg_free))
     return app
 

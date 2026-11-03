@@ -591,6 +591,133 @@ async def read_document(text: str, commessa: dict, user_id: Optional[str] = None
             "amount": amount, "amount_basis": (basis if basis in ("imponibile", "totale") else "totale") if amount else ""}
 
 
+# ---- the quote, read (AUT-PRE-01): totals, items, dates and deadlines, activities, materials ----
+async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """-> {"total", "taxable", "vat", "items": [{description, amount}], "start", "end", "validity",
+    "payments": [str], "activities": [str], "materials": [str], "description"} - amounts only when
+    written in the document, dates only real ones; what is missing stays empty (asked, never guessed)."""
+    today = today_local()
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Ricevi il testo di un PREVENTIVO per la commessa "
+        f"«{commessa.get('title')}» del cliente {commessa.get('client_name')}. Oggi è {today.isoformat()}. Estrai SOLO ciò che è scritto:\n"
+        "\"total\": totale complessivo (numero) come scritto; \"taxable\": imponibile senza IVA (numero) se scritto; \"vat\": importo IVA se scritto;\n"
+        "\"items\": le voci [{\"description\": testo breve, \"amount\": importo della voce o null}];\n"
+        "\"start\", \"end\": date di inizio e fine lavori (YYYY-MM-DD) se scritte; \"validity\": data di scadenza/validità dell'offerta "
+        "(YYYY-MM-DD; \"valida 30 giorni\" -> calcola da oggi) se scritta;\n"
+        "\"payments\": acconti e condizioni di pagamento, frasi brevi;\n"
+        "\"activities\": le attività/lavorazioni da svolgere, una frase breve ciascuna, nell'ordine;\n"
+        "\"materials\": materiali indicati, frasi brevi;\n"
+        "\"description\": la descrizione delle attività da svolgere per chi lavora: una frase sull'oggetto e l'elenco delle "
+        "lavorazioni (righe che iniziano con \"- \"), senza prezzi. Ciò che manca: vuoto o null. MAI inventare.\n"
+        "Rispondi SOLO con JSON: {\"total\": null, \"taxable\": null, \"vat\": null, \"items\": [], \"start\": \"\", \"end\": \"\", "
+        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"description\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=3000, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": (text or "")[:30000]}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+
+    def money(v):
+        try:
+            v = round(float(str(v).replace(",", ".")), 2) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+        return v if v and v > 0 and amount_in_text(v, text) else None
+
+    def day(v):
+        try:
+            d = date.fromisoformat(str(v or "")[:10])
+        except ValueError:
+            return ""
+        return d.isoformat() if today - timedelta(days=400) <= d <= today + timedelta(days=3 * 366) else ""
+
+    def lines(v, n=40):
+        return [" ".join(str(x).split())[:200] for x in (v if isinstance(v, list) else []) if str(x or "").strip()][:n]
+
+    items = []
+    for it in p.get("items") if isinstance(p.get("items"), list) else []:
+        if isinstance(it, dict) and str(it.get("description") or "").strip():
+            items.append({"description": " ".join(str(it["description"]).split())[:200], "amount": money(it.get("amount"))})
+    return {"total": money(p.get("total")), "taxable": money(p.get("taxable")), "vat": money(p.get("vat")), "items": items[:60],
+            "start": day(p.get("start")), "end": day(p.get("end")), "validity": day(p.get("validity")),
+            "payments": lines(p.get("payments"), 10), "activities": lines(p.get("activities")), "materials": lines(p.get("materials")),
+            "description": str(p.get("description") or "").strip()[:4000]}
+
+
+# ---- the survey, organized (AUT-SOP-02) ----
+SURVEY_KEYS = [("date_participants", "Data e partecipanti"), ("state", "Stato di fatto e misure"), ("requests", "Lavori richiesti dal cliente"),
+               ("issues", "Criticità e vincoli"), ("materials", "Materiali ipotizzati")]
+
+
+async def survey_summary(entries: list, commessa: dict, user_id: Optional[str] = None, channel: str = "web") -> dict:
+    """The survey's notes (text, transcriptions of handwritten notes, documents) -> the section in
+    order: {date_participants, state, requests, issues, materials} - only what is written."""
+    material = "\n\n".join(f"[{e.get('date') or ''} · {e.get('author') or ''}] {e.get('text') or ''}" for e in entries)[:24000]
+    system = (
+        "Sei l'assistente di un'impresa artigiana. Ricevi le note di SOPRALLUOGO della commessa "
+        f"«{commessa.get('title')}» del cliente {commessa.get('client_name')} (testi, trascrizioni di appunti, documenti). "
+        "Riorganizzale SENZA aggiungere nulla in queste parti, testo breve o elenchi con \"- \":\n"
+        "\"date_participants\": data/e del sopralluogo e chi era presente; \"state\": stato di fatto e misure; "
+        "\"requests\": lavori richiesti dal cliente; \"issues\": criticità e vincoli; \"materials\": materiali ipotizzati. "
+        "Una parte senza informazioni: stringa vuota. MAI inventare misure, nomi o date.\n"
+        "Rispondi SOLO con JSON: {\"date_participants\": \"\", \"state\": \"\", \"requests\": \"\", \"issues\": \"\", \"materials\": \"\"}"
+    )
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=2000, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": material}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+    return {k: str(p.get(k) or "").strip()[:3000] for k, _label in SURVEY_KEYS}
+
+
+_SURVEY_SAID = re.compile(r"\bsopralluog\w*|\brilievo\b|\brilievi\b|\bmisure\s+prese\b", re.I)
+
+
+def survey_said(text: str) -> bool:
+    return bool(_SURVEY_SAID.search(text or ""))
+
+
+# ---- the quote's outcome, said (RF-PRE-03): "il preventivo dei Rossi è stato accettato",
+# "preventivo bagno perso per il prezzo", "il cliente ci pensa ancora" ----
+_QUOTE = re.compile(r"\bpreventiv\w*|\bofferta\b", re.I)
+_ACCEPTED = re.compile(r"\b(?:accettat\w*|approvat\w*|confermat\w*|firmat\w*|ok\s+dal\s+cliente|ha\s+detto\s+di\s+s[iì])\b", re.I)
+_LOST = re.compile(r"\b(?:pers[oa]|rifiutat\w*|non\s+(?:è\s+stato\s+|e'\s+stato\s+)?accettat\w*|non\s+(?:lo\s+)?accetta|"
+                   r"ha\s+rinunciat\w*|rinuncia|scartat\w*|non\s+se\s+ne\s+fa\s+(?:più\s+)?niente)\b", re.I)
+_WAITING = re.compile(r"\b(?:in\s+attesa|ci\s+(?:sta\s+)?pens\w*|deve\s+(?:ancora\s+)?decidere|non\s+ha\s+ancora\s+deciso)\b", re.I)
+_LOST_CATS = [("prezzo", re.compile(r"\b(?:prezz\w*|car[oaie]\b|costos\w*|costa\s+troppo|budget|economic\w*)", re.I)),
+              ("tempi", re.compile(r"\b(?:temp[oi]|tardi|lung[hi]+|data|urgen\w*|attes[ae])\b", re.I)),
+              ("concorrente", re.compile(r"\b(?:concorren\w*|altra\s+ditta|altr[oaie]\s+(?:impres\w*|artigian\w*|elettricist\w*|idraulic\w*))", re.I)),
+              ("rinuncia_cliente", re.compile(r"\b(?:rinunci\w*|non\s+(?:lo\s+)?fa\s+più|non\s+se\s+ne\s+fa)", re.I))]
+
+
+def quote_outcome_said(text: str) -> Optional[dict]:
+    """-> {"outcome": accettato | perso | in_attesa, "category": prezzo|tempi|concorrente|rinuncia_cliente|altro|"",
+    "reason": the words after "per/perché"} or None (not about a quote's outcome)."""
+    t = text or ""
+    if not _QUOTE.search(t):
+        return None
+    if _LOST.search(t):
+        cat = next((k for k, rx in _LOST_CATS if rx.search(t)), "")
+        m = re.search(r"\b(?:per(?:ché|che)?|motivo:?)\s+(.{3,200})$", t, re.I)
+        return {"outcome": "perso", "category": cat, "reason": (m.group(1).strip(" .") if m else "")}
+    if _ACCEPTED.search(t):
+        return {"outcome": "accettato", "category": "", "reason": ""}
+    if _WAITING.search(t):
+        return {"outcome": "in_attesa", "category": "", "reason": ""}
+    return None
+
+
 def _mat_key(m: dict) -> tuple:
     return (" ".join((m.get("name") or "").lower().split()), (m.get("unit") or "").lower().strip("."))
 
