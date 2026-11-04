@@ -463,12 +463,20 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
 
 # ---- a new commessa said in a message: "Nuova commessa per Mario Rossi, rifacimento bagno in via
 # Garibaldi 5 a Torino, inizio 10 novembre" (RF-CRE-02). Only what is written; asked when missing.
-_NEW_COMMESSA = re.compile(r"^\s*(?:(?:nuova|una\s+nuova)\s+commessa|(?:crea|creare|apri|aprire|aggiungi|inserisci)\s+(?:una\s+)?(?:nuova\s+)?commessa"
-                           r"|nuovo\s+lavoro\s+per|nuovo\s+cantiere\s+per)\b", re.I)
+# "crea una commessa …", "creami una commessa", "mi crei una nuova commessa", "per Luca D crea commessa …", "nuova commessa",
+# "commessa nuova", "nuovo cantiere per …" - anywhere in the message. Never "apri LA commessa del bagno" (an existing one)
+# and never a question on how to do it ("come si crea una commessa?").
+_NEW_COMMESSA = re.compile(
+    r"\b(?:(?:crea|creami|creare|crei|creiamo|creeresti|apri|aprimi|aprire|apriamo|aggiungi|aggiungimi|aggiungere|inserisci|inserire|"
+    r"registra|registrami|registrare|fammi|metti)\s+(?:(?:una|un|un'|nuova|nuovo|altra|anche|ancora|subito|pure)\s+){0,3}"
+    r"(?:commessa|cantiere)\b"
+    r"|\bnuova\s+commessa\b|\bcommessa\s+nuova\b|\bnuovo\s+(?:cantiere|lavoro)\s+per\b)", re.I)
+_HOW_TO = re.compile(r"^\s*(?:come|dove|quando|perch[eé]|cosa|che\s+cosa|si\s+pu[oò]|posso\s+sapere)\b", re.I)
 
 
 def new_commessa_said(text: str) -> bool:
-    return bool(_NEW_COMMESSA.match(text or ""))
+    t = text or ""
+    return bool(_NEW_COMMESSA.search(t)) and not _HOW_TO.match(t)
 
 
 async def read_new_commessa(text: str, user_id: Optional[str] = None, channel: str = "web") -> dict:

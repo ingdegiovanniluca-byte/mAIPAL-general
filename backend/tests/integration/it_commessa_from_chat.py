@@ -189,5 +189,37 @@ async def main():
     assert next(x for x in db.collection_sub_items.docs if x["data"].get("titolo") == "Tetto")["data"]["stato"] == "preventivo inviato"   # (the old name, in today's)
     # other lists: as before
     assert not lu.about_jobs("aggiungi il latte alla spesa", names)
+
+    # 4) "crea una commessa impianto allarme per il cliente luca d" with Luca D already a client: a new commessa under
+    #    them (the summary first) - never "Luca D exists already". Said in many ways, anywhere in the message.
+    db.collection_items.docs.append({"id": "c_lucad", "collection_id": cl["id"], "data": {"nome": "Luca D"}})
+    for t in ("crea una commessa impianto allarme per il cliente luca d", "creami una commessa impianto allarme per Luca D",
+              "per il cliente Luca D crea una nuova commessa impianto allarme", "puoi creare una commessa impianto allarme per luca d?",
+              "crea commessa impianto allarme luca d"):
+        assert jl.new_commessa_said(t), t
+    for t in ("apri la commessa del bagno", "come si crea una commessa?", "oggi siamo andati al nuovo cantiere", "la commessa è stata creata ieri"):
+        assert not jl.new_commessa_said(t), t
+    async def boom(*a, **k): raise AssertionError("not the lists' interpreter")
+    lu.interpret_list_request = boom
+    jl.read_new_commessa = new_job("Impianto allarme", "luca d")
+    r = await server._execute_list_update(me, "crea una commessa impianto allarme per il cliente luca d")
+    assert r["status"] == "commessa_draft" and "Luca D (già nella lista Clienti)" in r["message"], r
+    out = await server.confirm_commessa_draft(r["draft"]["id"], server.DraftConfirmPayload(choice="ok"), me)
+    assert out["status"] == "created"
+    assert [x["data"]["titolo"] for x in db.collection_sub_items.docs if x["item_id"] == "c_lucad"] == ["Impianto allarme"]
+    assert sum(1 for x in db.collection_items.docs if (x["data"].get("nome") or "").lower() == "luca d") == 1     # no second client
+    # the safety net: the lists' interpreter adding a client that is there already -> the commessa's summary, not an error
+    async def add_client_again(text, catalog, kb_context="", user_id=None, channel="web"):
+        return {"op": "add_item", "collection_id": cl["id"], "item_query": "", "sub_item_query": "",
+                "fields": {"nome": "Luca D"}, "sub_items": [{"titolo": "Videosorveglianza"}], "items": []}
+    lu.interpret_list_request = add_client_again
+    jl.read_new_commessa = new_job("Videosorveglianza", "Luca D")
+    r = await server._execute_list_update(me, "Luca D: videosorveglianza da fare in negozio")
+    assert r["status"] == "commessa_draft" and "Videosorveglianza" in r["message"], r
+    async def only_client(text, catalog, kb_context="", user_id=None, channel="web"):
+        return {"op": "add_item", "collection_id": cl["id"], "item_query": "", "sub_item_query": "", "fields": {"nome": "luca d"}, "sub_items": [], "items": []}
+    lu.interpret_list_request = only_client
+    r = await server._execute_list_update(me, "aggiungi luca d alla lista")
+    assert r["status"] == "error" and "«Luca D» è già nella lista Clienti" in r["message"] and "nuova commessa per Luca D" in r["message"], r
     print("ALL OK")
 asyncio.run(main())

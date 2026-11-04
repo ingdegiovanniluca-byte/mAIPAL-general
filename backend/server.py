@@ -4764,6 +4764,16 @@ async def _execute_list_update(
     if op == "add_item":
         if not norm_fields:
             raise HTTPException(status_code=400, detail="Non ho trovato nessun dato da salvare per il nuovo elemento.")
+        if coll.get("system_key") == vx.CLIENTI_KEY:   # a client already there: the request was about a commessa of theirs
+            name_key = ((coll.get("fields") or [{}])[0]).get("key")
+            said_name = str(norm_fields.get(name_key) or "").strip().lower()
+            existing = next((c for c in await db.collection_items.find({"collection_id": collection_id}, {"_id": 0}).to_list(5000)
+                             if said_name and str((c.get("data") or {}).get(name_key) or "").strip().lower() == said_name), None)
+            if existing:
+                if norm_new_sub_items or lu.about_jobs(text, ["clienti"]) or jl.new_commessa_said(text):
+                    return await _commessa_draft(current, text, channel)
+                return {"status": "error", "message": f"«{lu.item_display(existing)}» è già nella lista Clienti. Per una nuova commessa "
+                                                     f"scrivi ad esempio «nuova commessa per {lu.item_display(existing)}: impianto allarme»."}
         created = await create_collection_item(collection_id, CollectionItemPayload(data=norm_fields), current)
         sub_created = [await create_sub_item(collection_id, created["id"], CollectionSubItemPayload(data=e), current) for e in norm_new_sub_items]
         if sub_created:
