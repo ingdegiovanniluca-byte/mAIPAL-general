@@ -940,6 +940,8 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
           : <div className="text-white/60">Totale non trovato nel documento</div>}
         {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
         {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+        {d.warranty && <div>🛡 Garanzia: {d.warranty}</div>}
+        {(d.maintenance || []).length > 0 && <div>🔧 Manutenzione: {d.maintenance.map((m) => m.text + (m.every_months ? ` (ogni ${m.every_months} mesi)` : " (frequenza non scritta)")).join("; ")}</div>}
         {(d.items || []).length > 0 && (
           <details><summary className="cursor-pointer text-white/75">{d.items.length} voci</summary>
             {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
@@ -1427,6 +1429,9 @@ function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, on
             {(d.taxable || d.total) ? <div>💶 {d.taxable ? `Imponibile ${eur(d.taxable)}` : ""}{d.taxable && d.total ? " · " : ""}{d.total ? `Totale ${eur(d.total)}` : ""}</div> : null}
             {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
             {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+            {d.warranty && <div>🛡 Garanzia: {d.warranty}</div>}
+            {(d.maintenance || []).length > 0 && <div data-testid="quote-maintenance">🔧 Manutenzione: {d.maintenance.map((m) => m.text).join("; ")}
+              <span className="text-white/55"> · a fine lavori fisso i promemoria</span></div>}
           </div>
           {last.value_pending && isAdmin && (
             <div className="mt-2 text-[12.5px] text-white/85" data-testid="quote-value-pending">
@@ -1947,10 +1952,36 @@ function CommessaChat({ commessa, onClose, onSaved }) {
   const micRight = micSide !== "left";
   const recRef = useRef(null);
   const fileRef = useRef(null);
+  const docRef = useRef(null);
   const taRef = useRef(null);
   const listRef = useRef(null);
+  const [quote, setQuote] = useState(null);
 
   useEffect(() => { setMessages([]); setText(""); setPhotos([]); }, [commessa.id]);
+  // a document of this commessa (a quote, survey notes…): "preventivo" in the message -> read as the quote
+  const sendDoc = async (file) => {
+    if (!file || busy) return;
+    const said = text.trim();
+    setMessages((ms) => [...ms, { role: "user", content: `${said ? said + "\n" : ""}📎 ${file.name}`, mode }]);
+    setText("");
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (/\bpreventiv/i.test(said)) fd.append("hint", "preventivo");
+      if (said) fd.append("caption", said);
+      const r = (await api.post(`/jobs/commesse/${commessa.id}/documents`, fd)).data;
+      if (r.type === "quote") {
+        setMessages((ms) => [...ms, { role: "assistant", content: "📄 Ho letto il preventivo: controlla i dati e conferma." }]);
+        setQuote(r);
+      } else {
+        setMessages((ms) => [...ms, { role: "assistant", content: r.message || "Documento salvato nel diario." }]);
+        onSaved?.();
+      }
+    } catch (e) {
+      setMessages((ms) => [...ms, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a leggere il documento") }]);
+    } finally { setBusy(false); }
+  };
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
   useEffect(() => {
     const el = taRef.current;
@@ -2066,6 +2097,8 @@ function CommessaChat({ commessa, onClose, onSaved }) {
           {busy && <Loader2 size={16} className="animate-spin text-white/70" />}
         </div>
       )}
+      {quote && <QuoteSheet commessa={commessa} proposal={quote} onClose={() => setQuote(null)}
+        onSaved={() => { setQuote(null); setMessages((ms) => [...ms, { role: "assistant", content: "✅ Preventivo salvato: lo trovi nella sezione Preventivo e nel diario." }]); onSaved?.(); }} />}
       <div className="flex items-center gap-2 mb-2">
         {modeBtn("ask", MessageCircle, "Chiedi")}
         {modeBtn("diary", NotebookPen, "Scrivi nel diario")}
@@ -2104,6 +2137,11 @@ function CommessaChat({ commessa, onClose, onSaved }) {
               </button>
             )}
             <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pickPhotos(e.target.files); e.target.value = ""; }} />
+            <button onClick={() => docRef.current?.click()} disabled={busy} title="Documento (preventivo, sopralluogo…)" aria-label="Documento"
+              data-testid="commessa-chat-doc" className="p-2 rounded-full text-white/90 hover:bg-white/15 disabled:opacity-50">
+              <FileText size={19} />
+            </button>
+            <input ref={docRef} type="file" accept={DOC_ACCEPT} hidden data-testid="commessa-chat-doc-file" onChange={(e) => { sendDoc(e.target.files?.[0]); e.target.value = ""; }} />
             <button onClick={send} disabled={busy || recording || transcribing || (!text.trim() && !(mode === "diary" && photos.length))}
               data-testid="commessa-chat-send" title="Invia" aria-label="Invia"
               style={{ background: "rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)" }}

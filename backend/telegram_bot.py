@@ -1492,8 +1492,9 @@ async def _ingest_tg_document(ctx, chat_id, db, user, commessa_id: str, pdoc: di
     from server import _ingest_commessa_document
     tg_file = await ctx.bot.get_file(pdoc["file_id"])
     raw = bytes(await tg_file.download_as_bytearray())
+    said_quote = bool(_re.search(r"\bpreventiv\w*", pdoc.get("caption") or "", _re.I))   # "preventivo …" in the caption: always a quote
     res = await _ingest_commessa_document(_to_user_pydantic(user), commessa_id, pdoc.get("name") or "documento", raw, pdoc.get("mime"),
-                                          caption=pdoc.get("caption") or "", channel="telegram")
+                                          hint="preventivo" if said_quote else None, caption=pdoc.get("caption") or "", channel="telegram")
     if res.get("type") == "quote":
         qid = res["quote"]["id"]
         rows = []

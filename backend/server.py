@@ -6047,6 +6047,16 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
         "Cliente": view["client_name"], "Commessa": view["title"], "Indirizzo del cantiere": view["address"],
         "Stato": view["stato"], "Periodo di riferimento": plabel, "Data": today.strftime("%d/%m/%Y"),
         "Redatto da": current.name or ""}}]
+    _quotes = await _commessa_quotes(cid)
+    if _quotes:
+        _qd = _quotes[0].get("data") or {}
+        _qf = sections[0]["fields"]
+        _qf["Preventivo"] = f"v{_quotes[0].get('version')}" + (f", inizio {_short_it_date(_qd['start'])}" if _qd.get("start") else "") \
+            + (f", fine {_short_it_date(_qd['end'])}" if _qd.get("end") else "")
+        if _qd.get("warranty"):
+            _qf["Garanzia"] = _qd["warranty"]
+        if _qd.get("maintenance"):
+            _qf["Manutenzione prevista"] = "\n".join(f"- {m['text']}" for m in _qd["maintenance"])
     titles = dict(work_reports.COMMESSA_PARTS)
     for key in [k for k, _ in work_reports.COMMESSA_PARTS if k in wants]:
         if key == "stato":
@@ -9029,6 +9039,11 @@ def _quote_summary(view: dict, q: dict) -> str:
         lines.append("💳 " + "; ".join(d["payments"][:3]))
     if d.get("activities"):
         lines.append("🛠 Attività:\n" + "\n".join(f"• {a}" for a in d["activities"][:12]))
+    if d.get("warranty"):
+        lines.append(f"🛡 Garanzia: {d['warranty']}")
+    if d.get("maintenance"):
+        lines.append("🔧 Manutenzione prevista: " + "; ".join(m["text"] for m in d["maintenance"])
+                     + " (a fine lavori ti fisso i promemoria)")
     return "\n".join(lines)
 
 
@@ -9124,7 +9139,8 @@ async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[st
     await _job_event(current, clienti, view, "preventivo",
                      f"📄 Preventivo v{version} caricato da {_first_name(current.name)}"
                      + (f": {('imponibile ' + jl._eur(d['taxable'])) if d.get('taxable') else ('totale ' + jl._eur(d['total']))}" if (d.get("taxable") or d.get("total")) else "")
-                     + (f", valido fino al {_short_it_date(d['validity'])}" if d.get("validity") else "") + ".")
+                     + (f", valido fino al {_short_it_date(d['validity'])}" if d.get("validity") else "") + "."
+                     + "".join(f"\n{x}" for x in jl.quote_detail_lines(d)))
     feedback = await _loss_feedback(clienti, view)
     if feedback:
         lines.append(feedback)
@@ -9326,6 +9342,32 @@ async def upload_commessa_document(commessa_id: str, file: UploadFile = File(...
     """From the diary: a survey's notes or documents, a quote (hint: sopralluogo | preventivo; none: recognized)."""
     return await _ingest_commessa_document(current, commessa_id, file.filename or "documento", await file.read(), file.content_type,
                                            hint=hint, caption=(caption or "").strip())
+
+
+_QUOTE_SAID = re.compile(r"\bpreventiv\w*", re.I)
+
+
+@api_router.post("/jobs/quotes/from-chat")
+async def quote_from_chat(file: UploadFile = File(...), text: str = Form(""), commessa_id: Optional[str] = Form(None),
+                          current: User = Depends(get_current_user)):
+    """"Questo è il preventivo della commessa impianto allarme di Luca D" with the file: read as a
+    quote of that commessa (as from its Preventivo section). The commessa: the one chosen, else the
+    one named in the message, else the choices."""
+    contents = await file.read()
+    if not commessa_id:
+        clienti = await _clienti_list(current)
+        if not clienti:
+            raise HTTPException(status_code=400, detail="Non c'è ancora la lista Clienti con le commesse.")
+        res = await _resolve_commessa(clienti, text, "", "", None)
+        if res.get("commessa"):
+            commessa_id = res["commessa"]["id"]
+        else:
+            commesse, _ = await _all_commesse(clienti)
+            act = await _last_activity([c["id"] for c in commesse])
+            rows = [r for r in _pick_rows([c for c in commesse if not vx.is_closed(c["stato"])], act)]
+            return {"type": "pick_commessa", "message": "📎 Di quale commessa è questo preventivo?", "candidates": rows}
+    return await _ingest_commessa_document(current, commessa_id, file.filename or "preventivo", contents, file.content_type,
+                                           hint="preventivo", caption=text)
 
 
 class QuoteConfirmPayload(BaseModel):
@@ -12038,6 +12080,61 @@ def _close_check_text(chk: dict) -> str:
     return "\n".join(parts)
 
 
+def _add_months(d: date, months: int) -> date:
+    y, m = divmod(d.month - 1 + months, 12)
+    import calendar as _cal
+    return date(d.year + y, m + 1, min(d.day, _cal.monthrange(d.year + y, m + 1)[1]))
+
+
+async def _maintenance_reminders(current: User, clienti: dict, commessa_id: str) -> list:
+    """At the closure: each maintenance the quote foresees with its frequency becomes a recurring
+    reminder of the administrator (from the end of the works); the warranty's end one too (a month
+    before). A maintenance with no frequency written is only pointed out. -> the reminders made"""
+    quotes = await _commessa_quotes(commessa_id)
+    d = (quotes[0].get("data") or {}) if quotes else {}
+    if not d.get("maintenance") and not d.get("warranty_months"):
+        return []
+    ctx = await _commessa_ctx(commessa_id)
+    if not ctx:
+        return []
+    _cl, sub, _client, view = ctx
+    owner_id = clienti.get("user_id") or current.user_id
+    if await db.tasks.find_one({"commessa_id": commessa_id, "kind": {"$in": ["manutenzione", "garanzia"]}}, {"_id": 1}):
+        return []   # already done (a commessa closed again)
+    end = jl.today_local()
+    made, no_freq = [], []
+    for m in d.get("maintenance") or []:
+        if not m.get("every_months"):
+            no_freq.append(m["text"])
+            continue
+        n = int(m["every_months"])
+        first = _add_months(end, n)
+        rule = {"freq": "yearly", "interval": n // 12} if n % 12 == 0 else {"freq": "monthly", "interval": n}
+        doc = await _create_task_or_todo(owner_id, {"title": f"Manutenzione: {m['text']} — {view['client_name']}",
+                                                    "description": f"Prevista dal preventivo della commessa «{view['title']}» ({view['client_name']}"
+                                                                   + (f", {view['address']}" if view.get("address") else "") + ").",
+                                                    "due_date": first.isoformat(), "recurrence": rule, "tags": ["manutenzione"]},
+                                         None, default_reminder_enabled=True)
+        await db.tasks.update_one({"id": doc["id"]}, {"$set": {"commessa_id": commessa_id, "kind": "manutenzione"}})
+        made.append(f"{m['text']}: dal {_short_it_date(first.isoformat())}, poi ogni {n} mesi" if n % 12 else
+                    f"{m['text']}: dal {_short_it_date(first.isoformat())}, poi ogni {'anno' if n == 12 else f'{n // 12} anni'}")
+    if d.get("warranty_months"):
+        due = _add_months(end, int(d["warranty_months"]) - 1)
+        doc = await _create_task_or_todo(owner_id, {"title": f"Scade tra un mese la garanzia — {view['client_name']} · {view['title']}",
+                                                    "description": f"Garanzia: {d.get('warranty')}. Fine lavori: {_short_it_date(end.isoformat())}.",
+                                                    "due_date": due.isoformat(), "tags": ["garanzia"]}, None, default_reminder_enabled=True)
+        await db.tasks.update_one({"id": doc["id"]}, {"$set": {"commessa_id": commessa_id, "kind": "garanzia"}})
+        made.append(f"fine garanzia: avviso il {_short_it_date(due.isoformat())}")
+    owner_doc = await db.users.find_one({"user_id": owner_id}, {"_id": 0})
+    if owner_doc and (made or no_freq):
+        await _notify_owner(User(**owner_doc), f"🔧 «{view['title']}» — {view['client_name']}: "
+                            + (("ho fissato i promemoria dal preventivo:\n" + "\n".join(f"• {x}" for x in made)) if made else "")
+                            + (("\n" if made else "") + "Senza frequenza scritta (dimmi ogni quanto e lo fisso): " + "; ".join(no_freq) if no_freq else ""))
+    if made:
+        await _job_event(current, clienti, view, "manutenzione", "🔧 Promemoria fissati dal preventivo: " + "; ".join(made) + ".")
+    return made
+
+
 async def _after_close(current: User, clienti: dict, commessa_id: str) -> None:
     """AUT-CHI-02: the reminders and notifications of the commessa stop (planned activities
     cancelled, To Do and milestones without reminders) and the final report goes to Report/."""
@@ -12046,6 +12143,10 @@ async def _after_close(current: User, clienti: dict, commessa_id: str) -> None:
         await db.job_activities.update_one({"id": a["id"]}, {"$set": {"status": "annullata", "cancelled_reason": "commessa completata", "updated_at": now}})
     await db.job_todos.update_many({"commessa_id": commessa_id, "done": False}, {"$set": {"reminders_off": True}})
     await db.job_milestones.update_many({"commessa_id": commessa_id, "done": False}, {"$set": {"reminders_off": True}})
+    try:
+        await _maintenance_reminders(current, clienti, commessa_id)
+    except Exception:
+        logger.exception("maintenance reminders of %s failed", commessa_id)
     try:
         include = [k for k, _ in work_reports.COMMESSA_PARTS if k != "costi" or await _sees_costs(current)]
         await _generate_commessa_report(current, CommessaReportPayload(commessa_id=commessa_id, include=include, period="all"),

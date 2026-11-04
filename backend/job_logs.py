@@ -615,10 +615,13 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
         "\"payments\": acconti e condizioni di pagamento, frasi brevi;\n"
         "\"activities\": le attività/lavorazioni da svolgere, una frase breve ciascuna, nell'ordine;\n"
         "\"materials\": materiali indicati, frasi brevi;\n"
+        "\"warranty\": la garanzia come scritta (es. \"garanzia 2 anni su materiali e manodopera\"), altrimenti vuoto;\n"
+        "\"maintenance\": le manutenzioni o i controlli periodici previsti dopo i lavori, ciascuno con la frequenza come scritta "
+        "(es. \"manutenzione annuale della caldaia\", \"verifica semestrale dell'impianto di allarme\"), altrimenti [];\n"
         "\"description\": la descrizione delle attività da svolgere per chi lavora: una frase sull'oggetto e l'elenco delle "
         "lavorazioni (righe che iniziano con \"- \"), senza prezzi. Ciò che manca: vuoto o null. MAI inventare.\n"
         "Rispondi SOLO con JSON: {\"total\": null, \"taxable\": null, \"vat\": null, \"items\": [], \"start\": \"\", \"end\": \"\", "
-        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"description\": \"\"}"
+        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -648,6 +651,9 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
     def lines(v, n=40):
         return [" ".join(str(x).split())[:200] for x in (v if isinstance(v, list) else []) if str(x or "").strip()][:n]
 
+    warranty = " ".join(str(p.get("warranty") or "").split())[:200]
+    warranty = warranty if warranty and grounded(warranty, text, 0.6) else ""
+    maintenance = [{"text": x, "every_months": months_every(x)} for x in lines(p.get("maintenance"), 10) if grounded(x, text, 0.6)]
     items = []
     for it in p.get("items") if isinstance(p.get("items"), list) else []:
         if isinstance(it, dict) and str(it.get("description") or "").strip():
@@ -655,7 +661,69 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
     return {"total": money(p.get("total")), "taxable": money(p.get("taxable")), "vat": money(p.get("vat")), "items": items[:60],
             "start": day(p.get("start")), "end": day(p.get("end")), "validity": day(p.get("validity")),
             "payments": lines(p.get("payments"), 10), "activities": lines(p.get("activities")), "materials": lines(p.get("materials")),
+            "warranty": warranty, "warranty_months": warranty_months(warranty), "maintenance": maintenance,
             "description": str(p.get("description") or "").strip()[:4000]}
+
+
+# how often, from the words (never guessed): "annuale" 12, "semestrale" 6, "ogni 3 mesi" 3, "ogni due anni" 24
+_NUM_WORDS = {"un": 1, "uno": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7, "otto": 8, "nove": 9,
+              "dieci": 10, "undici": 11, "dodici": 12, "diciotto": 18, "ventiquattro": 24, "trentasei": 36}
+_EVERY_WORD = [(re.compile(r"\bmensil\w*", re.I), 1), (re.compile(r"\bbimestral\w*", re.I), 2), (re.compile(r"\btrimestral\w*", re.I), 3),
+               (re.compile(r"\bquadrimestral\w*", re.I), 4), (re.compile(r"\bsemestral\w*", re.I), 6),
+               (re.compile(r"\bbiennal\w*", re.I), 24), (re.compile(r"\btriennal\w*", re.I), 36),
+               (re.compile(r"\bannual\w*|\bannuo\b|\bogni\s+anno\b|\ball'anno\b", re.I), 12)]
+_EVERY_N = re.compile(r"\bogni\s+(\d{1,2}|[a-z]+)\s+(mes[ei]|ann[oi])\b", re.I)
+
+
+def _n_of(w: str) -> Optional[int]:
+    return int(w) if w.isdigit() else _NUM_WORDS.get(w.lower())
+
+
+def months_every(text: str) -> Optional[int]:
+    m = _EVERY_N.search(text or "")
+    if m and _n_of(m.group(1)):
+        return _n_of(m.group(1)) * (12 if m.group(2).lower().startswith("ann") else 1)
+    for rx, months in _EVERY_WORD:
+        if rx.search(text or ""):
+            return months
+    return None
+
+
+_WARRANTY_N = re.compile(r"\b(\d{1,2}|[a-z]+)\s+(mes[ei]|ann[oi])\b", re.I)
+
+
+def warranty_months(text: str) -> Optional[int]:
+    """The warranty's length from the words only: "2 anni" 24, "24 mesi" 24, "biennale" 24."""
+    m = _WARRANTY_N.search(text or "")
+    if m and _n_of(m.group(1)):
+        return _n_of(m.group(1)) * (12 if m.group(2).lower().startswith("ann") else 1)
+    if re.search(r"\bbiennal\w*", text or "", re.I):
+        return 24
+    if re.search(r"\bannual\w*", text or "", re.I):
+        return 12
+    return None
+
+
+def quote_detail_lines(d: dict, with_money: bool = False) -> list:
+    """The quote's content as diary lines (read by the commessa's chat, its reports and searches)."""
+    out = []
+    if d.get("items"):
+        out.append("Voci: " + "; ".join(i["description"] + (f" ({_eur(i['amount'])})" if with_money and i.get("amount") else "")
+                                       for i in d["items"][:40]))
+    if d.get("activities"):
+        out.append("Attività previste: " + "; ".join(d["activities"][:30]))
+    if d.get("materials"):
+        out.append("Materiali: " + "; ".join(d["materials"][:30]))
+    dates = [x for x in (f"inizio {d['start']}" if d.get("start") else "", f"fine {d['end']}" if d.get("end") else "") if x]
+    if dates:
+        out.append("Date: " + ", ".join(dates))
+    if d.get("payments"):
+        out.append("Pagamenti: " + "; ".join(d["payments"]))
+    if d.get("warranty"):
+        out.append(f"Garanzia: {d['warranty']}")
+    if d.get("maintenance"):
+        out.append("Manutenzione prevista: " + "; ".join(m["text"] for m in d["maintenance"]))
+    return out
 
 
 # ---- the survey, organized (AUT-SOP-02) ----

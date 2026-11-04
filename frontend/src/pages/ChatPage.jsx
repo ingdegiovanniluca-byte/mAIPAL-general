@@ -1098,6 +1098,52 @@ export default function ChatPage() {
     }
   };
 
+  // "questo è il preventivo della commessa impianto allarme di Luca D" + the file: read as that commessa's quote
+  // (as from its Preventivo section), not saved among the Documenti; its summary confirmed here
+  const runQuoteFromChat = async (content, files, shown, commessaId = null) => {
+    if (!commessaId) {
+      setThread((th) => th
+        ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
+        : { conv_id: null, action: "info_upload", messages: [{ role: "user", content: shown }], liveAnswer: "" });
+    }
+    setStreaming(true);
+    try {
+      const a = files[0];
+      const fd = new FormData();
+      fd.append("file", a.driveFile, a.name);
+      fd.append("text", content);
+      if (commessaId) fd.append("commessa_id", commessaId);
+      const r = (await api.post("/jobs/quotes/from-chat", fd)).data;
+      if (r.type === "pick_commessa") {
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: r.message, quotePick: { content, files, candidates: r.candidates } }] }));
+        return;
+      }
+      for (const f of files) if (f.kb && f.id) api.delete(`/kb/documents/${f.id}`).catch(() => {});   // it is the commessa's, not a Documento
+      if (r.type === "quote") {
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: r.message, chatQuote: r }] }));
+      } else {
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: r.message || "Documento salvato nella commessa." }] }));
+      }
+      if (files.length > 1) toast.message(`Ho letto «${files[0].name}»: manda gli altri file uno alla volta.`);
+    } catch (e) {
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a leggere il preventivo") }] }));
+    } finally { setStreaming(false); }
+  };
+  const resolveQuotePick = async (pick, commessaId) => {
+    setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.quotePick === pick ? { ...m, quotePick: { ...pick, done: true } } : m)) }));
+    await runQuoteFromChat(pick.content, pick.files, null, commessaId);
+  };
+  const resolveChatQuote = async (q, action, valueChoice = null) => {
+    setStreaming(true);
+    try {
+      const r = action === "confirm" ? await api.post(`/jobs/quotes/${q.quote.id}/confirm`, { value_choice: valueChoice })
+        : await api.post(`/jobs/quotes/${q.quote.id}/discard`);
+      setThread((th) => ({ ...th, messages: [...th.messages.map((m) => (m.chatQuote === q ? { ...m, chatQuote: { ...q, done: true } } : m)),
+        { role: "assistant", content: action === "confirm" ? r.data.message : "Ok, non l'ho salvato.", jobCommessaId: action === "confirm" ? q.quote.commessa_id : undefined }] }));
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setStreaming(false); }
+  };
+
   const runListCreateFor = async (content, docIds = [], shown = content, convId = thread?.conv_id) => {
     setThread((th) => th
       ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
@@ -1269,6 +1315,14 @@ export default function ChatPage() {
     // saved as a generic note - no separate button needed for the two.
     const { main: mainQuestion, parts: taggedParts } = splitMentions(currentQuestion);
 
+    // a quote with its file for a commessa (artigiano): to that commessa's Preventivo, not to the Documenti
+    if (active === "info_upload" && vertical === "artigiano" && /\bpreventiv/i.test(mainQuestion || "") && attachments.some((a) => a.driveFile)) {
+      const files = attachments.filter((a) => a.driveFile);
+      setText("");
+      setAttachments([]);
+      await runQuoteFromChat(mainQuestion, files, [mainQuestion, ...files.map((a) => `📎 ${a.name}`)].join("\n"));
+      return;
+    }
     // Wrong agent? ("salva che ..." sent to Cerca): only on a new chat, and the backend
     // speaks up only when it is sure - then the chat suggests the right agent instead.
     const skipGuard = skipAgentGuardRef.current;
@@ -2537,6 +2591,31 @@ export default function ChatPage() {
                           className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">🧰 Usati oggi</button>
                         <button onClick={() => resolveJobMat(m.jobMat, "da_prendere")} disabled={streaming} data-testid="job-mat-plan"
                           className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">📌 Da prendere</button>
+                      </div>
+                    )}
+                    {m.quotePick && !m.quotePick.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="quote-pick-choices">
+                        {m.quotePick.candidates.map((c) => (
+                          <button key={c.commessa_id} onClick={() => resolveQuotePick(m.quotePick, c.commessa_id)} disabled={streaming}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">{c.title} · {c.client_name}</button>
+                        ))}
+                      </div>
+                    )}
+                    {m.chatQuote && !m.chatQuote.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="chat-quote-choices">
+                        {m.chatQuote.value && m.chatQuote.current_budget && m.chatQuote.can_choose_value && Math.abs(m.chatQuote.current_budget - m.chatQuote.value) >= 0.01 ? (
+                          <>
+                            <button onClick={() => resolveChatQuote(m.chatQuote, "confirm", "new")} disabled={streaming} data-testid="chat-quote-confirm-new"
+                              className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">✅ Conferma e usa {m.chatQuote.value.toLocaleString("it-IT")} €</button>
+                            <button onClick={() => resolveChatQuote(m.chatQuote, "confirm", "keep")} disabled={streaming}
+                              className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">✅ Conferma e tieni {m.chatQuote.current_budget.toLocaleString("it-IT")} €</button>
+                          </>
+                        ) : (
+                          <button onClick={() => resolveChatQuote(m.chatQuote, "confirm")} disabled={streaming} data-testid="chat-quote-confirm"
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">✅ Conferma il preventivo</button>
+                        )}
+                        <button onClick={() => resolveChatQuote(m.chatQuote, "discard")} disabled={streaming} data-testid="chat-quote-discard"
+                          className="text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/70 disabled:opacity-50">Annulla</button>
                       </div>
                     )}
                     {m.commessaDraft && !m.commessaDraft.done && (
