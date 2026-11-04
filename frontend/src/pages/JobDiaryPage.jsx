@@ -2166,6 +2166,7 @@ export default function JobDiaryPage() {
   const [level, setLevel] = useState(linked ? "diary" : "clients");
   const [selectedId, setSelectedId] = useState(linked);
   const [detail, setDetail] = useState(null);
+  const [detailError, setDetailError] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
@@ -2224,10 +2225,15 @@ export default function JobDiaryPage() {
     const params = {};
     if (from) params.date_from = from;
     if (to) params.date_to = to;
-    try { setDetail((await api.get(`/jobs/commesse/${id}`, { params })).data); }
+    setDetailError(null);
+    try { setDetail((await api.get(`/jobs/commesse/${id}`, { params, timeout: 45000 })).data); }
     catch (e) {
       setDetail(null);
-      if (e.response?.status === 404) { setSelectedId(null); setLevel("clients"); toast.error("Commessa non trovata"); }
+      if (e.response?.status === 404) { setSelectedId(null); setLevel("clients"); toast.error("Commessa non trovata"); return; }
+      // never an endless "caricamento…": why, and try again
+      const d = e.response?.data?.detail;
+      setDetailError({ id, status: e.response?.status || null,
+        message: (typeof d === "string" ? d : null) || (e.code === "ECONNABORTED" ? "Il server non risponde: riprova tra poco." : "Non sono riuscito ad aprire il diario di questa commessa.") });
     }
   };
   const reload = () => Promise.all([loadDetail(selectedId), loadList()]);
@@ -2297,6 +2303,16 @@ export default function JobDiaryPage() {
   const c = detail?.commessa?.id === selectedId ? detail.commessa : null;
   const t = c ? detail.totals : null;
   const loading = <div className="kicker text-center py-10">caricamento…</div>;
+  const detailFailed = detailError && detailError.id === selectedId ? (
+    <div className="text-center py-10" data-testid="detail-error">
+      <div className="text-[14px] text-white/85">{detailError.message}</div>
+      {detailError.status && <div className="text-[11.5px] text-white/50 mt-1">Errore {detailError.status}</div>}
+      <div className="mt-3 flex justify-center gap-2">
+        <button type="button" onClick={() => loadDetail(selectedId)} data-testid="detail-retry" className="px-4 py-2 rounded-full bg-white text-[#403A3C] text-sm font-medium">Riprova</button>
+        <button type="button" onClick={() => { setSelectedId(null); setLevel("clients"); }} className="px-4 py-2 rounded-full bg-white/15 text-white text-sm">Torna ai clienti</button>
+      </div>
+    </div>
+  ) : null;
 
   const back = (label, to) => (
     <button onClick={() => setLevel(to)} data-testid="job-back" className="flex items-center gap-1.5 text-sm text-white/65 hover:text-white mb-3">
@@ -2394,7 +2410,7 @@ export default function JobDiaryPage() {
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
 
-  const diaryView = !c ? loading : (
+  const diaryView = !c ? (detailFailed || loading) : (
     <div ref={detailBox} className="relative w-full" data-testid="commessa-detail">
       {/* only the commessa's name; the arrow goes back to its card */}
       <div className="flex items-center gap-2.5">

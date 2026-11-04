@@ -400,6 +400,14 @@ async def main():
     n = len(db.tasks.docs)
     await server._maintenance_reminders(me, cl, "s_all")
     assert len(db.tasks.docs) == n                                                       # once
+    # 5) the commessa's page always opens: a part that fails is left out (and logged), no NaN in the answer
+    real_q, real_h = server._commessa_quotes, server._commessa_history
+    async def broken(*a, **k): raise RuntimeError("bad data")
+    server._commessa_quotes, server._commessa_history = broken, broken
+    d = await server.get_job_commessa("s_all", current=me)
+    assert d["quotes"] == [] and d["history"] == [] and d["commessa"]["id"] == "s_all" and d["logs"]
+    server._commessa_quotes, server._commessa_history = real_q, real_h
+    assert server._json_safe({"a": float("nan"), "b": [1.5, float("inf")], "c": "x"}) == {"a": None, "b": [1.5, None], "c": "x"}
     print("ALL OK")
 
 asyncio.run(main())

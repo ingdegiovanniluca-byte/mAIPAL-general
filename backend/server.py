@@ -7714,9 +7714,33 @@ async def list_job_commesse(current: User = Depends(get_current_user)):
     return commesse
 
 
+async def _detail_part(label: str, commessa_id: str, coro, default):
+    """One part of the commessa's page: if it fails, the page still opens without it (and the log says which)."""
+    try:
+        return await coro
+    except Exception:
+        logger.exception("commessa %s: the part «%s» of its page failed", commessa_id, label)
+        return default
+
+
+def _json_safe(x):
+    """No NaN / infinity in an answer (they make the whole response fail)."""
+    if isinstance(x, float):
+        return x if x == x and x not in (float("inf"), float("-inf")) else None
+    if isinstance(x, dict):
+        return {k: _json_safe(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_json_safe(v) for v in x]
+    return x
+
+
 @api_router.get("/jobs/commesse/{commessa_id}")
 async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, date_to: Optional[str] = None,
                            current: User = Depends(get_current_user)):
+    return _json_safe(await _job_commessa_detail(commessa_id, date_from, date_to, current))
+
+
+async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_to: Optional[str], current: User) -> dict:
     """The commessa, its whole-job totals (the four figures on top) and the entries of the
     period asked (date_from/date_to, YYYY-MM-DD; none = the whole commessa), newest first.
     The totals need only the figures, so the texts are loaded for the period alone."""
@@ -7739,28 +7763,29 @@ async def get_job_commessa(commessa_id: str, date_from: Optional[str] = None, da
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
     reports = await db.work_reports.count_documents({"commessa_id": commessa_id})
     photos = sum(len(lg.get("photos") or []) for lg in light)
-    todos = _sort_job_todos(await db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000))
-    econ = await _commessa_economics(clienti, commessa_id, light)
+    P = lambda label, coro, default: _detail_part(label, commessa_id, coro, default)
+    todos = _sort_job_todos(await P("todo", db.job_todos.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000), []))
+    econ = await P("costi", _commessa_economics(clienti, commessa_id, light), None)
     sees_costs = await _sees_costs(current)
-    milestones = await _commessa_milestones(commessa_id)
+    milestones = await P("milestone", _commessa_milestones(commessa_id), [])
     waiting = [lg["id"] for lg in light if lg.get("hours_pending")]   # a collaborator's hours, to approve
     to_approve = await db.job_logs.find({"id": {"$in": waiting}}, {"_id": 0, "embedding": 0}).to_list(500) if waiting else []
     return {"commessa": _commessa_view(sub, client, clienti), "logs": logs, "totals": jl.totals(light),
             "hours_to_approve": sorted(to_approve, key=lambda lg: (lg.get("date") or "", lg.get("created_at") or "")),
-            "todos": todos, "team": await _team_first_names(current),
-            "collaborators": await _assignable_collaborators(commessa_id),
-            "on_site": await _on_site(commessa_id), "geo": sub.get("geo"),
+            "todos": todos, "team": await P("team", _team_first_names(current), []),
+            "collaborators": await P("collaboratori", _assignable_collaborators(commessa_id), []),
+            "on_site": await P("in cantiere", _on_site(commessa_id), []), "geo": sub.get("geo"),
             "milestones": milestones, "milestones_summary": _milestones_summary(milestones),
-            "contacts": await _commessa_contacts(commessa_id),
-            "economics": {k: econ[k] for k in ("cost_total", "budget", "margin", "used_pct", "complete")} if sees_costs else None,
+            "contacts": await P("contatti", _commessa_contacts(commessa_id), []),
+            "economics": {k: econ.get(k) for k in ("cost_total", "budget", "margin", "used_pct", "complete")} if sees_costs and econ else None,
             "can_see_costs": sees_costs, "is_admin": _is_org_admin(current), "me_id": current.user_id,
-            "activities": await _commessa_activities(commessa_id),
-            "extra_works": await _commessa_extra_works(commessa_id, clienti, sees_costs) if _is_org_admin(current) else [],
-            "survey_logs": sorted(await db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300),
+            "activities": await P("pianificazione", _commessa_activities(commessa_id), []),
+            "extra_works": await P("lavori extra", _commessa_extra_works(commessa_id, clienti, sees_costs), []) if _is_org_admin(current) else [],
+            "survey_logs": sorted(await P("sopralluogo", db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300), []),
                                   key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True),
-            "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await _commessa_quotes(commessa_id)],
+            "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await P("preventivi", _commessa_quotes(commessa_id), [])],
             "quote_outcome": sub.get("quote_outcome"),
-            "history": await _commessa_history(commessa_id) if _is_org_admin(current) else [],
+            "history": await P("modifiche", _commessa_history(commessa_id), []) if _is_org_admin(current) else [],
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
             "first_day": min((lg.get("date") for lg in light if lg.get("date")), default=None),
             "stati": vx.COMMESSA_STATI,
