@@ -169,8 +169,8 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Nel diario della commessa:
   - una riga di informazioni da scorrere: **Stato** (toccalo per cambiarlo), **Attività** (l'inizio della descrizione: toccala per leggerla tutta), Ore, Segnalazioni, Documenti, Date, Telefono, Email (il cantiere è sulla mappa qui sotto; la voce **Cantiere** compare solo finché la posizione non c'è);
   - la **mappa** del cantiere, a colori, sotto i dati in alto: il pallino è **verde** (col numero) se qualcuno è in cantiere ora, arancione se non c'è nessuno. Trascina la **barretta** sotto la mappa in su per nasconderla e in giù per riaprirla, oppure toccala; la scelta resta su quel dispositivo. Con un dito sposti la mappa, con due la ingrandisci. **Tocca il pallino** per sapere cosa indica: chi è in cantiere e da quando (o che non c'è nessuno), l'indirizzo e il pulsante per **navigare** fin lì. La posizione è quella dell'indirizzo o quella che imposti tu: tocca il pallino e poi l'icona della **posizione**. Senza una posizione la mappa non c'è, e al suo posto nella barra in alto c'è la voce **Cantiere** per impostarla;
-  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / Milestone / To Do / Descrizione**: scorri per passare dall'una all'altra;
-  - **To Do**: le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
+  - le sezioni **Diario / Ore / Problemi / Materiali / Costi / Pianificazione / Descrizione / Sopralluogo / Preventivo**: scorri per passare dall'una all'altra (attività in cantiere, milestone e To Do sono tutte in **Pianificazione**);
+  - **To Do** (in Pianificazione): le prossime attività della commessa. Con **Nuova attività** scrivi cosa c'è da fare, **chi se ne occupa** ed **entro quando** (facoltativo). Il pallino la segna come fatta; toccandola la modifichi o la elimini. Le attività restano dentro la commessa (non compaiono nella sezione To-Do generale);
   - il **periodo** (questa settimana da lunedì, ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio e le foto. Tocca una voce per modificarla o eliminarla.
 - Ogni cambio di stato resta scritto nel diario.
@@ -234,6 +234,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Gli extra ancora da valutare o da far approvare compaiono nel **report del venerdì** e nel controllo prima di **chiudere** la commessa. I lavori extra li gestisce solo l'amministratore; i collaboratori non li vedono.
 
 **Pianificazione**
+- La sezione **Pianificazione** raccoglie in un unico posto tutto ciò che è da fare sulla commessa: le **attività in cantiere** (giorno, ora, chi, cosa portare), le **milestone** (le tappe con la scadenza) e i **To Do**. In alto scegli **Tutto** per vederli insieme o **Attività**, **Milestone**, **To Do** per uno alla volta (accanto, quanti sono ancora da fare). La scheda **Milestone** nella barra in alto porta qui.
 - Le attività da svolgere le pianifica l'**amministratore**: sezione **Pianificazione** → **Pianifica un'attività** (cosa, giorno, ora d'inizio e, se vuoi, di fine, chi la svolge, cosa portare, informazioni utili), oppure scrivendolo in chat: "**pianifica** smontaggio sanitari giovedì alle 8 con Marco, portare il flex e il casco". Per pianificare serve l'**indirizzo del cantiere** (per il meteo e gli avvisi). Senza ora d'inizio vale quella dell'organizzazione (Organizzazione → Commesse: orari e automatismi).
 - **Dal preventivo**: con il preventivo accettato, le sue attività compaiono in **Da pianificare**: toccane una e completi giorno e persone.
 - **Cosa portare** è diviso in **Materiali**, **Attrezzi**, **DPI** e **Documenti** (la categoria la riconosco dalle parole, la puoi cambiare). Chi è assegnato può aggiungere cose da portare, dall'app o rispondendo su Telegram.
@@ -249,7 +250,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - La chat della commessa e l'agente Cerca li conoscono ("qual è il numero dell'idraulico dei Rossi?").
 
 **Milestone**
-- Nella sezione **Milestone** segni le tappe del lavoro: cosa va completato, **chi la esegue** e la **scadenza** (Nuova milestone).
+- In **Pianificazione → Milestone** segni le tappe del lavoro: cosa va completato, **chi la esegue** e la **scadenza** (Nuova milestone).
 - Il **pallino** la segna come fatta (con la data di oggi); toccandola puoi cambiare la data di esecuzione, la scadenza, chi la esegue, oppure eliminarla.
 - **Ritardi**: la prima scadenza resta salvata. Vedi se una milestone è **in ritardo** (e di quanti giorni), se è stata fatta in tempo o con quanti giorni di ritardo, e di quanto è stata spostata. In alto: quante sono fatte, quante in ritardo, quante in tempo e il ritardo medio. Cambiare la scadenza prima che sia scaduta è una nuova pianificazione, non un ritardo.
 - **Azioni correttive**: su una milestone in ritardo (o a rischio) scrivi cosa fai per recuperare e, se serve, la nuova scadenza. Restano nella milestone e nel diario.

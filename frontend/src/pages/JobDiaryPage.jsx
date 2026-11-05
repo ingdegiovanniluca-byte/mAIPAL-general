@@ -102,12 +102,10 @@ const SECTIONS = [
   { key: "problemi", label: "Problemi" },
   { key: "materiali", label: "Materiali" },
   { key: "costi", label: "Costi" },
-  { key: "milestone", label: "Milestone" },
-  { key: "todo", label: "To Do" },
+  { key: "pianificazione", label: "Pianificazione" },
   { key: "descrizione", label: "Descrizione" },
   { key: "sopralluogo", label: "Sopralluogo" },
   { key: "preventivo", label: "Preventivo" },
-  { key: "pianificazione", label: "Pianificazione" },
 ];
 const PERIODS = [
   { key: "week", label: "Questa settimana" },
@@ -2283,6 +2281,7 @@ export default function JobDiaryPage() {
   const [tplOpen, setTplOpen] = useState(null);   // "apply" | "save"
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
+  const [planTab, setPlanTab] = useState("tutto");   // Pianificazione: tutto | attivita | milestone | todo
   const [period, setPeriod] = useState({ key: "30" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -2342,7 +2341,7 @@ export default function JobDiaryPage() {
   const reload = () => Promise.all([loadDetail(selectedId), loadList()]);
   useEffect(() => { loadList(); }, []);
   useEffect(() => { loadDetail(selectedId); }, [selectedId, period]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setSection("diario"); setMenu(null); setPeriod({ key: "30" }); }, [selectedId]);
+  useEffect(() => { setSection("diario"); setPlanTab("tutto"); setMenu(null); setPeriod({ key: "30" }); }, [selectedId]);
   // back on top: the page, or (desktop split) the right column, which scrolls by itself
   useEffect(() => { (document.querySelector('[data-testid="split-right"]') || window).scrollTo({ top: 0 }); }, [level, selectedId]);
   useEffect(() => { if (level === "clients") setChatOpen(false); }, [level]);
@@ -2451,7 +2450,11 @@ export default function JobDiaryPage() {
   const secs = SECTIONS.filter((x) => x.key !== "costi" || detail?.can_see_costs !== false);   // costs: who may see them
   const secAt = (i) => secs[(i + secs.length) % secs.length];
   const secIdx = Math.max(0, secs.findIndex((x) => x.key === section));
-  const pickSection = (key) => { setSection(key); setMenu(null); };
+  const pickSection = (key) => {
+    if (key === "milestone" || key === "todo") { setSection("pianificazione"); setPlanTab(key); }   // now inside Pianificazione
+    else setSection(key);
+    setMenu(null);
+  };
   const onSwipeStart = (e) => { swipeX.current = e.touches?.[0]?.clientX ?? null; };
   const onSwipeEnd = (e) => {
     if (swipeX.current == null) return;
@@ -2617,9 +2620,6 @@ export default function JobDiaryPage() {
           {detail.can_see_costs && <HistoryEstimate commessa={c} />}
           {detail.is_admin && !ro && <ExtraWorksView commessa={c} rows={detail.extra_works || []} onChanged={() => loadDetail(selectedId)} />}
         </>
-      ) : section === "pianificazione" ? (
-        <PlanView commessa={c} activities={detail.activities || []} quotes={detail.quotes || []} meId={detail.me_id} isAdmin={!!detail.is_admin}
-          canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
       ) : section === "descrizione" ? (
         <DescriptionView commessa={c} canEdit={!ro && (access.is_owner || me?.role === "admin")} budget={detail.economics?.budget}
           onChanged={() => loadDetail(selectedId)} />
@@ -2627,8 +2627,30 @@ export default function JobDiaryPage() {
         <div className={ro ? "pointer-events-none" : ""} data-testid={ro ? "costs-read-only" : undefined}>
           <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
         </div>
-      ) : section === "milestone" ? (
-        <>
+      ) : section === "pianificazione" ? (
+        <div data-testid="job-plan-section">
+          {/* planned activities on site, milestones and To Do: one place, all together or one kind at a time */}
+          <div className="mt-1.5 flex justify-center">
+            <span className="inline-flex rounded-full bg-white/10 p-0.5" data-testid="plan-tabs">
+              {[["tutto", "Tutto", null], ["attivita", "Attività", (detail.activities || []).filter((x) => ["pianificata", "confermata", "in_corso"].includes(x.status)).length], ["milestone", "Milestone", msSum.total - msSum.done], ["todo", "To Do", openTodos]].map(([k, label, n]) => (
+                <button key={k} type="button" onClick={() => setPlanTab(k)} data-testid={`plan-tab-${k}`}
+                  className={`px-3 py-1 rounded-full text-[12px] transition-colors ${planTab === k ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`}>
+                  {label}{n ? <span className={planTab === k ? "text-[#403A3C]/60" : "text-white/50"}> {n}</span> : null}
+                </button>
+              ))}
+            </span>
+          </div>
+          {(planTab === "tutto" || planTab === "attivita") && (
+            <div data-testid="plan-block-attivita">
+              {planTab === "tutto" && <div className="mt-4 text-[10px] uppercase tracking-widest text-white/55 text-center">attività in cantiere</div>}
+              <PlanView commessa={c} activities={detail.activities || []} quotes={detail.quotes || []} meId={detail.me_id} isAdmin={!!detail.is_admin}
+          canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
+            </div>
+          )}
+          {(planTab === "tutto" || planTab === "milestone") && (
+            <div data-testid="plan-block-milestone">
+              {planTab === "tutto" && <div className="mt-6 text-[10px] uppercase tracking-widest text-white/55 text-center">milestone</div>}
+              <>
           <div className={`mt-1.5 flex items-center justify-center gap-2.5 ${ro ? "hidden" : ""}`}>
             <button type="button" onClick={() => setMsEditing({})} data-testid="job-milestone-add" aria-label="Nuova milestone"
               className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 whitespace-nowrap">
@@ -2663,8 +2685,12 @@ export default function JobDiaryPage() {
             )}
           </div>
         </>
-      ) : section === "todo" ? (
-        <>
+            </div>
+          )}
+          {(planTab === "tutto" || planTab === "todo") && (
+            <div data-testid="plan-block-todo">
+              {planTab === "tutto" && <div className="mt-6 text-[10px] uppercase tracking-widest text-white/55 text-center">to do</div>}
+              <>
           <div className="mt-1.5 flex items-center justify-center gap-2.5">
             <button type="button" onClick={() => setTodoEditing({})} data-testid="job-todo-add" aria-label="Nuova attività"
               className={`h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 ${ro ? "hidden" : ""}`}>
@@ -2682,6 +2708,9 @@ export default function JobDiaryPage() {
             )}
           </div>
         </>
+            </div>
+          )}
+        </div>
       ) : (<>
       {section === "ore" && detail.hours_plan && <HoursPlan plan={detail.hours_plan} />}
       {section === "ore" && (access.is_owner || me?.role === "admin") && (detail.hours_to_approve || []).length > 0 && (
