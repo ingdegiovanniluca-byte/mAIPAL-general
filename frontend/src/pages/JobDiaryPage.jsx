@@ -918,12 +918,13 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
   const [desc, setDesc] = useState(d.description || "");
   const [mode, setMode] = useState(proposal.current_description ? "aggiungi" : "sostituisci");
   const [useDesc, setUseDesc] = useState(!proposal.current_description);
+  const [plan, setPlan] = useState(proposal.plan_default || "none");
   const [busy, setBusy] = useState(false);
   const seg = (on) => `px-3 py-1 rounded-full text-[12px] transition-colors ${on ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`;
   const confirm = async () => {
     setBusy(true);
     try {
-      const r = await api.post(`/jobs/quotes/${q.id}/confirm`, { value_choice: differs && proposal.can_choose_value ? valueChoice : null,
+      const r = await api.post(`/jobs/quotes/${q.id}/confirm`, { value_choice: differs && proposal.can_choose_value ? valueChoice : null, plan,
         ...(useDesc && desc.trim() ? { description_text: desc, description_mode: mode } : {}) });
       toast.success(r.data.message.split("\n")[0]); onSaved();
     } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -958,6 +959,22 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
         </div>
       )}
       {!proposal.current_budget && proposal.value ? <div className="mt-2 text-[12px] text-white/60">Il valore della commessa diventa {eur(proposal.value)}.</div> : null}
+      {(d.activities || []).length > 0 && (
+        <div className="mt-3 text-[13px] text-white/85" data-testid="quote-plan">
+          Le {d.activities.length} attività del preventivo:
+          <span className="ml-2 inline-flex rounded-full bg-white/10 p-0.5">
+            <button type="button" onClick={() => proposal.plan_dates?.end && setPlan("milestone")} disabled={!proposal.plan_dates?.end}
+              className={`${seg(plan === "milestone")} disabled:opacity-40`} data-testid="quote-plan-milestone">Milestone</button>
+            <button type="button" onClick={() => setPlan("todo")} className={seg(plan === "todo")} data-testid="quote-plan-todo">To Do</button>
+            <button type="button" onClick={() => setPlan("none")} className={seg(plan === "none")}>Niente</button>
+          </span>
+          <div className="text-[11.5px] text-white/55 mt-1">
+            {plan === "milestone" ? `Scadenze distribuite nei giorni lavorativi dal ${shortDay(proposal.plan_dates.start)} al ${shortDay(proposal.plan_dates.end)}, nell'ordine del preventivo: poi le cambi tu.`
+              : plan === "todo" ? (proposal.plan_dates?.end ? "Un To Do per attività, senza scadenza." : "Senza date di inizio e fine lavori le milestone non si possono fare: un To Do per attività.")
+              : "Non creo né milestone né To Do (le attività restano da pianificare)."}
+          </div>
+        </div>
+      )}
       {proposal.loss_feedback && <div className="mt-3 text-[12.5px] text-[#F2C14E]" data-testid="quote-loss-feedback">{proposal.loss_feedback}</div>}
       {proposal.history_check && <div className="mt-2 text-[12.5px] text-white/85" data-testid="quote-history-check">{proposal.history_check}</div>}
       {desc && (
@@ -1286,6 +1303,50 @@ function HistoryEstimate({ commessa }) {
   );
 }
 
+// ===== The materials the quote foresees against the ones the diary says were used (the whole commessa)
+const MAT_STATUS = { oltre: ["oltre il previsto", "#F08A8A"], completo: ["usato tutto", "#8ED973"], in_uso: ["in uso", "rgba(255,255,255,0.8)"],
+  da_usare: ["non ancora usato", "rgba(255,255,255,0.5)"], usato: ["usato", "#8ED973"] };
+function MaterialsPlan({ plan }) {
+  const [open, setOpen] = useState(true);
+  const q = (x, u) => (x == null ? "—" : `${fmtNum(x)}${u ? ` ${u}` : ""}`);
+  return (
+    <div className="mt-1 mb-4" data-testid="materials-plan">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-center gap-1 text-[10px] uppercase tracking-widest text-white/55 mb-1">
+        previsti dal preventivo{plan.quote_version ? ` v${plan.quote_version}` : ""} {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      </button>
+      {open && (
+        <>
+          {plan.rows.map((r, i) => {
+            const [label, color] = MAT_STATUS[r.status] || MAT_STATUS.in_uso;
+            return (
+              <div key={i} className="py-2 border-t border-white/[0.13]" data-testid="materials-plan-row">
+                <div className="flex items-baseline gap-2">
+                  <span className="flex-1 min-w-0 text-[14px] text-white/90 break-words">{r.name}</span>
+                  <span className="shrink-0 text-[12.5px] tabular-nums text-white/85">{r.planned == null ? (r.used ? q(r.used, r.unit) : "") : `${q(r.used, r.unit)} / ${q(r.planned, r.unit)}`}</span>
+                </div>
+                {r.planned ? (
+                  <div className="mt-1 h-1 rounded-full bg-white/15 overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, r.pct || 0)}%`, background: color }} />
+                  </div>
+                ) : null}
+                <div className="text-[11.5px] mt-0.5" style={{ color }}>
+                  {label}{r.status === "oltre" ? ` di ${q(-r.left, r.unit)}` : r.status === "in_uso" ? ` · ne restano ${q(r.left, r.unit)}` : ""}
+                  {(r.other_units || []).length > 0 && <span className="text-white/55"> · usato anche {r.other_units.join(", ")} (altra unità)</span>}
+                </div>
+              </div>
+            );
+          })}
+          {plan.unplanned.length > 0 && (
+            <div className="pt-2 border-t border-white/[0.13] text-[12.5px] text-white/75" data-testid="materials-unplanned">
+              <span className="text-white/55">Usati e non previsti:</span> {plan.unplanned.map((u) => [fmtNum(u.qty), u.unit, u.name].filter(Boolean).join(" ")).join(" · ")}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ===== Lavori extra: done on the site, not in the quote - found in the diary, approved by the client, billed
 const EXTRA_DONE = ["approvato", "rifiutato", "compreso", "scartato"];
 function ExtraWorksView({ commessa, rows, onChanged }) {
@@ -1429,6 +1490,7 @@ function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, on
             {(d.taxable || d.total) ? <div>💶 {d.taxable ? `Imponibile ${eur(d.taxable)}` : ""}{d.taxable && d.total ? " · " : ""}{d.total ? `Totale ${eur(d.total)}` : ""}</div> : null}
             {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
             {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+            {(d.materials_planned || []).length > 0 && <div>🧰 Materiali previsti: {d.materials_planned.map((m) => [fmtNum(m.qty), m.unit, m.name].filter(Boolean).join(" ")).join("; ")}</div>}
             {d.warranty && <div>🛡 Garanzia: {d.warranty}</div>}
             {(d.maintenance || []).length > 0 && <div data-testid="quote-maintenance">🔧 Manutenzione: {d.maintenance.map((m) => m.text).join("; ")}
               <span className="text-white/55"> · a fine lavori fisso i promemoria</span></div>}
@@ -2589,6 +2651,7 @@ export default function JobDiaryPage() {
       {section === "problemi" && (
         <ProblemsBlock problems={t.problems || []} canEdit={!ro} onChanged={() => loadDetail(selectedId)} />
       )}
+      {section === "materiali" && detail.materials_plan && <MaterialsPlan plan={detail.materials_plan} />}
       {section === "materiali" && toTake.length > 0 && (
         <div className="mt-1 mb-4" data-testid="materials-to-take">
           <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">da prendere</div>

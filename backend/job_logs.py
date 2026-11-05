@@ -615,13 +615,14 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
         "\"payments\": acconti e condizioni di pagamento, frasi brevi;\n"
         "\"activities\": le attività/lavorazioni da svolgere, una frase breve ciascuna, nell'ordine;\n"
         "\"materials\": materiali indicati, frasi brevi;\n"
+        "\"materials_planned\": gli stessi materiali come [{\"name\": nome del materiale, \"qty\": quantità come numero se scritta altrimenti null, \"unit\": unità come scritta (m, mq, pz, kg, sacchi…) o \"\"}];\n"
         "\"warranty\": la garanzia come scritta (es. \"garanzia 2 anni su materiali e manodopera\"), altrimenti vuoto;\n"
         "\"maintenance\": le manutenzioni o i controlli periodici previsti dopo i lavori, ciascuno con la frequenza come scritta "
         "(es. \"manutenzione annuale della caldaia\", \"verifica semestrale dell'impianto di allarme\"), altrimenti [];\n"
         "\"description\": la descrizione delle attività da svolgere per chi lavora: una frase sull'oggetto e l'elenco delle "
         "lavorazioni (righe che iniziano con \"- \"), senza prezzi. Ciò che manca: vuoto o null. MAI inventare.\n"
         "Rispondi SOLO con JSON: {\"total\": null, \"taxable\": null, \"vat\": null, \"items\": [], \"start\": \"\", \"end\": \"\", "
-        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\"}"
+        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"materials_planned\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -661,6 +662,7 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
     return {"total": money(p.get("total")), "taxable": money(p.get("taxable")), "vat": money(p.get("vat")), "items": items[:60],
             "start": day(p.get("start")), "end": day(p.get("end")), "validity": day(p.get("validity")),
             "payments": lines(p.get("payments"), 10), "activities": lines(p.get("activities")), "materials": lines(p.get("materials")),
+            "materials_planned": clean_planned_materials(p.get("materials_planned"), text),
             "warranty": warranty, "warranty_months": warranty_months(warranty), "maintenance": maintenance,
             "description": str(p.get("description") or "").strip()[:4000]}
 
@@ -704,6 +706,88 @@ def warranty_months(text: str) -> Optional[int]:
     return None
 
 
+# ---- the materials a quote foresees, against the ones the diary says were used ----
+_MAT_LINE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(m2|m²|mq|m3|m³|mc|ml|m|cm|mm|kg|g|lt|l|pz|pezzi|pezzo|nr|n\.?|sacchi|sacco|rotoli|rotolo|"
+                       r"confezioni|conf|scatole|scatola|barre|barra|metri|metro|litri|litro|chili|chilo)?\.?\s+(?:di\s+)?(.+)$", re.I)
+_UNIT_ALIAS = {"m²": "mq", "m2": "mq", "m³": "mc", "m3": "mc", "metri": "m", "metro": "m", "litri": "l", "litro": "l", "lt": "l",
+               "pezzi": "pz", "pezzo": "pz", "nr": "pz", "n": "pz", "n.": "pz", "chili": "kg", "chilo": "kg", "sacco": "sacchi",
+               "rotolo": "rotoli", "scatola": "scatole", "barra": "barre", "conf": "confezioni"}
+
+
+def unit_norm(u: str) -> str:
+    u = (u or "").strip().lower().rstrip(".") if u else ""
+    return _UNIT_ALIAS.get(u, _UNIT_ALIAS.get(u + ".", u))
+
+
+def _qty_in_text(q: float, text: str) -> bool:
+    """A quantity read is kept only if that number is written in the document."""
+    t = (text or "").replace(" ", "")
+    s = f"{q:g}"
+    return s in t or s.replace(".", ",") in t
+
+
+def clean_planned_materials(rows, text: str) -> list:
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        name = " ".join(str(r.get("name") or "").split()).strip(" .-•")[:120]
+        if not name or not grounded(name, text, 0.6):
+            continue
+        q = _num(r.get("qty"))
+        q = q if q is not None and q > 0 and _qty_in_text(q, text) else None
+        out.append({"name": name, "qty": q, "unit": unit_norm(r.get("unit")) if q is not None else ""})
+    return out[:60]
+
+
+def planned_materials(d: dict) -> list:
+    """The quote's planned materials: as read (with quantities), else from its lines ("20 m corrugato 25")."""
+    if d.get("materials_planned"):
+        return d["materials_planned"]
+    out = []
+    for line in d.get("materials") or []:
+        m = _MAT_LINE.match(str(line))
+        if m:
+            out.append({"name": m.group(3).strip(" .-"), "qty": float(m.group(1).replace(",", ".")), "unit": unit_norm(m.group(2) or "")})
+        elif str(line).strip():
+            out.append({"name": str(line).strip(), "qty": None, "unit": ""})
+    return out
+
+
+def _same_material(a: str, b: str) -> bool:
+    return grounded(a, b, 0.6) or grounded(b, a, 0.6)
+
+
+def compare_materials(planned: list, used: list) -> dict:
+    """Planned vs used (the diary's totals): per planned material the quantity used (same unit), what is
+    left or over; the used ones the quote did not foresee. Nothing estimated: only the two sides written."""
+    rows, taken = [], set()
+    for p in planned:
+        hits = [i for i, u in enumerate(used) if i not in taken and _same_material(p["name"], u["name"])]
+        same_unit = [i for i in hits if unit_norm(used[i].get("unit")) == (p.get("unit") or "") or not p.get("unit")]
+        taken.update(hits)
+        used_qty = round(sum(float(used[i].get("qty") or 0) for i in same_unit), 2) if same_unit else 0.0
+        other_units = [f"{_fmt_num(used[i].get('qty'))} {used[i].get('unit') or ''}".strip() for i in hits if i not in same_unit]
+        row = {"name": p["name"], "unit": p.get("unit") or (used[same_unit[0]].get("unit") if same_unit else ""),
+               "planned": p.get("qty"), "used": used_qty, "other_units": other_units, "used_names": [used[i]["name"] for i in hits]}
+        if p.get("qty"):
+            row["left"] = round(p["qty"] - used_qty, 2)
+            row["pct"] = round(used_qty / p["qty"] * 100)
+            row["status"] = "oltre" if used_qty > p["qty"] + 1e-9 else "completo" if abs(used_qty - p["qty"]) < 1e-9 else \
+                "da_usare" if used_qty == 0 and not hits else "in_uso"
+        else:
+            row["status"] = "usato" if hits else "da_usare"
+        rows.append(row)
+    unplanned = [{"name": u["name"], "qty": u.get("qty"), "unit": u.get("unit") or ""} for i, u in enumerate(used) if i not in taken]
+    return {"rows": rows, "unplanned": unplanned}
+
+
+def spread_due_dates(n: int, start: date, end: date, add_workdays, workdays_between) -> list:
+    """n steps spread over the working days from start to end, in order (the last one on the end)."""
+    total = max(0, workdays_between(start, end))
+    return [add_workdays(start, round(total * (i + 1) / n)) for i in range(n)]
+
+
 def quote_detail_lines(d: dict, with_money: bool = False) -> list:
     """The quote's content as diary lines (read by the commessa's chat, its reports and searches)."""
     out = []
@@ -712,8 +796,10 @@ def quote_detail_lines(d: dict, with_money: bool = False) -> list:
                                        for i in d["items"][:40]))
     if d.get("activities"):
         out.append("Attività previste: " + "; ".join(d["activities"][:30]))
-    if d.get("materials"):
-        out.append("Materiali: " + "; ".join(d["materials"][:30]))
+    planned = planned_materials(d)
+    if planned:
+        out.append("Materiali previsti: " + "; ".join(" ".join(x for x in (_fmt_num(m["qty"]) if m.get("qty") else "", m.get("unit") or "", m["name"]) if x)
+                                                     for m in planned[:30]))
     dates = [x for x in (f"inizio {d['start']}" if d.get("start") else "", f"fine {d['end']}" if d.get("end") else "") if x]
     if dates:
         out.append("Date: " + ", ".join(dates))

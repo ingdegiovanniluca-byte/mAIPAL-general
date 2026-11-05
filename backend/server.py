@@ -7714,6 +7714,15 @@ async def list_job_commesse(current: User = Depends(get_current_user)):
     return commesse
 
 
+async def _materials_plan(commessa_id: str, light: list) -> Optional[dict]:
+    """The last quote's planned materials against the ones the diary says were used (the whole commessa)."""
+    quotes = await _commessa_quotes(commessa_id)
+    planned = jl.planned_materials((quotes[0].get("data") or {})) if quotes else []
+    if not planned:
+        return None
+    return {**jl.compare_materials(planned, jl.totals(light)["materials"]), "quote_version": quotes[0].get("version")}
+
+
 async def _detail_part(label: str, commessa_id: str, coro, default):
     """One part of the commessa's page: if it fails, the page still opens without it (and the log says which)."""
     try:
@@ -7783,6 +7792,7 @@ async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_
             "extra_works": await P("lavori extra", _commessa_extra_works(commessa_id, clienti, sees_costs), []) if _is_org_admin(current) else [],
             "survey_logs": sorted(await P("sopralluogo", db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300), []),
                                   key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True),
+            "materials_plan": await P("materiali previsti", _materials_plan(commessa_id, light), None),
             "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await P("preventivi", _commessa_quotes(commessa_id), [])],
             "quote_outcome": sub.get("quote_outcome"),
             "history": await P("modifiche", _commessa_history(commessa_id), []) if _is_org_admin(current) else [],
@@ -9100,13 +9110,66 @@ async def _quote_proposal(current: User, clienti: dict, sub: dict, view: dict, n
             logger.exception("history check of the quote failed")
     if history:
         msg += "\n" + history
+    st, en = _quote_dates(view, q)
     return {"type": "quote", "quote": _quote_public(doc), "value": value, "current_budget": econ.get("budget"), "history_check": history,
+            "plan_default": _plan_default(view, q), "plan_dates": {"start": st.isoformat() if st else None, "end": en.isoformat() if en else None},
             "current_description": view.get("descrizione") or "", "loss_feedback": feedback, "can_choose_value": _is_org_admin(current),
             "message": msg + "\nConfermi i dati?"}
 
 
+def _quote_dates(view: dict, d: dict) -> tuple:
+    """(start, end) of the works: the quote's, else the commessa's - None when not known."""
+    def day(v):
+        try:
+            return date.fromisoformat(str(v or "")[:10])
+        except ValueError:
+            return None
+    start, end = day(d.get("start")) or day(view.get("data_inizio")), day(d.get("end")) or day(view.get("data_fine"))
+    return (start, end) if start and end and end > start else (start, None)
+
+
+def _plan_default(view: dict, d: dict) -> str:
+    if not d.get("activities"):
+        return "none"
+    return "milestone" if _quote_dates(view, d)[1] else "todo"
+
+
+async def _plan_from_quote(current: User, clienti: dict, view: dict, d: dict, mode: str) -> str:
+    """The quote's activities as the commessa's structure: milestones with due dates spread over the
+    working days from start to end (in order), or To Do. Those already there (same name) are skipped.
+    -> the line for the answer ("" when nothing made)"""
+    acts = [a for a in d.get("activities") or [] if a.strip()]
+    if mode not in ("milestone", "todo") or not acts:
+        return ""
+    low = lambda x: " ".join(str(x or "").lower().split())
+    have = {low(m.get("title")) for m in await db.job_milestones.find({"commessa_id": view["id"]}, {"_id": 0, "title": 1}).to_list(1000)}
+    have |= {low(t.get("text")) for t in await db.job_todos.find({"commessa_id": view["id"]}, {"_id": 0, "text": 1}).to_list(1000)}
+    acts = [a for a in dict.fromkeys(acts) if low(a) not in have]
+    if not acts:
+        return ""
+    now = datetime.now(timezone.utc).isoformat()
+    who = _first_name(current.name)
+    start, end = _quote_dates(view, d)
+    if mode == "milestone" and end:
+        dues = jl.spread_due_dates(len(acts), start, end, mtpl.add_workdays, mtpl.workdays_between)
+        for a, due in zip(acts, dues):
+            await db.job_milestones.insert_one({"id": f"jms_{uuid.uuid4().hex[:12]}", "commessa_id": view["id"], "collection_id": clienti["id"],
+                                                "user_id": current.user_id, "org_id": current.org_id, "author_name": who, "title": a[:200], "who": who,
+                                                "collaborator_id": None, "due_date": due.isoformat(), "original_due_date": due.isoformat(), "done": False,
+                                                "done_date": None, "corrective_actions": [], "reminded": {}, "created_at": now, "from_quote": True})
+        return (f"🚩 Ho creato {len(acts)} milestone dalle attività del preventivo, dal {_short_it_date(dues[0].isoformat())} al "
+                f"{_short_it_date(dues[-1].isoformat())}: le trovi in Milestone, dove puoi cambiare date e chi le fa.")
+    for a in acts:
+        await db.job_todos.insert_one({"id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": view["id"], "collection_id": clienti["id"],
+                                       "user_id": current.user_id, "org_id": current.org_id, "author_name": who, "text": a[:500], "who": who,
+                                       "collaborator_id": None, "due_date": None, "done": False, "done_at": None, "reminded": {},
+                                       "created_at": now, "from_quote": True})
+    return (f"📌 Ho creato {len(acts)} To Do dalle attività del preventivo" + ("" if mode == "todo" and end else
+            " (senza date di inizio e fine non posso fare le milestone)") + ": li trovi in To Do.")
+
+
 async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[str] = None, description_text: Optional[str] = None,
-                         description_mode: str = "sostituisci") -> dict:
+                         description_mode: str = "sostituisci", plan: Optional[str] = None) -> dict:
     """The quote confirmed: its version, its file in Preventivi, the commessa "preventivo inviato",
     its value (set when empty; when different the administrator chooses), its description when empty."""
     import base64 as _b64
@@ -9169,6 +9232,15 @@ async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[st
     feedback = await _loss_feedback(clienti, view)
     if feedback:
         lines.append(feedback)
+    try:
+        made = await _plan_from_quote(current, clienti, view, d, plan or _plan_default(view, d))
+    except Exception:
+        logger.exception("quote %s: the activities' structure failed", quote_id)
+        made = ""
+    if made:
+        lines.append(made)
+    if jl.planned_materials(d):
+        lines.append(f"🧰 {len(jl.planned_materials(d))} materiali previsti: in Materiali li confronto con quelli usati.")
     return {"status": "confirmed", "quote": _quote_public({**q, **upd}), "message": "\n".join(lines)}
 
 
@@ -9397,13 +9469,14 @@ async def quote_from_chat(file: UploadFile = File(...), text: str = Form(""), co
 
 class QuoteConfirmPayload(BaseModel):
     value_choice: Optional[Literal["new", "keep"]] = None
+    plan: Optional[Literal["milestone", "todo", "none"]] = None   # the quote's activities as milestones / To Do (none given: by the dates)
     description_text: Optional[str] = None
     description_mode: Literal["sostituisci", "aggiungi"] = "sostituisci"
 
 
 @api_router.post("/jobs/quotes/{quote_id}/confirm")
 async def confirm_quote(quote_id: str, payload: QuoteConfirmPayload, current: User = Depends(get_current_user)):
-    return await _confirm_quote(current, quote_id, payload.value_choice, payload.description_text, payload.description_mode)
+    return await _confirm_quote(current, quote_id, payload.value_choice, payload.description_text, payload.description_mode, payload.plan)
 
 
 @api_router.post("/jobs/quotes/{quote_id}/discard")
