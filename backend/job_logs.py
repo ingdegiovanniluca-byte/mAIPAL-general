@@ -609,24 +609,30 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
         "Sei l'assistente di un'impresa artigiana. Ricevi il testo di un PREVENTIVO per la commessa "
         f"«{commessa.get('title')}» del cliente {commessa.get('client_name')}. Oggi è {today.isoformat()}. Estrai SOLO ciò che è scritto:\n"
         "\"total\": totale complessivo (numero) come scritto; \"taxable\": imponibile senza IVA (numero) se scritto; \"vat\": importo IVA se scritto;\n"
-        "\"items\": le voci [{\"description\": testo breve, \"amount\": importo della voce o null}];\n"
+        "\"items\": TUTTE le voci [{\"description\": testo breve, \"qty\": quantità della voce come numero se scritta altrimenti null, "
+        "\"unit\": unità come scritta (ml, m, mq, pz, cad, kg, ore, h…) o \"\", \"unit_price\": prezzo unitario se scritto o null, "
+        "\"amount\": importo della voce o null}];\n"
         "\"start\", \"end\": date di inizio e fine lavori (YYYY-MM-DD) se scritte; \"validity\": data di scadenza/validità dell'offerta "
         "(YYYY-MM-DD; \"valida 30 giorni\" -> calcola da oggi) se scritta;\n"
         "\"payments\": acconti e condizioni di pagamento, frasi brevi;\n"
         "\"activities\": le attività/lavorazioni da svolgere, una frase breve ciascuna, nell'ordine;\n"
         "\"materials\": materiali indicati, frasi brevi;\n"
-        "\"materials_planned\": gli stessi materiali come [{\"name\": nome del materiale, \"qty\": quantità come numero se scritta altrimenti null, \"unit\": unità come scritta (m, mq, pz, kg, sacchi…) o \"\"}];\n"
+        "\"materials_planned\": TUTTI i materiali e i componenti da fornire o posare, compresi quelli dentro le voci (es. \"Fornitura e posa "
+        "corrugato Ø25 ml 120\" -> {\"name\": \"corrugato Ø25\", \"qty\": 120, \"unit\": \"ml\"}), come [{\"name\": nome del materiale, "
+        "\"qty\": quantità come numero ESATTAMENTE come scritta altrimenti null, \"unit\": unità come scritta o \"\"}]; non la manodopera;\n"
+        "\"labor_hours\": le ore uomo / ore di manodopera totali previste, come numero, SOLO se sono scritte come ore; altrimenti null;\n"
+        "\"labor\": le righe sulla manodopera come scritte (es. \"manodopera: 2 operai per 5 giorni\", \"ore di manodopera 40\"), altrimenti [];\n"
         "\"warranty\": la garanzia come scritta (es. \"garanzia 2 anni su materiali e manodopera\"), altrimenti vuoto;\n"
         "\"maintenance\": le manutenzioni o i controlli periodici previsti dopo i lavori, ciascuno con la frequenza come scritta "
         "(es. \"manutenzione annuale della caldaia\", \"verifica semestrale dell'impianto di allarme\"), altrimenti [];\n"
         "\"description\": la descrizione delle attività da svolgere per chi lavora: una frase sull'oggetto e l'elenco delle "
         "lavorazioni (righe che iniziano con \"- \"), senza prezzi. Ciò che manca: vuoto o null. MAI inventare.\n"
         "Rispondi SOLO con JSON: {\"total\": null, \"taxable\": null, \"vat\": null, \"items\": [], \"start\": \"\", \"end\": \"\", "
-        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"materials_planned\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\"}"
+        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"materials_planned\": [], \"labor_hours\": null, \"labor\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
-        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=3000, response_format={"type": "json_object"},
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=8000, response_format={"type": "json_object"},
                                                     messages=[{"role": "system", "content": system}, {"role": "user", "content": (text or "")[:30000]}])
     except Exception:
         _track(None, user_id, channel, status="errore")
@@ -658,11 +664,23 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
     items = []
     for it in p.get("items") if isinstance(p.get("items"), list) else []:
         if isinstance(it, dict) and str(it.get("description") or "").strip():
-            items.append({"description": " ".join(str(it["description"]).split())[:200], "amount": money(it.get("amount"))})
+            q = _num(it.get("qty"))
+            q = q if q is not None and q > 0 and _qty_in_text(q, text) else None
+            items.append({"description": " ".join(str(it["description"]).split())[:200], "qty": q,
+                          "unit": unit_norm(it.get("unit")) if q is not None else "", "unit_price": money(it.get("unit_price")),
+                          "amount": money(it.get("amount"))})
+    # the man-hours: as written, else the items priced in hours added up (both from the document)
+    in_hours = [it["qty"] for it in items if it.get("qty") and it.get("unit") in HOUR_UNITS]
+    lh = _num(p.get("labor_hours"))
+    if lh is not None and not (lh > 0 and (_qty_in_text(lh, text) or (in_hours and abs(sum(in_hours) - lh) < 0.01))):
+        lh = None
+    if lh is None and in_hours:
+        lh = round(sum(in_hours), 2)
     return {"total": money(p.get("total")), "taxable": money(p.get("taxable")), "vat": money(p.get("vat")), "items": items[:60],
             "start": day(p.get("start")), "end": day(p.get("end")), "validity": day(p.get("validity")),
             "payments": lines(p.get("payments"), 10), "activities": lines(p.get("activities")), "materials": lines(p.get("materials")),
             "materials_planned": clean_planned_materials(p.get("materials_planned"), text),
+            "labor_hours": lh, "labor": [x for x in lines(p.get("labor"), 10) if grounded(x, text, 0.6)],
             "warranty": warranty, "warranty_months": warranty_months(warranty), "maintenance": maintenance,
             "description": str(p.get("description") or "").strip()[:4000]}
 
@@ -707,9 +725,10 @@ def warranty_months(text: str) -> Optional[int]:
 
 
 # ---- the materials a quote foresees, against the ones the diary says were used ----
-_MAT_LINE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(m2|m²|mq|m3|m³|mc|ml|m|cm|mm|kg|g|lt|l|pz|pezzi|pezzo|nr|n\.?|sacchi|sacco|rotoli|rotolo|"
+_MAT_LINE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(m2|m²|mq|m3|m³|mc|ml|mtl|mt|m|cm|mm|kg|g|lt|l|pz|cad|n°|pezzi|pezzo|nr|n\.?|sacchi|sacco|rotoli|rotolo|"
                        r"confezioni|conf|scatole|scatola|barre|barra|metri|metro|litri|litro|chili|chilo)?\.?\s+(?:di\s+)?(.+)$", re.I)
-_UNIT_ALIAS = {"m²": "mq", "m2": "mq", "m³": "mc", "m3": "mc", "metri": "m", "metro": "m", "litri": "l", "litro": "l", "lt": "l",
+_UNIT_ALIAS = {"ml": "m", "mt": "m", "mtl": "m", "cad": "pz", "n°": "pz", "nr.": "pz", "ora": "ore", "hh": "ore", "h": "ore",
+               "m²": "mq", "m2": "mq", "m³": "mc", "m3": "mc", "metri": "m", "metro": "m", "litri": "l", "litro": "l", "lt": "l",
                "pezzi": "pz", "pezzo": "pz", "nr": "pz", "n": "pz", "n.": "pz", "chili": "kg", "chilo": "kg", "sacco": "sacchi",
                "rotolo": "rotoli", "scatola": "scatole", "barra": "barre", "conf": "confezioni"}
 
@@ -719,11 +738,18 @@ def unit_norm(u: str) -> str:
     return _UNIT_ALIAS.get(u, _UNIT_ALIAS.get(u + ".", u))
 
 
+HOUR_UNITS = ("ore", "h", "hh", "ora")
+
+
 def _qty_in_text(q: float, text: str) -> bool:
-    """A quantity read is kept only if that number is written in the document."""
-    t = (text or "").replace(" ", "")
+    """A quantity read is kept only if that number is written in the document (also as 1.200 or 1.200,00)."""
+    t = (text or "").replace(" ", "").replace("\u00a0", "")
+    t = re.sub(r"(?<=\d)[.'](?=\d{3}(?:\D|$))", "", t)        # thousands separators
     s = f"{q:g}"
-    return s in t or s.replace(".", ",") in t
+    before, after = r"(?<!\d)(?<!\d[.,])", r"(?!\d)(?![.,]\d)"     # not part of another number
+    if "." in s:   # 2.5: "2,5", "2,50", "2.5"
+        return bool(re.search(rf"{before}(?:{re.escape(s)}|{re.escape(s.replace('.', ','))})0*{after}", t))
+    return bool(re.search(rf"{before}{re.escape(s)}(?:[.,]0+)?{after}", t))   # 12: "12", "12,00", "n. 12" - never "120" or "1,2"
 
 
 def clean_planned_materials(rows, text: str) -> list:
@@ -805,6 +831,10 @@ def quote_detail_lines(d: dict, with_money: bool = False) -> list:
         out.append("Date: " + ", ".join(dates))
     if d.get("payments"):
         out.append("Pagamenti: " + "; ".join(d["payments"]))
+    if d.get("labor_hours"):
+        out.append(f"Ore uomo previste: {_fmt_num(d['labor_hours'])} h")
+    if d.get("labor"):
+        out.append("Manodopera: " + "; ".join(d["labor"]))
     if d.get("warranty"):
         out.append(f"Garanzia: {d['warranty']}")
     if d.get("maintenance"):

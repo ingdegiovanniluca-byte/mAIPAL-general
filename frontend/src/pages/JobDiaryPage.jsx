@@ -941,11 +941,23 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
           : <div className="text-white/60">Totale non trovato nel documento</div>}
         {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
         {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+        {(d.materials_planned || []).length > 0 && (
+          <details data-testid="quote-sheet-materials"><summary className="cursor-pointer">🧰 {d.materials_planned.length} materiali previsti
+            {d.materials_planned.some((m) => m.qty) ? ` (${d.materials_planned.filter((m) => m.qty).length} con la quantità)` : ""}</summary>
+            {d.materials_planned.map((m, i) => (
+              <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{m.name}</span>
+                <span className="tabular-nums text-white/70">{m.qty ? `${fmtNum(m.qty)}${m.unit ? ` ${m.unit}` : ""}` : "quantità non scritta"}</span></div>
+            ))}
+          </details>
+        )}
+        {d.labor_hours ? <div data-testid="quote-sheet-hours">👷 Ore uomo previste: {fmtNum(d.labor_hours)} h</div>
+          : (d.labor || []).length > 0 ? <div>👷 Manodopera: {d.labor.join("; ")} <span className="text-white/55">(ore non scritte come numero)</span></div> : null}
         {d.warranty && <div>🛡 Garanzia: {d.warranty}</div>}
         {(d.maintenance || []).length > 0 && <div>🔧 Manutenzione: {d.maintenance.map((m) => m.text + (m.every_months ? ` (ogni ${m.every_months} mesi)` : " (frequenza non scritta)")).join("; ")}</div>}
         {(d.items || []).length > 0 && (
-          <details><summary className="cursor-pointer text-white/75">{d.items.length} voci</summary>
-            {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
+          <details><summary className="cursor-pointer text-white/75">{d.items.length} {d.items.length === 1 ? "voce" : "voci"}</summary>
+            {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>
+              {it.qty ? <span className="text-white/60 tabular-nums">{fmtNum(it.qty)}{it.unit ? ` ${it.unit}` : ""}</span> : null}{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
           </details>
         )}
       </div>
@@ -1303,6 +1315,33 @@ function HistoryEstimate({ commessa }) {
   );
 }
 
+// ===== The man-hours the quote foresees against the ones written in the diary (the whole commessa)
+function HoursPlan({ plan }) {
+  const over = plan.planned && plan.done > plan.planned;
+  const color = over ? "#F08A8A" : plan.pct >= 80 ? "#F2C14E" : "rgba(255,255,255,0.8)";
+  return (
+    <div className="mt-1 mb-4" data-testid="hours-plan">
+      <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">ore previste dal preventivo{plan.quote_version ? ` v${plan.quote_version}` : ""}</div>
+      {plan.planned ? (
+        <div className="py-2 border-t border-white/[0.13]">
+          <div className="flex items-baseline gap-2">
+            <span className="flex-1 text-[14px] text-white/90">Ore uomo</span>
+            <span className="text-[13px] tabular-nums text-white/90" data-testid="hours-plan-figures">{fmtNum(plan.done)} h / {fmtNum(plan.planned)} h</span>
+          </div>
+          <div className="mt-1 h-1 rounded-full bg-white/15 overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${Math.min(100, plan.pct || 0)}%`, background: color }} />
+          </div>
+          <div className="text-[11.5px] mt-0.5" style={{ color }}>
+            {over ? `oltre il previsto di ${fmtNum(-plan.left)} h` : `${plan.pct}% · ne restano ${fmtNum(plan.left)} h`}
+            {plan.pending ? <span className="text-white/55"> · {fmtNum(plan.pending)} h da approvare non contate</span> : null}
+          </div>
+        </div>
+      ) : null}
+      {(plan.labor || []).length > 0 && <div className="text-[12px] text-white/65 pt-1">Dal preventivo: {plan.labor.join("; ")}</div>}
+    </div>
+  );
+}
+
 // ===== The materials the quote foresees against the ones the diary says were used (the whole commessa)
 const MAT_STATUS = { oltre: ["oltre il previsto", "#F08A8A"], completo: ["usato tutto", "#8ED973"], in_uso: ["in uso", "rgba(255,255,255,0.8)"],
   da_usare: ["non ancora usato", "rgba(255,255,255,0.5)"], usato: ["usato", "#8ED973"] };
@@ -1490,6 +1529,7 @@ function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, on
             {(d.taxable || d.total) ? <div>💶 {d.taxable ? `Imponibile ${eur(d.taxable)}` : ""}{d.taxable && d.total ? " · " : ""}{d.total ? `Totale ${eur(d.total)}` : ""}</div> : null}
             {(d.start || d.end || d.validity) && <div>📅 {[d.start && `inizio ${shortDay(d.start)}`, d.end && `fine ${shortDay(d.end)}`, d.validity && `valido fino al ${shortDay(d.validity)}`].filter(Boolean).join(" · ")}</div>}
             {(d.payments || []).length > 0 && <div>💳 {d.payments.join("; ")}</div>}
+            {d.labor_hours ? <div>👷 Ore uomo previste: {fmtNum(d.labor_hours)} h</div> : null}
             {(d.materials_planned || []).length > 0 && <div>🧰 Materiali previsti: {d.materials_planned.map((m) => [fmtNum(m.qty), m.unit, m.name].filter(Boolean).join(" ")).join("; ")}</div>}
             {d.warranty && <div>🛡 Garanzia: {d.warranty}</div>}
             {(d.maintenance || []).length > 0 && <div data-testid="quote-maintenance">🔧 Manutenzione: {d.maintenance.map((m) => m.text).join("; ")}
@@ -1517,7 +1557,8 @@ function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, on
           )}
           {(d.items || []).length > 0 && (
             <details className="mt-2"><summary className="text-[12px] text-white/60 cursor-pointer py-1">Voci ({d.items.length})</summary>
-              {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
+              {d.items.map((it, i) => <div key={i} className="flex gap-2 text-[12.5px] text-white/80 py-0.5"><span className="flex-1">{it.description}</span>
+              {it.qty ? <span className="text-white/60 tabular-nums">{fmtNum(it.qty)}{it.unit ? ` ${it.unit}` : ""}</span> : null}{it.amount ? <span>{eur(it.amount)}</span> : null}</div>)}
             </details>
           )}
           {quotes.length > 1 && (
@@ -2642,6 +2683,7 @@ export default function JobDiaryPage() {
           </div>
         </>
       ) : (<>
+      {section === "ore" && detail.hours_plan && <HoursPlan plan={detail.hours_plan} />}
       {section === "ore" && (access.is_owner || me?.role === "admin") && (detail.hours_to_approve || []).length > 0 && (
         <div className="mt-1 mb-4" data-testid="hours-to-approve-list">
           <div className="text-[10px] uppercase tracking-widest text-white/55 text-center mb-1">ore da approvare</div>

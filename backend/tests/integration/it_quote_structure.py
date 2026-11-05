@@ -366,6 +366,40 @@ async def main():
     ev = [lg for lg in db.job_logs.docs if lg.get("commessa_id") == "s1" and lg.get("kind") == "preventivo"][0]
     assert "Materiali previsti: 20 m corrugato 25; 12 pz scatole 503; centralino 12 moduli" in ev["text"], ev["text"]
     assert (await server.get_job_commessa("s3", current=me))["materials_plan"]["rows"]       # (same materials on the others)
+    # 4) the quote reader: quantities from the items too ("1.200"), only the written numbers; the man-hours
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("jl_fresh", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "job_logs.py"))
+    jlf = importlib.util.module_from_spec(spec); spec.loader.exec_module(jlf)
+    doc = ("PREVENTIVO impianto elettrico\n1) Fornitura e posa corrugato Ø25 ml 1.200 x 0,80 = 960,00\n2) Scatole 503 n. 12 x 2,00 = 24,00\n"
+           "3) Manodopera elettricista ore 32 x 30,00 = 960,00\n4) Manodopera aiutante ore 16 x 25,00 = 400,00\nTotale 2.344,00")
+    MODEL_EXTRAS.clear(); MODEL_EXTRAS.update({
+        "total": 2344, "items": [{"description": "Fornitura e posa corrugato Ø25", "qty": 1200, "unit": "ml", "unit_price": 0.8, "amount": 960},
+                                 {"description": "Scatole 503", "qty": 12, "unit": "n.", "unit_price": 2, "amount": 24},
+                                 {"description": "Manodopera elettricista", "qty": 32, "unit": "ore", "unit_price": 30, "amount": 960},
+                                 {"description": "Manodopera aiutante", "qty": 16, "unit": "ore", "unit_price": 25, "amount": 400}],
+        "materials_planned": [{"name": "corrugato Ø25", "qty": 1200, "unit": "ml"}, {"name": "scatole 503", "qty": 12, "unit": "n."},
+                              {"name": "scatole 503", "qty": 120, "unit": "pz"}],
+        "labor_hours": 50, "labor": ["Manodopera elettricista ore 32", "Manodopera aiutante ore 16"]})
+    q = await jlf.read_quote(doc, {"title": "Impianto", "client_name": "Mario Rossi"})
+    assert [(i["qty"], i["unit"]) for i in q["items"]] == [(1200.0, "m"), (12.0, "pz"), (32.0, "ore"), (16.0, "ore")], q["items"]
+    assert q["materials_planned"][:2] == [{"name": "corrugato Ø25", "qty": 1200.0, "unit": "m"}, {"name": "scatole 503", "qty": 12.0, "unit": "pz"}]
+    assert q["materials_planned"][2]["qty"] is None                     # 120 is not written: not taken
+    assert q["labor_hours"] == 48.0, q["labor_hours"]                    # 50 is not written: the items in hours added up (32 + 16)
+    MODEL_EXTRAS["labor_hours"] = 48
+    assert (await jlf.read_quote(doc + "\nTotale ore uomo 48", {"title": "x"}))["labor_hours"] == 48.0
+    assert "Ore uomo previste: 48 h" in "\n".join(jlf.quote_detail_lines(q))
+
+    # 5) the Ore section: the man-hours planned against the ones written in the diary
+    QUOTE.update(labor_hours=48.0, labor=["Manodopera elettricista ore 32"], start="", end="", activities=[])
+    up = await server._ingest_commessa_document(me, "s1", "prev3.txt", b"PREVENTIVO v3 impianto elettrico Totale 3.300,00", "text/plain", hint="preventivo")
+    assert "👷 Ore uomo previste: 48 h" in up["message"] and "🧰 Materiali previsti (3, 2 con la quantità)" in up["message"], up["message"]
+    await server.confirm_quote(up["quote"]["id"], server.QuoteConfirmPayload(value_choice="new"), me)
+    db.job_logs.docs.append({"id": "lh1", "commessa_id": "s1", "date": "2026-11-12", "text": "lavori", "hours": [{"who": "Luca", "hours": 20}], "materials": [], "problems": []})
+    db.job_logs.docs.append({"id": "lh2", "commessa_id": "s1", "date": "2026-11-13", "text": "lavori", "hours": [{"who": "Gino", "hours": 16}], "materials": [], "problems": []})
+    hp = (await server.get_job_commessa("s1", current=me))["hours_plan"]
+    assert hp["planned"] == 48.0 and hp["done"] == 36.0 and hp["left"] == 12.0 and hp["pct"] == 75 and hp["quote_version"] == 3, hp
+    rep = await server._job_weekly_summary(me, datetime(2026, 11, 13, 18, 0, tzinfo=ROME))
+    assert "👷 Ore: 36 h fatte di 48 previste dal preventivo (75%)" in rep, rep
     print("ALL OK")
 
 asyncio.run(main())

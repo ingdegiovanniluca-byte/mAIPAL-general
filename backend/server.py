@@ -7723,6 +7723,21 @@ async def _materials_plan(commessa_id: str, light: list) -> Optional[dict]:
     return {**jl.compare_materials(planned, jl.totals(light)["materials"]), "quote_version": quotes[0].get("version")}
 
 
+async def _hours_plan(commessa_id: str, light: list) -> Optional[dict]:
+    """The last quote's man-hours against the hours written in the diary (approved; the ones to approve apart)."""
+    quotes = await _commessa_quotes(commessa_id)
+    d = (quotes[0].get("data") or {}) if quotes else {}
+    if not d.get("labor_hours") and not d.get("labor"):
+        return None
+    t = jl.totals(light)
+    planned = d.get("labor_hours")
+    out = {"planned": planned, "done": t["hours_total"], "pending": t["hours_pending_total"], "by_person": t["by_person"],
+           "labor": d.get("labor") or [], "quote_version": quotes[0].get("version")}
+    if planned:
+        out.update(left=round(planned - t["hours_total"], 2), pct=round(t["hours_total"] / planned * 100))
+    return out
+
+
 async def _detail_part(label: str, commessa_id: str, coro, default):
     """One part of the commessa's page: if it fails, the page still opens without it (and the log says which)."""
     try:
@@ -7793,6 +7808,7 @@ async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_
             "survey_logs": sorted(await P("sopralluogo", db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300), []),
                                   key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True),
             "materials_plan": await P("materiali previsti", _materials_plan(commessa_id, light), None),
+            "hours_plan": await P("ore previste", _hours_plan(commessa_id, light), None),
             "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await P("preventivi", _commessa_quotes(commessa_id), [])],
             "quote_outcome": sub.get("quote_outcome"),
             "history": await P("modifiche", _commessa_history(commessa_id), []) if _is_org_admin(current) else [],
@@ -9074,6 +9090,16 @@ def _quote_summary(view: dict, q: dict) -> str:
         lines.append("💳 " + "; ".join(d["payments"][:3]))
     if d.get("activities"):
         lines.append("🛠 Attività:\n" + "\n".join(f"• {a}" for a in d["activities"][:12]))
+    planned = jl.planned_materials(d)
+    if planned:
+        with_q = [m for m in planned if m.get("qty")]
+        lines.append(f"🧰 Materiali previsti ({len(planned)}" + (f", {len(with_q)} con la quantità" if with_q else "") + "):\n"
+                     + "\n".join("• " + " ".join(x for x in (jl._fmt_num(m["qty"]) if m.get("qty") else "", m.get("unit") or "", m["name"]) if x)
+                                  for m in planned[:20]) + ("\n…" if len(planned) > 20 else ""))
+    if d.get("labor_hours"):
+        lines.append(f"👷 Ore uomo previste: {jl._fmt_num(d['labor_hours'])} h")
+    elif d.get("labor"):
+        lines.append("👷 Manodopera: " + "; ".join(d["labor"]) + " (ore non scritte come numero)")
     if d.get("warranty"):
         lines.append(f"🛡 Garanzia: {d['warranty']}")
     if d.get("maintenance"):
@@ -14600,6 +14626,10 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
         t = jl.totals(week(lgs))
         per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in t["by_person"].items())
         lines.append(f"\n*{c['title']}* — {c['client_name']}: {jl._fmt_num(t['hours_total'])} h" + (f" ({per})" if per else ""))
+        hp = await _hours_plan(c["id"], lgs)
+        if hp and hp.get("planned"):
+            lines.append(f"👷 Ore: {jl._fmt_num(hp['done'])} h fatte di {jl._fmt_num(hp['planned'])} previste dal preventivo ({hp['pct']}%)"
+                         + (" ⚠️ oltre il previsto" if hp["done"] > hp["planned"] else ""))
         acts = acts_by.get(c["id"], [])
         if acts:   # planned vs done
             undone = [a["description"] for a in acts if a.get("status") != "svolta"]
