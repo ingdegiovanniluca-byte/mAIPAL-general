@@ -581,6 +581,8 @@ async def _cmd_generic(update: Update, ctx, forced_action=None):
         import team_presence_tg as tp   # artigiano: "sono arrivato" / "ho finito", the answer to "com'è andata?"
         if await tp.try_presence(update, ctx, user, content):
             return
+        if await _try_nearby(update, ctx, db, user, content):      # "dammi i clienti vicino a me"
+            return
         if await tp.try_note(update, ctx, user, state, content):
             return
         if state.get("pending_work_revise") and _state_is_fresh(state):
@@ -706,6 +708,63 @@ async def _cmd_save(update, ctx):    await _cmd_generic(update, ctx, "info_uploa
 async def _cmd_task(update, ctx):    await _cmd_generic(update, ctx, "task_todo")
 async def _cmd_journal(update, ctx): await _cmd_generic(update, ctx, "journal")
 async def _msg_free(update, ctx):    await _cmd_generic(update, ctx, None)
+
+
+# ---- "clienti vicino a me": the question, then the position (a button) -> the list ----
+async def _reply_md(update, text: str, **kw):
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True, **kw)
+    except Exception:
+        await update.message.reply_text(text.replace("*", ""), disable_web_page_preview=True, **kw)
+
+
+async def _try_nearby(update, ctx, db, user: dict, content: str) -> bool:
+    import nearby as nb
+    if user.get("business_vertical") != "artigiano":
+        return False
+    q = nb.said(content)
+    if not q:
+        return False
+    from telegram import ReplyKeyboardMarkup, KeyboardButton
+    chat_id = update.effective_chat.id
+    if q["me"]:
+        await _set_state(db, chat_id, user["user_id"], pending_nearby=q)
+        await update.message.reply_text(
+            "📍 Mandami la tua posizione con il pulsante qui sotto e ti dico chi hai vicino"
+            + (f" (entro {q['radius_km']:g} km)." if q.get("radius_km") else "."),
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("📍 Invia la mia posizione", request_location=True)]],
+                                             one_time_keyboard=True, resize_keyboard=True))
+        return True
+    await _run_nearby(update, user, q, None)
+    return True
+
+
+async def _run_nearby(update, user: dict, q: dict, loc: dict | None) -> None:
+    import nearby as nb
+    from telegram import ReplyKeyboardRemove
+    from server import _nearby_origin, _nearby_search
+    current = _to_user_pydantic(user)
+    try:
+        origin = await _nearby_origin(current, q, (loc or {}).get("lat"), (loc or {}).get("lon"))
+        res = await _nearby_search(current, origin, q.get("radius_km"), q.get("filter"), q.get("place"))
+        await _reply_md(update, nb.message(res), reply_markup=ReplyKeyboardRemove())
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {str(getattr(e, 'detail', e))[:200]}", reply_markup=ReplyKeyboardRemove())
+
+
+async def _on_location(update: Update, ctx):
+    """A position: the answer to "clienti vicino a me" when that was asked, else the presence on site (as before)."""
+    from server import db
+    import team_presence_tg as tp
+    user = await _get_user_by_chat(db, update.effective_chat.id)
+    if user:
+        state = await _get_state(db, user["user_id"], update.effective_chat.id)
+        if state.get("pending_nearby") and _state_is_fresh(state):
+            await _set_state(db, update.effective_chat.id, user["user_id"], pending_nearby=None)
+            place = update.message.location
+            await _run_nearby(update, user, state["pending_nearby"], {"lat": place.latitude, "lon": place.longitude})
+            return
+    await tp.on_location(update, ctx)
 
 
 async def _cmd_report(update: Update, ctx):
@@ -1664,7 +1723,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("azioni", _cmd_scheduled_list))
     import team_presence_tg as tp
     app.add_handler(CommandHandler("cantiere", tp.cmd_cantiere))
-    app.add_handler(MessageHandler(filters.LOCATION, tp.on_location))
+    app.add_handler(MessageHandler(filters.LOCATION, _on_location))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_handler(MessageHandler(filters.VOICE, _msg_voice))
     app.add_handler(MessageHandler(filters.PHOTO, _msg_photo))

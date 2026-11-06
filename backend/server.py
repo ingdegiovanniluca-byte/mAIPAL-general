@@ -58,6 +58,7 @@ import site_presence as sp
 import client_updates as cu
 import access as orgaccess
 import org_settings as osettings
+import nearby as nb
 import archive_names as an
 import weather as wx
 import milestone_templates as mtpl
@@ -10997,6 +10998,191 @@ async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
 # ---- PRESENCE ON SITE (see site_presence.py): "sono arrivato" / "ho finito" on Telegram, with
 # the position sent by the button; the time in between is the collaborator's hours in the diary.
 
+# ======================================================================================
+# CLIENTS NEAR ME (Cerca chat and Telegram): "dammi i clienti vicino a me", "chi ho vicino entro 5 km",
+# "clienti vicino a Moncalieri". A client is where they live (their address) and where their sites
+# are (the commesse's addresses): the nearest one counts. The coordinates are looked up once from the
+# address (OpenStreetMap, one a second, in the background) and kept; the user's position is used for
+# that search only, never kept. Straight line for the list, the road for the first ones; the clients
+# with something to do (open commesse, a quote waiting, a maintenance due, an extra to approve) first,
+# the others after them.
+# ======================================================================================
+_GEO_RUNNING: set = set()
+
+
+def _client_address(clienti: dict, item: dict) -> str:
+    return " ".join(str(_sysval(item.get("data"), clienti.get("system_map") or {}, "indirizzo") or "").split())
+
+
+async def _geo_backfill(clienti: dict, limit: int = 200) -> int:
+    """The coordinates not known yet (clients' and sites' addresses), one a second. -> how many looked up."""
+    if clienti["id"] in _GEO_RUNNING:
+        return 0
+    _GEO_RUNNING.add(clienti["id"])
+    done = 0
+    try:
+        for it in await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "id": 1, "data": 1, "geo": 1}).to_list(5000):
+            addr = _client_address(clienti, it)
+            if not addr or (it.get("geo") or {}).get("address") == addr or done >= limit:
+                continue
+            found = await sp.geocode(addr)
+            await db.collection_items.update_one({"id": it["id"]}, {"$set": {"geo": {"address": addr, "source": "address",
+                                                                                     "lat": (found or {}).get("lat"), "lon": (found or {}).get("lon")}}})
+            done += 1
+            await asyncio.sleep(1.1)
+        commesse, _ = await _all_commesse(clienti)
+        for v in commesse:
+            if done >= limit:
+                break
+            sub = await db.collection_sub_items.find_one({"id": v["id"]}, {"_id": 0, "geo": 1})
+            geo = (sub or {}).get("geo") or {}
+            if v.get("address") and geo.get("source") != "manual" and geo.get("address") != v["address"]:
+                await _commessa_geo(v["id"], v)
+                done += 1
+                await asyncio.sleep(1.1)
+    except Exception:
+        logger.exception("coordinates backfill failed")
+    finally:
+        _GEO_RUNNING.discard(clienti["id"])
+    return done
+
+
+async def _geo_backfill_loop():
+    """Every 10 minutes: the coordinates of the new or changed addresses of every Clienti list."""
+    await asyncio.sleep(90)
+    while True:
+        try:
+            for cl in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
+                await _geo_backfill(cl, limit=100)
+        except Exception:
+            logger.exception("coordinates loop iteration failed")
+        await asyncio.sleep(600)
+
+
+async def _nearby_search(current: User, origin: dict, radius_km: Optional[float] = None, flt: Optional[str] = None,
+                         place: Optional[str] = None) -> dict:
+    """The clients within the radius of the origin, the ones with something to do first. -> rows and counts"""
+    clienti = await _clienti_list(current)
+    radius = float(radius_km or (await _settings_of_user(current.user_id)).get("nearby_radius_km") or nb.DEFAULT_RADIUS_KM)
+    res = {"radius_km": radius, "place": place, "origin": origin, "rows": [], "missing": {}, "nearest": None}
+    if not clienti:
+        return res
+    commesse, clients = await _all_commesse(clienti)
+    subs = {s_["id"]: s_ for s_ in await db.collection_sub_items.find({"collection_id": clienti["id"]}, {"_id": 0, "id": 1, "geo": 1}).to_list(5000)}
+    by_client: dict = {}
+    for v in commesse:
+        by_client.setdefault(v["client_item_id"], []).append(v)
+    today = jl.today_local()
+    ids = [v["id"] for v in commesse]
+    tasks = await db.tasks.find({"commessa_id": {"$in": ids}, "kind": {"$in": ["manutenzione", "garanzia"]}, "completed": {"$ne": True}},
+                                {"_id": 0}).to_list(2000) if ids else []
+    extras = await db.job_extra_works.find({"commessa_id": {"$in": ids}, "status": "extra"}, {"_id": 0, "commessa_id": 1, "work": 1}).to_list(2000) if ids else []
+    fmap = clienti.get("system_map") or {}
+    rows, outside = [], []
+    missing = {"no_address": 0, "not_found": 0, "pending": 0}
+    for cid, item in clients.items():
+        mine = by_client.get(cid, [])
+        points = []
+        geo = item.get("geo") or {}
+        addr = _client_address(clienti, item)
+        if geo.get("lat") is not None and geo.get("address") == addr:
+            points.append(({"lat": geo["lat"], "lon": geo["lon"]}, "indirizzo del cliente"))
+        for v in mine:
+            g = (subs.get(v["id"]) or {}).get("geo") or {}
+            if g.get("lat") is not None:
+                points.append(({"lat": g["lat"], "lon": g["lon"]}, f"cantiere «{v['title']}»"))
+        if not points:
+            pending = (addr and geo.get("address") != addr) or any(
+                v.get("address") and ((subs.get(v["id"]) or {}).get("geo") or {}).get("address") != v["address"] for v in mine)
+            if pending:
+                missing["pending"] += 1          # looked up in the background
+            elif not addr and not any(v.get("address") for v in mine):
+                missing["no_address"] += 1
+            else:
+                missing["not_found"] += 1        # an address the map does not know
+            continue
+        pt, via = min(((p_, w) for p_, w in points), key=lambda x: nb.distance_m(origin, x[0]))
+        dist = nb.distance_m(origin, pt)
+        open_c = [v for v in mine if not vx.is_closed(v["stato"])]
+        opp = []
+        for v in mine:
+            if vx.norm_stato(v["stato"]) == "preventivo inviato" and v.get("quote_outcome") not in ("accettato", "perso"):
+                opp.append(f"preventivo in attesa di esito («{v['title']}»)")
+        for t in tasks:
+            if any(t["commessa_id"] == v["id"] for v in mine) and (t.get("due_date") or "9999") <= (today + timedelta(days=45)).isoformat():
+                opp.append(("manutenzione da fare" if t["kind"] == "manutenzione" else "garanzia in scadenza") + f" entro il {_short_it_date(t['due_date'])}")
+        for x in extras:
+            if any(x["commessa_id"] == v["id"] for v in mine):
+                opp.append(f"lavoro extra da far approvare: {x['work']}")
+        row = {"client_id": cid, "name": _sysval(item.get("data"), fmap, "nome") or "Cliente", "phone": _sysval(item.get("data"), fmap, "telefono") or "",
+               "distance_m": round(dist), "via": via if via != "indirizzo del cliente" or open_c else "", "lat": pt["lat"], "lon": pt["lon"],
+               "maps": nb.maps_link(pt["lat"], pt["lon"]),
+               "commesse": [{"id": v["id"], "title": v["title"], "stato": v["stato"]} for v in open_c],
+               "opportunities": opp}
+        if flt == "aperte" and not open_c:
+            continue
+        if flt == "preventivi" and not any(o.startswith("preventivo") for o in opp):
+            continue
+        if flt == "manutenzione" and not any(o.startswith(("manutenzione", "garanzia")) for o in opp):
+            continue
+        if flt == "opportunita" and not (opp or open_c):
+            continue
+        (rows if dist <= radius * 1000 else outside).append(row)
+    # with something to do first (for "opportunità": the opportunities first), then the others; nearest first in each
+    key = (lambda r: (0 if r["opportunities"] else 1, r["distance_m"])) if flt == "opportunita" else         (lambda r: (0 if (r["commesse"] or r["opportunities"]) else 1, r["distance_m"]))
+    rows.sort(key=key)
+    rows = rows[:20]
+    roads = await asyncio.gather(*(nb.router(origin, {"lat": r["lat"], "lon": r["lon"]}) for r in rows[:nb.ROAD_FIRST]), return_exceptions=True)
+    for r, road in zip(rows, roads):
+        if isinstance(road, dict) and road.get("m") is not None:
+            r.update(road_m=round(road["m"]), road_min=road["min"])
+    res.update(rows=rows, missing={k: v for k, v in missing.items() if v},
+               nearest=min(outside, key=lambda r: r["distance_m"]) if outside and not rows else None)
+    if missing["pending"]:
+        _bg(_geo_backfill(clienti))
+    return res
+
+
+async def _nearby_origin(current: User, q: dict, lat: Optional[float], lon: Optional[float]) -> dict:
+    """Where from: my position, a commessa named ("vicino al cantiere dei Rossi") or a place found on the map."""
+    if not q.get("place"):
+        if lat is None or lon is None:
+            raise HTTPException(status_code=400, detail="Per cercare vicino a te serve la tua posizione.")
+        return {"lat": float(lat), "lon": float(lon)}
+    clienti = await _clienti_list(current)
+    if clienti and re.search(r"\bcantier|\bcommess|\bdai?\b|\bdel(?:la|lo)?\b", q["place"], re.I):
+        hit = await _resolve_commessa(clienti, q["place"], "", "", None)
+        if hit.get("commessa"):
+            g = await _commessa_geo(hit["commessa"]["id"], hit["commessa"])
+            if g:
+                return {"lat": g["lat"], "lon": g["lon"]}
+    found = await sp.geocode(q["place"])
+    if not found:
+        raise HTTPException(status_code=400, detail=f"Non trovo «{q['place']}» sulla mappa: scrivi il paese o l'indirizzo completo.")
+    return found
+
+
+class NearbyPayload(BaseModel):
+    text: str = ""
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+@api_router.post("/nearby/intent")
+async def nearby_intent(payload: NearbyPayload, current: User = Depends(get_current_user)):
+    """Is this a "clients near me" question (and does it need my position)?"""
+    q = nb.said(payload.text) if current.business_vertical == "artigiano" else None
+    return {"nearby": q}
+
+
+@api_router.post("/nearby")
+async def nearby_search(payload: NearbyPayload, current: User = Depends(get_current_user)):
+    q = nb.said(payload.text) or {"me": True, "place": None, "radius_km": None, "filter": None}
+    origin = await _nearby_origin(current, q, payload.lat, payload.lon)
+    res = await _nearby_search(current, origin, q.get("radius_km"), q.get("filter"), q.get("place"))
+    return {**res, "message": nb.message(res)}
+
+
 async def _commessa_geo(commessa_id: str, view: dict) -> Optional[dict]:
     """The site's position: the one set by the owner, or found from the commessa's address
     (looked up once per address, kept on the commessa)."""
@@ -15178,6 +15364,7 @@ async def start_services():
         await _migrate_tenants()
     except Exception:
         logger.exception("organizations migration failed")
+    asyncio.create_task(_geo_backfill_loop())
     try:
         await _migrate_commesse()
         await _migrate_weekly_actions()

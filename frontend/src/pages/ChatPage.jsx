@@ -267,6 +267,46 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+// "clienti vicino a me": the list, nearest first (the ones with something to do before the others)
+const kmText = (m) => (m == null ? "" : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1).replace(".", ",")} km`);
+function NearbyResult({ res }) {
+  const where = res.place ? `vicino a ${res.place}` : "vicino a te";
+  const miss = res.missing || {};
+  return (
+    <div className="mt-1 ml-1 max-w-[560px]" data-testid="nearby-result">
+      <div className="text-[14px] text-white/90">
+        {res.rows.length ? `📍 ${res.rows.length} ${res.rows.length === 1 ? "cliente" : "clienti"} ${where} entro ${res.radius_km} km`
+          : `📍 Nessun cliente ${where} entro ${res.radius_km} km.`}
+        {!res.rows.length && res.nearest && ` Il più vicino è ${res.nearest.name}, a ${kmText(res.nearest.distance_m)}.`}
+      </div>
+      {res.rows.map((r, i) => (
+        <div key={r.client_id} className="py-2.5 border-t border-white/[0.13]" data-testid="nearby-row">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[14.5px] font-semibold text-white flex-1 min-w-0 break-words">{i + 1}. {r.name}</span>
+            <span className="shrink-0 text-[12.5px] text-white/80 tabular-nums">
+              {r.road_m != null ? `${kmText(r.road_m)} · ${r.road_min} min` : kmText(r.distance_m)}
+            </span>
+          </div>
+          {r.via && <div className="text-[11.5px] text-white/55">{r.road_m != null ? "su strada, " : "in linea d'aria, "}{r.via}</div>}
+          {(r.commesse || []).map((c) => <div key={c.id} className="text-[12.5px] text-white/80">🏗 {c.title} · {c.stato}</div>)}
+          {(r.opportunities || []).map((o, j) => <div key={j} className="text-[12.5px] text-[#F2C14E]">💡 {o}</div>)}
+          <div className="mt-1 flex gap-2">
+            <a href={r.maps} target="_blank" rel="noreferrer" data-testid="nearby-nav"
+              className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white">🧭 Naviga</a>
+            {r.phone && <a href={`tel:${r.phone.replace(/\s/g, "")}`} className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white">📞 Chiama</a>}
+          </div>
+        </div>
+      ))}
+      {(miss.no_address || miss.not_found || miss.pending) ? (
+        <div className="pt-2 border-t border-white/[0.13] text-[12px] text-white/55" data-testid="nearby-missing">
+          Non nell'elenco: {[miss.no_address && `${miss.no_address} senza indirizzo`, miss.not_found && `${miss.not_found} con un indirizzo che non trovo`,
+            miss.pending && `${miss.pending} ancora da localizzare (riprova tra qualche minuto)`].filter(Boolean).join(", ")}.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ChatPage() {
   // desktop split: the chat in the left column, always in its mobile layout
   const pane = useChatPane();
@@ -1129,6 +1169,34 @@ export default function ChatPage() {
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a leggere il preventivo") }] }));
     } finally { setStreaming(false); }
   };
+  // "dammi i clienti vicino a me" (Cerca, artigiano): my position for this search only, never kept
+  const getPosition = () => new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition((p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+      () => resolve(null), { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+  });
+  const runNearby = async (content, q) => {
+    setThread((th) => th
+      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      : { conv_id: null, action: "info_request", messages: [{ role: "user", content }], liveAnswer: "" });
+    setStreaming(true);
+    try {
+      let pos = null;
+      if (q.me) {
+        pos = await getPosition();
+        if (!pos) {
+          setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant",
+            content: "📍 Per cercare vicino a te mi serve la posizione: consentila al browser per mAIPAL e riprova, oppure scrivi un luogo, es. «clienti vicino a Moncalieri»." }] }));
+          return;
+        }
+      }
+      const r = (await api.post("/nearby", { text: content, ...(pos || {}) })).data;
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "", nearby: r }] }));
+    } catch (e) {
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Ricerca non riuscita") }] }));
+    } finally { setStreaming(false); }
+  };
+
   const resolveQuotePick = async (pick, commessaId) => {
     setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.quotePick === pick ? { ...m, quotePick: { ...pick, done: true } } : m)) }));
     await runQuoteFromChat(pick.content, pick.files, null, commessaId);
@@ -1322,6 +1390,13 @@ export default function ChatPage() {
       setAttachments([]);
       await runQuoteFromChat(mainQuestion, files, [mainQuestion, ...files.map((a) => `📎 ${a.name}`)].join("\n"));
       return;
+    }
+    // "dammi i clienti vicino a me" in Cerca: the clients around, not a search in the notes
+    if (active === "info_request" && vertical === "artigiano" && attachments.length === 0 && mainQuestion
+        && /vicin|dintorni|in zona|paraggi|intorno a me|attorno a me/i.test(mainQuestion)) {
+      let q = null;
+      try { q = (await api.post("/nearby/intent", { text: mainQuestion })).data?.nearby; } catch { /* a normal search */ }
+      if (q) { setText(""); await runNearby(mainQuestion, q); return; }
     }
     // Wrong agent? ("salva che ..." sent to Cerca): only on a new chat, and the backend
     // speaks up only when it is sure - then the chat suggests the right agent instead.
@@ -2593,6 +2668,7 @@ export default function ChatPage() {
                           className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">📌 Da prendere</button>
                       </div>
                     )}
+                    {m.nearby && <NearbyResult res={m.nearby} />}
                     {m.quotePick && !m.quotePick.done && (
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="quote-pick-choices">
                         {m.quotePick.candidates.map((c) => (

@@ -60,6 +60,9 @@ const SETTING_ROWS = [
     ["weather_alert_rain_pct", "Avviso pioggia oltre", "num", "%"],
     ["weather_alert_wind_kmh", "Avviso vento oltre", "num", "km/h"],
   ]],
+  ["clienti vicino a me", [
+    ["nearby_radius_km", "Raggio se non lo dici", "num", "km"],
+  ]],
 ];
 
 function AutomationSettings() {

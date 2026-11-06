@@ -349,6 +349,17 @@ Per gli artigiani c'è la lista **Clienti**, già pronta, con le **commesse** di
 - **Eliminare** un cliente o una commessa cancella anche il diario (voci, foto), le attività e i costi, e non si può annullare. Per questo, toccando **Elimina**, ti arriva su **Telegram** un codice di 6 cifre da scrivere nell'app: vale 10 minuti, una volta sola, e dopo 5 tentativi sbagliati ne serve uno nuovo. Se Telegram non è collegato, l'app ti chiede di collegarlo (Impostazioni → Collegamenti → Telegram). I file su Drive/OneDrive restano.
 - Dalla chat clienti e commesse non si eliminano: si usa il tasto Elimina nella lista.
 
+## Clienti vicino a me
+<!-- id: clienti-vicino · verticale: artigiano -->
+Chiedi a **Cerca** (o al bot su Telegram) chi hai vicino: "dammi l'elenco dei clienti vicino a me", "chi ho vicino entro 5 km?", "cantieri aperti vicino a me", "clienti vicino a Moncalieri", "clienti vicino al cantiere Bagno dei Rossi".
+- **La tua posizione**: nell'app il browser te la chiede (consentila per mAIPAL); su Telegram tocchi **📍 Invia la mia posizione**. Serve solo per quella ricerca: non la salvo. Se non vuoi darla, scrivi un luogo ("vicino a via Roma 10, Torino").
+- **Il raggio**: quello che dici ("entro 5 km", "nel raggio di 500 metri"), altrimenti quello dell'organizzazione (10 km, si cambia in Organizzazione → Commesse: orari e automatismi → **Clienti vicino a me**).
+- **Dove sta un cliente**: il suo indirizzo e gli indirizzi dei cantieri delle sue commesse; conta il più vicino (la riga dice "cantiere «Bagno»" quando è il cantiere).
+- **L'ordine**: prima i clienti con qualcosa da fare (commesse aperte, un **preventivo in attesa** di esito, una **manutenzione** o una **garanzia** in scadenza entro 45 giorni, un **lavoro extra** da far approvare), poi gli altri, in fondo; in ciascun gruppo dal più vicino.
+- **Le distanze**: in linea d'aria; per i **primi 3** la distanza **su strada** con i minuti di guida. Per ognuno: le commesse aperte, le 💡 opportunità, il telefono (**📞 Chiama**) e **🧭 Naviga** (apre Google Maps).
+- Puoi chiedere solo una parte: "cantieri aperti…", "preventivi in attesa vicino a me", "manutenzioni da fare qui intorno", "dove posso passare qui vicino?" (solo chi ha qualcosa da fare).
+- Se nessuno è nel raggio ti dico il più vicino e a quanti km. In fondo trovi quanti clienti non sono nell'elenco perché **senza indirizzo**, con un **indirizzo che non trovo** sulla mappa (correggilo nella scheda del cliente) o **ancora da localizzare**: le posizioni si cercano da sole dagli indirizzi, una al secondo, quindi la prima volta con tanti clienti riprova dopo qualche minuto.
+
 ## Documenti
 <!-- id: documenti · path: /dashboard/documents · verticale: tutti -->
 Documenti è la tua **base di conoscenza**: tutto quello che hai caricato con Salva (file, foto, scontrini) e che Cerca usa per rispondere.
@@ -407,6 +418,7 @@ Con Telegram usi mAIPAL dal telefono come una chat.
 - Mandagli foto (con o senza didascalia): le salva su Drive; se non capisce la cartella, te lo chiede.
 - Comandi: `/ask` domanda, `/save` informazione, `/task` task, `/journal` diario, `/report` referto o report, `/lista` modifica una lista, `/azione` e `/azioni` azioni programmate, `/end` chiude la conversazione, `/help`.
 - Ogni mattina (all'orario scelto in Profilo) ricevi il riepilogo della giornata; il lunedì quello della settimana. La sera alle 21 il resoconto della giornata, il venerdì quello della settimana.
+- "**Clienti vicino a me**" (artigiani): il bot ti chiede la posizione con un pulsante e ti risponde con l'elenco, i link per navigare e i telefoni.
 - Help per ora risponde solo nell'app, non su Telegram.
 
 ## Orologio

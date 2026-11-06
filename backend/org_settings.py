@@ -32,6 +32,7 @@ DEFAULTS = {
     "working_days": ["MON", "TUE", "WED", "THU", "FRI"],
     "timezone": "Europe/Rome",
     "lunch_break_minutes": 0,                 # PA-04: taken off the hours on site (0 = not)
+    "nearby_radius_km": 10,                   # "clienti vicino a me": the radius when not said
     # rules
     "save_position": True,                    # the 📍 button keeps the position (C.4)
     "client_report_approval": True,           # the client's weekly message waits for approval (C.2)
@@ -41,7 +42,8 @@ _TIME_KEYS = {k for k, v in DEFAULTS.items() if isinstance(v, str) and re.fullma
 _INT_LIMITS = {"max_presence_hours": (1, 24), "checkin_tolerance_minutes": (0, 240), "checkout_tolerance_minutes": (0, 240),
                "daily_message_lead_minutes": (0, 240), "quote_followup_days": (1, 60), "quote_followup_max": (0, 20),
                "weather_alert_rain_pct": (0, 100), "weather_alert_wind_kmh": (0, 200), "weather_alert_temp_min": (-30, 30),
-               "weather_alert_temp_max": (10, 60), "lunch_break_minutes": (0, 180)}
+               "weather_alert_temp_max": (10, 60), "lunch_break_minutes": (0, 180),
+               "nearby_radius_km": (1, 200)}
 
 
 def settings(tenant: Optional[dict]) -> dict:
