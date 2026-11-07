@@ -271,7 +271,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Valore, costi e margine li vedono gli **amministratori**; gli utenti solo se l'organizzazione lo permette (Impostazioni → Organizzazione → regole), i collaboratori mai.
 - Nella sezione **Costi** della commessa:
   - **Preventivo**: l'importo concordato con il cliente;
-  - **Manodopera**: una **tariffa standard** (€/ora) e, se serve, una tariffa per ogni persona. Le ore sono quelle scritte nel diario;
+  - **Manodopera**: una **tariffa standard** (€/ora) e, se serve, una tariffa per ogni persona. Le ore sono quelle scritte nel diario. La tariffa standard si vede con le voci: tocca la freccia di **Manodopera** per aprirle o chiuderle;
   - **Materiali**: il prezzo unitario di ogni materiale usato (per metro, pezzo, …);
   - **Altre spese**: noleggi, trasferte, smaltimenti, con importo e descrizione.
 - Tariffe e prezzi valgono per **tutte le commesse** dei tuoi clienti: li scrivi una volta sola.

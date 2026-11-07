@@ -1633,7 +1633,7 @@ function CostsView({ commessaId, onChanged }) {
   const fold = (k, title, total, n, testid) => (
     <button type="button" onClick={() => toggle(k)} aria-expanded={open[k]} data-testid={testid}
       className={`${head} w-full flex items-center gap-2 text-left`}>
-      <span className="flex-1">{title} · {eur(total)}{!open[k] && n ? <span className="normal-case tracking-normal text-white/45"> · {n} voc{n === 1 ? "e" : "i"}</span> : null}</span>
+      <span className="flex-1">{title} · <span className="text-[13px]">{eur(total)}</span>{!open[k] && n ? <span className="normal-case tracking-normal text-white/45"> · {n} voc{n === 1 ? "e" : "i"}</span> : null}</span>
       <ChevronDown size={15} className={`text-white/60 transition-transform duration-200 ${open[k] ? "rotate-180" : ""}`} />
     </button>
   );
@@ -1673,13 +1673,15 @@ function CostsView({ commessaId, onChanged }) {
       )}
 
       {fold("labor", "manodopera", e.labor_total, e.labor.length, "costs-labor-toggle")}
-      <div className={row}>
-        <span className="flex-1 min-w-0">
-          <span className="block text-[14px] text-white/90">Tariffa standard</span>
-          <span className="block text-[11.5px] text-white/50">per chi non ha una tariffa sua</span>
-        </span>
-        <MoneyInput value={e.default_rate} onSave={(n) => costs(n === null ? { clear_default_rate: true } : { default_rate: n })} unit="€/h" testid="costs-default-rate" />
-      </div>
+      {open.labor && (
+        <div className={row}>
+          <span className="flex-1 min-w-0">
+            <span className="block text-[14px] text-white/90">Tariffa standard</span>
+            <span className="block text-[11.5px] text-white/50">per chi non ha una tariffa sua</span>
+          </span>
+          <MoneyInput value={e.default_rate} onSave={(n) => costs(n === null ? { clear_default_rate: true } : { default_rate: n })} unit="€/h" testid="costs-default-rate" />
+        </div>
+      )}
       {open.labor && e.labor.map((x) => (
         <div key={x.who} className={row} data-testid="costs-labor-row">
           <span className="flex-1 min-w-0">
@@ -1707,7 +1709,7 @@ function CostsView({ commessaId, onChanged }) {
       ))}
       {open.materials && e.materials.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessun materiale registrato.</div>}
 
-      <div className={head}>altre spese · {eur(e.extras_total)}</div>
+      <div className={head}>altre spese · <span className="text-[13px]">{eur(e.extras_total)}</span></div>
       {e.extras.map((x) => (
         <div key={x.id} className={row} data-testid="costs-extra-row">
           <span className="flex-1 min-w-0">
@@ -1728,7 +1730,6 @@ function CostsView({ commessaId, onChanged }) {
         {/* keeps the field focused: a blur would bring the tab bar back under the finger */}
         <button type="button" onMouseDown={(ev) => ev.preventDefault()} onClick={addExtra} data-testid="costs-extra-add" aria-label="Aggiungi la spesa" className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center text-white"><Plus size={15} /></button>
       </div>
-      <div className="pt-3 text-[11.5px] text-white/50">Tariffe orarie e prezzi dei materiali valgono per tutte le commesse. All'80% e al 100% del preventivo ti avviso su Telegram.</div>
     </div>
   );
 }
