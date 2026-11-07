@@ -101,7 +101,7 @@ def maps_link(loc: Optional[dict]) -> str:
 async def geocode(address: str) -> Optional[dict]:
     """The address's coordinates from OpenStreetMap (Nominatim) -> {"lat", "lon"} or None."""
     address = " ".join((address or "").split())
-    if len(address) < 5:
+    if len(address) < 3:          # "Bra", "Asti": a town is enough
         return None
     import httpx
     try:

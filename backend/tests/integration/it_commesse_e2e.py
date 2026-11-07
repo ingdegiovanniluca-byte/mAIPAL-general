@@ -381,14 +381,15 @@ async def main():
     BOT_SENT.clear()
     assert await server._daily_site_summary(at(D, 20, 0)) == 1 and "*Rifacimento bagno* — Mario Rossi" in to(77)[-1][0]
     F = D + timedelta(days=(4 - D.weekday()) % 7)
-    rep = await server._job_weekly_summary(me, at(F, 18, 0).astimezone(ROME))
+    W = D if D.weekday() >= 4 else F       # the report of the week D is in (asked on the weekend: that day's)
+    rep = await server._job_weekly_summary(me, at(W, 18, 0).astimezone(ROME))
     assert "Margine" in rep and "valore € 8.500" in rep and "manodopera" in rep, rep
-    if F - timedelta(days=F.weekday()) <= D:
+    if W - timedelta(days=W.weekday()) <= D:
         assert "1 svolte su 1 pianificate" in rep and "1 ancora aperti" in rep, rep
     act = next(x for x in db.scheduled_actions.docs if x.get("system_key") == server.WEEKLY_JOBS_KEY)
     assert act["schedule"]["weekdays"] == [4] and act["schedule"]["time"] == "18:00" and act["title"] == "Report settimanale cantieri"
     # the users never see the money
-    assert "Margine" not in await server._job_weekly_summary(MARCO, at(F, 18, 0).astimezone(ROME))
+    assert "Margine" not in await server._job_weekly_summary(MARCO, at(W, 18, 0).astimezone(ROME))
     # nothing reaches the client without the approval
     db.client_links.docs.append({"id": "cl1", "owner_user_id": "u1", "collection_id": cl["id"], "item_id": sub["item_id"], "telegram_chat_id": 555,
                                  "status": "active", "name": "Mario Rossi"})

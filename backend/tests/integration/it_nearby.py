@@ -306,7 +306,7 @@ async def fake_road(a, b):
     return {"m": nb.distance_m(a, b) * 1.3, "min": 7}
 nb.router = fake_road
 GEOCODED = []
-PLACES = {"Moncalieri": north(-8), "via Garibaldi 3, Torino": north(1)}
+PLACES = {"Moncalieri": north(-8), "via Garibaldi 3, Torino": north(1), "Bra": north(-40), "Milano": north(120)}
 async def fake_geocode(addr):
     GEOCODED.append(addr)
     return PLACES.get(addr)
@@ -329,6 +329,10 @@ async def main():
     assert nb.said("il vicino ha chiesto un preventivo per il bagno") is None
     assert nb.said("sono vicino al cantiere dei Rossi, arrivo tra 10 minuti") is None
     assert nb.said("oggi posato il gres") is None
+    # misspelled, a doubled preposition, a client or a site named
+    assert nb.said("dimmi i clinenti vicino a milano")["place"] == "milano" and nb.said("clineti vicino a me")["me"]
+    assert nb.said("dimmi i clienti vicino a al cantiere di luca")["place"] == "cantiere di luca"
+    assert nb.said("cantiere vicino al bar, arrivo") is None and nb.said("chi ho vicino a Bra?")["place"] == "Bra"
 
     # 2) the clients: where they live and where their sites are; the nearest one counts
     def client(cid, name, addr="", geo=None, phone=""):
@@ -387,7 +391,7 @@ async def main():
     ten["settings"]["nearby_radius_km"] = 10
     res = await server._nearby_search(me, ORIGIN, radius_km=0.5)
     assert res["rows"] == [] and res["nearest"]["name"] == "Gino Bruni"
-    assert "Nessun cliente vicino a te entro 0,5 km" in nb.message(res) or "Nessun cliente vicino a te entro 0.5 km" in nb.message(res)
+    assert "Nessun cliente vicino a te entro 0,5 km" in nb.message(res)
     assert "Il più vicino è Gino Bruni, a 1,0 km: chiedimi «entro 1 km»" in nb.message(res), nb.message(res)
 
     # 4) the filters: open commesse, quotes, maintenances, opportunities
@@ -406,8 +410,35 @@ async def main():
     assert out["rows"] and out["message"].startswith("📍 ")
     out = await server.nearby_search(server.NearbyPayload(text="clienti vicino a Moncalieri entro 3 km"), me)
     assert out["place"] == "Moncalieri" and out["radius_km"] == 3 and out["rows"] == [] and out["nearest"]
+    # a site named: its position, its client not in the list
     out = await server.nearby_search(server.NearbyPayload(text="clienti vicino al cantiere Bagno dei Neri entro 2 km"), me)
-    assert [r["name"] for r in out["rows"]][0] == "Bruno Neri" and out["rows"][0]["distance_m"] == 0, out["rows"]
+    assert out["where"] == "vicino al cantiere «Bagno» di Bruno Neri" and [r["name"] for r in out["rows"]] == ["Hugo Gialli", "Anna Verdi"], out["rows"]
+    assert out["message"].startswith("📍 2 clienti vicino al cantiere «Bagno» di Bruno Neri entro 2 km:")
+    out = await server.nearby_search(server.NearbyPayload(text="dimmi i clienti vicino a al cantiere di bruno"), me)
+    assert out["where"] == "vicino al cantiere «Bagno» di Bruno Neri" and "Bruno Neri" not in [r["name"] for r in out["rows"]]
+    # a client named: their address (a part of the name only with "casa di", "dai", ...)
+    out = await server.nearby_search(server.NearbyPayload(text="clienti vicino a casa di Anna entro 1,5 km"), me)
+    assert out["where"] == "vicino ad Anna Verdi" and [r["name"] for r in out["rows"]] == ["Bruno Neri", "Gino Bruni"], out
+    assert "entro 1,5 km" in out["message"]
+    out = await server.nearby_search(server.NearbyPayload(text="clienti vicino a Hugo Gialli entro 3 km"), me)
+    assert out["where"] == "vicino a Hugo Gialli" and [r["name"] for r in out["rows"]][0] == "Carla Blu"
+    # two open sites: asked which
+    client("c_luca", "Luca D", "via Roma 1, Torino", north(0.5))
+    job("s_l1", "c_luca", "Impianto allarme", "in lavorazione", "via Roma 1, Torino", north(0.5))
+    job("s_l2", "c_luca", "Bagno", "in lavorazione", "via Po 9, Torino", north(1.5))
+    d = await deny(server.nearby_search(server.NearbyPayload(text="dimmi i clienti vicino al cantiere di luca"), me), 400)
+    assert "Luca D ha più cantieri aperti: «Impianto allarme», «Bagno»" in d, d
+    out = await server.nearby_search(server.NearbyPayload(text="dimmi i clienti vicino al cantiere impianto allarme di luca"), me)
+    assert out["where"] == "vicino al cantiere «Impianto allarme» di Luca D"
+    d = await deny(server.nearby_search(server.NearbyPayload(text="clienti vicino al cantiere Bagno"), me), 400)
+    assert d.startswith("Quale cantiere? «Bagno» di Bruno Neri, «Bagno» di Luca D") or d.startswith("Quale cantiere? «Bagno» di Luca D"), d
+    d = await deny(server.nearby_search(server.NearbyPayload(text="clienti vicino a Elena Viola"), me), 400)
+    assert "Di Elena Viola non ho l'indirizzo" in d
+    # a town: on the map ("Bra": three letters are enough); a client's first name alone is not a town
+    out = await server.nearby_search(server.NearbyPayload(text="chi ho vicino a Bra?"), me)
+    assert out["where"] == "vicino a Bra" and out["rows"] == [] and out["nearest"]
+    out = await server.nearby_search(server.NearbyPayload(text="dimmi i clinenti vicino a Milano"), me)
+    assert out["where"] == "vicino a Milano"
     await deny(server.nearby_search(server.NearbyPayload(text="clienti vicino a Paperopoli"), me), 400)
     # another vertical: not a nearby question
     db.users.docs.append({"user_id": "u9", "email": "v@b.it", "name": "Vet", "role": "user", "tenant_id": "ten_9", "business_vertical": "veterinario"})
@@ -425,7 +456,7 @@ async def main():
     u.message.location = types.SimpleNamespace(latitude=ORIGIN["lat"], longitude=ORIGIN["lon"])
     await tg._on_location(u, Ctx())
     txt, kb = REPLIES[-1]
-    assert txt.startswith("📍 4 clienti vicino a te entro 5 km:") and "2. *Hugo Gialli* — 6,5 km su strada, 7 min\n" in txt and "Dario" not in txt, txt
+    assert txt.startswith("📍 5 clienti vicino a te entro 5 km:") and "3. *Hugo Gialli* — 6,5 km su strada, 7 min\n" in txt and "Dario" not in txt, txt
     assert isinstance(kb, telegram.ReplyKeyboardRemove)
     assert not (await tg._get_state(db, "u1", 77)).get("pending_nearby")
     # a place: no position asked

@@ -270,7 +270,7 @@ const fileToJournalImageDataUri = (file) => new Promise((resolve, reject) => {
 // "clienti vicino a me": the list, nearest first (the ones with something to do before the others)
 const kmText = (m) => (m == null ? "" : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1).replace(".", ",")} km`);
 function NearbyResult({ res }) {
-  const where = res.place ? `vicino a ${res.place}` : "vicino a te";
+  const where = res.where || (res.place ? `vicino a ${res.place}` : "vicino a te");
   const miss = res.missing || {};
   return (
     <div className="mt-1 ml-1 max-w-[560px]" data-testid="nearby-result">

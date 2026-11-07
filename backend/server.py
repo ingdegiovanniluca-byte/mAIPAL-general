@@ -11064,7 +11064,8 @@ async def _nearby_search(current: User, origin: dict, radius_km: Optional[float]
     """The clients within the radius of the origin, the ones with something to do first. -> rows and counts"""
     clienti = await _clienti_list(current)
     radius = float(radius_km or (await _settings_of_user(current.user_id)).get("nearby_radius_km") or nb.DEFAULT_RADIUS_KM)
-    res = {"radius_km": radius, "place": place, "origin": origin, "rows": [], "missing": {}, "nearest": None}
+    res = {"radius_km": radius, "place": place, "where": origin.get("where") or (f"vicino a {place}" if place else "vicino a te"),
+           "origin": {"lat": origin["lat"], "lon": origin["lon"]}, "rows": [], "missing": {}, "nearest": None}
     if not clienti:
         return res
     commesse, clients = await _all_commesse(clienti)
@@ -11081,6 +11082,8 @@ async def _nearby_search(current: User, origin: dict, radius_km: Optional[float]
     rows, outside = [], []
     missing = {"no_address": 0, "not_found": 0, "pending": 0}
     for cid, item in clients.items():
+        if cid == origin.get("client_id"):          # "vicino al cantiere di Luca": Luca is not in his own list
+            continue
         mine = by_client.get(cid, [])
         points = []
         geo = item.get("geo") or {}
@@ -11143,22 +11146,93 @@ async def _nearby_search(current: User, origin: dict, radius_km: Optional[float]
     return res
 
 
+# "vicino al cantiere di Luca", "vicino a casa di Mario Rossi", "vicino alla commessa Bagno": a client or a
+# site named, before the map ("vicino a Milano"). A part of a name ("Luca" for "Luca D") only with these words.
+_PLACE_CUE = re.compile(r"\b(?:cantier\w*|commess\w*|casa|client[ei]|dai?|dal(?:la|lo)?|dagli|dalle|di|del(?:la|lo|l)?|dei|degli)\b", re.I)
+_SITE_CUE = re.compile(r"\b(?:cantier\w*|commess\w*|lavor\w*)\b", re.I)
+
+
+async def _client_point(clienti: dict, item: dict) -> Optional[dict]:
+    """The client's position from their address (looked up once, kept)."""
+    addr = _client_address(clienti, item)
+    if not addr:
+        return None
+    geo = item.get("geo") or {}
+    if geo.get("address") != addr:
+        found = await sp.geocode(addr)
+        geo = {"address": addr, "source": "address", "lat": (found or {}).get("lat"), "lon": (found or {}).get("lon")}
+        await db.collection_items.update_one({"id": item["id"]}, {"$set": {"geo": geo}})
+    return {"lat": geo["lat"], "lon": geo["lon"]} if geo.get("lat") is not None else None
+
+
+async def _named_origin(clienti: dict, place: str) -> Optional[dict]:
+    """A client or a commessa named in the place -> {"lat", "lon", "where", "client_id"}, None when none is named.
+    400 when it can't be told which one, or it has no address."""
+    commesse, clients = await _all_commesse(clienti)
+    fmap = clienti.get("system_map") or {}
+    name_key = fmap.get("nome", "nome")
+    low_place, low = place.lower(), _norm_title(place)
+    cue = _PLACE_CUE.search(place)
+    named = work_reports.find_matching_clients(place, list(clients.values()), name_key)
+    if not cue:     # "vicino a Milano": only a client's whole name, not a part of it
+        named = [c for c in named if re.search(rf"\b{re.escape(str((c.get('data') or {}).get(name_key) or '').lower())}\b", low_place)]
+    named_ids = {c["id"] for c in named}
+    name_of = lambda cid: _sysval((clients.get(cid) or {}).get("data"), fmap, "nome") or "Cliente"
+
+    def titled(v):
+        t = _norm_title(v["title"])
+        return len(t) >= 4 and t not in JOB_GENERIC_TITLES and re.search(rf"\b{re.escape(t)}\b", low) is not None
+    sites = [v for v in commesse if (_SITE_CUE.search(place) or named_ids) and titled(v)
+             and (not named_ids or v["client_item_id"] in named_ids)]
+    if not sites and named_ids and _SITE_CUE.search(place) and len(named_ids) == 1:
+        opened = [v for v in commesse if v["client_item_id"] in named_ids and not vx.is_closed(v["stato"])]
+        sites = opened              # their one open site; none open: their address
+        if len(opened) > 1:
+            raise HTTPException(status_code=400, detail=(
+                f"{name_of(opened[0]['client_item_id'])} ha più cantieri aperti: " + ", ".join(f"«{v['title']}»" for v in opened)
+                + f". Scrivi quale, es. «clienti vicino al cantiere {opened[0]['title']} di {name_of(opened[0]['client_item_id'])}»."))
+    if sites:
+        sites = [v for v in sites if not vx.is_closed(v["stato"])] or sites
+        if len(sites) > 1:
+            raise HTTPException(status_code=400, detail="Quale cantiere? " + ", ".join(
+                f"«{v['title']}» di {name_of(v['client_item_id'])}" for v in sites[:6]) + ". Scrivilo per intero.")
+        v = sites[0]
+        g = await _commessa_geo(v["id"], v) or await _client_point(clienti, clients.get(v["client_item_id"]) or {})
+        if not g:
+            raise HTTPException(status_code=400, detail=f"Del cantiere «{v['title']}» di {name_of(v['client_item_id'])} non ho l'indirizzo "
+                                                        "(o non lo trovo sulla mappa): aggiungilo nella commessa.")
+        return {"lat": g["lat"], "lon": g["lon"], "client_id": v["client_item_id"],
+                "where": f"vicino al cantiere «{v['title']}» di {name_of(v['client_item_id'])}"}
+    if not named:
+        return None
+    if len(named_ids) > 1:
+        raise HTTPException(status_code=400, detail="Quale cliente? " + ", ".join(name_of(c["id"]) for c in named[:6]) + ". Scrivi il nome completo.")
+    c = named[0]
+    g = await _client_point(clienti, c)
+    if not g:       # no address of theirs: their only open site
+        opened = [v for v in commesse if v["client_item_id"] == c["id"] and not vx.is_closed(v["stato"])]
+        g = await _commessa_geo(opened[0]["id"], opened[0]) if len(opened) == 1 else None
+    if not g:
+        raise HTTPException(status_code=400, detail=f"Di {name_of(c['id'])} non ho l'indirizzo (o non lo trovo sulla mappa): aggiungilo nella scheda del cliente.")
+    who = name_of(c["id"])
+    return {"lat": g["lat"], "lon": g["lon"], "client_id": c["id"], "where": f"vicino {'ad' if who[:1].lower() == 'a' else 'a'} {who}"}
+
+
 async def _nearby_origin(current: User, q: dict, lat: Optional[float], lon: Optional[float]) -> dict:
-    """Where from: my position, a commessa named ("vicino al cantiere dei Rossi") or a place found on the map."""
+    """Where from: my position, a client or a site named ("vicino al cantiere di Luca") or a place on the map ("vicino a Milano")."""
     if not q.get("place"):
         if lat is None or lon is None:
             raise HTTPException(status_code=400, detail="Per cercare vicino a te serve la tua posizione.")
         return {"lat": float(lat), "lon": float(lon)}
     clienti = await _clienti_list(current)
-    if clienti and re.search(r"\bcantier|\bcommess|\bdai?\b|\bdel(?:la|lo)?\b", q["place"], re.I):
-        hit = await _resolve_commessa(clienti, q["place"], "", "", None)
-        if hit.get("commessa"):
-            g = await _commessa_geo(hit["commessa"]["id"], hit["commessa"])
-            if g:
-                return {"lat": g["lat"], "lon": g["lon"]}
+    if clienti:
+        hit = await _named_origin(clienti, q["place"])
+        if hit:
+            return hit
     found = await sp.geocode(q["place"])
     if not found:
-        raise HTTPException(status_code=400, detail=f"Non trovo «{q['place']}» sulla mappa: scrivi il paese o l'indirizzo completo.")
+        raise HTTPException(status_code=400, detail=f"Non trovo «{q['place']}» sulla mappa né tra i tuoi clienti: scrivi il paese, "
+                                                    "l'indirizzo completo o il nome del cliente.")
     return found
 
 

@@ -731,7 +731,7 @@ async def _try_nearby(update, ctx, db, user: dict, content: str) -> bool:
         await _set_state(db, chat_id, user["user_id"], pending_nearby=q)
         await update.message.reply_text(
             "📍 Mandami la tua posizione con il pulsante qui sotto e ti dico chi hai vicino"
-            + (f" (entro {q['radius_km']:g} km)." if q.get("radius_km") else "."),
+            + (f" (entro {nb._num(q['radius_km'])} km)." if q.get("radius_km") else "."),
             reply_markup=ReplyKeyboardMarkup([[KeyboardButton("📍 Invia la mia posizione", request_location=True)]],
                                              one_time_keyboard=True, resize_keyboard=True))
         return True
