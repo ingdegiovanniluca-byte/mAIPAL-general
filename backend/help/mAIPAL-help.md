@@ -273,7 +273,8 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
   - **Preventivo**: l'importo concordato con il cliente;
   - **Manodopera**: una **tariffa standard** (€/ora) e, se serve, una tariffa per ogni persona. Le ore sono quelle scritte nel diario. La tariffa standard si vede con le voci: tocca la freccia di **Manodopera** per aprirle o chiuderle;
   - **Materiali**: il prezzo unitario di ogni materiale usato (per metro, pezzo, …);
-  - **Altre spese**: noleggi, trasferte, smaltimenti, con importo e descrizione.
+  - **Altre spese**: noleggi, trasferte, smaltimenti, con importo e descrizione (la riga per aggiungerle si vede con la sezione aperta).
+  - Manodopera, Materiali e Altre spese si aprono e chiudono con la freccia; da chiuse mostrano il totale e quante voci ci sono.
 - Tariffe e prezzi valgono per **tutte le commesse** dei tuoi clienti: li scrivi una volta sola.
 - In alto vedi costi, preventivo, **margine** e la barra di quanto preventivo hai già consumato (arancione dall'80%, rossa oltre il 100%). Ore o materiali senza prezzo non vengono stimati: sono indicati a parte come "non conteggiati".
 - Il riquadro **Costi** nella riga di informazioni mostra il totale e la percentuale del preventivo.

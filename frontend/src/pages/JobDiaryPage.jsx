@@ -558,7 +558,7 @@ function MoneyInput({ value, onSave, placeholder, testid, unit = "€", wide = f
 
 // Costi: open / closed lists of manodopera and materiali, kept on this device
 const COSTS_OPEN_KEY = "maipal.costs.open";
-const readOpen = () => { try { return { labor: true, materials: true, ...JSON.parse(localStorage.getItem(COSTS_OPEN_KEY) || "{}") }; } catch { return { labor: true, materials: true }; } };
+const readOpen = () => { try { return { labor: true, materials: true, extras: true, ...JSON.parse(localStorage.getItem(COSTS_OPEN_KEY) || "{}") }; } catch { return { labor: true, materials: true, extras: true }; } };
 
 // ===== A commessa lost: its reason is required (category + words), then the state changes
 function LostSheet({ commessa, onClose, onSaved }) {
@@ -1709,8 +1709,8 @@ function CostsView({ commessaId, onChanged }) {
       ))}
       {open.materials && e.materials.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessun materiale registrato.</div>}
 
-      <div className={head}>altre spese · <span className="text-[13px]">{eur(e.extras_total)}</span></div>
-      {e.extras.map((x) => (
+      {fold("extras", "altre spese", e.extras_total, e.extras.length, "costs-extras-toggle")}
+      {open.extras && e.extras.map((x) => (
         <div key={x.id} className={row} data-testid="costs-extra-row">
           <span className="flex-1 min-w-0">
             <span className="block text-[14px] text-white/90 truncate">{x.label}</span>
@@ -1720,7 +1720,7 @@ function CostsView({ commessaId, onChanged }) {
           <button type="button" onClick={() => delExtra(x)} aria-label="Elimina la spesa" className="p-1.5 text-white/55 hover:text-white"><Trash2 size={14} /></button>
         </div>
       ))}
-      <div className="flex items-center gap-2 py-2.5 border-t border-white/[0.16]">
+      {open.extras && <div className="flex items-center gap-2 py-2.5 border-t border-white/[0.16]">
         <input value={label} onChange={(ev) => setLabel(ev.target.value)} placeholder="Es. noleggio ponteggio" data-testid="costs-extra-label"
           className="h-8 flex-1 min-w-0 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/35 outline-none" />
         <input value={amount} onChange={(ev) => setAmount(ev.target.value)} placeholder="0" inputMode="decimal" data-testid="costs-extra-amount"
@@ -1729,7 +1729,7 @@ function CostsView({ commessaId, onChanged }) {
         <span className="text-[12px] text-white/60">€</span>
         {/* keeps the field focused: a blur would bring the tab bar back under the finger */}
         <button type="button" onMouseDown={(ev) => ev.preventDefault()} onClick={addExtra} data-testid="costs-extra-add" aria-label="Aggiungi la spesa" className="h-8 w-8 shrink-0 rounded-full bg-white/15 flex items-center justify-center text-white"><Plus size={15} /></button>
-      </div>
+      </div>}
     </div>
   );
 }
