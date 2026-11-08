@@ -1216,8 +1216,10 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_message(chat_id=chat_id, text=out["message"] + (f"\n\n{out['text']}" if out.get("status") == "approvata" else ""))
         except Exception as e:
             await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
-    elif data.startswith(("qc:", "qx:", "qv:", "qo:", "qr:", "docc:")):   # quotes: confirm, discard, value, outcome, lost reason; a document's commessa
-        from server import _confirm_quote, _choose_quote_value, _quote_outcome, LOST_CATEGORIES
+    elif data.startswith(("qc:", "qx:", "qv:", "qo:", "qr:", "qs:", "docc:")):   # quotes: confirm, discard, value, outcome, lost reason, solution; a document's commessa
+        from server import _confirm_quote, _choose_quote_value, _quote_outcome, _choose_quote_option, LOST_CATEGORIES
+        def _option_kb(qid, names):
+            return InlineKeyboardMarkup([[InlineKeyboardButton(f"🔀 {n}", callback_data=f"qs:{qid}:{i}")] for i, n in enumerate(names)])
         current = _to_user_pydantic(user)
         parts = data.split(":")
         try:
@@ -1226,7 +1228,13 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
         try:
             if parts[0] == "qc":
-                out = await _confirm_quote(current, parts[1], parts[2] if len(parts) > 2 and parts[2] in ("new", "keep") else None)
+                extra = parts[2] if len(parts) > 2 else ""
+                option = int(extra[1:]) if extra[:1] == "o" and extra[1:].isdigit() else None
+                out = await _confirm_quote(current, parts[1], extra if extra in ("new", "keep") else None, option=option)
+                await ctx.bot.send_message(chat_id=chat_id, text=out["message"],
+                                           reply_markup=_option_kb(parts[1], out["options"]) if out.get("options") else None)
+            elif parts[0] == "qs":
+                out = await _choose_quote_option(current, parts[1], int(parts[2]))
                 await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
             elif parts[0] == "qx":
                 from server import db as _db
@@ -1241,7 +1249,9 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     await ctx.bot.send_message(chat_id=chat_id, text="Perché non è stato accettato?", reply_markup=kb)
                 else:
                     out = await _quote_outcome(current, parts[1], parts[2], channel="telegram")
-                    await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+                    co = out.get("choose_option")
+                    await ctx.bot.send_message(chat_id=chat_id, text=out["message"],
+                                               reply_markup=_option_kb(co["quote_id"], co["options"]) if co else None)
             elif parts[0] == "qr":
                 if parts[2] == "altro":
                     await _set_state(db, chat_id, user["user_id"], pending_lost=parts[1])
@@ -1557,7 +1567,12 @@ async def _ingest_tg_document(ctx, chat_id, db, user, commessa_id: str, pdoc: di
     if res.get("type") == "quote":
         qid = res["quote"]["id"]
         rows = []
-        if res.get("value") and res.get("current_budget") and res.get("can_choose_value") and abs(float(res["current_budget"]) - res["value"]) >= 0.01:
+        if res.get("options"):   # alternative solutions: which one, or later
+            for i, o in enumerate(res["options"][:6]):
+                rows.append([InlineKeyboardButton(f"✅ {o['name']}" + (f" ({o['value']:,.0f} €)".replace(",", ".") if o.get("value") else ""),
+                                                  callback_data=f"qc:{qid}:o{i}")])
+            rows.append([InlineKeyboardButton("✅ Conferma, la soluzione la scelgo dopo", callback_data=f"qc:{qid}:later")])
+        elif res.get("value") and res.get("current_budget") and res.get("can_choose_value") and abs(float(res["current_budget"]) - res["value"]) >= 0.01:
             rows.append([InlineKeyboardButton("✅ Conferma, usa il nuovo valore", callback_data=f"qc:{qid}:new")])
             rows.append([InlineKeyboardButton("✅ Conferma, tieni il valore attuale", callback_data=f"qc:{qid}:keep")])
         else:

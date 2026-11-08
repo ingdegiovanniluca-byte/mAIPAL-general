@@ -421,7 +421,8 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "\"08:00\", end \"17:00\"); altrimenti null. Il giorno va in \"date\" (\"ieri\" -> ieri).\n"
         "8. \"expenses\": le SPESE sostenute per la commessa con il loro importo SCRITTO nel messaggio (acquisti, noleggi, "
         "trasporti: \"comprato nastro 8 €\" -> {\"description\": \"nastro\", \"amount\": 8, \"supplier\": \"\"}), con il fornitore se detto. "
-        "Senza importo scritto non è una spesa. Nessuna: [].\n"
+        "Senza importo scritto non è una spesa. Se la spesa è il costo di un materiale usato (\"montato un interruttore da 50 A, costo 50 €\"), "
+        "mettilo in \"materials\" E in \"expenses\" con lo stesso nome. Nessuna: [].\n"
         "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
         "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
         "\"hours\": [], \"materials\": [], \"problems\": [], \"expenses\": [], \"times\": {\"start\": null, \"end\": null}, "
@@ -627,8 +628,15 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
         "(es. \"manutenzione annuale della caldaia\", \"verifica semestrale dell'impianto di allarme\"), altrimenti [];\n"
         "\"description\": la descrizione delle attività da svolgere per chi lavora: una frase sull'oggetto e l'elenco delle "
         "lavorazioni (righe che iniziano con \"- \"), senza prezzi. Ciò che manca: vuoto o null. MAI inventare.\n"
+        "\"optionals\": le voci FACOLTATIVE non comprese nel totale (\"OPTIONAL: kit luci +€250\") come [{\"description\", \"amount\"}];\n"
+        "\"options\": SOLO se il documento propone SOLUZIONI ALTERNATIVE tra cui il cliente sceglie (\"soluzione 1\" / \"soluzione 2\", "
+        "\"opzione A\" / \"opzione B\", \"in alternativa\"), una per soluzione, nell'ordine: [{\"name\": il nome come scritto (es. \"Soluzione 1\"), "
+        "\"title\": cosa propone in poche parole, \"total\": il totale DI QUELLA soluzione, \"taxable\": il suo imponibile se scritto, "
+        "\"items\": le sue voci (come sopra), \"materials_planned\": i suoi materiali (come sopra), \"activities\": le sue attività, "
+        "\"optionals\": le sue voci facoltative}]. In quel caso NON sommare le soluzioni: \"total\" e \"taxable\" generali solo se il documento "
+        "ha un totale unico, altrimenti null; \"items\" e \"materials_planned\" generali vuoti. Nessuna alternativa: [].\n"
         "Rispondi SOLO con JSON: {\"total\": null, \"taxable\": null, \"vat\": null, \"items\": [], \"start\": \"\", \"end\": \"\", "
-        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"materials_planned\": [], \"labor_hours\": null, \"labor\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\"}"
+        "\"validity\": \"\", \"payments\": [], \"activities\": [], \"materials\": [], \"materials_planned\": [], \"labor_hours\": null, \"labor\": [], \"warranty\": \"\", \"maintenance\": [], \"description\": \"\", \"optionals\": [], \"options\": []}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -661,14 +669,39 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
     warranty = " ".join(str(p.get("warranty") or "").split())[:200]
     warranty = warranty if warranty and grounded(warranty, text, 0.6) else ""
     maintenance = [{"text": x, "every_months": months_every(x)} for x in lines(p.get("maintenance"), 10) if grounded(x, text, 0.6)]
-    items = []
-    for it in p.get("items") if isinstance(p.get("items"), list) else []:
-        if isinstance(it, dict) and str(it.get("description") or "").strip():
-            q = _num(it.get("qty"))
-            q = q if q is not None and q > 0 and _qty_in_text(q, text) else None
-            items.append({"description": " ".join(str(it["description"]).split())[:200], "qty": q,
-                          "unit": unit_norm(it.get("unit")) if q is not None else "", "unit_price": money(it.get("unit_price")),
-                          "amount": money(it.get("amount"))})
+    def clean_items(rows):
+        out = []
+        for it in rows if isinstance(rows, list) else []:
+            if isinstance(it, dict) and str(it.get("description") or "").strip():
+                q = _num(it.get("qty"))
+                q = q if q is not None and q > 0 and _qty_in_text(q, text) else None
+                out.append({"description": " ".join(str(it["description"]).split())[:200], "qty": q,
+                            "unit": unit_norm(it.get("unit")) if q is not None else "", "unit_price": money(it.get("unit_price")),
+                            "amount": money(it.get("amount"))})
+        return out[:60]
+
+    def clean_optionals(rows):   # only with their amount written
+        out = []
+        for o in rows if isinstance(rows, list) else []:
+            desc = " ".join(str((o or {}).get("description") or "").split())[:160] if isinstance(o, dict) else ""
+            if desc and grounded(desc, text, 0.6):
+                out.append({"description": desc, "amount": money(o.get("amount"))})
+        return out[:10]
+
+    items = clean_items(p.get("items"))
+    # the alternative solutions ("soluzione 1 / 2"): each with its own total, items and materials; the client chooses one
+    options = []
+    for o in p.get("options") if isinstance(p.get("options"), list) else []:
+        if not isinstance(o, dict):
+            continue
+        name = " ".join(str(o.get("name") or "").split())[:80] or f"Soluzione {len(options) + 1}"
+        opt = {"name": name, "title": " ".join(str(o.get("title") or "").split())[:160], "total": money(o.get("total")),
+               "taxable": money(o.get("taxable")), "items": clean_items(o.get("items")),
+               "materials_planned": clean_planned_materials(o.get("materials_planned"), text), "activities": lines(o.get("activities")),
+               "optionals": clean_optionals(o.get("optionals"))}
+        if opt["total"] or opt["taxable"] or opt["items"] or opt["materials_planned"]:
+            options.append(opt)
+    options = options[:6] if len(options) >= 2 else []
     # the man-hours: as written, else the items priced in hours added up (both from the document)
     in_hours = [it["qty"] for it in items if it.get("qty") and it.get("unit") in HOUR_UNITS]
     lh = _num(p.get("labor_hours"))
@@ -676,13 +709,44 @@ async def read_quote(text: str, commessa: dict, user_id: Optional[str] = None, c
         lh = None
     if lh is None and in_hours:
         lh = round(sum(in_hours), 2)
+    if options:   # nothing of one solution counted as the whole quote's
+        total = money(p.get("total"))
+        total = total if total and not any(abs(total - (o["total"] or 0)) < 0.01 for o in options) else None
+        return {"total": total, "taxable": None, "vat": None, "items": [], "options": options, "optionals": [],
+                "start": day(p.get("start")), "end": day(p.get("end")), "validity": day(p.get("validity")),
+                "payments": lines(p.get("payments"), 10), "activities": lines(p.get("activities")), "materials": [],
+                "materials_planned": [], "labor_hours": lh, "labor": [x for x in lines(p.get("labor"), 10) if grounded(x, text, 0.6)],
+                "warranty": warranty, "warranty_months": warranty_months(warranty), "maintenance": maintenance,
+                "description": str(p.get("description") or "").strip()[:4000]}
     return {"total": money(p.get("total")), "taxable": money(p.get("taxable")), "vat": money(p.get("vat")), "items": items[:60],
+            "options": [], "optionals": clean_optionals(p.get("optionals")),
             "start": day(p.get("start")), "end": day(p.get("end")), "validity": day(p.get("validity")),
             "payments": lines(p.get("payments"), 10), "activities": lines(p.get("activities")), "materials": lines(p.get("materials")),
             "materials_planned": clean_planned_materials(p.get("materials_planned"), text),
             "labor_hours": lh, "labor": [x for x in lines(p.get("labor"), 10) if grounded(x, text, 0.6)],
             "warranty": warranty, "warranty_months": warranty_months(warranty), "maintenance": maintenance,
             "description": str(p.get("description") or "").strip()[:4000]}
+
+
+def apply_option(d: dict, idx: int) -> dict:
+    """The quote with the solution chosen: its total, items, materials, activities and optionals."""
+    opts = d.get("options") or []
+    if not 0 <= idx < len(opts):
+        raise ValueError("no such solution")
+    o = opts[idx]
+    return {**d, "total": o.get("total"), "taxable": o.get("taxable"), "vat": None, "items": o.get("items") or [],
+            "materials_planned": o.get("materials_planned") or [], "activities": o.get("activities") or d.get("activities") or [],
+            "optionals": o.get("optionals") or [], "chosen_option": idx, "chosen_option_name": o.get("name") or f"Soluzione {idx + 1}"}
+
+
+def option_line(o: dict, i: int) -> str:
+    """ "1) Soluzione 1 — sbarra FAAC 615: totale 2.650 € +IVA, 8 voci · optional: kit luci asta 250 €" """
+    money = (f"imponibile {_eur(o['taxable'])}" if o.get("taxable") else f"totale {_eur(o['total'])}" if o.get("total") else "totale non scritto")
+    bits = [money] + ([f"{len(o['items'])} voci"] if o.get("items") else [])
+    out = f"{i + 1}) {o.get('name') or f'Soluzione {i + 1}'}" + (f" — {o['title']}" if o.get("title") else "") + ": " + ", ".join(bits)
+    if o.get("optionals"):
+        out += " · optional: " + "; ".join(x["description"] + (f" {_eur(x['amount'])}" if x.get("amount") else "") for x in o["optionals"])
+    return out
 
 
 # how often, from the words (never guessed): "annuale" 12, "semestrale" 6, "ogni 3 mesi" 3, "ogni due anni" 24
@@ -766,10 +830,20 @@ def clean_planned_materials(rows, text: str) -> list:
     return out[:60]
 
 
+_LABOR_ITEM = re.compile(r"\b(?:manodopera|installazion\w*|montaggio|posa\s+in\s+opera|collaud\w*|trasport\w*|smaltiment\w*|"
+                         r"sopralluog\w*|progettazion\w*|pratich\w*|assistenza|garanzia|manutenzion\w*|totale|sconto|iva)\b", re.I)
+
+
 def planned_materials(d: dict) -> list:
-    """The quote's planned materials: as read (with quantities), else from its lines ("20 m corrugato 25")."""
+    """The quote's planned materials: as read (with quantities), else from its lines ("20 m corrugato 25"),
+    else its items with a quantity that are things (not hours, not installation or transport)."""
     if d.get("materials_planned"):
         return d["materials_planned"]
+    if not d.get("materials"):
+        from_items = [{"name": it["description"], "qty": it["qty"], "unit": it.get("unit") or ""} for it in d.get("items") or []
+                      if it.get("qty") and (it.get("unit") or "") not in HOUR_UNITS and not _LABOR_ITEM.search(it.get("description") or "")]
+        if from_items:
+            return from_items
     out = []
     for line in d.get("materials") or []:
         m = _MAT_LINE.match(str(line))
@@ -817,6 +891,13 @@ def spread_due_dates(n: int, start: date, end: date, add_workdays, workdays_betw
 def quote_detail_lines(d: dict, with_money: bool = False) -> list:
     """The quote's content as diary lines (read by the commessa's chat, its reports and searches)."""
     out = []
+    if d.get("options") and d.get("chosen_option") is None:
+        out.append("Soluzioni alternative (da scegliere): " + " | ".join(option_line(o, i) for i, o in enumerate(d["options"])))
+    elif d.get("options"):
+        out.append(f"Soluzione scelta: {d.get('chosen_option_name')} (alternative: "
+                   + "; ".join(o.get("name") or "" for i, o in enumerate(d["options"]) if i != d["chosen_option"]) + ")")
+    if d.get("optionals"):
+        out.append("Optional (non compresi): " + "; ".join(x["description"] + (f" {_eur(x['amount'])}" if x.get("amount") else "") for x in d["optionals"]))
     if d.get("items"):
         out.append("Voci: " + "; ".join(i["description"] + (f" ({_eur(i['amount'])})" if with_money and i.get("amount") else "")
                                        for i in d["items"][:40]))
@@ -1173,14 +1254,30 @@ def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[f
         if cost is None:
             unpriced_hours += h
         labor.append({"who": who, "hours": h, "rate": rate, "own_rate": who.lower() in rates, "cost": cost})
+    paid = {}   # what the notes say a material cost ("interruttore 50 A, 50 €"): that, not the price list
+    for lg in logs:
+        for m in lg.get("materials") or []:
+            if m.get("paid") is not None:
+                k = price_key(m["name"], m.get("unit") or "")
+                q, a = paid.get(k, (0.0, 0.0))
+                paid[k] = (q + float(m.get("qty") or 0), a + float(m["paid"]))
     mats, unpriced_mats = [], []
     for m in tot["materials"]:
-        p = (prices or {}).get(price_key(m["name"], m.get("unit") or ""))
+        key = price_key(m["name"], m.get("unit") or "")
+        p = (prices or {}).get(key)
         price = p.get("price") if isinstance(p, dict) else p
+        if key in paid:
+            pq, pa = paid[key]
+            rest = max(0.0, float(m.get("qty") or 0) - pq)
+            cost = round(pa + (rest * float(price) if rest and price is not None else 0), 2)
+            if rest and price is None:
+                unpriced_mats.append(m["name"])
+            mats.append({**m, "key": key, "price": price, "cost": cost, "paid": round(pa, 2)})
+            continue
         cost = round(m["qty"] * float(price), 2) if (price is not None and m.get("qty") is not None) else None
         if cost is None:
             unpriced_mats.append(m["name"])
-        mats.append({**m, "key": price_key(m["name"], m.get("unit") or ""), "price": price, "cost": cost})
+        mats.append({**m, "key": key, "price": price, "cost": cost})
     extras = [x for x in (extras or []) if x.get("amount") is not None]
     labor_total = round(sum(x["cost"] for x in labor if x["cost"] is not None), 2)
     materials_total = round(sum(x["cost"] for x in mats if x["cost"] is not None), 2)
@@ -1194,6 +1291,22 @@ def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[f
         out["margin"] = round(float(budget) - cost_total, 2)
         out["used_pct"] = round(cost_total / float(budget) * 100, 1)
     return out
+
+
+def expenses_on_materials(materials: list, expenses: list) -> tuple:
+    """ "usato un interruttore da 50 A, costo 50 €": the 50 € is what that material cost, kept on it
+    ("paid"), not an expense too (it would be counted twice). -> (materials, the other expenses)"""
+    mats = [dict(m) for m in materials or []]
+    left = []
+    for x in expenses or []:
+        i = next((i for i, m in enumerate(mats) if m.get("paid") is None and _same_material(m["name"], x["description"])), None)
+        if i is None:
+            left.append(x)
+            continue
+        mats[i]["paid"] = x["amount"]
+        if x.get("supplier"):
+            mats[i]["supplier"] = x["supplier"]
+    return mats, left
 
 
 def clean_expenses(rows, raw: str) -> list:
@@ -1265,7 +1378,12 @@ def hours_line(hours: list) -> str:
 
 def materials_line(materials: list) -> str:
     return ", ".join(" ".join(x for x in (_fmt_num(m.get("qty")), m.get("unit") or "", m["name"]) if x).strip()
-                     for m in materials)
+                     + (f" ({_eur(m['paid'])})" if m.get("paid") is not None else "") for m in materials)
+
+
+def unplanned_materials(materials: list, planned: list) -> list:
+    """The materials of a note the quote didn't foresee (by name, like the plan's comparison)."""
+    return [m for m in materials or [] if not any(_same_material(p["name"], m["name"]) for p in planned or [])]
 
 
 def _ctx_line(lg: dict) -> str:

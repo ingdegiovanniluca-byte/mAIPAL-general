@@ -1201,10 +1201,10 @@ export default function ChatPage() {
     setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.quotePick === pick ? { ...m, quotePick: { ...pick, done: true } } : m)) }));
     await runQuoteFromChat(pick.content, pick.files, null, commessaId);
   };
-  const resolveChatQuote = async (q, action, valueChoice = null) => {
+  const resolveChatQuote = async (q, action, valueChoice = null, option = undefined) => {
     setStreaming(true);
     try {
-      const r = action === "confirm" ? await api.post(`/jobs/quotes/${q.quote.id}/confirm`, { value_choice: valueChoice })
+      const r = action === "confirm" ? await api.post(`/jobs/quotes/${q.quote.id}/confirm`, { value_choice: valueChoice, ...(option !== undefined ? { option } : {}) })
         : await api.post(`/jobs/quotes/${q.quote.id}/discard`);
       setThread((th) => ({ ...th, messages: [...th.messages.map((m) => (m.chatQuote === q ? { ...m, chatQuote: { ...q, done: true } } : m)),
         { role: "assistant", content: action === "confirm" ? r.data.message : "Ok, non l'ho salvato.", jobCommessaId: action === "confirm" ? q.quote.commessa_id : undefined }] }));
@@ -2679,7 +2679,17 @@ export default function ChatPage() {
                     )}
                     {m.chatQuote && !m.chatQuote.done && (
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="chat-quote-choices">
-                        {m.chatQuote.value && m.chatQuote.current_budget && m.chatQuote.can_choose_value && Math.abs(m.chatQuote.current_budget - m.chatQuote.value) >= 0.01 ? (
+                        {(m.chatQuote.options || []).length > 0 ? (
+                          <>
+                            {m.chatQuote.options.map((o, i) => (
+                              <button key={i} onClick={() => resolveChatQuote(m.chatQuote, "confirm", null, i)} disabled={streaming} data-testid={`chat-quote-option-${i}`}
+                                className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
+                                ✅ {o.name}{o.value ? ` (${o.value.toLocaleString("it-IT")} €)` : ""}</button>
+                            ))}
+                            <button onClick={() => resolveChatQuote(m.chatQuote, "confirm", null, null)} disabled={streaming} data-testid="chat-quote-option-later"
+                              className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">✅ Conferma, scelgo dopo</button>
+                          </>
+                        ) : m.chatQuote.value && m.chatQuote.current_budget && m.chatQuote.can_choose_value && Math.abs(m.chatQuote.current_budget - m.chatQuote.value) >= 0.01 ? (
                           <>
                             <button onClick={() => resolveChatQuote(m.chatQuote, "confirm", "new")} disabled={streaming} data-testid="chat-quote-confirm-new"
                               className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">✅ Conferma e usa {m.chatQuote.value.toLocaleString("it-IT")} €</button>
