@@ -1559,6 +1559,9 @@ def build_system_prompt(user: User, action: str) -> str:
             "(ogni data, in ordine cronologico), non solo la prima. "
             "Considera equivalenti parole vicine per significato (es. 'lezione' e 'pilates', 'corso' e 'lezione', singolare e plurale). "
             "Rispondi 'non ho trovato' SOLO se nessuna voce del contesto riguarda davvero la domanda. "
+            "Se il contesto contiene le PRESENZE IN CANTIERE REGISTRATE, per le domande su chi è (o è stato oggi) in cantiere rispondi "
+            "da quelle, anche quando dicono che nessuno ha registrato di essere in cantiere, precisando che si tratta delle presenze "
+            "registrate (non di chi non l'ha segnato). "
             "Tu NON salvi nulla: se l'utente ti chiede di registrare, salvare o annotare qualcosa, o ti racconta un fatto "
             "da ricordare (es. 'oggi ho speso 50 euro di benzina'), NON dire mai di averlo registrato o salvato: digli "
             "chiaramente che NON è stato salvato e che per salvarlo deve usare l'agente Salva. "
@@ -1677,10 +1680,18 @@ def _clear_cached_embedding(payload: dict, text_fields: set):
 
 
 
-async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb", org_id: Optional[str] = None) -> List[dict]:
+async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb", org_id: Optional[str] = None,
+                      live: bool = False) -> List[dict]:
     """Search the user's saved knowledge - see retrieval.py (kept separate so it can be
-    tested without the web server). Used by the web chat and the Telegram bot alike."""
-    return await retrieval.retrieve(db, user_id, query, limit=limit, scope=scope, org_id=org_id)
+    tested without the web server). Used by the web chat and the Telegram bot alike.
+    live: a question to Cerca - "chi è in cantiere?" also gets who registered they are on site."""
+    hits = await retrieval.retrieve(db, user_id, query, limit=limit, scope=scope, org_id=org_id)
+    if live and sp.presence_question(query):
+        try:
+            hits = await _presence_context(user_id) + hits
+        except Exception:
+            logger.exception("presence context failed")
+    return hits
 
 
 # Usage tracking: the chat "action" field already tells us which catalog feature (§4 of
@@ -1804,7 +1815,7 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             scope = (conv.get("filters", {}) or {}).get("scope", "all")
         else:
             scope = (payload.filters or {}).get("scope", "all")
-        kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope, org_id=current.org_id)
+        kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope, org_id=current.org_id, live=True)
         logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={payload.content[:60]!r} chunks={len(kb_context)}")
     elif action == "task_todo":
         kb_context = await retrieve_kb(current.user_id, payload.content, scope="kb", org_id=current.org_id)
@@ -11958,6 +11969,59 @@ async def _presence_day_note(now_utc: Optional[datetime] = None) -> int:
     return asked
 
 
+async def _presence_context(user_id: str) -> list:
+    """Who registered they are on site (the presences of «sono arrivato» / 📍) on the commesse of the user's
+    Clienti list: now, and today's already ended - as the context of a Cerca question. Only what was
+    registered: nobody registered = said so (the notes saved don't tell who is on site now)."""
+    udoc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not udoc or udoc.get("business_vertical") != "artigiano":
+        return []
+    current = User(**{k: v for k, v in udoc.items() if k in User.model_fields})
+    clienti = await _clienti_list(current)
+    if not clienti:
+        return []
+    commesse, _ = await _all_commesse(clienti)
+    views = {v["id"]: v for v in commesse}
+    if not views:
+        return []
+    now = datetime.now(timezone.utc)
+    day0 = _at_local(now.astimezone(LOCAL_TZ).date(), "00:00").astimezone(timezone.utc).isoformat()
+    rows = [x for x in await db.work_sessions.find({"commessa_id": {"$in": list(views)}}, {"_id": 0}).to_list(5000)
+            if x.get("end_at") is None or (x.get("start_at") or "") >= day0]
+    names = {}
+
+    async def who(wid):
+        if wid not in names:
+            w = await _worker_of(wid)
+            names[wid] = (_collab_name(w) if w else "?") + ("" if not w or w.get("is_user") else
+                                                           f" (collaboratore{', ' + w['company'] if w.get('company') else ''})")
+        return names[wid]
+
+    def where(x):
+        v = views.get(x["commessa_id"]) or {}
+        return f"«{v.get('title') or x.get('commessa_title')}» — {v.get('client_name') or x.get('client_name') or ''}"
+    open_ = sorted([x for x in rows if x.get("end_at") is None], key=lambda x: x.get("start_at") or "")
+    ended = sorted([x for x in rows if x.get("end_at") is not None], key=lambda x: x.get("start_at") or "")
+    t = now.astimezone(LOCAL_TZ)
+    lines = [f"PRESENZE IN CANTIERE REGISTRATE (con «sono arrivato» / 📍 nel diario di commessa o su Telegram) — dato in tempo reale, "
+             f"oggi {t.strftime('%d/%m')} alle {sp.hhmm(t)}. Rispondi su chi è in cantiere SOLO da qui."]
+    if open_:
+        lines.append(f"Adesso in cantiere: {len({x['collaborator_id'] for x in open_})} "
+                     f"{'persona' if len({x['collaborator_id'] for x in open_}) == 1 else 'persone'}.")
+        for x in open_:
+            since = _local(x["start_at"])
+            lines.append(f"• {await who(x['collaborator_id'])} su {where(x)}, dalle {sp.hhmm(since)}"
+                         + (f" del {since.strftime('%d/%m')}" if since.date() != t.date() else "")
+                         + (" (senza posizione)" if x.get("start_m") is None else f" ({sp.distance_text(x['start_m'])})"))
+    else:
+        lines.append("Adesso nessuno ha registrato di essere in cantiere.")
+    if ended:
+        lines.append("Oggi sono già stati in cantiere (presenze chiuse):")
+        for x in ended:
+            lines.append(f"• {await who(x['collaborator_id'])} su {where(x)}, {sp.hhmm(_local(x['start_at']))}–{sp.hhmm(_local(x['end_at']))}")
+    return [{"display": "\n".join(lines), "text": "\n".join(lines), "source": "presenze", "score": 1.0}]
+
+
 async def _on_site(commessa_id: str) -> list:
     """Who is working on the commessa now (a start not ended yet)."""
     out = []
@@ -15507,7 +15571,7 @@ async def _run_sub_agent(user: User, agent: str, piece: str, context: str, sourc
             return {**base, "status": "ok", "message": "💾 Informazione salvata."}
 
         if agent == "info_request":
-            hits = await retrieve_kb(user.user_id, piece, scope="all", org_id=user.org_id)
+            hits = await retrieve_kb(user.user_id, piece, scope="all", org_id=user.org_id, live=True)
             ctx = "\n\n".join(f"- {h.get('display') or h.get('text', '')}" for h in hits)
             text = docs_block + ((f"CONTESTO KB PERSONALE:\n{ctx}\n\nDOMANDA:\n{piece}") if ctx else piece)
             visible, _ = await _agent_llm(user, "info_request", text, "ricerca_informazioni", channel)

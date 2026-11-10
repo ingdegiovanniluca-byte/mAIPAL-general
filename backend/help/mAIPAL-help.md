@@ -86,6 +86,7 @@ Cerca risponde alle tue domande usando quello che hai salvato.
 - Se la domanda è su come si usa mAIPAL, risponde Help.
 - Cerca **legge** soltanto, non salva: le spese ("oggi ho speso 50 euro di benzina") e ogni altra informazione da ricordare si registrano con l'agente **Salva**. Se le scrivi a Cerca, ti propone di mandarle a Salva con un tocco.
 - Per il totale di un periodo chiedi pure come ti viene: "spese di ottobre", "totale del mese", "quanto ho pagato questo mese": vengono considerate tutte le spese salvate in quel periodo.
+- **Chi è in cantiere** (artigiani): "quanti operai ci sono in cantiere?", "chi è in cantiere adesso?", "chi è stato in cantiere oggi?", "chi sta lavorando dai Rossi?". Cerca risponde dalle **presenze registrate** con «sono arrivato» / 📍 (nel diario di commessa o su Telegram, da te, dal team e dai collaboratori) su tutte le tue commesse: chi c'è adesso, su quale commessa e da che ora, e chi c'è già stato oggi. Se nessuno ha registrato l'arrivo te lo dice: chi non l'ha segnato non risulta. Vale anche su Telegram.
 
 ## Salva
 <!-- id: agente-salva · verticale: tutti -->

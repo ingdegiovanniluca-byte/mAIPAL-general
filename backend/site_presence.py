@@ -148,3 +148,19 @@ def _selftest():
 if __name__ == "__main__":
     _selftest()
     print("ok")
+
+
+# ---- "quanti operai ci sono in cantiere?", "chi è in cantiere adesso?", "chi sta lavorando dai Rossi?",
+# "chi è stato in cantiere oggi?": a question about the presences (the ones registered with
+# «sono arrivato» / 📍), answered from them, not from the notes saved.
+import re as _re
+_PRES_WHO = _re.compile(r"\b(?:chi|quant[ie]|quali|nessuno|qualcuno|c'[eè]|ci\s+sono|ci\s+sta|presenti|presenz\w*|operai|operaio|"
+                        r"collaborator\w*|squadr\w*|dipendent\w*|persone|ragazzi|elettricist\w*|idraulic\w*|muratori)\b", _re.I)
+_PRES_WHERE = _re.compile(r"\b(?:in\s+cantier\w*|sul\s+cantiere|nei\s+cantieri|al\s+cantiere|ai\s+cantieri|cantier\w*|"
+                          r"al\s+lavoro|a\s+lavorare|sta(?:nno)?\s+lavorando|lavora(?:no)?\s+(?:oggi|adesso|ora)|"
+                          r"(?:è|e'|sono)\s+arrivat\w*|ha(?:nno)?\s+(?:iniziato|finito|timbrato)|presenze|presenti)\b", _re.I)
+
+
+def presence_question(text: str) -> bool:
+    t = " ".join((text or "").split())
+    return bool(t) and bool(_PRES_WHO.search(t)) and bool(_PRES_WHERE.search(t))
