@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, MapPin, Square } from "lucide-react";
+import { Loader2, MapPin, Square, Pause, Play } from "lucide-react";
 import { api } from "@/lib/api";
 import { isClosed } from "@/lib/commessaStati";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -53,13 +53,19 @@ function EndSheet({ end, onClose, onSaved }) {
       <div className="kicker">· Fine in cantiere</div>
       <div className="text-2xl font-bold text-white mt-1">{hours(hoursNow)} h nel diario</div>
       <div className="text-[13px] text-white/70 mt-1">«{end.commessa_title}» · {duration(end.minutes)}</div>
-      <div className="kicker mt-5 mb-2">Hai fatto pause?</div>
-      <div className="flex gap-2 flex-wrap">
-        {[[0, "Nessuna"], [30, "− 30 min"], [60, "− 1 h"]].map(([m, label]) => (
-          <button key={m} type="button" onClick={() => pick(m)} data-testid={`presence-pause-${m}`}
-            className={`px-3.5 py-1.5 rounded-full text-xs ${pause === m ? "bg-white text-[#403A3C] font-semibold" : "bg-white/10 text-white"}`}>{label}</button>
-        ))}
-      </div>
+      {end.pause_registered ? (
+        <div className="mt-3 text-[13px] text-white/80" data-testid="presence-pause-registered">⏸️ Pause segnate: {duration(end.pause_min)}, escluse dalle ore.</div>
+      ) : (
+        <>
+          <div className="kicker mt-5 mb-2">Hai fatto pause?</div>
+          <div className="flex gap-2 flex-wrap">
+            {[[0, "Nessuna"], [30, "− 30 min"], [60, "− 1 h"]].map(([m, label]) => (
+              <button key={m} type="button" onClick={() => pick(m)} data-testid={`presence-pause-${m}`}
+                className={`px-3.5 py-1.5 rounded-full text-xs ${pause === m ? "bg-white text-[#403A3C] font-semibold" : "bg-white/10 text-white"}`}>{label}</button>
+            ))}
+          </div>
+        </>
+      )}
       <div className="kicker mt-5 mb-2">Com'è andata oggi?</div>
       <textarea data-testid="presence-note" value={note} onChange={(e) => setNote(e.target.value)} rows={3}
         placeholder="Cosa avete fatto, problemi, materiali… (va nel diario)"
@@ -107,6 +113,16 @@ export default function PresencePill({ commessa, onChanged }) {
     } catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a segnarlo"); load(); }
     finally { setBusy(false); }
   };
+  // ⏸️ Pausa / ▶️ Riprendo: the pause doesn't count in the hours (the same as on Telegram)
+  const brk = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post("/jobs/presence/break", { action: open.paused_at ? "end" : "start" });
+      setOpen(r.data.open);
+      toast.success(r.data.message.split(":")[0]);
+    } catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a segnarlo"); load(); }
+    finally { setBusy(false); }
+  };
   const still = async () => {
     try { await api.post("/jobs/presence/still"); toast.success("👍 Buon lavoro!"); load(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
@@ -140,7 +156,14 @@ export default function PresencePill({ commessa, onChanged }) {
           )}
         </div>
       ) : (
-        <div className="mt-3 flex justify-center">
+        <div className="mt-3 flex justify-center gap-2">
+          {open && (
+            <button type="button" disabled={busy} onClick={brk} data-testid="presence-break"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-full lg-glass text-[13px] text-white active:opacity-70 disabled:opacity-60 shrink-0">
+              {open.paused_at ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}
+              <span>{open.paused_at ? `Riprendo · pausa dalle ${hhmm(open.paused_at)}` : "Pausa"}</span>
+            </button>
+          )}
           <button type="button" disabled={busy} onClick={open ? () => stop() : start} data-testid="presence-pill"
             className="flex items-center gap-2 px-4 py-2 rounded-full lg-glass text-[13px] text-white active:opacity-70 disabled:opacity-60 max-w-full">
             {busy ? <Loader2 size={15} className="animate-spin" /> : open ? <Square size={13} className="text-[#FF8A80]" fill="currentColor" /> : <MapPin size={15} />}

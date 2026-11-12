@@ -43,7 +43,8 @@ async def _worker_and_targets(user_doc: dict):
 
 async def _keyboard(worker: dict):
     from server import _open_presence
-    return presence_keyboard(bool(await _open_presence(worker["id"])))
+    s_ = await _open_presence(worker["id"])
+    return presence_keyboard(bool(s_), bool((s_ or {}).get("paused_at")))
 
 
 def _pause_buttons(log_id: str) -> InlineKeyboardMarkup:
@@ -71,15 +72,16 @@ async def cmd_cantiere(update: Update, ctx) -> None:
     worker, _owner, targets, _cl = await _worker_and_targets(user_doc)
     s_ = await _open_presence(worker["id"])
     if s_:
-        text = (f"⏱️ Sei in cantiere su «{s_['commessa_title']}» dalle {sp.hhmm(_local(s_['start_at']))}: "
-                "quando hai finito tocca 📍 Ho finito (o scrivi «ho finito»).")
+        text = (f"⏱️ Sei in cantiere su «{s_['commessa_title']}» dalle {sp.hhmm(_local(s_['start_at']))}"
+                + (f", in pausa dalle {sp.hhmm(_local(s_['paused_at']))}" if s_.get("paused_at") else "")
+                + ": quando hai finito tocca 📍 Ho finito (o scrivi «ho finito»). Per le pause ⏸️ Pausa / ▶️ Riprendo.")
     elif not targets:
         text = "Non hai commesse aperte: le crei nella lista Clienti dell'app."
     else:
         text = ("📍 Quando arrivi in cantiere tocca *Sono arrivato in cantiere*, quando hai finito *Ho finito*: le ore vanno nel diario "
                 "della commessa. Puoi anche scrivere «sono arrivato dai Rossi» o «ho finito alle 17:30».\n"
                 "La posizione viene salvata solo in quei due momenti.")
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=presence_keyboard(bool(s_)))
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=presence_keyboard(bool(s_), bool((s_ or {}).get("paused_at"))))
 
 
 async def try_presence(update: Update, ctx, user_doc: dict, text: str = "", loc: Optional[dict] = None) -> bool:
@@ -106,12 +108,19 @@ async def try_presence(update: Update, ctx, user_doc: dict, text: str = "", loc:
         await _run_job_log_flow(update, ctx, db, user_doc, text)
         return True
     action = command["action"] if command else ("stop" if open_ else "start")
+    if action.startswith("pause"):   # ⏸️ Pausa / ▶️ Riprendo / "ho fatto mezz'ora di pausa"
+        from server import _presence_break
+        if open_:
+            worker["owner_user_id"] = open_.get("owner_user_id") or worker["owner_user_id"]
+        await update.message.reply_text(await _presence_break(worker, command, at), reply_markup=await _keyboard(worker))
+        return True
     if action == "stop":
+        from server import _presence_asks_pause
         if open_:
             worker["owner_user_id"] = open_.get("owner_user_id") or worker["owner_user_id"]
         answer, log_id = await _presence_stop(worker, at, loc)
         await update.message.reply_text(answer, reply_markup=await _keyboard(worker))
-        if log_id:
+        if await _presence_asks_pause(log_id):
             await update.message.reply_text("Hai fatto pause?", reply_markup=_pause_buttons(log_id))
         return True
     if open_:   # already started: said
@@ -183,7 +192,8 @@ async def handle_callback(update: Update, ctx, user_doc: dict, data: str) -> boo
     _, sid, hhmm = (data.split(":") + ["", ""])[:3]
     answer, log_id = await _presence_left_at(worker, sid, hhmm)
     await send(answer, await _keyboard(worker))
-    if log_id:
+    from server import _presence_asks_pause
+    if await _presence_asks_pause(log_id):
         await send("Hai fatto pause?", _pause_buttons(log_id))
     return True
 

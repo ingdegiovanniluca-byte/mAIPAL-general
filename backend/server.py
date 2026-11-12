@@ -11585,15 +11585,23 @@ async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict], channe
     st = await _settings_of_user(owner.user_id)
     if not st.get("save_position", True):
         loc = None   # decision C.4: no positions kept
-    lunch = int(st.get("lunch_break_minutes") or 0) if minutes >= 6 * 60 else 0   # PA-04: the lunch break, when set and the day is long enough
+    # the pauses: the ones registered (⏸️ / ▶️, "pausa di 30 minuti"), else the lunch break of the organization (PA-04)
+    registered = _pause_registered(s_)
+    lunch = int(st.get("lunch_break_minutes") or 0) if minutes >= 6 * 60 else 0
+    pause = max(0, min(_pause_minutes(s_, at), minutes - 1)) if registered else lunch
     geo = await _commessa_geo(view["id"], view) if loc else None
     d_end = sp.distance_m(loc, geo)
-    hours = sp.round_hours(max(0, minutes - lunch))
-    log = _presence_log(collab, owner, view, s_, at, minutes, lunch, loc, d_end, channel)
+    hours = sp.round_hours(max(0, minutes - pause))
+    log = _presence_log(collab, owner, view, s_, at, minutes, pause, loc, d_end, channel)
+    log["presence"]["pause_registered"] = registered
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
+    pauses = list(s_.get("pauses") or [])
+    if s_.get("paused_at"):   # still in pause at the end: closed there
+        pauses.append({"start": s_["paused_at"], "end": at.astimezone(timezone.utc).isoformat()})
     await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": at.astimezone(timezone.utc).isoformat(), "end_loc": loc,
-                                                                  "end_m": d_end, "minutes": minutes, "log_id": log["id"]}})
+                                                                  "end_m": d_end, "minutes": minutes, "log_id": log["id"],
+                                                                  "pauses": pauses, "paused_at": None}})
     if s_.get("late_asked_at") and not s_.get("late_answer_at"):   # the evening's question answered by closing
         await _presence_answered(s_, collab, left_at=at)
     await db.collaborators.update_one({"id": collab["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": datetime.now(timezone.utc).isoformat()}}})
@@ -11606,7 +11614,101 @@ async def _presence_stop(collab: dict, at: datetime, loc: Optional[dict], channe
            f"{jl._fmt_num(hours)} h nel diario" + (f" ({sp.distance_text(d_end)})." if d_end is not None else "."))
     if sp.far(d_end):
         msg += f"\n⚠️ Risulti {sp.distance_text(d_end)}: la distanza resta segnata."
+    if registered:
+        return msg + f"\n⏸️ Pause segnate: {sp.fmt_duration(pause)}, escluse dalle ore. Se vuoi, scrivimi cosa avete fatto oggi.", log["id"]
     return msg + "\nSe hai fatto pause toglile con i pulsanti; poi, se vuoi, scrivimi cosa avete fatto oggi.", log["id"]
+
+
+def _pause_registered(s_: dict) -> bool:
+    return bool(s_.get("pauses") or s_.get("paused_at"))
+
+
+def _pause_minutes(s_: dict, until: datetime) -> int:
+    """The pauses of a time on site, in minutes (an open one up to `until`)."""
+    tot = 0
+    for p in s_.get("pauses") or []:
+        if p.get("minutes") is not None:
+            tot += int(p["minutes"])
+        elif p.get("start") and p.get("end"):
+            tot += max(0, int((datetime.fromisoformat(p["end"]) - datetime.fromisoformat(p["start"])).total_seconds() // 60))
+    if s_.get("paused_at"):
+        tot += max(0, int((until - datetime.fromisoformat(s_["paused_at"])).total_seconds() // 60))
+    return tot
+
+
+async def _presence_asks_pause(log_id: Optional[str]) -> bool:
+    """After the end: "Hai fatto pause?" only when none was registered during the work."""
+    if not log_id:
+        return False
+    log = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "presence": 1}) or {}
+    return not (log.get("presence") or {}).get("pause_registered")
+
+
+async def _last_presence_log_today(collab: dict) -> Optional[dict]:
+    q = {"collaborator_id": None, "user_id": collab.get("user_id")} if collab.get("is_user") else {"collaborator_id": collab["id"]}
+    today = datetime.now(LOCAL_TZ).date().isoformat()
+    logs = [lg for lg in await db.job_logs.find({**q, "date": today}, {"_id": 0}).to_list(200) if lg.get("presence")]
+    return max(logs, key=lambda lg: lg["presence"].get("end_at") or "") if logs else None
+
+
+async def _presence_break(collab: dict, command: dict, at: datetime) -> str:
+    """The pauses while on site: ⏸️ Pausa / "sono in pausa" (from now or the time said), ▶️ Riprendo /
+    "ho ripreso", or the pause said ("ho fatto mezz'ora di pausa", "pausa dalle 12 alle 13"). They come
+    off the hours at the end. Said after the end: taken off today's last time on site."""
+    act = command["action"]
+    s_ = await _open_presence(collab["id"])
+    if not s_:
+        if act == "pause_add":
+            log = await _last_presence_log_today(collab)
+            if not log:
+                return ("Non trovo un tempo in cantiere di oggi a cui togliere la pausa. Se hai dimenticato di segnare l'arrivo, "
+                        "scrivimi gli orari, es. «oggi dalle 8 alle 17, pausa di mezz'ora».")
+            pr = log["presence"]
+            total = (pr.get("pause_min") or 0) + command["minutes"] if pr.get("pause_registered") else command["minutes"]
+            answer = await _presence_pause(collab, log["id"], total)
+            if answer != PRESENCE_GONE:   # now it is the pause said: said again, it adds up
+                fresh = await db.job_logs.find_one({"id": log["id"]}, {"_id": 0, "presence": 1})
+                if fresh:
+                    await db.job_logs.update_one({"id": log["id"]}, {"$set": {"presence": {**fresh["presence"], "pause_registered": True}}})
+            return answer
+        if act == "pause_end":
+            return "Non risulti in pausa (né in cantiere)."
+        return "Non risulti in cantiere: quando arrivi tocca 📍 Sono arrivato (o scrivi «sono arrivato»), poi ⏸️ Pausa quando ti fermi."
+    start = datetime.fromisoformat(s_["start_at"])
+    where = f"«{s_.get('commessa_title')}»"
+    if act == "pause_start":
+        if s_.get("paused_at"):
+            return (f"Sei già in pausa dalle {sp.hhmm(_local(s_['paused_at']))}: quando riprendi tocca ▶️ Riprendo "
+                    "(o scrivi «riprendo»).")
+        if at < start:
+            return f"Le {sp.hhmm(at.astimezone(LOCAL_TZ))} sono prima del tuo arrivo ({sp.hhmm(_local(s_['start_at']))}): scrivimi l'ora giusta."
+        await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"paused_at": at.astimezone(timezone.utc).isoformat()}})
+        return (f"⏸️ In pausa dalle {sp.hhmm(at.astimezone(LOCAL_TZ))} su {where}. Quando riprendi tocca ▶️ Riprendo "
+                "(o scrivi «riprendo»): la pausa non conta nelle ore.")
+    if act == "pause_end":
+        if not s_.get("paused_at"):
+            return ("Non risulti in pausa. Se ti sei fermato senza segnarlo, scrivimi quanto, es. «ho fatto mezz'ora di pausa».")
+        p0 = datetime.fromisoformat(s_["paused_at"])
+        if at < p0:
+            return f"Le {sp.hhmm(at.astimezone(LOCAL_TZ))} sono prima dell'inizio della pausa ({sp.hhmm(_local(s_['paused_at']))}): scrivimi l'ora giusta."
+        mins = int((at - p0).total_seconds() // 60)
+        pauses = list(s_.get("pauses") or []) + [{"start": s_["paused_at"], "end": at.astimezone(timezone.utc).isoformat()}]
+        await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"pauses": pauses, "paused_at": None}})
+        total = _pause_minutes({"pauses": pauses}, at)
+        return (f"▶️ Ripreso alle {sp.hhmm(at.astimezone(LOCAL_TZ))} su {where}: pausa di {sp.fmt_duration(mins)}"
+                + (f" (oggi in tutto {sp.fmt_duration(total)})" if total != mins else "") + ", non conta nelle ore.")
+    # pause_add: a pause said, while still on site
+    entry = {"minutes": int(command["minutes"]), "said_at": datetime.now(timezone.utc).isoformat()}
+    if command.get("from") and command.get("to"):
+        day = _local(s_["start_at"]).date()
+        entry = {"start": datetime.combine(day, command["from"], tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat(),
+                 "end": datetime.combine(day, command["to"], tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()}
+    pauses = list(s_.get("pauses") or []) + [entry]
+    await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"pauses": pauses}})
+    total = _pause_minutes({"pauses": pauses}, at)
+    return (f"⏸️ Pausa di {sp.fmt_duration(int(command['minutes']))} segnata su {where}"
+            + (f" (oggi in tutto {sp.fmt_duration(total)})" if total != int(command["minutes"]) else "")
+            + ": la tolgo dalle ore quando finisci.")
 
 
 def _presence_log(collab: dict, owner: User, view: dict, s_: dict, end: datetime, minutes: int, pause: int,
@@ -11706,6 +11808,10 @@ class PresencePausePayload(BaseModel):
     minutes: int = 0
 
 
+class PresenceBreakPayload(BaseModel):
+    action: Literal["start", "end"]
+
+
 async def _me_worker(current: User) -> dict:
     clienti = await _clienti_list(current)
     udoc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0}) or {"user_id": current.user_id, "name": current.name}
@@ -11730,6 +11836,7 @@ def _session_view(s_: Optional[dict]) -> Optional[dict]:
     if not s_:
         return None
     return {"id": s_["id"], "commessa_id": s_["commessa_id"], "commessa_title": s_.get("commessa_title"), "client_name": s_.get("client_name"),
+            "paused_at": s_.get("paused_at"), "pause_min": _pause_minutes(s_, datetime.now(timezone.utc)),
             "start_at": s_["start_at"], "start_m": s_.get("start_m"), "far": sp.far(s_.get("start_m")),
             # asked in the evening whether they are still there, not answered yet
             "late_asked": bool(s_.get("late_asked_at")) and not s_.get("late_answer_at")}
@@ -11774,7 +11881,8 @@ async def presence_stop_app(payload: PresencePayload, current: User = Depends(ge
         raise HTTPException(status_code=400, detail=answer)
     log = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "presence": 1, "hours": 1, "commessa_id": 1, "commessa_title": 1})
     return {"message": answer, "log_id": log_id, "minutes": log["presence"]["minutes"], "hours": log["hours"][0]["hours"],
-            "commessa_id": log["commessa_id"], "commessa_title": log["commessa_title"]}
+            "commessa_id": log["commessa_id"], "commessa_title": log["commessa_title"],
+            "pause_min": log["presence"].get("pause_min") or 0, "pause_registered": bool(log["presence"].get("pause_registered"))}
 
 
 @api_router.post("/jobs/presence/pause")
@@ -11783,6 +11891,19 @@ async def presence_pause_app(payload: PresencePausePayload, current: User = Depe
     if answer == PRESENCE_GONE:
         raise HTTPException(status_code=404, detail=answer)
     return {"message": answer}
+
+
+@api_router.post("/jobs/presence/break")
+async def presence_break_app(payload: PresenceBreakPayload, current: User = Depends(get_current_user)):
+    """⏸️ Pausa / ▶️ Riprendo from the app (the same as on Telegram)."""
+    worker = await _me_worker(current)
+    s_ = await _open_presence(worker["id"])
+    if not s_:
+        raise HTTPException(status_code=400, detail="Non risulti in cantiere")
+    if (payload.action == "start") == bool(s_.get("paused_at")):
+        raise HTTPException(status_code=400, detail="Sei già in pausa" if payload.action == "start" else "Non risulti in pausa")
+    answer = await _presence_break(worker, {"action": f"pause_{payload.action}"}, datetime.now(timezone.utc))
+    return {"message": answer, "open": _session_view(await _open_presence(worker["id"]))}
 
 
 @api_router.post("/jobs/presence/still")
@@ -12012,7 +12133,8 @@ async def _presence_context(user_id: str) -> list:
             since = _local(x["start_at"])
             lines.append(f"• {await who(x['collaborator_id'])} su {where(x)}, dalle {sp.hhmm(since)}"
                          + (f" del {since.strftime('%d/%m')}" if since.date() != t.date() else "")
-                         + (" (senza posizione)" if x.get("start_m") is None else f" ({sp.distance_text(x['start_m'])})"))
+                         + (" (senza posizione)" if x.get("start_m") is None else f" ({sp.distance_text(x['start_m'])})")
+                         + (f", IN PAUSA dalle {sp.hhmm(_local(x['paused_at']))}" if x.get("paused_at") else ""))
     else:
         lines.append("Adesso nessuno ha registrato di essere in cantiere.")
     if ended:
@@ -12028,6 +12150,7 @@ async def _on_site(commessa_id: str) -> list:
     for s_ in await db.work_sessions.find({"commessa_id": commessa_id, "end_at": None}, {"_id": 0}).to_list(50):
         c = await _worker_of(s_["collaborator_id"])
         out.append({"name": _collab_name(c) if c else "?", "is_user": bool(c and c.get("is_user")), "since": s_["start_at"], "start_m": s_.get("start_m"),
+                    "paused_since": s_.get("paused_at"),
                     "far": sp.far(s_.get("start_m")), "role": (c or {}).get("role") or "", "company": (c or {}).get("company") or ""})
     return sorted(out, key=lambda p: p["since"] or "")
 

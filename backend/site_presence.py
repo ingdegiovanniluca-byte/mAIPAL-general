@@ -33,13 +33,84 @@ _STOP = re.compile(
     re.I)
 
 
+# ---- the pauses while on site: "⏸️ Pausa" / "sono in pausa (dalle 12:30)" ... "▶️ Riprendo" / "ho ripreso";
+# or the pause said afterwards: "ho fatto mezz'ora di pausa", "pausa pranzo di un'ora", "pausa dalle 12 alle 13"
+_PAUSE_WORD = r"(?:una\s+|la\s+)?pausa(?:\s+(?:pranzo|caff[eè]|merenda|sigaretta))?"
+_PAUSE_START = re.compile(
+    r"^(?:" + _PAUSE_WORD + r"|(?:(?:sono|siamo|vado|andiamo)\s+)?in\s+" + _PAUSE_WORD + r"|(?:faccio|facciamo|inizio|iniziamo)\s+"
+    + _PAUSE_WORD + r"|(?:vado|andiamo)\s+a\s+(?:pranzo|mangiare)|(?:stacco|stacchiamo)\s+per\s+(?:il\s+)?pranzo)" + _TIME + r"[\s.!]*$", re.I)
+_PAUSE_END = re.compile(
+    r"^(?:riprendo|riprendiamo|(?:ho|abbiamo)\s+ripreso|ripres[oi]|fine\s+(?:della\s+)?pausa|finita\s+la\s+pausa|(?:ho|abbiamo)\s+finito\s+la\s+pausa|"
+    r"(?:torno|torniamo)\s+al\s+lavoro|(?:sono|siamo)\s+tornat[oaie](?:\s+al\s+lavoro|\s+in\s+cantiere)?|rientrat[oaie]|ricomincio|ricominciamo)"
+    r"(?:\s+a\s+lavorare)?" + _TIME + r"[\s.!]*$", re.I)
+_DUR = (r"(?P<{}>mezz['’ ]?ora|un['’ ]?ora(?:\s+e\s+mezz[ao])?|\d{{1,3}}(?:[.,]\d)?\s*(?:minuti|min|m|ore|ora|h|')"
+        r"(?:\s*e\s*(?:mezz[ao]|\d{{1,2}}(?:\s*(?:minuti|min))?))?|\d{{1,2}}[:.]\d{{2}}\s*(?:ore|h)?)")
+_PAUSE_FOR = re.compile(
+    r"^(?:(?:ho|abbiamo)\s+fatto\s+|fatto\s+|fatta\s+)?(?:(?:" + _PAUSE_WORD + r")\s+(?:di\s+)?" + _DUR.format("dur") + r"|" + _DUR.format("dur2")
+    + r"\s+di\s+" + _PAUSE_WORD + r"|(?:" + _PAUSE_WORD + r")\s+dalle\s+(?P<h1>\d{1,2})(?:[:.,](?P<m1>\d{2}))?\s+alle\s+(?P<h2>\d{1,2})(?:[:.,](?P<m2>\d{2}))?)"
+    r"(?:\s+(?:oggi|stamattina|a\s+pranzo))?[\s.!]*$", re.I)
+
+
+def _duration_min(s: str) -> Optional[int]:
+    """ "mezz'ora" 30, "un'ora e mezza" 90, "45 minuti" 45, "1 ora e 30" 90, "1,5 ore" 90, "1:30" 90."""
+    t = s.lower().replace("’", "'").strip()
+    if re.match(r"mezz", t):
+        return 30
+    if re.match(r"un'? ?ora", t):
+        return 90 if re.search(r"e\s+mezz", t) else 60
+    m = re.match(r"(\d{1,2})[:.](\d{2})", t)
+    if m and not re.search(r"min", t):
+        return int(m.group(1)) * 60 + int(m.group(2))
+    m = re.match(r"(\d{1,3}(?:[.,]\d)?)\s*(minuti|min|m|ore|ora|h|')", t)
+    if not m:
+        return None
+    n = float(m.group(1).replace(",", "."))
+    mins = n * 60 if m.group(2) in ("ore", "ora", "h") else n
+    rest = t[m.end():]
+    if re.search(r"e\s*mezz", rest):
+        mins += 30
+    else:
+        r2 = re.search(r"e\s*(\d{1,2})", rest)
+        if r2:
+            mins += int(r2.group(1))
+    return int(round(mins))
+
+
+def _parse_pause(t: str) -> Optional[dict]:
+    m = _PAUSE_FOR.match(t)
+    if m:
+        if m.group("h1"):
+            h1, m1, h2, m2 = int(m.group("h1")), int(m.group("m1") or 0), int(m.group("h2")), int(m.group("m2") or 0)
+            if h1 > 23 or h2 > 23 or m1 > 59 or m2 > 59 or (h2 * 60 + m2) <= (h1 * 60 + m1):
+                return None
+            return {"action": "pause_add", "minutes": (h2 * 60 + m2) - (h1 * 60 + m1), "from": time(h1, m1), "to": time(h2, m2), "at": None, "rest": ""}
+        mins = _duration_min(m.group("dur") or m.group("dur2") or "")
+        return {"action": "pause_add", "minutes": mins, "at": None, "rest": ""} if mins and 0 < mins <= 600 else None
+    for action, rx in (("pause_start", _PAUSE_START), ("pause_end", _PAUSE_END)):
+        m = rx.match(t)
+        if m:
+            at = None
+            if m.group("h"):
+                h, mi = int(m.group("h")), int(m.group("m") or 0)
+                if h > 23 or mi > 59:
+                    return None
+                at = time(h, mi)
+            return {"action": action, "at": at, "rest": ""}
+    return None
+
+
 def parse_command(text: str) -> Optional[dict]:
     """"sono arrivato (dai Rossi) (alle 8)" -> {"action": "start", "at": time|None, "rest": "dai Rossi"};
-    "ho finito (alle 17:30)" -> {"action": "stop", ...}; anything longer (a diary entry such as
-    "ho finito il massetto") -> None."""
+    "ho finito (alle 17:30)" -> {"action": "stop", ...}; "sono in pausa" / "riprendo" -> "pause_start" /
+    "pause_end"; "ho fatto mezz'ora di pausa" -> {"action": "pause_add", "minutes": 30}; anything longer
+    (a diary entry such as "ho finito il massetto") -> None."""
     t = " ".join((text or "").strip().split())
+    t = re.sub(r"^[^\w/']+", "", t).strip()       # the buttons' emoji ("⏸️ Pausa", "▶️ Riprendo")
     if not t or len(t) > 80:
         return None
+    pause = _parse_pause(t)
+    if pause:
+        return pause
     for action, rx in (("start", _START), ("stop", _STOP)):
         m = rx.match(t)
         if m:

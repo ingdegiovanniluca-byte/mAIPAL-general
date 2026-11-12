@@ -234,7 +234,7 @@ async def main():
     assert r["open"]["commessa_id"] == "s_bagno" and r["open"]["start_m"] < 50 and not r["open"]["late_asked"]
     assert (await server.my_presence(me))["open"]["commessa_title"] == "Bagno"
     det = await server.get_job_commessa("s_bagno", current=me)
-    assert det["on_site"] == [{"name": "Luca Rossi", "is_user": True, "since": r["open"]["start_at"], "start_m": r["open"]["start_m"], "far": False, "role": "", "company": ""}]
+    assert det["on_site"] == [{"name": "Luca Rossi", "is_user": True, "since": r["open"]["start_at"], "start_m": r["open"]["start_m"], "paused_since": None, "far": False, "role": "", "company": ""}]
     try:
         await server.presence_start_app("s_tetto", server.PresencePayload(), me); assert False
     except HTTPException as ex:

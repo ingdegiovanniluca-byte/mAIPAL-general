@@ -44,15 +44,23 @@ HELP = ("Qui puoi fare due cose, sulle commesse che ti sono state abilitate:\n"
         "Se lavori su più commesse, nomina il cliente o i lavori, oppure scegli la commessa dai pulsanti.\n"
         "📌 Qui ti arrivano anche le attività e le milestone affidate a te, con i promemoria: quando sono fatte tocca ✅ Fatto.\n"
         "⏱️ Quando arrivi in cantiere tocca 📍 Sono arrivato, quando hai finito 📍 Ho finito: le ore vanno nel diario da sole "
-        "(oppure scrivi «sono arrivato» / «ho finito alle 17:30»).")
+        "(oppure scrivi «sono arrivato» / «ho finito alle 17:30»).\n"
+        "⏸️ Quando ti fermi tocca ⏸️ Pausa e poi ▶️ Riprendo (o scrivi «sono in pausa» / «riprendo», oppure «ho fatto mezz'ora di pausa»): "
+        "le pause non contano nelle ore.")
 PRIVACY_PLACE = ("📍 La tua posizione viene salvata solo quando tocchi il pulsante 📍 (all'arrivo e alla fine), "
                  "per segnare che eri in cantiere: non vieni seguito.")
 
 
-def presence_keyboard(working: bool) -> ReplyKeyboardMarkup:
-    """The button under the chat: it sends the phone's position, which starts or ends the work."""
-    label = "📍 Ho finito" if working else "📍 Sono arrivato in cantiere"
-    return ReplyKeyboardMarkup([[KeyboardButton(label, request_location=True)]], resize_keyboard=True, is_persistent=True)
+PAUSE_BTN, RESUME_BTN = "⏸️ Pausa", "▶️ Riprendo"
+
+
+def presence_keyboard(working: bool, paused: bool = False) -> ReplyKeyboardMarkup:
+    """The buttons under the chat: 📍 sends the phone's position, which starts or ends the work;
+    while working, ⏸️ Pausa (then ▶️ Riprendo) - their text is read like "sono in pausa" / "riprendo"."""
+    if not working:
+        return ReplyKeyboardMarkup([[KeyboardButton("📍 Sono arrivato in cantiere", request_location=True)]], resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardMarkup([[KeyboardButton("📍 Ho finito", request_location=True), KeyboardButton(RESUME_BTN if paused else PAUSE_BTN)]],
+                               resize_keyboard=True, is_persistent=True)
 
 
 async def _still_working(update: Update, recs: list):
@@ -63,16 +71,18 @@ async def _still_working(update: Update, recs: list):
     for r in recs:
         s_ = await _open_presence(r["id"])
         if s_:
-            await _reply(update, f"⏱️ Tempo in cantiere aperto dalle {sp.hhmm(_local(s_['start_at']))} su «{s_['commessa_title']}»: "
-                                 "quando hai finito tocca 📍 Ho finito.", reply_markup=presence_keyboard(True))
+            await _reply(update, f"⏱️ Tempo in cantiere aperto dalle {sp.hhmm(_local(s_['start_at']))} su «{s_['commessa_title']}»"
+                                 + (f", in pausa dalle {sp.hhmm(_local(s_['paused_at']))}" if s_.get("paused_at") else "")
+                                 + ": quando hai finito tocca 📍 Ho finito.", reply_markup=presence_keyboard(True, bool(s_.get("paused_at"))))
             return
 
 
 async def _keyboard_for(recs: list) -> ReplyKeyboardMarkup:
     from server import _open_presence
     for r in recs:
-        if await _open_presence(r["id"]):
-            return presence_keyboard(True)
+        s_ = await _open_presence(r["id"])
+        if s_:
+            return presence_keyboard(True, bool(s_.get("paused_at")))
     return presence_keyboard(False)
 
 
@@ -431,11 +441,22 @@ async def presence(update: Update, active: list, targets: list, command: Optiona
             open_rec = r
             break
     action = command["action"] if command else ("stop" if open_rec else "start")
+    if action.startswith("pause"):   # ⏸️ Pausa / ▶️ Riprendo / "ho fatto mezz'ora di pausa"
+        from server import _presence_break
+        answer = await _presence_break(open_rec or active[0], command, at)
+        if not open_rec and command["action"] == "pause_add" and len(active) > 1 and answer.startswith("Non trovo"):
+            for r in active[1:]:   # the time of today may be with another firm
+                answer = await _presence_break(r, command, at)
+                if not answer.startswith("Non trovo"):
+                    break
+        await _reply(update, answer, reply_markup=await _keyboard_for(active))
+        return
     if action == "stop":
+        from server import _presence_asks_pause
         rec = open_rec or active[0]
         answer, log_id = await _presence_stop(rec, at, loc)
         await _reply(update, answer, reply_markup=await _keyboard_for(active))
-        if log_id:
+        if await _presence_asks_pause(log_id):
             await _reply(update, "Hai fatto pause?", reply_markup=_pause_buttons(log_id))
         return
     if open_rec:   # already started: said (whatever the commessa)
@@ -536,7 +557,8 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             if log_id or not answer.startswith("Il tempo"):
                 break
         await _reply(update, answer, reply_markup=await _keyboard_for(active))
-        if log_id:
+        from server import _presence_asks_pause
+        if await _presence_asks_pause(log_id):
             await _reply(update, "Hai fatto pause?", reply_markup=_pause_buttons(log_id))
         return
     if data.startswith("cpz:"):   # a pause taken out of the hours just counted
