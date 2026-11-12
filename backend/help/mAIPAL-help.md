@@ -284,6 +284,11 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
   - **Altre spese**: noleggi, trasferte, smaltimenti, con importo e descrizione (la riga per aggiungerle si vede con la sezione aperta).
   - Manodopera, Materiali e Altre spese si aprono e chiudono con la freccia; da chiuse mostrano il totale e quante voci ci sono.
 - Tariffe e prezzi valgono per **tutte le commesse** dei tuoi clienti: li scrivi una volta sola.
+- **Ore per fase della commessa**: ogni voce con ore ha la sua **fase**: Sopralluogo, Preventivo, Lavorazione, Dopo la consegna (assistenza, garanzia).
+  - Di solito è lo **stato della commessa nel giorno del lavoro**: nuova o sopralluogo → Sopralluogo; preventivo inviato o persa → Preventivo; in lavorazione o sospesa → Lavorazione; completata → Dopo la consegna.
+  - Se la nota lo dice («2 ore per preparare il preventivo», «fatto il sopralluogo») vale quello che dice.
+  - La puoi cambiare toccando la voce (**fase della commessa**); con **Automatica** torna allo stato di quel giorno.
+  - Nella sezione **Ore** vedi la fase su ogni voce e il totale **per fase** del periodo. In **Costi → Manodopera** c'è il costo **per fase** (quanto ti è costato il sopralluogo, il preventivo, i lavori). Il report del venerdì e la chat della commessa («quante ore abbiamo fatto per il preventivo?») ne tengono conto.
 - In alto vedi costi, preventivo, **margine** e la barra di quanto preventivo hai già consumato (arancione dall'80%, rossa oltre il 100%). Ore o materiali senza prezzo non vengono stimati: sono indicati a parte come "non conteggiati".
 - Il riquadro **Costi** nella riga di informazioni mostra il totale e la percentuale del preventivo.
 - Quando una commessa arriva all'**80%** e quando **supera** il preventivo ricevi un avviso su Telegram, una sola volta per soglia.

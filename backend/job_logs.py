@@ -1071,12 +1071,41 @@ def _mat_key(m: dict) -> tuple:
     return (" ".join((m.get("name") or "").lower().split()), (m.get("unit") or "").lower().strip("."))
 
 
+# ---- the phase of the commessa the hours were worked in: the state it was in that day (survey, quote,
+# works, after the delivery), or what the note says ("2 ore per preparare il preventivo"), or set by hand
+WORK_PHASES = [("sopralluogo", "Sopralluogo"), ("preventivo", "Preventivo"), ("lavorazione", "Lavorazione"), ("post", "Dopo la consegna")]
+PHASE_LABEL = dict(WORK_PHASES)
+_STATO_PHASE = {"nuova": "sopralluogo", "sopralluogo": "sopralluogo", "preventivo inviato": "preventivo", "persa": "preventivo",
+                "in lavorazione": "lavorazione", "sospesa": "lavorazione", "completata": "post", "archiviata": "post"}
+_PHASE_WORDS = [(re.compile(r"\b(?:per|fare|fatto|preparar\w*|preparat\w*|scriver\w*|scritto|stesura|redatto|redigere|calcolar\w*|calcolat\w*|"
+                            r"computo)\s+(?:il\s+|del\s+|un\s+|al\s+|lo\s+)?(?:nuovo\s+)?preventiv", re.I), "preventivo"),
+                (re.compile(r"\b(?:fatto|per|al|il|un|nel|durante\s+il)\s+sopralluog\w*|\bsopralluog\w*\s+(?:dal|dai|da|presso|fatto)", re.I), "sopralluogo")]
+
+
+def phase_of_stato(stato: str) -> str:
+    s = " ".join((stato or "").lower().replace("_", " ").split())
+    s = {"preventivo": "preventivo inviato", "in corso": "in lavorazione", "chiusa": "completata"}.get(s, s) or "nuova"
+    return _STATO_PHASE.get(s, "lavorazione")
+
+
+def phase_from_words(text: str) -> Optional[str]:
+    for rx, ph in _PHASE_WORDS:
+        if rx.search(text or ""):
+            return ph
+    return None
+
+
 def totals(logs: list) -> dict:
-    """Hours (total and per person), materials summed by name+unit, problems with their day."""
+    """Hours (total, per person, per phase of the commessa), materials summed by name+unit, problems with their day."""
     by_person, mats, problems, pending = {}, {}, [], []
+    by_phase, by_phase_person = {}, {}
     for lg in logs:
         for h in lg.get("hours") or []:
             by_person[h["who"]] = round(by_person.get(h["who"], 0) + float(h.get("hours") or 0), 2)
+            ph = lg.get("phase") or "lavorazione"
+            by_phase[ph] = round(by_phase.get(ph, 0) + float(h.get("hours") or 0), 2)
+            pp = by_phase_person.setdefault(ph, {})
+            pp[h["who"]] = round(pp.get(h["who"], 0) + float(h.get("hours") or 0), 2)
         for h in lg.get("hours_pending") or []:   # written in a note by a collaborator: apart until approved
             pending.append({"log_id": lg.get("id"), "date": lg.get("date"), "who": h["who"], "hours": float(h.get("hours") or 0),
                             "review": lg.get("hours_review") or {}})
@@ -1094,6 +1123,8 @@ def totals(logs: list) -> dict:
     for x in pending:
         pending_by[x["who"]] = round(pending_by.get(x["who"], 0) + x["hours"], 2)
     return {"hours_total": round(sum(by_person.values()), 2), "by_person": by_person,
+            "by_phase": {k: by_phase[k] for k, _l in WORK_PHASES if by_phase.get(k)},
+            "by_phase_person": {k: by_phase_person[k] for k, _l in WORK_PHASES if k in by_phase_person},
             "pending": pending, "pending_by_person": pending_by, "hours_pending_total": round(sum(pending_by.values()), 2),
             "materials": sorted(mats.values(), key=lambda x: x["name"].lower()), "problems": problems,
             "entries": sum(1 for lg in logs if not lg.get("kind")),   # state changes are not entries
@@ -1279,11 +1310,21 @@ def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[f
             unpriced_mats.append(m["name"])
         mats.append({**m, "key": key, "price": price, "cost": cost})
     extras = [x for x in (extras or []) if x.get("amount") is not None]
+    labor_by_phase = []   # what each phase cost in labour (the survey, the quote, the works, after the delivery)
+    for ph, label in WORK_PHASES:
+        people = tot["by_phase_person"].get(ph) or {}
+        if not people:
+            continue
+        hrs = round(sum(people.values()), 2)
+        costs = [round(h * rates.get(who.lower(), default_rate), 2) if rates.get(who.lower(), default_rate) is not None else None
+                 for who, h in people.items()]
+        labor_by_phase.append({"phase": ph, "label": label, "hours": hrs, "cost": round(sum(c for c in costs if c is not None), 2),
+                               "complete": all(c is not None for c in costs)})
     labor_total = round(sum(x["cost"] for x in labor if x["cost"] is not None), 2)
     materials_total = round(sum(x["cost"] for x in mats if x["cost"] is not None), 2)
     extras_total = round(sum(float(x["amount"]) for x in extras), 2)
     cost_total = round(labor_total + materials_total + extras_total, 2)
-    out = {"labor": labor, "materials": mats, "extras": extras, "labor_total": labor_total, "materials_total": materials_total,
+    out = {"labor": labor, "labor_by_phase": labor_by_phase, "materials": mats, "extras": extras, "labor_total": labor_total, "materials_total": materials_total,
            "extras_total": extras_total, "cost_total": cost_total, "budget": budget, "margin": None, "used_pct": None,
            "unpriced_hours": round(unpriced_hours, 2), "unpriced_materials": unpriced_mats,
            "complete": not unpriced_hours and not unpriced_mats}
@@ -1355,6 +1396,8 @@ def economics_line(e: dict) -> str:
     """One line for the AI answers and the weekly summary."""
     parts = [f"costi {_eur(e['cost_total'])} (manodopera {_eur(e['labor_total'])}, materiali {_eur(e['materials_total'])}"
              + (f", altre spese {_eur(e['extras_total'])}" if e["extras_total"] else "") + ")"]
+    if len(e.get("labor_by_phase") or []) > 1:
+        parts.append("manodopera per fase: " + ", ".join(f"{x['label']} {_fmt_num(x['hours'])} h {_eur(x['cost'])}" for x in e["labor_by_phase"]))
     if e.get("budget"):
         parts.append(f"preventivo {_eur(e['budget'])}, margine {_eur(e['margin'])} ({e['used_pct']:.0f}% del preventivo speso)")
     if not e["complete"]:
@@ -1390,7 +1433,8 @@ def _ctx_line(lg: dict) -> str:
     who = lg.get("author_name") or ""
     if lg.get("kind"):   # a change of state, a report made
         return f"- {lg.get('date')} · {lg.get('text')}"
-    return f"- {lg.get('date')} · {who}: {search_text(lg)}" + (f" ({len(lg['photos'])} foto)" if lg.get("photos") else "")
+    return (f"- {lg.get('date')} · {who}: {search_text(lg)}" + (f" ({len(lg['photos'])} foto)" if lg.get("photos") else "")
+            + (f" [fase: {PHASE_LABEL.get(lg['phase'], lg['phase'])}]" if lg.get("phase") and lg.get("hours") else ""))
 
 
 async def answer(commessa: dict, logs: list, reports: list, question: str, history: list,
@@ -1414,6 +1458,8 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
     ] if x)
     pend = ", ".join(f"{k} {_fmt_num(v)} h" for k, v in tot["pending_by_person"].items())
     totals_s = (f"Voci di diario: {tot['entries']}. Ore totali: {_fmt_num(tot['hours_total'])} h" + (f" ({per})" if per else "")
+                + (f". Ore per fase della commessa: " + ", ".join(f"{PHASE_LABEL[k]} {_fmt_num(v)} h" for k, v in tot["by_phase"].items())
+                   if tot.get("by_phase") else "")
                 + (f". Ore da approvare, NON comprese nel totale: {_fmt_num(tot['hours_pending_total'])} h ({pend})" if pend else "")
                 + ". Materiali: " + (materials_line(tot["materials"]) or "nessuno") + ".")
     diary = "\n".join(_ctx_line(lg) for lg in logs) or "(nessuna voce)"

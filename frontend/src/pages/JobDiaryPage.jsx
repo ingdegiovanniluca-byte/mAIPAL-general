@@ -336,6 +336,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
           <span className="text-[11.5px] font-medium">{log.author_name}</span>
           {log.author_company && <span className="text-[10.5px] text-white/40">· {log.author_company}</span>}
           {log.channel === "telegram" && <span className="text-[10.5px] text-white/40">· Telegram</span>}
+          {section === "ore" && log.phase && <span className="text-[10.5px] text-[#F2C14E]/85" data-testid="job-entry-phase">· {PHASE_LABEL[log.phase]}</span>}
         </span>
         {detail && <span className="block mt-[3px] text-[14.5px] font-medium leading-snug text-white">{detail}</span>}
         <span className={`block mt-[3px] leading-[1.45] whitespace-pre-wrap ${isEvent ? "text-[13px] text-white/70"
@@ -385,6 +386,9 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
     </div>
   );
 }
+// the phase of the commessa the hours were worked in
+const PHASES = [["sopralluogo", "Sopralluogo"], ["preventivo", "Preventivo"], ["lavorazione", "Lavorazione"], ["post", "Dopo la consegna"]];
+const PHASE_LABEL = Object.fromEntries(PHASES);
 const hoursLineOf = (log) => (log.hours?.length ? log.hours : log.hours_pending || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(" · ")
   + (log.hours_pending?.length ? " da approvare" : "");
 // "(dalle 07:58 alle 17:10, al posto delle 10 h segnate con 📍)"
@@ -444,6 +448,7 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
   const [hours, setHours] = useState((log.hours || []).map((h) => ({ ...h, hours: fmtNum(h.hours) })));
   const [materials, setMaterials] = useState((log.materials || []).map((m, i) => ({ ...m, qty: fmtNum(m.qty), orig: i })));
   const [problems, setProblems] = useState((log.problems || []).join("\n"));
+  const [phase, setPhase] = useState(log.phase || "");
   const [saving, setSaving] = useState(false);
   const num = (v) => (String(v).trim() === "" ? null : Number(String(v).replace(",", ".")));
   const save = async () => {
@@ -454,6 +459,7 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
         hours: hours.filter((h) => h.who && num(h.hours)).map((h) => ({ who: h.who, hours: num(h.hours) })),
         materials: materials.filter((m) => m.name).map((m) => ({ name: m.name, qty: num(m.qty), unit: m.unit || "" })),
         problems: problems.split("\n").map((p) => p.trim()).filter(Boolean),
+        ...(phase && phase !== log.phase ? { phase } : {}),
       });
       onSaved(r.data);
     } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
@@ -483,6 +489,18 @@ function EditDialog({ log, onClose, onSaved, onDelete }) {
               </div>
             ))}
             <button onClick={() => setHours((xs) => [...xs, { who: "", hours: "" }])} className="text-xs text-white/75 inline-flex items-center gap-1"><Plus size={12} /> aggiungi</button>
+            {hours.length > 0 && (
+              <div className="mt-2.5" data-testid="job-edit-phase">
+                <div className="text-[11px] text-white/55 mb-1">fase della commessa{log.phase_set ? "" : " (dallo stato di quel giorno)"}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {PHASES.map(([k, label]) => (
+                    <button key={k} type="button" onClick={() => setPhase(k)} aria-pressed={phase === k}
+                      className={`px-3 py-1 rounded-full text-[12px] ${phase === k ? "bg-white text-[#403A3C] font-semibold" : "bg-white/10 text-white/85"}`}>{label}</button>
+                  ))}
+                  {log.phase_set && <button type="button" onClick={() => setPhase("auto")} className={`px-3 py-1 rounded-full text-[12px] ${phase === "auto" ? "bg-white text-[#403A3C] font-semibold" : "bg-white/5 text-white/60"}`}>Automatica</button>}
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <div className="kicker mb-1">materiali</div>
@@ -1794,6 +1812,18 @@ function CostsView({ commessaId, onChanged }) {
         </div>
       ))}
       {open.labor && e.labor.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessuna ora registrata.</div>}
+      {open.labor && (e.labor_by_phase || []).length > 0 && (
+        <div className="py-2.5 border-t border-white/[0.16]" data-testid="costs-labor-phases">
+          <div className="text-[11.5px] text-white/55 mb-1">per fase della commessa</div>
+          {e.labor_by_phase.map((x) => (
+            <div key={x.phase} className="flex items-baseline gap-2 text-[13px] text-white/85 py-0.5">
+              <span className="flex-1">{x.label}</span>
+              <span className="tabular-nums text-white/70">{fmtNum(x.hours)} h</span>
+              <span className="w-[84px] text-right tabular-nums">{x.cost || x.complete ? eur(x.cost) : "—"}{!x.complete && x.cost ? "*" : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {fold("materials", "materiali", e.materials_total, e.materials.length, "costs-materials-toggle")}
       {open.materials && e.materials.map((m) => (
@@ -2592,6 +2622,7 @@ export default function JobDiaryPage() {
   const summary = !pt ? "" : section === "ore"
     ? `${fmtNum(pt.hours_total)} h nel periodo${Object.keys(pt.by_person).length ? " · " + Object.entries(pt.by_person).map(([k, v]) => `${k} ${fmtNum(v)} h`).join(" · ") : ""}`
       + (pt.hours_pending_total ? ` · ${fmtNum(pt.hours_pending_total)} h da approvare (non contate)` : "")
+      + (Object.keys(pt.by_phase || {}).length ? "\nPer fase: " + Object.entries(pt.by_phase).map(([k, v]) => `${PHASE_LABEL[k]} ${fmtNum(v)} h`).join(" · ") : "")
     : section === "problemi" ? `${pt.problems.length} ${pt.problems.length === 1 ? "segnalazione" : "segnalazioni"} nel periodo`
     : section === "materiali" ? (pt.materials.map(matLabel).join(" · ") || "Nessun materiale nel periodo") : "";
   const range = periodRange(period);
@@ -2843,7 +2874,7 @@ export default function JobDiaryPage() {
         </span>
         <span className="text-[12px] tracking-[0.16em] uppercase text-white/55">· {nEntries === 1 ? "1 voce" : `${nEntries} voci`}</span>
       </div>
-      {summary && <div className="mt-2.5 text-[12.5px] text-white/80 text-center" data-testid="section-summary">{summary}</div>}
+      {summary && <div className="mt-2.5 text-[12.5px] text-white/80 text-center whitespace-pre-line" data-testid="section-summary">{summary}</div>}
 
       {/* the days */}
       <div className="mt-1.5" data-testid="diary-days">

@@ -6329,6 +6329,7 @@ class JobTodoPatch(BaseModel):
 
 class JobLogPatch(BaseModel):
     text: Optional[str] = None
+    phase: Optional[Literal["sopralluogo", "preventivo", "lavorazione", "post", "auto"]] = None   # auto: from the commessa's state
     date: Optional[str] = None
     hours: Optional[List[dict]] = None
     materials: Optional[List[dict]] = None
@@ -7653,6 +7654,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         "date": parsed["date"], "raw_text": text, "text": parsed["text"],
         "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"], **review_fields,
         "photos": [], "channel": channel, "conv_id": conv_id, "created_at": now, "embedding": None,
+        **({"phase": jl.phase_from_words(text), "phase_set": "nota"} if jl.phase_from_words(text) else {}),
     }
     survey = not author and _is_survey(target, text)   # the survey: the administrator and the users, never a collaborator
     if survey:
@@ -7823,7 +7825,7 @@ async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_
     clienti, sub, client = acc["clienti"], acc["sub"], acc["client"]
     light = await db.job_logs.find({"commessa_id": commessa_id},
                                    {"_id": 0, "id": 1, "date": 1, "kind": 1, "hours": 1, "materials": 1, "problems": 1, "photos": 1,
-                                    "hours_pending": 1, "hours_review": 1, "author_name": 1}).to_list(20000)
+                                    "hours_pending": 1, "hours_review": 1, "author_name": 1, "phase": 1, "section": 1, "created_at": 1}).to_list(20000)
     q: dict = {"commessa_id": commessa_id}
     rng = {}
     if date_from:
@@ -7834,6 +7836,8 @@ async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_
         q["date"] = rng
     logs = await db.job_logs.find(q, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
+    stato_now = _commessa_view(sub, client, clienti)["stato"]
+    await _detail_part("fasi", commessa_id, _fill_phases(commessa_id, light + logs, stato_now), None)
     reports = await db.work_reports.count_documents({"commessa_id": commessa_id})
     photos = sum(len(lg.get("photos") or []) for lg in light)
     P = lambda label, coro, default: _detail_part(label, commessa_id, coro, default)
@@ -8711,11 +8715,64 @@ def _num_or_none(v) -> Optional[float]:
     return round(f, 4) if f >= 0 else None
 
 
+async def _phase_timeline(commessa_id: str, stato_now: Optional[str] = None) -> list:
+    """[(from iso time, stato)] - the states the commessa went through (its history of changes), oldest first."""
+    if stato_now is None:
+        sub = await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0}) or {}
+        cl = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0, "system_sub_map": 1}) if sub else None
+        stato_now = _sysval(sub.get("data"), (cl or {}).get("system_sub_map") or {}, "stato")
+    changes = sorted([h for h in await db.commessa_history.find({"commessa_id": commessa_id, "field": "Stato"}, {"_id": 0}).to_list(500)],
+                     key=lambda h: h.get("at") or "")
+    if not changes:
+        return [("", stato_now or "nuova")]
+    return [("", changes[0].get("old") or "nuova")] + [(h.get("at") or "", h.get("new") or "") for h in changes]
+
+
+def _phase_at(timeline: list, when: str) -> str:
+    stato = timeline[0][1]
+    for at, st in timeline[1:]:
+        if at and at <= when:
+            stato = st
+    return jl.phase_of_stato(stato)
+
+
+def _entry_time(lg: dict) -> str:
+    """When the work of an entry was done: its creation when written that day, else midday of its day."""
+    day, created = lg.get("date") or "", lg.get("created_at") or ""
+    try:
+        if created and _local(created).date().isoformat() == day:
+            return created
+    except ValueError:
+        pass
+    try:
+        return datetime.combine(date.fromisoformat(day[:10]), datetime.min.time().replace(hour=12), tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        return created
+
+
+async def _fill_phases(commessa_id: str, logs: list, stato_now: Optional[str] = None) -> list:
+    """Each entry's phase (sopralluogo, preventivo, lavorazione, post): set by hand or said in the note,
+    else the state the commessa was in when the work was done; the survey's entries are the survey."""
+    timeline = None
+    for lg in logs:
+        if lg.get("phase") and lg.get("phase") in jl.PHASE_LABEL:
+            continue
+        if lg.get("section") == "sopralluogo":
+            lg["phase"] = "sopralluogo"
+            continue
+        if timeline is None:
+            timeline = await _phase_timeline(commessa_id, stato_now)
+        lg["phase"] = _phase_at(timeline, _entry_time(lg))
+    return logs
+
+
 async def _commessa_economics(clienti: dict, commessa_id: str, logs: Optional[list] = None) -> dict:
     costs = clienti.get("costs") or {}
     econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
     if logs is None:
-        logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "hours": 1, "materials": 1, "problems": 1, "kind": 1, "date": 1}).to_list(20000)
+        logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "hours": 1, "materials": 1, "problems": 1, "kind": 1, "date": 1,
+                                                                     "phase": 1, "section": 1, "created_at": 1}).to_list(20000)
+        await _fill_phases(commessa_id, logs)
     return jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), econ.get("extras"), econ.get("budget"))
 
 
@@ -11129,6 +11186,7 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
             "todos_line": " | ".join(f"«{t['text']}» ({t.get('who') or '-'})" + (f" entro {t['due_date']}" if t.get("due_date") else "")
                                      for t in _sort_job_todos(open_todos)),
             "contacts_line": contacts_line(await _commessa_contacts(view["id"]))}   # the job's trades: useful to them too
+    await _fill_phases(view["id"], logs, view.get("stato"))
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
 
@@ -12980,6 +13038,7 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
     view = _commessa_view(sub, client, clienti)
     logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""))
+    await _fill_phases(commessa_id, logs, view.get("stato"))
     reports = await db.work_reports.find({"commessa_id": commessa_id}, {"_id": 0, "docx_b64": 0, "embedding": 0}).to_list(50)
     if await _sees_costs(current):   # never for collaborators, nor for the users when the organization says so
         view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))
@@ -13085,9 +13144,14 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
         upd["materials"] = jl.clean_materials(payload.materials)
     if payload.problems is not None:
         upd["problems"] = jl.clean_problems(payload.problems)
+    if payload.phase is not None:
+        upd.update(phase=None, phase_set=None) if payload.phase == "auto" else upd.update(phase=payload.phase, phase_set="mano")
     if upd:
         upd["embedding"] = None
         await db.job_logs.update_one({"id": log_id}, {"$set": upd})
+        if "phase" in upd and not upd["phase"]:
+            await _fill_phases(log["commessa_id"], [upd_log := {**log, **upd}])
+            return _public_log(upd_log)
         if "hours" in upd or "materials" in upd:
             clienti = await _clienti_list(current)
             if clienti:
@@ -15254,9 +15318,12 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
     econs = {}
     for c in worked:
         lgs = by.get(c["id"], [])
+        await _fill_phases(c["id"], lgs, c.get("stato"))
         t = jl.totals(week(lgs))
         per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in t["by_person"].items())
         lines.append(f"\n*{c['title']}* — {c['client_name']}: {jl._fmt_num(t['hours_total'])} h" + (f" ({per})" if per else ""))
+        if len(t["by_phase"]) > 1:
+            lines.append("🧭 Per fase: " + " · ".join(f"{jl.PHASE_LABEL[k]} {jl._fmt_num(v)} h" for k, v in t["by_phase"].items()))
         hp = await _hours_plan(c["id"], lgs)
         if hp and hp.get("planned"):
             lines.append(f"👷 Ore: {jl._fmt_num(hp['done'])} h fatte di {jl._fmt_num(hp['planned'])} previste dal preventivo ({hp['pct']}%)"
