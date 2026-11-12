@@ -3521,9 +3521,12 @@ async def create_todo(payload: TodoUpsert, current: User = Depends(get_current_u
 async def update_todo(todo_id: str, payload: dict, current: User = Depends(get_current_user)):
     payload.pop("id", None); payload.pop("user_id", None); payload.pop("_id", None)
     _clear_cached_embedding(payload, {"title", "description", "notes"})
+    payload.pop("steps", None)                                    # the steps have their own calls
+    if "due_date" in payload or "reminder" in payload:
+        payload["reminded_on"] = None                               # a new due date: its reminder again
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()   # the To-Do folders say when they last changed
     await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": payload})
-    doc = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
+    doc = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0, "embedding": 0})
     return doc
 
 
@@ -3595,6 +3598,199 @@ async def assign_task(task_id: str, payload: TaskAssignPayload, current: User = 
             logger.exception("failed to send assignment notification")
 
     return doc
+
+
+# ---- THE STEPS OF A TO DO ("Vacanza": contattare l'agenzia, richiedere il preventivo, ...): added, ticked,
+# marked as main (they stay on top), moved, with a due date and a Telegram reminder if wanted. The to do's
+# progress follows them: the first one done -> "in corso"; the last one -> the app asks whether it is done.
+TODO_STEPS_MAX = 100
+
+
+class TodoStepNew(BaseModel):
+    text: Optional[str] = None
+    texts: List[str] = []                 # several at once (the ones suggested)
+    after: Optional[str] = None           # after this step (none: at the end)
+
+
+class TodoStepPatch(BaseModel):
+    text: Optional[str] = None
+    done: Optional[bool] = None
+    main: Optional[bool] = None
+    due_date: Optional[str] = None        # "" clears it
+    reminder: Optional[bool] = None
+    note: Optional[str] = None
+
+
+class TodoStepsOrder(BaseModel):
+    ids: List[str]
+
+
+async def _todo_of(current: User, todo_id: str) -> dict:
+    todo = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0, "embedding": 0})
+    if not todo:
+        raise HTTPException(status_code=404, detail="To do non trovato")
+    return todo
+
+
+def _clean_step_text(t: str) -> str:
+    return " ".join(str(t or "").split()).strip(" -•·")[:200]
+
+
+async def _save_steps(todo: dict, steps: list, extra: Optional[dict] = None) -> dict:
+    """The steps saved, with the to do's progress and state that follow from them."""
+    upd = {"steps": steps, "updated_at": datetime.now(timezone.utc).isoformat(), **(extra or {})}
+    ask_done = False
+    if steps:
+        done = sum(1 for x in steps if x.get("done"))
+        upd["completion_percent"] = round(done / len(steps) * 100)
+        status = upd.get("status") or todo.get("status")
+        if done and status == "da_fare":
+            upd["status"] = "in_corso"
+        before_done = sum(1 for x in todo.get("steps") or [] if x.get("done")) == len(todo.get("steps") or []) and todo.get("steps")
+        ask_done = done == len(steps) and not before_done and status != "fatto"
+    _clear_cached_embedding(upd, set())
+    await db.todos.update_one({"id": todo["id"], "user_id": todo["user_id"]}, {"$set": upd})
+    out = await db.todos.find_one({"id": todo["id"], "user_id": todo["user_id"]}, {"_id": 0, "embedding": 0})
+    return {**out, "ask_done": ask_done}
+
+
+def _new_step(text: str) -> dict:
+    return {"id": f"st_{uuid.uuid4().hex[:10]}", "text": text, "done": False, "main": False, "due_date": None, "reminder": False,
+            "note": "", "created_at": datetime.now(timezone.utc).isoformat()}
+
+
+@api_router.post("/todos/{todo_id}/steps")
+async def add_todo_steps(todo_id: str, payload: TodoStepNew, current: User = Depends(get_current_user)):
+    todo = await _todo_of(current, todo_id)
+    texts = [_clean_step_text(t) for t in ([payload.text] if payload.text else []) + payload.texts]
+    texts = [t for t in texts if t]
+    if not texts:
+        raise HTTPException(status_code=400, detail="Scrivi il passo")
+    steps = list(todo.get("steps") or [])
+    if len(steps) + len(texts) > TODO_STEPS_MAX:
+        raise HTTPException(status_code=400, detail=f"Al massimo {TODO_STEPS_MAX} passi per to do")
+    new = [_new_step(t) for t in texts]
+    at = next((i + 1 for i, x in enumerate(steps) if x["id"] == payload.after), len(steps))
+    return await _save_steps(todo, steps[:at] + new + steps[at:])
+
+
+@api_router.patch("/todos/{todo_id}/steps/{step_id}")
+async def update_todo_step(todo_id: str, step_id: str, payload: TodoStepPatch, current: User = Depends(get_current_user)):
+    todo = await _todo_of(current, todo_id)
+    steps = [dict(x) for x in todo.get("steps") or []]
+    st = next((x for x in steps if x["id"] == step_id), None)
+    if not st:
+        raise HTTPException(status_code=404, detail="Passo non trovato")
+    if payload.text is not None:
+        if not _clean_step_text(payload.text):
+            raise HTTPException(status_code=400, detail="Il passo non può essere vuoto")
+        st["text"] = _clean_step_text(payload.text)
+    if payload.done is not None:
+        st["done"] = payload.done
+        st["done_at"] = datetime.now(timezone.utc).isoformat() if payload.done else None
+    if payload.main is not None:
+        st["main"] = payload.main
+    if payload.due_date is not None:
+        try:
+            st["due_date"] = date.fromisoformat(payload.due_date[:10]).isoformat() if payload.due_date else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Data non valida")
+        if not st["due_date"]:
+            st["reminder"] = False
+        st["reminded_on"] = None
+    if payload.reminder is not None:
+        st["reminder"] = bool(payload.reminder) and bool(st.get("due_date") or payload.reminder)
+        st["reminded_on"] = None
+    if payload.note is not None:
+        st["note"] = " ".join(payload.note.split())[:300]
+    return await _save_steps(todo, steps)
+
+
+@api_router.delete("/todos/{todo_id}/steps/{step_id}")
+async def delete_todo_step(todo_id: str, step_id: str, current: User = Depends(get_current_user)):
+    todo = await _todo_of(current, todo_id)
+    steps = [x for x in todo.get("steps") or [] if x["id"] != step_id]
+    if len(steps) == len(todo.get("steps") or []):
+        raise HTTPException(status_code=404, detail="Passo non trovato")
+    out = await _save_steps(todo, steps, {} if steps else {"completion_percent": todo.get("completion_percent") or 0})
+    return out
+
+
+@api_router.put("/todos/{todo_id}/steps/order")
+async def order_todo_steps(todo_id: str, payload: TodoStepsOrder, current: User = Depends(get_current_user)):
+    todo = await _todo_of(current, todo_id)
+    by_id = {x["id"]: x for x in todo.get("steps") or []}
+    ordered = [by_id[i] for i in dict.fromkeys(payload.ids) if i in by_id]
+    ordered += [x for x in todo.get("steps") or [] if x["id"] not in set(payload.ids)]   # none lost
+    return await _save_steps(todo, ordered)
+
+
+@api_router.post("/todos/{todo_id}/steps/suggest")
+async def suggest_todo_steps(todo_id: str, current: User = Depends(get_current_user)):
+    """✨ Steps proposed from the title, description and notes - only proposals: the user picks them."""
+    todo = await _todo_of(current, todo_id)
+    have = [x["text"] for x in todo.get("steps") or []]
+    system = ("Sei mAIPAL. Proponi i passi concreti per portare a termine un to-do personale o di lavoro, nell'ordine in cui farli: "
+              "da 3 a 8 passi, ognuno una breve azione all'infinito (es. «Contattare l'agenzia»), max 60 caratteri, in italiano. "
+              "Usa il titolo, la descrizione e le note; non ripetere i passi già presenti; nessun dato inventato (nomi, prezzi, date). "
+              "Rispondi SOLO con JSON: {\"steps\": [\"...\"]}")
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"todo_steps_{todo_id}_{uuid.uuid4().hex[:6]}", system_message=system,
+                   user_id=current.user_id, feature="creazione_todo", channel="web", trigger="utente", org_id=current.org_id).with_model("openai", "gpt-4o")
+    raw = await chat.send_message(UserMessage(text=json.dumps({"titolo": todo.get("title"), "descrizione": todo.get("description") or "",
+                                                               "note": todo.get("notes") or "", "passi_presenti": have}, ensure_ascii=False)))
+    try:
+        m = re.search(r"\{.*\}", raw or "", re.S)
+        rows = json.loads(m.group(0)).get("steps") if m else []
+    except Exception:
+        rows = []
+    seen = {jl._norm(h) for h in have}
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        t = _clean_step_text(r)[:80]
+        if t and jl._norm(t) not in seen:
+            seen.add(jl._norm(t))
+            out.append(t)
+    return {"steps": out[:8]}
+
+
+async def _todo_step_reminders(now_utc: Optional[datetime] = None) -> int:
+    """The steps (and the to dos) with a due date and the reminder on: on that day, from 9:00, a Telegram
+    message - once. -> messages sent."""
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now.hour < 9:
+        return 0
+    today = now.date().isoformat()
+    sent = 0
+    q = {"$or": [{"steps": {"$exists": True}}, {"reminder": True}]}
+    for todo in await db.todos.find(q, {"_id": 0, "embedding": 0}).to_list(5000):
+        if todo.get("status") == "fatto":
+            continue
+        lines, steps, changed = [], [dict(x) for x in todo.get("steps") or []], False
+        for st in steps:
+            if st.get("reminder") and not st.get("done") and st.get("due_date") == today and st.get("reminded_on") != today:
+                lines.append(f"• {st['text']}" + (" ★" if st.get("main") else ""))
+                st["reminded_on"], changed = today, True
+        todo_due = todo.get("reminder") and todo.get("due_date") == today and todo.get("reminded_on") != today
+        if not lines and not todo_due:
+            continue
+        user = await db.users.find_one({"user_id": todo["user_id"]}, {"_id": 0, "telegram_chat_id": 1})
+        text = (f"🔔 To do «{todo.get('title')}»" + (" scade oggi." if todo_due else ":")
+                + ("\n" + ("Passi in scadenza oggi:\n" if todo_due else "da fare oggi:\n") + "\n".join(lines) if lines else ""))
+        if user and await _send_telegram_text(user.get("telegram_chat_id"), text):
+            sent += 1
+        upd = {**({"steps": steps} if changed else {}), **({"reminded_on": today} if todo_due else {})}
+        await db.todos.update_one({"id": todo["id"]}, {"$set": upd})
+    return sent
+
+
+async def _todo_reminders_loop():
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _todo_step_reminders()
+        except Exception:
+            logger.exception("to do reminders iteration failed")
+        await asyncio.sleep(600)
 
 
 @api_router.post("/todos/{todo_id}/favorite")
@@ -13470,11 +13666,18 @@ async def todo_chat(todo_id: str, payload: ContextChatRequest, current: User = D
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
 
+    steps = todo.get("steps") or []
+    shown = {k: v for k, v in todo.items() if k not in ("steps", "embedding")}
+    steps_txt = "\n".join(f"- id {x['id']}: {x['text']}" + (" [fatto]" if x.get("done") else "") + (" [principale]" if x.get("main") else "")
+                          for x in steps) or "(nessuno)"
     system = (
-        f"Sei mAIPAL. L'utente sta modificando il to-do: {todo}. "
+        f"Sei mAIPAL. L'utente sta modificando il to-do: {shown}. I suoi PASSI (sottotask), in ordine:\n{steps_txt}\n"
         "Rispondi in modo naturale (1-2 frasi) con la conferma. "
         "In coda includi SOLO per il sistema i campi da aggiornare tra i marcatori "
-        "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, status ('da_fare'|'in_corso'|'fatto'), completion_percent, priority, tags, notes."
+        "<<<META>>>{...}<<<END>>>, chiavi ammesse: title, description, status ('da_fare'|'in_corso'|'fatto'), priority, tags, notes, due_date (YYYY-MM-DD); "
+        "e per i passi: steps_add [{\"text\": passo con le parole dell'utente, \"after\": id del passo dopo cui metterlo o null}], "
+        "steps_done [id], steps_undone [id], steps_main [id], steps_not_main [id], steps_remove [id]. "
+        "Non usare completion_percent quando ci sono passi: si calcola da solo."
     )
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY, session_id=f"todo_{todo_id}", system_message=system,
@@ -13485,9 +13688,37 @@ async def todo_chat(todo_id: str, payload: ContextChatRequest, current: User = D
     visible, meta = _extract_meta(raw)
     visible = visible.replace("```json", "").replace("```", "").strip()
     if meta:
-        _clear_cached_embedding(meta, {"title", "description", "notes"})
-        await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": meta})
-    updated = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0})
+        ops = {k: meta.pop(k) for k in ("steps_add", "steps_done", "steps_undone", "steps_main", "steps_not_main", "steps_remove") if k in meta}
+        meta = {k: v for k, v in meta.items() if k in ("title", "description", "status", "completion_percent", "priority", "tags", "notes", "due_date")}
+        if (todo.get("steps") or ops.get("steps_add")) and "completion_percent" in meta:
+            meta.pop("completion_percent")
+        if meta:
+            _clear_cached_embedding(meta, {"title", "description", "notes"})
+            await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": meta})
+        if ops:
+            fresh = await _todo_of(current, todo_id)
+            st = [dict(x) for x in fresh.get("steps") or []]
+            ids = {x["id"] for x in st}
+            pick = lambda k: {i for i in (ops.get(k) or []) if isinstance(i, str) and i in ids}
+            for x in st:
+                if x["id"] in pick("steps_done"):
+                    x["done"], x["done_at"] = True, datetime.now(timezone.utc).isoformat()
+                if x["id"] in pick("steps_undone"):
+                    x["done"], x["done_at"] = False, None
+                if x["id"] in pick("steps_main"):
+                    x["main"] = True
+                if x["id"] in pick("steps_not_main"):
+                    x["main"] = False
+            st = [x for x in st if x["id"] not in pick("steps_remove")]
+            for a in ops.get("steps_add") or []:
+                a = a if isinstance(a, dict) else {"text": a}
+                t = _clean_step_text(a.get("text"))
+                if not t or not jl.grounded(t, payload.message, 0.6) or len(st) >= TODO_STEPS_MAX:   # the user's words, never invented
+                    continue
+                at = next((i + 1 for i, x in enumerate(st) if x["id"] == a.get("after")), len(st))
+                st.insert(at, _new_step(t))
+            await _save_steps(fresh, st)
+    updated = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0, "embedding": 0})
     return {"answer": visible, "todo": updated}
 
 
@@ -15877,6 +16108,7 @@ async def start_services():
     except Exception:
         logger.exception("organizations migration failed")
     asyncio.create_task(_geo_backfill_loop())
+    asyncio.create_task(_todo_reminders_loop())
     try:
         await _migrate_commesse()
         await _migrate_weekly_actions()

@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Tag, Star, Trash2 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import TodoFolders from "@/components/TodoFolders";
-import GlassBottomSheet from "@/components/GlassBottomSheet";
+import TodoDetail from "@/components/TodoDetail";
 
 const COLS = [
   { key: "da_fare", label: "Da fare", dot: "bg-neutral-400" },
@@ -62,7 +60,7 @@ export default function TodoBoardPage() {
       <>
         <TodoFolders todos={todos} setTodos={setTodos} sortTodos={sortTodos} reload={load}
           onOpenTodo={setSelected} onToggleFav={toggleFav} onDelete={del} />
-        {selected && <TodoDialog sheet todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
+        {selected && <TodoDetail todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
       </>
     );
   }
@@ -89,7 +87,7 @@ export default function TodoBoardPage() {
         ))}
       </div>
 
-      {selected && <TodoDialog todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
+      {selected && <TodoDetail todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
     </div>
   );
 }
@@ -133,144 +131,5 @@ function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
         <div className="mt-3 kicker">{todo.created_at ? new Date(todo.created_at).toLocaleDateString("it-IT") : ""}</div>
       </button>
     </div>
-  );
-}
-
-// sheet: on the phone and the iPad the to do opens in the app's glass sheet from the bottom
-// (like "Nuovo to do"), not in the centred dialog - that one could leave Safari with the whole
-// page unresponsive after opening it from the folders
-function TodoDialog({ todo, onClose, onUpdated, sheet = false }) {
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [thread, setThread] = useState([]);
-  const [pct, setPct] = useState(todo.completion_percent || 0);
-  const [status, setStatus] = useState(todo.status);
-  const [notes, setNotes] = useState(todo.notes || "");
-  const [savingNotes, setSavingNotes] = useState(false);
-
-  const persistStatus = async (s) => {
-    setStatus(s);
-    await api.patch(`/todos/${todo.id}`, { status: s });
-    onUpdated();
-  };
-  const persistPct = async (v) => {
-    setPct(v);
-    await api.patch(`/todos/${todo.id}`, { completion_percent: v });
-    onUpdated();
-  };
-
-  const saveNotes = async () => {
-    setSavingNotes(true);
-    try {
-      await api.patch(`/todos/${todo.id}`, { notes });
-      onUpdated();
-      toast.success("Note salvate");
-    } catch { toast.error("Errore"); }
-    finally { setSavingNotes(false); }
-  };
-
-  const send = async () => {
-    if (!msg.trim()) return;
-    setBusy(true);
-    try {
-      const r = await api.post(`/todos/${todo.id}/chat`, { message: msg });
-      setThread((t) => [...t, { user: msg, agent: r.data.answer }]);
-      setMsg("");
-      onUpdated();
-      toast.success("To-do aggiornato");
-    } catch { toast.error("Errore"); }
-    finally { setBusy(false); }
-  };
-
-  const del = async () => {
-    toast("Eliminare questo to-do?", {
-      action: {
-        label: "Elimina",
-        onClick: async () => {
-          await api.delete(`/todos/${todo.id}`);
-          onUpdated(); onClose();
-        },
-      },
-      cancel: { label: "Annulla", onClick: () => {} },
-      duration: 6000,
-    });
-  };
-
-  const body = (
-      <>
-        <div className="text-white/70 text-sm">{todo.description}</div>
-
-        <div className="flex flex-wrap gap-2">
-          {["da_fare", "in_corso", "fatto"].map((s) => (
-            <button key={s} data-testid={`status-${s}`} onClick={() => persistStatus(s)}
-                    style={status === s ? { backgroundColor: "#CECAD0", color: "#fff", border: "none" } : {}}
-                    className={`px-3 py-1.5 rounded-full text-xs ${status === s ? "" : "bg-white/10 border"}`}>
-              {s.replace("_", " ")}
-            </button>
-          ))}
-          <button data-testid="delete-todo" onClick={del} className="px-3 py-1.5 rounded-full text-xs bg-white/10 border text-red-600">Elimina</button>
-        </div>
-
-        {status === "in_corso" && (
-          <div className="pt-2">
-            <div className="kicker mb-2">completamento · {pct}%</div>
-            <input data-testid="todo-progress" type="range" min="0" max="100" value={pct} onChange={(e) => persistPct(parseInt(e.target.value))} className="w-full" />
-          </div>
-        )}
-
-        {/* NOTES */}
-        <div className="pt-2">
-          <div className="kicker mb-2">· note</div>
-          <Textarea
-            data-testid="todo-notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Aggiungi note libere sul to-do…"
-            className="bg-white/10 rounded-2xl min-h-[80px]"
-          />
-          <div className="flex justify-end mt-2">
-            <button data-testid="todo-notes-save" onClick={saveNotes} disabled={savingNotes || notes === (todo.notes || "")} className="px-4 py-1.5 rounded-full text-xs bg-black text-white disabled:opacity-40">
-              {savingNotes ? "…" : "Salva note"}
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 space-y-3 max-h-60 overflow-y-auto">
-          {thread.map((t, i) => (
-            <div key={i} className="space-y-2">
-              <div className="bg-white/10 rounded-xl p-3 text-sm">{t.user}</div>
-              <div className="prose-answer text-sm whitespace-pre-wrap">{t.agent}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-3">
-          <Textarea data-testid="todo-chat-input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Aggiorna stato, avanzamento, tag, note…" className="bg-white/10 rounded-2xl min-h-[80px]" />
-          <div className="flex justify-end mt-2">
-            <button data-testid="todo-chat-send" onClick={send} disabled={busy} className="pill-btn">{busy ? "…" : "Invia a mAIPAL"}</button>
-          </div>
-        </div>
-      </>
-  );
-
-  if (sheet) {
-    return (
-      <GlassBottomSheet onClose={onClose} testid="todo-dialog" className="max-h-[88vh]">
-        <div role="dialog" aria-label={todo.title} className="space-y-4">
-          <div className="text-2xl font-bold text-white break-words pr-2">{todo.title}</div>
-          {body}
-        </div>
-      </GlassBottomSheet>
-    );
-  }
-  return (
-    <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl bg-[color:var(--app-bg)] max-h-[90vh] overflow-y-auto" data-testid="todo-dialog">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold">{todo.title}</DialogTitle>
-        </DialogHeader>
-        {body}
-      </DialogContent>
-    </Dialog>
   );
 }

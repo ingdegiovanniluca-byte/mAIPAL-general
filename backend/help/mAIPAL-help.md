@@ -125,7 +125,16 @@ La sezione Task mostra i tuoi impegni con una data.
 <!-- id: todo · path: /dashboard/todos · verticale: tutti -->
 I to-do sono le cose da fare senza una data precisa.
 - Tre stati: **Da fare**, **In corso** (con la barra di avanzamento), **Fatti**.
-- Aprendo un to-do puoi aggiornarlo scrivendo ("a metà, manca solo la stampa"), cambiare stato, avanzamento e tag, aggiungere note, segnarlo come preferito o eliminarlo.
+- **Aprendo un to-do** si apre **a tutto schermo**. In alto: ← per tornare, la **stella** (preferito) e **⋯** (scadenza del to-do, promemoria su Telegram, elimina). Tocca il **titolo** per cambiarlo; sotto lo **stato** (Da fare / In corso / Fatto) e l'**avanzamento**.
+- **Passi** (sottotask): scrivi in «**Aggiungi un passo**» e premi Invio: si apre subito il campo per il successivo, così scrivi una lista di seguito ("contattare l'agenzia", "richiedere il preventivo", "vedere il preventivo"…).
+  - Il **cerchio** lo spunta; i passi fatti scendono in **Completati** (chiusi, li apri con la freccia).
+  - La **stella** lo segna come **principale**: in grassetto e sempre in cima.
+  - Tieni premuti i **puntini ⋮⋮** e trascina per **riordinarli**.
+  - **Scorri a sinistra** su un passo per **Data** o **Elimina** (con Annulla).
+  - **Toccalo** per riscriverlo e dargli una **scadenza**, un **promemoria** (il giorno della scadenza, dalle 9, ti scrivo su Telegram) e una riga di nota.
+  - La barra si riempie da sola con i passi spuntati («3 di 7 passi fatti»). Con il primo passo fatto il to-do va in **In corso**; quando li hai fatti tutti ti chiedo se segnarlo come **Fatto**.
+- **✨ Suggerisci**: mAIPAL propone una lista di passi dal titolo e dalle note; aggiungo solo quelli che scegli.
+- In basso scrivi a mAIPAL per aggiornare il to-do a parole: "aggiungi prenotare il ristorante dopo vedere il preventivo", "segna fatto contattare l'agenzia", "a metà, manca solo la stampa". I passi nuovi li prendo dalle tue parole. Sotto ci sono anche le **note**, che si salvano da sole.
 - **Sul telefono** i tre stati sono tre **cartelle**, una sotto l'altra, con il numero dei to-do e il **+**. Dalla cartella spuntano i primi to-do: passandoci sopra il dito la cartella si apre in avanti e i to-do escono a ventaglio (quello sotto il dito sale di più).
 - **Sfogliare i to-do di una cartella**: scorri in su con il dito sopra i to-do e lasciali: restano alzati. Ora scorrendo in orizzontale sfogli tutti i to-do della cartella (le caselle seguono il dito; dopo l'ultimo ricomincia dal primo, e all'indietro dall'ultimo) (il to do in primo piano si alza un po’ di più; in basso a sinistra vedi quale è, es. "3 di 7"), toccandone uno lo apri, e scorrendo in giù rientrano nella cartella.
 - Tocca una cartella per l'**elenco** di tutti i suoi to-do: la stella li mette tra i preferiti (in cima), le frecce li **spostano** in un'altra cartella, il cerchio li segna come fatti (o li riapre), il cestino li elimina; toccando il titolo li apri. Con la freccia in alto (o il tasto indietro) torni alle cartelle.
