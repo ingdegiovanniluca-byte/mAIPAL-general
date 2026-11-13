@@ -153,15 +153,15 @@ Il diario raccoglie le tue giornate.
 ## Dashboard
 <!-- id: dashboard · path: /dashboard/oggi · verticale: artigiano -->
 La **Dashboard** è la tua giornata in uno schermo: la apri dal menu **+** in basso e, toccando il suo pallino, la fissi nella barra in basso come le altre sezioni. Sul telefono la pagina non scorre: scorrono solo i riquadri al loro interno.
-- **Task di oggi**: un orologio con intorno i task e le attività di cantiere di oggi. Ogni fascia **parte dall'ora di inizio** e dura quanto il task (la sua durata) o l'attività (fino all'ora di fine); se la durata non c'è, è lunga quanto basta per leggerla.
-  - Colori delle fasce: gialle le attività di cantiere, azzurre i task, rosa i task con priorità alta.
+- **Task di oggi**: un orologio con intorno i task e le attività di cantiere di oggi. Ogni fascia **parte dall'ora di inizio** e dura quanto il task (la sua durata) o l'attività (fino all'ora di fine); se la durata non c'è, è lunga un'ora. Le fasce molto corte mostrano solo l'ora, o solo il colore.
+  - Colori delle fasce, quelli delle gocce del logo: arancioni le attività di cantiere, blu petrolio i task, magenta i task con priorità alta.
   - Quelli fatti sono una spunta verde, quelli già passati sono più chiari.
   - **Sovrapposti**: quelli che si accavallano vanno su un **secondo anello**, più esterno. Se non ci stanno nemmeno così, sul primo anello resta quello con priorità alta (o il primo a iniziare) e sul secondo compare un tondo **+N**, il numero di quelli di quel periodo che non si vedono: con tre sovrapposti vedi uno e «+2». Toccando l'orologio li vedi tutti.
   - Sotto c'è quanti sono, quanti sono fatti e quanti non hanno un'ora. Toccando l'orologio vedi l'elenco.
-- **In cantiere**: quante persone sono in cantiere adesso (il numero grande, con accanto «persone in cantiere») (da «📍 Sono arrivato»), su quanti cantieri, divise tra **dipendenti** (gli utenti dell'app) e **collaboratori** esterni, e quante sono in pausa. Toccandolo vedi nomi, cantiere e ora di arrivo.
+- **In cantiere**: quante persone sono in cantiere adesso (da «📍 Sono arrivato»), con accanto su quanti cantieri, divise tra **dipendenti** (gli utenti dell'app) e **collaboratori** esterni, e quante sono in pausa. Toccandolo vedi nomi, cantiere e ora di arrivo.
 - **Commesse oggi**: le commesse con attività pianificate oggi e quelle dove adesso c'è qualcuno, una per riga (cliente · commessa).
   - Il pallino è **verde** se ci sono le persone previste, **giallo** se il numero è diverso (o la commessa non era prevista), **rosso** se non c'è nessuno. Le persone previste sono quelle assegnate alle attività di oggi.
-  - Il numero grande sono le persone in cantiere adesso, accanto (più piccolo) quelle previste; il triangolo rosso indica problemi aperti.
+  - Il numero più grande sono le persone in cantiere adesso, accanto (più piccolo) quelle previste; il triangolo rosso indica problemi aperti.
   - Toccando una commessa si apre il suo diario e con ← si torna alla Dashboard. L'elenco completo di clienti e commesse è nella sezione **Diario**.
 - **Note di oggi**:
   - **Attività previste**, per commessa, con orario e persone;

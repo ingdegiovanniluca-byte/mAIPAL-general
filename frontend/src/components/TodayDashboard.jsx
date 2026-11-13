@@ -9,15 +9,16 @@ import GlassBottomSheet from "@/components/GlassBottomSheet";
    the notes of the day. The last two boxes scroll inside themselves. A commessa opens its diary. */
 
 const STATUS_DOT = { green: "#8ED973", yellow: "#F2C14E", red: "#FF6B5B" };
-const CHIP = { attivita: ["#F2C14E", "#3a2a2a"], task: ["#8FD3F4", "#1f3340"], main: ["#E7A3D8", "#3d2238"] };
+// the colours of the drops of the mAIPAL logo: activities orange, tasks teal, high-priority tasks magenta
+const CHIP = { attivita: ["#FFAC33", "#4a2600"], task: ["#007E9A", "#ffffff"], main: ["#FF0061", "#ffffff"] };
 const hhmm = (iso) => new Date(iso).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
 
 // the clock: a 12 h glass face with the timed items around it, each an arc that starts at its start time
-// and lasts as long as it lasts (at least long enough for its label). The ones that overlap go on a
+// and lasts as long as it really lasts (an hour when not known). The ones that overlap go on a
 // second ring further out; when they don't fit on two rings, the first keeps the main one (or the
 // first to start) and the second shows "+N", the ones of that period not on screen. Done ones are a
 // green tick, the past ones fainter; the bottom ones are drawn so they read upright.
-const CX = 100, CY = 100, RINGS = [72, 91], SW = 16, CHAR = 4.5, MIN_SPAN = 46, TICK_SPAN = 14;
+const CX = 100, CY = 100, RINGS = [72, 91], SW = 16, CHAR = 4.5, HOUR = 60, TICK_SPAN = 14;
 const polar = (deg, r) => { const t = (deg * Math.PI) / 180; return [CX + r * Math.sin(t), CY - r * Math.cos(t)]; };
 const minOf = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
 const capDeg = (r, w) => ((w / 2) / r) * (180 / Math.PI);   // how far a round end reaches, in degrees
@@ -27,7 +28,7 @@ const meets = (p, q) => { const d = (((q.a - p.a) % 360) + 360) % 360; return d 
 export function layoutClock(items) {
   const timed = items.filter((x) => x.time).map((x) => {
     const m = minOf(x.time);
-    const span = x.done ? TICK_SPAN : Math.min(330, Math.max(MIN_SPAN, ((x.minutes || 0) / 720) * 360));
+    const span = x.done ? TICK_SPAN : Math.min(330, ((x.minutes || HOUR) / 720) * 360);
     return { ...x, m, a: ((m % 720) / 720) * 360, span };
   });
   // the clusters of items that overlap, one way or another
@@ -47,7 +48,7 @@ export function layoutClock(items) {
     rings[0].push(...fit[0]);
     if (!out.length) { rings[1].push(...fit[1]); continue; }
     const hidden = [...fit[1], ...out].sort((x, y) => x.m - y.m);
-    badges.push({ id: `more-${hidden[0].id}`, a: hidden[0].a, n: hidden.length, m: Math.max(...hidden.map((x) => x.m + (x.minutes || 30))) });
+    badges.push({ id: `more-${hidden[0].id}`, a: hidden[0].a, n: hidden.length, m: Math.max(...hidden.map((x) => x.m + (x.minutes || HOUR))) });
   }
   return { rings, badges };
 }
@@ -58,7 +59,8 @@ function chipLabel(x, room) {
   if (fits(full)) return full;
   const word = `${x.time} ${(x.label || "").split(/\s+/)[0] || ""}`.trim();
   if (fits(word)) return word;
-  return room > x.time.length + 2 ? `${word.slice(0, room - 1)}…` : x.time;
+  if (room > x.time.length + 2) return `${word.slice(0, room - 1)}…`;
+  return room >= x.time.length ? x.time : "";   // too short even for its time: just the colour
 }
 
 function Clock({ items, now }) {
@@ -67,7 +69,7 @@ function Clock({ items, now }) {
   const hA = ((now.getHours() % 12) * 60 + now.getMinutes()) / 2, mA = now.getMinutes() * 6;
   const [hx, hy] = polar(hA, 22), [mx, my] = polar(mA, 33);
   const chip = (x, r, ring) => {
-    const past = x.m + (x.minutes || 30) < nowMin;
+    const past = x.m + (x.minutes || HOUR) < nowMin;
     if (x.done) {
       const [cx, cy] = polar(x.a + capDeg(r, 18), r);
       return (
@@ -84,15 +86,16 @@ function Clock({ items, now }) {
     };
     const [bg, fg] = CHIP[x.kind === "task" && x.main ? "main" : x.kind] || CHIP.task;
     const room = Math.floor((r * (x.span - 3) * Math.PI) / 180 / CHAR);   // the text may run into the round ends
+    const round = x.span > 2 * cap + 1;   // a very short one is a square block, so it still lasts what it lasts
     const id = `chip-${ring}-${x.id}`;
     return (
       <g key={x.id} opacity={past ? 0.5 : 1} data-testid="clock-chip" data-ring={ring} data-start={x.a}>
         {/* the round ends start right at the start time */}
-        <path d={arc(x.a + cap, x.a + x.span - cap)} stroke={bg} strokeWidth={SW} fill="none" strokeLinecap="round" />
-        <path id={id} d={arc(x.a + 1.5, x.a + x.span - 1.5)} fill="none" stroke="none" />
-        <text fontSize="8.4" fontWeight="600" fill={fg} dominantBaseline="middle">
+        <path d={round ? arc(x.a + cap, x.a + x.span - cap) : arc(x.a, x.a + x.span)} stroke={bg} strokeWidth={SW} fill="none" strokeLinecap={round ? "round" : "butt"} />
+        {room >= x.time.length && <path id={id} d={arc(x.a + 1.5, x.a + x.span - 1.5)} fill="none" stroke="none" />}
+        {room >= x.time.length && <text fontSize="8.4" fontWeight="600" fill={fg} dominantBaseline="middle">
           <textPath href={`#${id}`} startOffset="50%" textAnchor="middle">{chipLabel(x, room)}</textPath>
-        </text>
+        </text>}
       </g>
     );
   };
@@ -182,10 +185,8 @@ export default function TodayDashboard({ onOpenCommessa }) {
         {/* who is on site now */}
         <button type="button" onClick={() => on.total && setSheet("people")} className={`${box} p-3 text-left flex flex-col`} data-testid="today-onsite">
           <Kicker>in cantiere</Kicker>
-          <div className="flex items-center gap-1.5 mt-2" data-testid="today-onsite-total"><span className="text-[38px] font-semibold leading-none text-white shrink-0">{on.total}</span>
-            <span className="min-w-0 text-[10.5px] leading-[1.2] text-white/80"><span className="block whitespace-nowrap">{on.total === 1 ? "persona" : "persone"}</span>
-              <span className="block whitespace-nowrap">in cantiere</span>
-              <span className="block whitespace-nowrap text-white/60">{on.sites ? `su ${on.sites} ${on.sites === 1 ? "cantiere" : "cantieri"}` : "nessun cantiere"}</span></span></div>
+          <div className="flex items-center gap-1.5 mt-2" data-testid="today-onsite-total"><span className="text-[36px] font-medium leading-none text-white shrink-0">{on.total}</span>
+            <span className="min-w-0 text-[11px] leading-tight text-white/80">{on.sites ? `su ${on.sites} ${on.sites === 1 ? "cantiere" : "cantieri"}` : "nessun cantiere"}</span></div>
           {[["employees", "dipendenti", User, "#8FD3F4", "#1f3340"], ["collaborators", "collaboratori", HardHat, "#F2C14E", "#3a2a2a"]].map(([k, label, Icon, bg, fg]) => (
             <div key={k} className="mt-2 flex items-center gap-2 rounded-2xl bg-white/[0.12] px-2 py-1.5" data-testid={`today-${k}`}>
               <span className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center" style={{ background: bg, color: fg }}><Icon size={14} strokeWidth={2.2} /></span>
@@ -202,8 +203,8 @@ export default function TodayDashboard({ onOpenCommessa }) {
         <div className="grid grid-cols-[14px_1fr_40px_22px_10px] gap-2 items-center pb-1.5 border-b border-white/[0.14]">
           <span />
           <span className="min-w-0"><Kicker>commesse oggi</Kicker></span>
-          <span className="flex justify-center text-white/65"><HardHat size={15} /></span>
-          <span className="flex justify-center text-white/65"><AlertTriangle size={14} /></span>
+          <span className="flex justify-center text-white"><HardHat size={15} /></span>
+          <span className="flex justify-center text-white"><AlertTriangle size={14} /></span>
           <span />
         </div>
         <div className="overflow-y-auto overscroll-contain pb-2" style={{ ...fade, maxHeight: h && h < 560 ? 96 : 132 }}>
@@ -213,7 +214,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
               className="w-full grid grid-cols-[14px_1fr_40px_22px_10px] gap-2 items-center py-[7px] border-b border-white/[0.14] last:border-0 text-left active:opacity-70">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS_DOT[c.status] }} data-status={c.status} />
               <span className="min-w-0 truncate text-[13px] text-white"><b className="font-semibold">{c.client}</b> · {c.title}</span>
-              <span className="text-center tabular-nums whitespace-nowrap" data-testid="today-present"><span className="text-[17px] font-bold leading-none text-white">{c.present}</span><span className="text-[11px] text-white/50">/{c.expected}</span></span>
+              <span className="text-center tabular-nums whitespace-nowrap" data-testid="today-present"><span className="text-[17px] font-medium leading-none text-white">{c.present}</span><span className="text-[11px] text-white/50">/{c.expected}</span></span>
               <span className="flex justify-center">{c.problems
                 ? <Alert size={16} label={`${c.problems} problemi aperti`} />
                 : <span className="text-white/25">–</span>}</span>
