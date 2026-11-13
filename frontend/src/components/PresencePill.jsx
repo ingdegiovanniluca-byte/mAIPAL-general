@@ -156,23 +156,31 @@ export default function PresencePill({ commessa, onChanged }) {
           )}
         </div>
       ) : (
-        <div className="mt-3 flex justify-center gap-2">
+        // a line that says where and since when (and the pause), then two short buttons that always fit
+        <div className="mt-3 flex flex-col items-center gap-2 max-w-full" data-testid="presence-box">
           {open && (
-            <button type="button" disabled={busy} onClick={brk} data-testid="presence-break"
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-full lg-glass text-[13px] text-white active:opacity-70 disabled:opacity-60 shrink-0">
-              {open.paused_at ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}
-              <span>{open.paused_at ? `Riprendo · pausa dalle ${hhmm(open.paused_at)}` : "Pausa"}</span>
-            </button>
+            <div className="max-w-full px-4 truncate text-[12px] text-white/70 text-center" data-testid="presence-state">
+              {open.paused_at && <Pause size={10} fill="currentColor" className="inline -mt-0.5 mr-1" />}
+              {open.paused_at ? `In pausa dalle ${hhmm(open.paused_at)}` : `In cantiere dalle ${hhmm(open.start_at)}`}
+              {open.paused_at ? ` · arrivo ${hhmm(open.start_at)}` : open.pause_min ? ` · pause ${duration(open.pause_min)}` : ""}
+              {!here && open.commessa_title ? ` · «${open.commessa_title}»` : ""}
+            </div>
           )}
-          <button type="button" disabled={busy} onClick={open ? () => stop() : start} data-testid="presence-pill"
-            className="flex items-center gap-2 px-4 py-2 rounded-full lg-glass text-[13px] text-white active:opacity-70 disabled:opacity-60 max-w-full">
-            {busy ? <Loader2 size={15} className="animate-spin" /> : open ? <Square size={13} className="text-[#FF8A80]" fill="currentColor" /> : <MapPin size={15} />}
-            <span className="truncate">
-              {open
-                ? (here ? `Ho finito · in cantiere dalle ${hhmm(open.start_at)}` : `Ho finito su «${open.commessa_title}» · dalle ${hhmm(open.start_at)}`)
-                : "Sono in cantiere"}
-            </span>
-          </button>
+          <div className="flex justify-center gap-2 max-w-full">
+            {open && (
+              <button type="button" disabled={busy} onClick={brk} data-testid="presence-break"
+                className={`shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] active:opacity-70 disabled:opacity-60 ${open.paused_at
+                  ? "bg-white text-[#403A3C] font-semibold" : "lg-glass text-white"}`}>
+                {open.paused_at ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}
+                <span>{open.paused_at ? "Riprendo" : "Pausa"}</span>
+              </button>
+            )}
+            <button type="button" disabled={busy} onClick={open ? () => stop() : start} data-testid="presence-pill"
+              className="min-w-0 flex items-center gap-2 px-4 py-2 rounded-full lg-glass text-[13px] text-white active:opacity-70 disabled:opacity-60">
+              {busy ? <Loader2 size={15} className="animate-spin shrink-0" /> : open ? <Square size={13} className="text-[#FF8A80] shrink-0" fill="currentColor" /> : <MapPin size={15} className="shrink-0" />}
+              <span className="truncate">{open ? "Ho finito" : "Sono in cantiere"}</span>
+            </button>
+          </div>
         </div>
       )}
       {sheet}
