@@ -4,7 +4,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, ChevronsLeft,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, ChevronsLeft, LayoutDashboard,
 } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
   { to: "/dashboard/tasks", label: "Task", testid: "tab-tasks", icon: CheckSquare },
   { to: "/dashboard/todos", label: "To-Do", testid: "tab-todos", icon: ListChecks },
+  { to: "/dashboard/oggi", label: "Dashboard", testid: "tab-dashboard", vertical: "artigiano", icon: LayoutDashboard },
   { to: "/dashboard/journal", label: "Diario", testid: "tab-journal", icon: BookOpen },
   { to: "/dashboard/news", label: "News", testid: "tab-news", icon: Newspaper },
   { to: "/dashboard/liste", label: "Liste", testid: "tab-liste", icon: List },

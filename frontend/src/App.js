@@ -16,6 +16,7 @@ import NewsPage from "@/pages/NewsPage";
 import CollectionsPage from "@/pages/CollectionsPage";
 import FitnessPage from "@/pages/FitnessPage";
 import ActionsPage from "@/pages/ActionsPage";
+import TodayPage from "@/pages/TodayPage";
 
 function Protected({ children, requireOnboard = true }) {
   const { user, loading } = useAuth();
@@ -42,6 +43,7 @@ function AppRouter() {
         <Route path="tasks" element={<TaskBoardPage />} />
         <Route path="todos" element={<TodoBoardPage />} />
         <Route path="journal" element={<JournalRoute />} />
+        <Route path="oggi" element={<TodayPage />} />
         <Route path="news" element={<NewsPage />} />
         <Route path="liste" element={<CollectionsPage />} />
         <Route path="documents" element={<DocumentsPage />} />
