@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronRight, User, HardHat, AlertTriangle, Pause, Check } from "lucide-react";
+import { User, HardHat, AlertTriangle, Pause, Check } from "lucide-react";
 import { api } from "@/lib/api";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
@@ -200,25 +200,23 @@ export default function TodayDashboard({ onOpenCommessa }) {
 
       {/* the commesse of today */}
       <div className={`${box} px-3.5 pt-3 pb-1 shrink-0`} data-testid="today-commesse">
-        <div className="grid grid-cols-[14px_1fr_40px_22px_10px] gap-2 items-center pb-1.5 border-b border-white/[0.14]">
+        <div className="grid grid-cols-[14px_1fr_40px_22px] gap-2 items-center pb-1.5 border-b border-white/[0.14]">
           <span />
           <span className="min-w-0"><Kicker>commesse oggi</Kicker></span>
           <span className="flex justify-center text-white"><HardHat size={15} /></span>
           <span className="flex justify-center text-white"><AlertTriangle size={14} /></span>
-          <span />
         </div>
         <div className="overflow-y-auto overscroll-contain pb-2" style={{ ...fade, maxHeight: h && h < 560 ? 96 : 132 }}>
           {d.commesse.length === 0 && <div className="py-3 text-[12.5px] text-white/70">Nessuna commessa prevista oggi e nessuno in cantiere.</div>}
           {d.commesse.map((c) => (
             <button key={c.id} type="button" onClick={() => onOpenCommessa(c.id)} data-testid="today-commessa"
-              className="w-full grid grid-cols-[14px_1fr_40px_22px_10px] gap-2 items-center py-[7px] border-b border-white/[0.14] last:border-0 text-left active:opacity-70">
+              className="w-full grid grid-cols-[14px_1fr_40px_22px] gap-2 items-center py-[7px] border-b border-white/[0.14] last:border-0 text-left active:opacity-70">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS_DOT[c.status] }} data-status={c.status} />
               <span className="min-w-0 truncate text-[13px] text-white"><b className="font-semibold">{c.client}</b> · {c.title}</span>
               <span className="text-center tabular-nums whitespace-nowrap" data-testid="today-present"><span className="text-[16px] font-medium leading-none text-white">{c.present}</span><span className="text-[11px] text-white/50">/{c.expected}</span></span>
               <span className="flex justify-center">{c.problems
                 ? <Alert size={16} label={`${c.problems} problemi aperti`} />
                 : <span className="text-white/25">–</span>}</span>
-              <ChevronRight size={13} className="text-white/55" />
             </button>
           ))}
         </div>
