@@ -66,6 +66,23 @@ async def unsubscribe(db, user_id: str, endpoint: str) -> None:
     await db.push_subscriptions.delete_many({"user_id": user_id, "endpoint": endpoint})
 
 
+def vapid_subject() -> str:
+    """Who sends (the VAPID "sub"): one clean mailto: or https: address. Apple's push service (iPhone,
+    iPad, Safari) refuses the notifications when it isn't (a space, quotes, two addresses in
+    ADMIN_EMAIL), while Google's accepts them - "on Android they arrive, on the iPhone not"."""
+    import re
+    raw = (os.environ.get("VAPID_SUBJECT") or os.environ.get("ADMIN_EMAIL") or "").strip().strip("'\"")
+    first = re.split(r"[,;\s]+", raw)[0] if raw else ""
+    if re.fullmatch(r"https://[^\s/]+(?:/\S*)?", first):
+        return first
+    first = first[len("mailto:"):] if first.lower().startswith("mailto:") else first
+    if re.fullmatch(r"[^@\s<>\"']+@[^@\s<>\"']+\.[a-zA-Z]{2,}", first):
+        return "mailto:" + first.lower()
+    base = (os.environ.get("APP_BASE_URL") or "").strip().strip("'\"")
+    m = re.match(r"https://[^/\s]+", base)
+    return m.group(0) if m else "mailto:ingdegiovanniluca@gmail.com"
+
+
 def _send_one(sub: dict, payload: str, private_pem: str, claims_sub: str):
     from pywebpush import webpush
     from py_vapid import Vapid02   # RFC 8292 ("vapid t=..., k=..."), what Apple and the others expect
@@ -97,7 +114,7 @@ async def send_to_user(db, user_id: str, title: str, body: str, url: str = "/das
         await _record(db, user_id, title, 0, 0, [])
         return 0
     keys = await vapid_keys(db)
-    claims_sub = "mailto:" + (os.environ.get("ADMIN_EMAIL") or "ingdegiovanniluca@gmail.com")
+    claims_sub = vapid_subject()
     payload = json.dumps({"title": title, "body": body[:240], "url": url, "tag": tag}, ensure_ascii=False)
     sent, errors = 0, []
     for sub in subs:

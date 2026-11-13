@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Bell, BellOff, Loader2, NotebookPen, AlarmClock } from "lucide-react";
 import { api } from "@/lib/api";
@@ -12,6 +12,7 @@ export default function NotificationsPanel() {
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState(null);   // the last notification sent to this account
   const [stale, setStale] = useState(false);  // this device subscribed with an old key: nothing would arrive
+  const keyRef = useRef(null);                // the server's public key, read before the tap (iPhone: see enablePush)
 
   // this device's state + the last notification sent (shown whatever the state: it says why one didn't arrive)
   const status = async (endpoint) => {
@@ -21,11 +22,10 @@ export default function NotificationsPanel() {
   const check = async () => {
     if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); status(); return; }
     if (Notification.permission === "denied") { setState("denied"); status(); return; }
+    try { keyRef.current = (await api.get("/push/key")).data.public_key; } catch { /* read again on the tap */ }
     const sub = await currentPushSubscription();
     let old = false;
-    if (sub) {
-      try { old = pushKeyMatches(sub, (await api.get("/push/key")).data.public_key) === false; } catch { /* can't tell */ }
-    }
+    if (sub && keyRef.current) old = pushKeyMatches(sub, keyRef.current) === false;
     setStale(old);
     const r = await status(sub?.endpoint);
     setState(sub && r?.subscribed && !old ? "on" : "off");
@@ -35,7 +35,7 @@ export default function NotificationsPanel() {
   const turnOn = async () => {
     setBusy(true);
     try {
-      const key = (await api.get("/push/key")).data.public_key;
+      const key = keyRef.current || (await api.get("/push/key")).data.public_key;
       const sub = await enablePush(key);
       await api.post("/push/subscribe", { subscription: sub.toJSON() });
       setState("on");
@@ -44,7 +44,8 @@ export default function NotificationsPanel() {
       toast.success("Notifiche attive su questo dispositivo");
     } catch (e) {
       if (e.message === "denied") setState("denied");
-      else if (e.message !== "dismissed") toast.error(e.response?.data?.detail || "Non sono riuscito ad attivare le notifiche");
+      else if (e.message === "dismissed") toast("Notifiche non attivate: tocca di nuovo «Attiva» e scegli «Consenti».");
+      else toast.error(e.response?.data?.detail || `Non sono riuscito ad attivare le notifiche${isIos() ? " (iPhone: serve iOS 16.4 o successivo, con mAIPAL aperta dalla schermata Home)" : ""}`);
     } finally { setBusy(false); }
   };
   const turnOff = async () => {
@@ -58,7 +59,7 @@ export default function NotificationsPanel() {
   };
   const test = async () => {
     setBusy(true);
-    try { await api.post("/push/test"); toast.success("Notifica di prova inviata: se non la vedi, controlla le notifiche di mAIPAL nelle impostazioni del telefono"); }
+    try { await api.post("/push/test"); toast.success(isIos() ? "Notifica di prova inviata: se non arriva, su iPhone apri Impostazioni → Notifiche → mAIPAL e attiva «Consenti notifiche» (e controlla che la modalità Full immersion non le blocchi)" : "Notifica di prova inviata: se non la vedi, controlla le notifiche di mAIPAL nelle impostazioni del telefono"); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); } finally { setBusy(false); await check(); }
   };
 
@@ -82,6 +83,9 @@ export default function NotificationsPanel() {
       )}
       {state === "off" && stale && (
         <p className="text-sm text-amber-300 mb-3" data-testid="push-stale">Su questo dispositivo le notifiche erano attivate con una chiave che non vale più: riattivale.</p>
+      )}
+      {state === "off" && isIos() && (
+        <p className="text-xs text-white/60 mb-3" data-testid="push-ios-hint">Su iPhone: tocca «Attiva» e poi «Consenti». Serve iOS 16.4 o successivo e mAIPAL aperta dall'icona sulla schermata Home.</p>
       )}
       {state === "off" && (
         <button onClick={turnOn} disabled={busy} data-testid="push-enable" className="pill-btn inline-flex items-center gap-2 disabled:opacity-60">

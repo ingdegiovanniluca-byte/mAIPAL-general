@@ -95,12 +95,16 @@ export function pushKeyMatches(sub, publicKey) {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
-// asks the permission (only after a tap) and subscribes with the server's public key
+// asks the permission (only after a tap) and subscribes with the server's public key.
+// iPhone / iPad (Safari): the permission and the subscription must start right from the tap - no
+// waiting for the network before them, or Safari refuses them without saying it. So the key is
+// read before (when the panel opens) and the registration is looked up while asking.
 export async function enablePush(publicKey) {
+  const regP = registration();
   const perm = await Notification.requestPermission();
   if (perm !== "granted") throw new Error(perm === "denied" ? "denied" : "dismissed");
-  const reg = await registration();
-  await navigator.serviceWorker.ready;
+  const reg = await regP;
+  if (!reg.active) await navigator.serviceWorker.ready;
   const old = await reg.pushManager.getSubscription();
   if (old) {
     if (pushKeyMatches(old, publicKey) === true) return old;

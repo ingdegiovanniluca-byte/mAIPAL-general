@@ -247,5 +247,12 @@ async def main():
         await server.push_test(me); assert False
     except server.HTTPException as e:
         assert e.status_code == 400
+    # the sender (VAPID "sub") always one clean address: Apple refuses the notifications otherwise
+    import push_notify as _pn
+    for raw, want in [("a@b.it", "mailto:a@b.it"), (" 'A@B.it' ", "mailto:a@b.it"), ("a@b.it, c@d.it", "mailto:a@b.it"),
+                      ("mailto:x@y.com", "mailto:x@y.com"), ("boh", "https://maipal.it")]:
+        os.environ["ADMIN_EMAIL"], os.environ["APP_BASE_URL"] = raw, "https://maipal.it/general"
+        assert _pn.vapid_subject() == want, (raw, _pn.vapid_subject())
+    os.environ.pop("ADMIN_EMAIL", None); os.environ.pop("APP_BASE_URL", None)
     print("ALL OK")
 asyncio.run(main())
