@@ -187,6 +187,9 @@ async def main():
             break
         await asyncio.sleep(0.05)
     assert last["title"] == "📒 Gino Neri · Bagno" and last["devices"] == 1 and last["sent"] == 1 and not last["errors"], last
+    assert len(last["detail"]) == 1 and last["detail"][0]["ok"], last
+    st0 = await server.push_status(server.PushEndpointPayload(endpoint=SUB["endpoint"]), me)
+    assert len(st0["device_list"]) == 1 and st0["device_list"][0]["this"], st0
 
     # 3) a task's reminder: on the device, once (a Telegram retry doesn't repeat it)
     now = datetime.now(timezone.utc)
@@ -247,6 +250,10 @@ async def main():
         await server.push_test(me); assert False
     except server.HTTPException as e:
         assert e.status_code == 400
+    # which device and push service: said per device, so "on Android yes, on the iPhone not" shows why
+    import push_notify as _pn0
+    assert _pn0.device_label("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)", "https://web.push.apple.com/abc") == {"device": "iPhone", "service": "Apple"}
+    assert _pn0.device_label("Mozilla/5.0 (Linux; Android 14)", "https://fcm.googleapis.com/fcm/send/x") == {"device": "Android", "service": "Google"}
     # the sender (VAPID "sub") always one clean address: Apple refuses the notifications otherwise
     import push_notify as _pn
     for raw, want in [("a@b.it", "mailto:a@b.it"), (" 'A@B.it' ", "mailto:a@b.it"), ("a@b.it, c@d.it", "mailto:a@b.it"),

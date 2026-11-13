@@ -13,11 +13,16 @@ export default function NotificationsPanel() {
   const [last, setLast] = useState(null);   // the last notification sent to this account
   const [stale, setStale] = useState(false);  // this device subscribed with an old key: nothing would arrive
   const keyRef = useRef(null);                // the server's public key, read before the tap (iPhone: see enablePush)
+  const [diag, setDiag] = useState(null);     // what this device says (and the server): when nothing arrives, where it stops
 
   // this device's state + the last notification sent (shown whatever the state: it says why one didn't arrive)
   const status = async (endpoint) => {
-    try { const r = (await api.post("/push/status", { endpoint: endpoint || "" })).data; setLast(r.last || null); return r; }
-    catch { return null; }
+    try {
+      const r = (await api.post("/push/status", { endpoint: endpoint || "" })).data;
+      setLast(r.last || null);
+      setDiag(await deviceCheck(r));
+      return r;
+    } catch { return null; }
   };
   const check = async () => {
     if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); status(); return; }
@@ -104,12 +109,62 @@ export default function NotificationsPanel() {
         </div>
       )}
       {last && <LastSending last={last} />}
+      {diag && <DeviceCheck diag={diag} />}
       <p className="text-xs text-white/50 mt-4">Ogni dispositivo si attiva per conto suo. Telegram, se collegato, continua a ricevere i suoi avvisi come prima.</p>
     </div>
   );
 }
 
 /* what happened to the last notification: when one doesn't arrive, here is why */
+// this device, step by step: installed (iPhone), permission, service worker, subscription and its service, known to the server
+async function deviceCheck(server) {
+  const ua = navigator.userAgent;
+  const iosV = (ua.match(/OS (\d+)[_.](\d+)/) || []).slice(1, 3).join(".");
+  const out = { ios: isIos(), iosVersion: iosV, standalone: isStandalone(), supported: pushSupported(),
+    permission: typeof Notification !== "undefined" ? Notification.permission : "assente", sw: "assente", sub: null, server, ua };
+  try {
+    const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    out.sw = reg ? (reg.active ? "attivo" : "in attivazione") : "assente";
+    const sub = reg && reg.pushManager ? await reg.pushManager.getSubscription() : null;
+    out.sub = sub ? new URL(sub.endpoint).host : null;
+  } catch { /* the browser doesn't say */ }
+  return out;
+}
+const svc = (host) => (!host ? "" : host.includes("push.apple.com") ? "Apple" : host.includes("googleapis") ? "Google" : host.includes("mozilla") ? "Mozilla" : host);
+function DeviceCheck({ diag }) {
+  const ok = (b) => (b ? "✓" : "✗");
+  const rows = [
+    ...(diag.ios ? [[`iPhone/iPad con iOS ${diag.iosVersion || "?"}`, !diag.iosVersion || parseFloat(diag.iosVersion) >= 16.4, "serve iOS 16.4 o successivo"],
+                    ["App aperta dall'icona sulla schermata Home", diag.standalone, "aprila dall'icona, non da Safari"]] : []),
+    ["Il browser riceve notifiche", diag.supported, "questo browser non le riceve"],
+    [`Permesso: ${diag.permission === "granted" ? "consentito" : diag.permission === "denied" ? "bloccato" : "non chiesto"}`, diag.permission === "granted",
+      diag.permission === "denied" ? "riattivalo nelle impostazioni del telefono" : "tocca «Attiva su questo dispositivo»"],
+    [`Service worker ${diag.sw}`, diag.sw === "attivo", "chiudi e riapri l'app"],
+    [diag.sub ? `Iscritto al servizio ${svc(diag.sub)}` : "Non iscritto", !!diag.sub, "tocca «Attiva su questo dispositivo»"],
+    ["Registrato sul server", !!diag.server?.subscribed, "tocca «Disattiva» e poi di nuovo «Attiva»"],
+  ];
+  const text = ["Diagnosi notifiche mAIPAL", ...rows.map(([l, v, fix]) => `${ok(v)} ${l}${v ? "" : ` — ${fix}`}`),
+    `Dispositivi attivi: ${(diag.server?.device_list || []).map((d) => `${d.device} (${d.service})`).join(", ") || "nessuno"}`,
+    ...((diag.server?.last?.detail || []).map((d) => `Ultimo invio a ${d.device} (${d.service}): ${d.ok ? "consegnato ad Apple/Google" : d.error}`)),
+    `Browser: ${diag.ua}`].join("\n");
+  const copy = async () => { try { await navigator.clipboard.writeText(text); toast.success("Diagnosi copiata: incollala dove vuoi"); } catch { toast.error("Non riesco a copiarla"); } };
+  return (
+    <div className="mt-4 rounded-2xl bg-white/[0.06] px-3.5 py-3 text-xs" data-testid="push-diagnosis">
+      <div className="flex items-center mb-1.5">
+        <span className="flex-1 text-[10px] uppercase tracking-widest text-white/50">diagnosi di questo dispositivo</span>
+        <button type="button" onClick={copy} className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 text-white" data-testid="push-diagnosis-copy">Copia</button>
+      </div>
+      {rows.map(([l, v, fix], i) => (
+        <div key={i} className="flex gap-2 py-0.5"><span className={v ? "text-[#8ED973]" : "text-amber-300"}>{ok(v)}</span>
+          <span className="text-white/85">{l}{!v && <span className="text-amber-300/90"> — {fix}</span>}</span></div>
+      ))}
+      {(diag.server?.device_list || []).length > 0 && (
+        <div className="mt-1.5 text-white/65">Dispositivi attivi: {diag.server.device_list.map((d) => `${d.device} (${d.service})${d.this ? " ← questo" : ""}`).join(", ")}</div>
+      )}
+    </div>
+  );
+}
+
 function LastSending({ last }) {
   const when = new Date(last.at).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   const outcome = !last.devices ? "non partita: nessun dispositivo con le notifiche attive"
@@ -120,7 +175,10 @@ function LastSending({ last }) {
       <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1">ultima notifica · {when}</div>
       <div className="text-white/85 break-words">{last.title}</div>
       <div className={last.sent ? "text-white/60 mt-0.5" : "text-amber-300 mt-0.5"}>{outcome}</div>
-      {(last.errors || []).map((e, i) => <div key={i} className="text-amber-300/90 mt-0.5 break-words">{e}</div>)}
+      {(last.detail || []).length > 0
+        ? last.detail.map((d, i) => <div key={i} className={`mt-0.5 break-words ${d.ok ? "text-white/60" : "text-amber-300/90"}`}>
+            {d.ok ? "✓" : "✗"} {d.device} ({d.service}): {d.ok ? "consegnata al servizio di notifiche" : d.error}</div>)
+        : (last.errors || []).map((e, i) => <div key={i} className="text-amber-300/90 mt-0.5 break-words">{e}</div>)}
     </div>
   );
 }

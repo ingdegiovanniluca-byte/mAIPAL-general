@@ -91,14 +91,26 @@ def _send_one(sub: dict, payload: str, private_pem: str, claims_sub: str):
                    headers={"Urgency": "high"})   # delivered at once, also with the phone saving battery
 
 
-async def _record(db, user_id: str, title: str, devices: int, sent: int, errors: list) -> None:
+def device_label(user_agent: str, endpoint: str = "") -> dict:
+    """Which device and which push service ("iPhone" / "Apple"): said in Impostazioni > Notifiche,
+    so a notification that reaches the Android phone and not the iPhone shows why."""
+    ua = (user_agent or "").lower()
+    device = ("iPhone" if "iphone" in ua else "iPad" if "ipad" in ua else "Android" if "android" in ua
+              else "Mac" if "macintosh" in ua or "mac os x" in ua else "Windows" if "windows" in ua else "Linux" if "linux" in ua else "Dispositivo")
+    host = (endpoint or "").split("/")[2] if (endpoint or "").count("/") >= 2 else ""
+    service = ("Apple" if "push.apple.com" in host else "Google" if "googleapis.com" in host else "Mozilla" if "mozilla" in host
+               else "Microsoft" if "windows.com" in host else host or "?")
+    return {"device": device, "service": service}
+
+
+async def _record(db, user_id: str, title: str, devices: int, sent: int, errors: list, detail: Optional[list] = None) -> None:
     """The last sending of each user, shown in Impostazioni > Notifiche: when nothing arrives,
     the user (and whoever helps them) sees why - no device, a device gone, an error."""
     logger.info("web push to %s: %d/%d device(s) - %s%s", user_id, sent, devices, title[:60], f" - {errors}" if errors else "")
     try:
         await db.push_log.update_one({"user_id": user_id}, {"$set": {
             "user_id": user_id, "at": datetime.now(timezone.utc).isoformat(), "title": title[:120],
-            "devices": devices, "sent": sent, "errors": errors[:5]}}, upsert=True)
+            "devices": devices, "sent": sent, "errors": errors[:5], "detail": (detail or [])[:10]}}, upsert=True)
     except Exception:
         logger.exception("web push log failed")
 
@@ -116,22 +128,26 @@ async def send_to_user(db, user_id: str, title: str, body: str, url: str = "/das
     keys = await vapid_keys(db)
     claims_sub = vapid_subject()
     payload = json.dumps({"title": title, "body": body[:240], "url": url, "tag": tag}, ensure_ascii=False)
-    sent, errors = 0, []
+    sent, errors, per_device = 0, [], []
     for sub in subs:
+        who = device_label(sub.get("user_agent") or "", sub["endpoint"])
         try:
             await asyncio.to_thread(_send_one, sub, payload, keys["private_pem"], claims_sub)
             sent += 1
+            per_device.append({**who, "ok": True})
         except Exception as e:
             resp = getattr(e, "response", None)
             status = getattr(resp, "status_code", None)
             if status in (404, 410):   # the device unsubscribed or the browser data was cleared
                 await db.push_subscriptions.delete_many({"endpoint": sub["endpoint"]})
-                errors.append("un dispositivo non è più iscritto ed è stato tolto: riattiva le notifiche su quel dispositivo")
+                errors.append(f"{who['device']}: non è più iscritto ed è stato tolto, riattiva le notifiche su quel dispositivo")
+                per_device.append({**who, "ok": False, "error": f"non più iscritto ({status}): riattivale lì"})
             else:
                 detail = (getattr(resp, "text", "") or str(e) or type(e).__name__).strip().replace("\n", " ")
-                logger.warning("web push failed (%s): %s", status, detail[:300])
-                errors.append(f"errore {status or type(e).__name__}: {detail[:160]}")
-    await _record(db, user_id, title, len(subs), sent, errors)
+                logger.warning("web push to %s/%s failed (%s): %s", who["device"], who["service"], status, detail[:300])
+                errors.append(f"{who['device']} ({who['service']}): errore {status or type(e).__name__}: {detail[:160]}")
+                per_device.append({**who, "ok": False, "error": f"errore {status or type(e).__name__}: {detail[:160]}"})
+    await _record(db, user_id, title, len(subs), sent, errors, per_device)
     return sent
 
 

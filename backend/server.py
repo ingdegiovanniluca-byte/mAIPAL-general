@@ -4293,8 +4293,11 @@ async def push_unsubscribe(payload: PushEndpointPayload, current: User = Depends
 async def push_status(payload: PushEndpointPayload, current: User = Depends(get_current_user)):
     """Is this device (its endpoint) receiving this user's notifications?"""
     on = bool(payload.endpoint) and bool(await db.push_subscriptions.find_one({"user_id": current.user_id, "endpoint": payload.endpoint}, {"_id": 1}))
-    return {"subscribed": on, "devices": await db.push_subscriptions.count_documents({"user_id": current.user_id}),
-            "last": await push.last_sending(db, current.user_id)}
+    subs = await db.push_subscriptions.find({"user_id": current.user_id}, {"_id": 0, "endpoint": 1, "user_agent": 1, "created_at": 1}).to_list(20)
+    return {"subscribed": on, "devices": len(subs), "last": await push.last_sending(db, current.user_id),
+            # every device with the notifications on, and which push service it uses (no endpoint shown)
+            "device_list": [{**push.device_label(x.get("user_agent") or "", x["endpoint"]), "since": x.get("created_at"),
+                             "this": x["endpoint"] == payload.endpoint} for x in subs]}
 
 
 @api_router.post("/push/test")
