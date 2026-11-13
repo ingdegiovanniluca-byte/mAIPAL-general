@@ -12412,6 +12412,20 @@ async def _presence_context(user_id: str) -> list:
 NEAR_TIP_KM = 5
 
 
+def _clock_minutes(duration=None, start=None, end=None) -> Optional[int]:
+    """How long an item of the clock lasts: its duration, or from its start to its end; None when not known."""
+    try:
+        if duration:
+            return max(1, int(duration))
+        if start and end:
+            (h0, m0), (h1, m1) = (map(int, start.split(":")[:2]), map(int, end.split(":")[:2]))
+            d = (h1 * 60 + m1) - (h0 * 60 + m0)
+            return d if d > 0 else None
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 async def _today_dashboard(current: User, now_utc: Optional[datetime] = None) -> dict:
     now = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
     today = now.date().isoformat()
@@ -12422,7 +12436,8 @@ async def _today_dashboard(current: User, now_utc: Optional[datetime] = None) ->
         if t.get("assigned_to") and t["assigned_to"] != current.user_id and t.get("user_id") != current.user_id:
             continue
         out["clock"].append({"id": t["id"], "kind": "task", "time": _hhmm_ok(t.get("due_time")), "title": t.get("title") or "",
-                             "label": t.get("title") or "", "done": bool(t.get("completed")), "main": t.get("priority") == "alta"})
+                             "label": t.get("title") or "", "done": bool(t.get("completed")), "main": t.get("priority") == "alta",
+                             "minutes": _clock_minutes(t.get("duration_minutes"))})
     clienti = await _clienti_list(current)
     if not clienti:
         out["clock"].sort(key=lambda x: (x["time"] or "99:99"))
@@ -12437,7 +12452,8 @@ async def _today_dashboard(current: User, now_utc: Optional[datetime] = None) ->
         v = views.get(a["commessa_id"]) or {}
         out["clock"].append({"id": a["id"], "kind": "attivita", "time": a.get("start_time"), "title": a.get("description") or "",
                              "label": v.get("client_name") or a.get("description") or "", "done": a.get("status") == "svolta",
-                             "main": False, "commessa_id": a["commessa_id"], "commessa": v.get("title")})
+                             "main": False, "commessa_id": a["commessa_id"], "commessa": v.get("title"),
+                             "minutes": _clock_minutes(None, a.get("start_time"), a.get("end_time"))})
     out["clock"].sort(key=lambda x: (x["time"] or "99:99"))
     # who is on site now
     sessions = await db.work_sessions.find({"commessa_id": {"$in": ids}, "end_at": None}, {"_id": 0}).to_list(2000) if ids else []

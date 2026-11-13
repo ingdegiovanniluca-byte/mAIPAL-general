@@ -334,7 +334,7 @@ async def main():
     db.job_todos.docs.append({"id": "m1", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(),
                               "text": "Da prendere: 20 m corrugato, 10 scatole 503", "who": "Gino"})
     db.job_todos.docs.append({"id": "m2", "commessa_id": "s_all", "kind": "materiale", "done": False, "due_date": (today + timedelta(days=1)).isoformat(), "text": "Da prendere: sirena"})
-    db.tasks.docs.append({"id": "t1", "user_id": "u1", "title": "Chiamare il fornitore", "due_date": today.isoformat(), "due_time": "10:30", "priority": "media"})
+    db.tasks.docs.append({"id": "t1", "user_id": "u1", "title": "Chiamare il fornitore", "due_date": today.isoformat(), "due_time": "10:30", "priority": "media", "duration_minutes": 45})
     db.tasks.docs.append({"id": "t2", "user_id": "u1", "title": "Fattura Rossi", "due_date": today.isoformat(), "due_time": None, "completed": True})
     db.tasks.docs.append({"id": "t3", "user_id": "u1", "title": "Domani", "due_date": (today + timedelta(days=1)).isoformat(), "due_time": "09:00"})
     db.news_items.docs += [{"id": "n1", "user_id": "u1", "date": today.isoformat(), "title": "Bonus casa 2027", "created_at": "2"},
@@ -347,6 +347,10 @@ async def main():
                                                                     ("task", "10:30", "Chiamare il fornitore"), ("task", None, "Fattura Rossi"),
                                                                     ("attivita", None, "Martina S")], d["clock"]
     assert next(x for x in d["clock"] if x["id"] == "t2")["done"]
+    # how long each lasts, so the clock draws it from its start: the task's duration, None when not known
+    assert next(x for x in d["clock"] if x["id"] == "t1")["minutes"] == 45
+    assert next(x for x in d["clock"] if x["id"] == "t2")["minutes"] is None
+    assert server._clock_minutes(None, "09:00", "11:30") == 150 and server._clock_minutes(None, "09:00", None) is None
     # on site: 2 employees, 3 collaborators, on 3 sites, 1 in pause
     on = d["on_site"]
     assert (on["total"], on["employees"], on["collaborators"], on["sites"], on["paused"]) == (5, 2, 3, 3, 1), on

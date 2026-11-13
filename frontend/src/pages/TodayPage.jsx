@@ -17,7 +17,7 @@ export default function TodayPage() {
           <h1 className="text-2xl font-semibold text-white">Dashboard</h1>
         </div>
       )}
-      <TodayDashboard onOpenCommessa={open} onAll={() => navigate("/dashboard/journal")} />
+      <TodayDashboard onOpenCommessa={open} />
     </div>
   );
 }
