@@ -12398,6 +12398,152 @@ async def _presence_context(user_id: str) -> list:
     return [{"display": "\n".join(lines), "text": "\n".join(lines), "source": "presenze", "score": 1.0}]
 
 
+# ======================================================================================
+# DIARIO · OGGI (artigiano, phone): the day at a glance - the clock with today's timed tasks and
+# activities around it, who is on site now (employees / external collaborators), the commesse of
+# today (planned or with people on site: a dot green / yellow / red for the people present against
+# the ones planned, the open problems) and the notes of the day: the activities by commessa, the
+# materials to take, the main news, and advice taken from the data only (a site with problems near
+# today's ones, a planned site with nobody there, a problem solved lately, bad weather).
+# ======================================================================================
+NEAR_TIP_KM = 5
+
+
+async def _today_dashboard(current: User, now_utc: Optional[datetime] = None) -> dict:
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    today = now.date().isoformat()
+    out = {"now": now.isoformat(), "clock": [], "on_site": {"total": 0, "employees": 0, "collaborators": 0, "sites": 0, "paused": 0, "people": []},
+           "commesse": [], "notes": {"activities": [], "materials": [], "news": [], "tips": []}}
+    # the clock: the tasks of today (their time) and the activities of today on the commesse
+    for t in await db.tasks.find({**_visible_query(current), "due_date": today}, {"_id": 0, "embedding": 0}).to_list(300):
+        if t.get("assigned_to") and t["assigned_to"] != current.user_id and t.get("user_id") != current.user_id:
+            continue
+        out["clock"].append({"id": t["id"], "kind": "task", "time": _hhmm_ok(t.get("due_time")), "title": t.get("title") or "",
+                             "label": t.get("title") or "", "done": bool(t.get("completed")), "main": t.get("priority") == "alta"})
+    clienti = await _clienti_list(current)
+    if not clienti:
+        out["clock"].sort(key=lambda x: (x["time"] or "99:99"))
+        return out
+    commesse, _clients = await _all_commesse(clienti)
+    views = {v["id"]: v for v in commesse}
+    ids = list(views)
+    acts = [a for a in (await db.job_activities.find({"commessa_id": {"$in": ids}, "date": today}, {"_id": 0}).to_list(2000) if ids else [])
+            if a.get("status") != "annullata"]
+    acts.sort(key=lambda a: a.get("start_time") or "99:99")
+    for a in acts:
+        v = views.get(a["commessa_id"]) or {}
+        out["clock"].append({"id": a["id"], "kind": "attivita", "time": a.get("start_time"), "title": a.get("description") or "",
+                             "label": v.get("client_name") or a.get("description") or "", "done": a.get("status") == "svolta",
+                             "main": False, "commessa_id": a["commessa_id"], "commessa": v.get("title")})
+    out["clock"].sort(key=lambda x: (x["time"] or "99:99"))
+    # who is on site now
+    sessions = await db.work_sessions.find({"commessa_id": {"$in": ids}, "end_at": None}, {"_id": 0}).to_list(2000) if ids else []
+    on = out["on_site"]
+    by_site: dict = {}
+    for x in sessions:
+        w = await _worker_of(x["collaborator_id"])
+        is_user = x["collaborator_id"].startswith(USER_WORKER)
+        on["employees" if is_user else "collaborators"] += 1
+        on["paused"] += 1 if x.get("paused_at") else 0
+        by_site.setdefault(x["commessa_id"], set()).add(x["collaborator_id"])
+        on["people"].append({"name": _collab_name(w) if w else "?", "employee": is_user, "company": (w or {}).get("company") or "",
+                             "commessa_id": x["commessa_id"], "commessa": (views.get(x["commessa_id"]) or {}).get("title") or x.get("commessa_title"),
+                             "client": (views.get(x["commessa_id"]) or {}).get("client_name") or x.get("client_name") or "",
+                             "since": x["start_at"], "paused_at": x.get("paused_at")})
+    on["total"], on["sites"] = on["employees"] + on["collaborators"], len(by_site)
+    on["people"].sort(key=lambda p: (p["client"], p["since"]))
+    # the commesse of today: planned (the people expected: the ones given the activities) or with people on site
+    expected: dict = {}
+    for a in acts:
+        for p in a.get("assignees") or []:
+            if (p.get("confirm") or {}).get("status") != "rifiutato":
+                expected.setdefault(a["commessa_id"], set()).add(_worker_id(p))
+    for cid in list(dict.fromkeys([a["commessa_id"] for a in acts] + list(by_site))):
+        v = views.get(cid)
+        if not v:
+            continue
+        present, exp = by_site.get(cid, set()), expected.get(cid, set())
+        status = "red" if not present else "green" if exp and present == exp else "yellow"
+        problems = await _open_problems(cid)
+        out["commesse"].append({"id": cid, "client": v.get("client_name") or "", "title": v.get("title") or "", "present": len(present),
+                                "expected": len(exp), "status": status, "problems": len(problems)})
+    rank = {"red": 0, "yellow": 1, "green": 2}
+    out["commesse"].sort(key=lambda c: (rank[c["status"]], 0 if c["problems"] else 1, c["client"].lower()))
+    # A) the activities of today, by commessa
+    notes = out["notes"]
+    for a in acts:
+        v = views.get(a["commessa_id"]) or {}
+        notes["activities"].append({"commessa_id": a["commessa_id"], "commessa": f"{v.get('client_name') or ''} · {v.get('title') or ''}".strip(" ·"),
+                                    "time": a.get("start_time"), "end": a.get("end_time"), "text": a.get("description") or "",
+                                    "who": [p.get("name") for p in a.get("assignees") or [] if p.get("name")], "done": a.get("status") == "svolta"})
+    # B) the materials to take (today's and the late ones)
+    for t in (await db.job_todos.find({"commessa_id": {"$in": ids}, "kind": "materiale", "done": False}, {"_id": 0}).to_list(1000) if ids else []):
+        if (t.get("due_date") or today) <= today:
+            v = views.get(t["commessa_id"]) or {}
+            notes["materials"].append({"text": re.sub(r"^Da prendere:\s*", "", t.get("text") or ""), "who": t.get("who") or "",
+                                       "commessa": v.get("client_name") or v.get("title") or "", "late": (t.get("due_date") or today) < today})
+    # C) the main news of today (the ones liked first)
+    news = await db.news_items.find({"user_id": current.user_id, "date": today}, {"_id": 0, "title": 1, "url": 1, "feedback": 1, "created_at": 1}).to_list(50)
+    news.sort(key=lambda n: (n.get("feedback") != "up", n.get("feedback") == "down", n.get("created_at") or ""))
+    notes["news"] = [{"title": n.get("title"), "url": n.get("url")} for n in news if n.get("feedback") != "down"][:3]
+    # D) the advice, from the data
+    tips = notes["tips"]
+    today_ids = [c["id"] for c in out["commesse"]]
+    geos = {}
+    for cid in ids:
+        sub = await db.collection_sub_items.find_one({"id": cid}, {"_id": 0, "geo": 1})
+        g = (sub or {}).get("geo") or {}
+        if g.get("lat") is not None:
+            geos[cid] = g
+    for oid, g in geos.items():   # a site with problems, not one of today's, near one of today's: on the way
+        if oid in today_ids or vx.is_closed((views.get(oid) or {}).get("stato")):
+            continue
+        near = sorted((d, cid) for cid in today_ids if cid in geos for d in [sp.distance_m(geos[cid], g)] if d is not None and d <= NEAR_TIP_KM * 1000)
+        if not near:
+            continue
+        probs = await _open_problems(oid)
+        if probs:
+            d, cid = near[0]
+            tips.append({"commessa_id": oid, "text": f"Vicino a {views[cid]['client_name']} · {views[cid]['title']} ({nb.km(d)}) c'è "
+                                                    f"{views[oid]['client_name']} · {views[oid]['title']} con un problema aperto "
+                                                    f"({probs[0][2][:80]}): passaci."})
+    for c in out["commesse"]:
+        a0 = next((a for a in acts if a["commessa_id"] == c["id"]), None)
+        started = not a0 or not a0.get("start_time") or a0["start_time"] <= now.strftime("%H:%M")
+        if c["expected"] and not c["present"] and started and now.hour >= 8:
+            tips.append({"commessa_id": c["id"], "text": f"{c['client']} · {c['title']}: nessuno in cantiere e "
+                                                         f"{c['expected']} {'persona prevista' if c['expected'] == 1 else 'persone previste'}."})
+    since = (now - timedelta(days=2)).astimezone(timezone.utc).isoformat()
+    for cid in ids:
+        if vx.is_closed((views.get(cid) or {}).get("stato")):
+            continue
+        for lg in await db.job_logs.find({"commessa_id": cid, "problem_status": {"$exists": True}}, {"_id": 0, "problems": 1, "problem_status": 1}).to_list(500):
+            solved = [lg["problems"][int(i)] for i, st in (lg.get("problem_status") or {}).items()
+                      if (st or {}).get("status") == "risolta" and (st.get("at") or "") >= since and int(i) < len(lg.get("problems") or [])]
+            if solved:
+                v = views[cid]
+                tips.append({"commessa_id": cid, "text": f"{v['client_name']} · {v['title']}: risolto «{solved[0][:70]}». Aggiorna il cliente."})
+                break
+    try:
+        st = await _settings_of_user(current.user_id)
+        for cid in today_ids:
+            if cid in geos:
+                warn = wx.alerts(await wx.forecast(geos[cid]["lat"], geos[cid]["lon"], now.date()), st)
+                if warn:
+                    v = views[cid]
+                    tips.append({"commessa_id": cid, "text": f"{v['client_name']} · {v['title']}: {', '.join(warn)} oggi. Valuta i lavori all'esterno."})
+    except Exception:
+        logger.exception("today's weather tips failed")
+    notes["tips"] = tips[:8]
+    return out
+
+
+@api_router.get("/jobs/today")
+async def jobs_today(current: User = Depends(get_current_user)):
+    """The Diario's «Oggi» on the phone."""
+    return await _today_dashboard(current)
+
+
 async def _on_site(commessa_id: str) -> list:
     """Who is working on the commessa now (a start not ended yet)."""
     out = []

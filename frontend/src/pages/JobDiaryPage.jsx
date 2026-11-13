@@ -7,6 +7,8 @@ import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertT
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
+import TodayDashboard from "@/components/TodayDashboard";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import InfoCard from "@/components/InfoCard";
 import CommessaContacts from "@/components/CommessaContacts";
 import ClientUpdatesSheet from "@/components/ClientUpdatesSheet";
@@ -2399,6 +2401,9 @@ export default function JobDiaryPage() {
   const linked = location.state?.commessa || new URLSearchParams(location.search).get("commessa") || null;
   const [level, setLevel] = useState(linked ? "diary" : "clients");
   const [selectedId, setSelectedId] = useState(linked);
+  // on the phone the Diario opens on «Oggi» (the day at a glance); «tutte ›» shows the clients and commesse
+  const isMobile = useIsMobile();
+  const [home, setHome] = useState("oggi");
   const [detail, setDetail] = useState(null);
   const [detailError, setDetailError] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -2992,13 +2997,18 @@ export default function JobDiaryPage() {
   const inCommessa = level !== "clients" && !!selectedId;
   return (
     <div className="w-full" data-testid="job-diary-page" style={chatOpen ? { paddingBottom: "min(62vh, 520px)" } : undefined}>
-      {(level !== "diary" || !selectedId) && (
+      {(level !== "diary" || !selectedId) && !(isMobile && home === "oggi") && (
         <div className="flex items-center gap-2 mb-4">
-          <NotebookPen size={20} className="text-white/80" />
+          {isMobile ? (
+            <button type="button" onClick={() => setHome("oggi")} data-testid="back-to-today" aria-label="Torna a Oggi"
+              className="h-[30px] w-[30px] shrink-0 rounded-full flex items-center justify-center text-white lg-frost"><ArrowLeft size={16} /></button>
+          ) : <NotebookPen size={20} className="text-white/80" />}
           <h1 className="text-2xl font-semibold text-white">Diario di commessa</h1>
         </div>
       )}
-      {level === "clients" || !selectedId ? clientsView : diaryView}
+      {(level === "clients" || !selectedId) && isMobile && home === "oggi"
+        ? <TodayDashboard onOpenCommessa={(id) => openCommessa({ id })} onAll={() => setHome("tutte")} />
+        : level === "clients" || !selectedId ? clientsView : diaryView}
 
       {inCommessa && c && !chatOpen && (
         <FloatingGlassButton icon={MessageCircle} label="Chat della commessa: chiedi o scrivi nel diario" testid="commessa-chat-toggle"

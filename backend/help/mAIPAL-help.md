@@ -154,6 +154,24 @@ Il diario raccoglie le tue giornate.
 <!-- id: diario-commessa · path: /dashboard/journal · verticale: artigiano -->
 Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per persona, materiali usati, problemi e foto. Tra i problemi vanno anche le assenze e ciò che ferma o rallenta i lavori (malattia, maltempo, cantiere fermo, consegne non arrivate, ritardi).
 
+**Oggi (sul telefono)**
+Sul telefono il **Diario** si apre su **Oggi**, la giornata in uno schermo. La pagina non scorre: scorrono solo i riquadri al loro interno.
+- **Task di oggi**: un orologio con intorno, sulla loro ora, i task e le attività di cantiere di oggi.
+  - Colori delle fasce: gialle le attività di cantiere, azzurre i task, rosa i task con priorità alta.
+  - Quelli fatti sono una spunta verde, quelli già passati sono più chiari; se due cadono vicini compare «+1».
+  - Sotto c'è quanti sono, quanti sono fatti e quanti non hanno un'ora. Toccando l'orologio vedi l'elenco.
+- **In cantiere**: quante persone sono in cantiere adesso (da «📍 Sono arrivato»), su quanti cantieri, divise tra **dipendenti** (gli utenti dell'app) e **collaboratori** esterni, e quante sono in pausa. Toccandolo vedi nomi, cantiere e ora di arrivo.
+- **Commesse oggi**: le commesse con attività pianificate oggi e quelle dove adesso c'è qualcuno, una per riga (cliente · commessa).
+  - Il pallino è **verde** se ci sono le persone previste, **giallo** se il numero è diverso (o la commessa non era prevista), **rosso** se non c'è nessuno. Le persone previste sono quelle assegnate alle attività di oggi.
+  - Il numero indica presenti/previsti; il triangolo rosso indica problemi aperti.
+  - Toccando una commessa si apre il suo diario e con ← si torna a Oggi. **tutte ›** apre l'elenco di clienti e commesse.
+- **Note di oggi**:
+  - **A** le attività previste per commessa, con orario e persone;
+  - **B** i materiali da prendere (anche quelli in ritardo);
+  - **C** le news principali di oggi (prima quelle con 👍, mai quelle con 👎);
+  - **D** i consigli, presi dai dati: un cantiere con problemi aperti entro 5 km da uno di oggi, un cantiere previsto senza nessuno, un problema risolto da poco di cui aggiornare il cliente, il meteo avverso sui cantieri di oggi. Toccando un consiglio si apre la commessa.
+- Si aggiorna da sola ogni 2 minuti.
+
 **Scrivere nel diario**
 - Dalla chat con l'agente **Diario**, anche a voce: "Oggi io e Gino dai Rossi, 4 ore a testa: posati 20 metri di corrugato, manca una scatola 503".
 - mAIPAL riconosce la commessa dal cliente o dai lavori che nomini; se non è sicuro te lo chiede con dei pulsanti (o ti propone di aprire una nuova commessa).
