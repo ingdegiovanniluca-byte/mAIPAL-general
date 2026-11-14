@@ -172,7 +172,7 @@ La **Dashboard** è la tua giornata in uno schermo: la apri dal menu **+** in ba
   3. **Materiali da prendere** oggi, solo quelli **inseriti da te** (quelli dei collaboratori o dei colleghi stanno nei loro To Do).
   4. **News** di oggi (prima quelle con 👍, mai quelle con 👎).
   5. **Consigli**, presi dai dati: un cantiere con problemi aperti entro 5 km da uno di oggi, un problema risolto da poco di cui aggiornare il cliente. Toccando un consiglio si apre la commessa.
-- Si aggiorna da sola ogni 2 minuti.
+- Si aggiorna da sola durante la giornata: **ogni minuto** mentre la guardi e **subito** quando torni sull'app (anche dopo averla lasciata in sottofondo). Accanto a «Note di oggi» vedi l'ora dell'ultimo aggiornamento («agg. 10:42»).
 
 ## Diario di commessa
 <!-- id: diario-commessa · path: /dashboard/journal · verticale: artigiano -->

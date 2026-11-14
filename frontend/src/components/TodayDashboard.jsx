@@ -143,13 +143,27 @@ export default function TodayDashboard({ onOpenCommessa }) {
   const [sheet, setSheet] = useState(null);   // "clock" | "people"
   const wrap = useRef(null);
   const [h, setH] = useState(null);
-  const load = () => api.get("/jobs/today").then((r) => { setD(r.data); setErr(false); }).catch(() => setErr(true));
+  const [at, setAt] = useState(null);           // when the day was last read
+  const loaded = useRef(false);                 // a refresh that fails keeps the day already on screen
+  const load = () => api.get("/jobs/today").then((r) => { loaded.current = true; setD(r.data); setErr(false); setAt(new Date()); })
+    .catch(() => { if (!loaded.current) setErr(true); });
+  // the day keeps itself up to date: every minute while it is on screen, and at once when the app comes back
+  // to the front (a phone stops the timers of an app in the background: opened again, it would show the old notes)
   useEffect(() => {
     load();
     const t = setInterval(() => setNow(new Date()), 30000);
-    const r = setInterval(load, 120000);
-    return () => { clearInterval(t); clearInterval(r); };
-  }, []);
+    const r = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+    const back = () => { if (document.visibilityState === "visible") { setNow(new Date()); load(); } };
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    window.addEventListener("pageshow", back);
+    return () => {
+      clearInterval(t); clearInterval(r);
+      document.removeEventListener("visibilitychange", back);
+      window.removeEventListener("focus", back);
+      window.removeEventListener("pageshow", back);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // the page fits the screen: from where it starts to above the bar at the bottom
   useLayoutEffect(() => {
     const fit = () => {   // down to the bar at the bottom (measured: phones differ), with a little air
@@ -234,7 +248,8 @@ export default function TodayDashboard({ onOpenCommessa }) {
 
       {/* the notes of the day */}
       <div className={`${box} px-3.5 pt-3 flex-1 min-h-[96px] flex flex-col`} data-testid="today-notes">
-        <Kicker>note di oggi</Kicker>
+        <div className="flex items-baseline justify-between gap-2"><Kicker>note di oggi</Kicker>
+          {at && <span className="text-[11px] text-white/60 tabular-nums" data-testid="today-updated">agg. {at.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}</span>}</div>
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-4 mt-1" style={fade}>
           {empty && <div className="py-2 text-[11px] text-white/70">Niente di previsto oggi.</div>}
           {n.urgent.length > 0 && <Part title="Da guardare subito" dot="#FF6B5B" testid="notes-urgent">
