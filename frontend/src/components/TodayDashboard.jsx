@@ -215,7 +215,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
               <span className="min-w-0 truncate text-[13px] text-white"><b className="font-semibold">{c.client}</b> · {c.title}</span>
               <span className="text-center tabular-nums whitespace-nowrap" data-testid="today-present"><span className="text-[16px] font-medium leading-none text-white">{c.present}</span><span className="text-[11px] text-white/50">/{c.expected}</span></span>
               <span className="flex justify-center">{c.problems
-                ? <Alert size={16} label={`${c.problems} problemi aperti`} />
+                ? <Alert size={13} label={`${c.problems} problemi aperti`} />
                 : <span className="text-white/25">–</span>}</span>
             </button>
           ))}
@@ -230,7 +230,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
           {n.activities.length > 0 && <Part title="Attività previste">
             {n.activities.map((a, i) => (
               <div key={i} className={a.done ? "opacity-60" : ""}><b className="font-semibold">{a.commessa}</b> — {a.time ? `${a.time} ` : ""}{a.text}
-                {a.who.length > 0 && <span className="text-white/65"> ({a.who.join(", ")})</span>}{a.done && " ✓"}</div>
+                {a.who.length > 0 && <span className="text-white/65"> ({a.who.join(", ")})</span>}</div>
             ))}
           </Part>}
           {n.materials.length > 0 && <Part title="Materiali da prendere">
@@ -241,7 +241,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
           </Part>}
           {n.tips.length > 0 && <Part title="Consigli">
             {n.tips.map((t, i) => (
-              <button key={i} type="button" onClick={() => t.commessa_id && onOpenCommessa(t.commessa_id)} className="block w-full text-left text-white">💡 {t.text}</button>
+              <button key={i} type="button" onClick={() => t.commessa_id && onOpenCommessa(t.commessa_id)} className="block w-full text-left text-white">{t.text}</button>
             ))}
           </Part>}
         </div>
