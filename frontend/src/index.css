@@ -842,3 +842,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 /* Report di commessa: the date fields' calendar icon readable on the dark glass, and on the light theme */
 .com-date { color-scheme: dark; }
 [data-theme="light"] .com-date { color-scheme: light; }
+
+/* iPhone / iPad: Safari zooms the whole page into a field whose text is under 16px (typing in the chat),
+   and the page then scrolls sideways and under the header. There the fields are 16px, so it never zooms. */
+@supports (-webkit-touch-callout: none) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+    textarea,
+    select {
+        font-size: 16px !important;
+    }
+}

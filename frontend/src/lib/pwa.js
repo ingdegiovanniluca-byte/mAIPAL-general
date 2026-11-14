@@ -118,3 +118,13 @@ export async function disablePush() {
   if (sub) { const endpoint = sub.endpoint; await sub.unsubscribe().catch(() => {}); return endpoint; }
   return null;
 }
+
+// the app opened (or came back to the front): this device's subscription to the server again, with the
+// permission already given - one the browser renewed (the iPhone does it) or the server lost is there again
+let lastSync = 0;
+export async function syncPush(post) {
+  if (!pushSupported() || Notification.permission !== "granted" || Date.now() - lastSync < 10 * 60 * 1000) return;
+  lastSync = Date.now();
+  const sub = await currentPushSubscription();
+  if (sub) await post(sub.toJSON());
+}

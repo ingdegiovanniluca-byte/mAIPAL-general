@@ -484,6 +484,7 @@ mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anch
   4. Se non arriva, sull'iPhone apri **Impostazioni → Notifiche → mAIPAL** e accendi «Consenti notifiche».
 
   Ogni dispositivo va attivato a parte: averle attive sul telefono Android non le attiva sull'iPhone.
+  Ogni volta che apri l'app, il dispositivo ricomunica la sua iscrizione alle notifiche: se l'iPhone l'ha rinnovata, le notifiche ripartono senza riattivarle.
 - **Non arriva una notifica?** In Impostazioni → Notifiche, sotto **Ultima notifica**, vedi l'ultima mandata e com'è andata: a quanti dispositivi è arrivata, "nessun dispositivo con le notifiche attive" (attivale su quel dispositivo), un dispositivo non più iscritto (riattivale lì) o l'errore del servizio di notifiche. Se risulta arrivata ma non la vedi, controlla che le notifiche di mAIPAL (o del browser) siano permesse nelle impostazioni del telefono e che non sia attiva la modalità Non disturbare / Full immersion.
 - Se le hai bloccate per errore, riattivale dalle impostazioni del browser o del telefono.
 - Telegram, se collegato, continua a ricevere i suoi avvisi come prima.

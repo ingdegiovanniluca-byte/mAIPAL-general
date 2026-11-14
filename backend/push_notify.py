@@ -54,6 +54,11 @@ async def subscribe(db, user_id: str, sub: dict, user_agent: str = "") -> dict:
     if not endpoint or not keys.get("p256dh") or not keys.get("auth"):
         raise ValueError("Iscrizione alle notifiche non valida")
     now = datetime.now(timezone.utc).isoformat()
+    same = await db.push_subscriptions.find_one({"endpoint": endpoint, "user_id": user_id}, {"_id": 0})
+    if same:   # the app said it again (it does at every start): the keys and the device, the rest kept
+        upd = {"keys": {"p256dh": keys["p256dh"], "auth": keys["auth"]}, "user_agent": (user_agent or same.get("user_agent") or "")[:200], "seen_at": now}
+        await db.push_subscriptions.update_one({"endpoint": endpoint, "user_id": user_id}, {"$set": upd})
+        return {**same, **upd}
     # one device = one endpoint: signing in with another account on it moves it there
     await db.push_subscriptions.delete_many({"endpoint": endpoint})
     doc = {"id": f"push_{uuid.uuid4().hex[:12]}", "user_id": user_id, "endpoint": endpoint,

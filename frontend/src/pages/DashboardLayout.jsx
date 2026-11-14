@@ -16,6 +16,8 @@ import { useInstallApp, InstallBanner, InstallIcon } from "@/components/InstallA
 import LiquidDock from "@/components/LiquidDock";
 import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { api } from "@/lib/api";
+import { syncPush } from "@/lib/pwa";
 import HelpSheet from "@/components/HelpSheet";
 import ChatPage from "@/pages/ChatPage";
 import { ChatPaneContext, SheetHostContext } from "@/lib/chatPane";
@@ -146,6 +148,15 @@ export default function DashboardLayout() {
     nav(back && !String(back).startsWith(CHAT_PATH) ? back : "/dashboard/tasks", { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [split, location.key]);
+
+  // the notifications of this device: its subscription to the server at the start and when the app comes back
+  useEffect(() => {
+    const run = () => syncPush((sub) => api.post("/push/subscribe", { subscription: sub })).catch(() => {});
+    const onVisible = () => { if (document.visibilityState === "visible") run(); };
+    run();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   useEffect(() => {
     const onClickOutside = (e) => {

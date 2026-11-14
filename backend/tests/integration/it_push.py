@@ -164,8 +164,11 @@ async def main():
     r = await server.push_subscribe(server.PushSubscribePayload(subscription=SUB), Req(), me)
     assert r["devices"] == 1
     assert (await server.push_status(server.PushEndpointPayload(endpoint=SUB["endpoint"]), me))["subscribed"]
-    await server.push_subscribe(server.PushSubscribePayload(subscription=SUB), Req(), me)   # again: still one device
+    first = dict(db.push_subscriptions.docs[0])
+    await server.push_subscribe(server.PushSubscribePayload(subscription=SUB), Req(), me)   # again (the app at every start): still one device
     assert len(db.push_subscriptions.docs) == 1
+    assert db.push_subscriptions.docs[0]["id"] == first["id"] and db.push_subscriptions.docs[0]["created_at"] == first["created_at"]
+    assert db.push_subscriptions.docs[0].get("seen_at")
     assert (await server.push_test(me))["sent"] == 1 and PUSHED[-1][1]["title"] == "🔔 mAIPAL"
 
     # 2) a collaborator writes in the diary -> the owner's device; the owner's own entries don't
