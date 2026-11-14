@@ -128,7 +128,7 @@ I to-do sono le cose da fare senza una data precisa.
 - **Aprendo un to-do** si apre **a tutto schermo**:
   - in alto, al centro, il **titolo** (toccalo per cambiarlo) e sotto quanti passi sono fatti e la scadenza;
   - un **riquadro colorato** con la **descrizione** (toccala per scriverla: di cosa si tratta) e, se vuoi, una **foto** (es. per un viaggio, la stanza da sistemare): **Foto** nel riquadro la carica dal telefono, **Cambia foto** la sostituisce, **⋯ → Togli la foto** la toglie;
-  - poi le righe, con il nome a sinistra: **Avvio / Stato** (la data di avvio, toccala per cambiarla; lo stato Da fare / In corso / Fatto, toccalo per sceglierlo), **Note** (testo libero, si salvano da sole) e **Passi**;
+  - poi le righe, con il nome a sinistra: **Avvio / Stato** (la data di avvio, toccala per cambiarla; lo stato Da fare / In corso / Fatto, toccalo per sceglierlo), **Note** (si salvano da sole) e **Passi**;
   - in alto ← per tornare e **⋯** con il resto: **Suggerisci i passi**, **preferiti**, **scadenza** (e promemoria su Telegram), **Segna il to-do come fatto** / **Riapri**, **Elimina**.
 - **Passi** (sottotask): ogni passo è una riga con un **cerchio** e il testo.
   - **Aggiungere**: scrivi in «**Aggiungi un passo**» (l'ultima riga dei passi da fare) e premi Invio: il campo resta pronto per il successivo, così scrivi una lista di seguito ("contattare l'agenzia", "richiedere il preventivo", "vedere il preventivo"…).

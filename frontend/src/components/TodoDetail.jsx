@@ -42,7 +42,7 @@ async function shrinkPhoto(file) {
 }
 
 const RowLabel = ({ title, sub }) => (
-  <div className="min-w-0"><div className="text-[14px] leading-[20px] text-white">{title}</div><div className="text-[12px] leading-[16px] text-white/55">{sub}</div></div>
+  <div className="min-w-0"><div className="text-[14px] leading-[20px] text-white">{title}</div>{sub && <div className="text-[12px] leading-[16px] text-white/55">{sub}</div>}</div>
 );
 const ACTIONS_W = 148;   // the two buttons behind a step slid to the left
 
@@ -52,9 +52,9 @@ const HOLD_MS = 380;        // a long press on a step picks it up, to move it
 function Circle({ done, onClick, label, testid }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={!!done} aria-label={label} data-testid={testid}
-      className="h-[22px] w-[22px] shrink-0 rounded-full flex items-center justify-center transition-colors"
+      className="h-[18px] w-[18px] shrink-0 rounded-full flex items-center justify-center transition-colors"
       style={done ? { background: ACCENT } : { border: "1px solid rgba(255,255,255,0.75)" }}>
-      {done && <Check size={13} strokeWidth={3} className="text-[#3b2400]" />}
+      {done && <Check size={11} strokeWidth={3} className="text-[#3b2400]" />}
     </button>
   );
 }
@@ -95,7 +95,7 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
       <motion.div drag={open || lifted ? false : "x"} dragDirectionLock dragConstraints={{ left: -ACTIONS_W, right: 0 }} dragElastic={0.05}
         onDragEnd={(_e, info) => animate(x, info.offset.x < -60 ? -ACTIONS_W : 0, { type: "spring", stiffness: 500, damping: 40 })}
         className="relative flex items-start gap-3 select-none" style={{ x }}>
-        <div className="pt-[9px]">
+        <div className="pt-[10px]">
           <Circle done={step.done} onClick={() => onPatch({ done: !step.done })} label={step.done ? "Segna da fare" : "Segna fatto"} testid="step-check" />
         </div>
         <button type="button" onClick={onToggleOpen} className="flex-1 min-w-0 text-left py-[9px]" data-testid="step-text">
@@ -111,7 +111,7 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
       <input ref={dateRef} type="date" value={step.due_date || ""} onChange={(e) => onPatch({ due_date: e.target.value || "" })}
         className="absolute opacity-0 pointer-events-none w-0 h-0 bottom-0 left-1/2" tabIndex={-1} aria-hidden />
       {open && (
-        <div className="ml-[34px] mt-1 mb-3 rounded-[16px] bg-white/[0.12] px-3.5 py-3" data-testid="step-edit">
+        <div className="ml-[30px] mt-1 mb-3 rounded-[16px] bg-white/[0.12] px-3.5 py-3" data-testid="step-edit">
           <input value={text} onChange={(e) => setText(e.target.value)} onBlur={saveText} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             data-testid="step-edit-text" className="w-full bg-transparent text-[16px] text-white outline-none border-b-[1px] border-white/55 pb-1.5" />
           <div className="flex flex-wrap gap-1.5 mt-2.5">
@@ -387,7 +387,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             </label>
           </div>
 
-          <RowLabel title="Note" sub="testo libero" />
+          <RowLabel title="Note" />
           {editNotes ? (
             <textarea autoFocus value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="todo-notes"
               onBlur={() => { setEditNotes(false); if (notes !== (t.notes || "")) patchTodo({ notes }); }}
@@ -409,7 +409,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             </Reorder.Group>
             <div className="flex items-center gap-3">
               <button type="button" onClick={addStep} aria-label="Aggiungi il passo"
-                className="h-[22px] w-[22px] shrink-0 rounded-full flex items-center justify-center border border-dashed border-white/60 text-white/60"><Plus size={12} /></button>
+                className="h-[18px] w-[18px] shrink-0 rounded-full flex items-center justify-center border border-dashed border-white/60 text-white/60"><Plus size={10} /></button>
               <input ref={addRef} value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
                 placeholder={order.length || doneSteps.length ? "Aggiungi un passo" : "Scrivi il primo passo"} data-testid="todo-step-add" enterKeyHint="next"
                 className="flex-1 min-w-0 bg-transparent py-[9px] text-[14px] text-white placeholder:text-white/45 outline-none" />
