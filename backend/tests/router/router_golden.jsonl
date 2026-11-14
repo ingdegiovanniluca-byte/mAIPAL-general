@@ -1,0 +1,112 @@
+{"text": "Oggi io e Gino dai Rossi, 4 ore a testa: posati 20 metri di corrugato, manca una scatola 503", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Oggi 8 ore in via Roma, finito il massetto del bagno", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Stamattina dai Bianchi 3 ore, montato il quadro elettrico", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Ieri Marco ha lavorato 6 ore al cantiere di Torino, tirati i cavi del primo piano", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "dai rossi oggi 4 ore posato il piatto doccia", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Finito il bagno dei Verdi, domani si fanno le finiture", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Gino e Pietro tutto il giorno sul cantiere di Moncalieri, intonaco del soggiorno", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Mezza giornata dalla signora Neri, sostituito il miscelatore", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Montate le prese in cucina e collegato il forno, 5 ore", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Abbiamo demolito il vecchio bagno, 7 ore in due", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Sono arrivato", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Ho finito alle 17.30", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "finito per oggi", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Pausa pranzo", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Riprendo", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Oggi piove, lavori fermi dai Rossi", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Il miscelatore non è arrivato, il bagno dei Rossi è fermo", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Gino oggi è malato, non è venuto in cantiere", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Domani porto 10 scatole 503 e il flessibile dai Rossi", "v": "artigiano", "expect": ["job_log"], "amb": true}
+{"text": "Ricorda a Mario di prendere domani 20 metri di corrugato per i Bianchi", "v": "artigiano", "expect": ["job_log"], "amb": true}
+{"text": "Speso 85 euro di materiale per il bagno dei Rossi, pagato con la carta", "v": "artigiano", "expect": ["job_log"], "amb": true}
+{"text": "Posato il cappotto lato nord, mancano 30 mq", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Tracce fatte in camera e in sala, domani si tirano i fili", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Collaudo impianto fatto, tutto ok", "v": "artigiano", "expect": ["job_log"], "amb": true}
+{"text": "Oggi sopralluogo veloce dai Verdi, nessun lavoro", "v": "artigiano", "expect": ["job_log"], "amb": true}
+{"text": "", "v": "artigiano", "expect": ["job_log"], "amb": false, "images": true}
+{"text": "foto", "v": "artigiano", "expect": ["job_log"], "amb": false, "images": true}
+{"text": "Ecco le foto", "v": "artigiano", "expect": ["job_log"], "amb": false, "images": true}
+{"text": "Quante ore ha fatto Gino questa settimana?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Chi è in cantiere adesso?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "quanti operai ci sono in cantiere", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Dimmi i clienti vicino a Milano", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Che materiali abbiamo usato dai Rossi?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Quanto abbiamo speso sulla commessa Bianchi?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Cosa devo fare domani?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Quando scade la garanzia del cancello Neri?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Ci sono problemi aperti?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "mostrami i preventivi in attesa", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Qual è il margine del bagno Rossi?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Come creo una nuova commessa?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "dove trovo i costi della commessa", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Chi ha lavorato ieri dai Verdi?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "a che punto è la cucina dei Bianchi", "v": "artigiano", "expect": ["info_request"], "amb": true}
+{"text": "elenca le commesse in lavorazione", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "il telefono del cliente Rossi?", "v": "artigiano", "expect": ["info_request"], "amb": true}
+{"text": "Che tempo fa domani a Torino?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Mi ricordi quando scade l'assicurazione del furgone?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "C'è qualcuno dai Rossi oggi?", "v": "artigiano", "expect": ["info_request"], "amb": false}
+{"text": "Ricordami di chiamare il fornitore martedì alle 15", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Ricordami domani di ordinare il quadro", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Promemoria: pagare l'F24 il 16", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Devo mandare il preventivo a Bianchi entro venerdì", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Crea un task: rinnovare l'assicurazione del furgone", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Segna come fatto il task del preventivo Rossi", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Sposta il task del commercialista a giovedì", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Aggiungi un appuntamento con il geometra lunedì alle 9", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "domani alle 8 sopralluogo dai Verdi", "v": "artigiano", "expect": ["task_todo"], "amb": true}
+{"text": "Devo comprare un trapano nuovo", "v": "artigiano", "expect": ["task_todo"], "amb": true}
+{"text": "Fissa un promemoria per il collaudo il 20 novembre", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Salva che il codice del cancello dei Rossi è 4512", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "Il codice wifi del magazzino è Magaz2024", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "Annota: il fornitore Edil G fa lo sconto del 10% sopra i 500 euro", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "La partita IVA di Bianchi è 01234567890", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "Prendi nota che il geometra Verdi si chiama Paolo", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "Il furgone ha fatto il tagliando a 120.000 km", "v": "artigiano", "expect": ["info_upload"], "amb": true, "lists": ["fornitori", "attrezzi"]}
+{"text": "Ho pagato la benzina 70 euro", "v": "artigiano", "expect": ["info_upload"], "amb": true, "lists": ["fornitori", "attrezzi"]}
+{"text": "Aggiungi Mario Rossi alla lista fornitori", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "Togli il trapano dalla lista attrezzi", "v": "artigiano", "expect": ["info_upload"], "amb": false, "lists": ["fornitori", "attrezzi"]}
+{"text": "Sopralluogo dal signor Rossi in via Roma 5: impianto della cucina da rifare, quadro vecchio senza differenziale, servono 6 punti presa nuovi e la linea del forno. Preventivo da fare entro la settimana.", "v": "artigiano", "expect": ["work_report", "job_log"], "amb": true}
+{"text": "Fai il report del sopralluogo di oggi dai Bianchi: bagno 3x2, scarichi da rifare", "v": "artigiano", "expect": ["work_report"], "amb": true}
+{"text": "Ogni venerdì mandami il riepilogo delle ore della settimana", "v": "artigiano", "expect": ["scheduled_action"], "amb": true}
+{"text": "Ogni lunedì svuota la lista materiali da ordinare", "v": "artigiano", "expect": ["scheduled_action"], "amb": true}
+{"text": "Ricordami ogni lunedì di controllare le scadenze", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Rossi ha pagato 500 euro", "v": "artigiano", "expect": ["info_upload", "job_log"], "amb": true}
+{"text": "Bianchi ha confermato il preventivo", "v": "artigiano", "expect": ["info_upload", "job_log"], "amb": true}
+{"text": "Domani dai Rossi", "v": "artigiano", "expect": ["job_log", "task_todo"], "amb": true}
+{"text": "Gino", "v": "artigiano", "expect": ["info_request", "job_log", "info_upload"], "amb": true}
+{"text": "ok", "v": "artigiano", "expect": ["info_request", "job_log", "info_upload", "task_todo"], "amb": true}
+{"text": "Oggi 4 ore dai Rossi e ricordami venerdì di ordinare il quadro", "v": "artigiano", "expect": ["job_log", "task_todo"], "amb": true}
+{"text": "Bagno Rossi", "v": "artigiano", "expect": ["job_log"], "amb": false, "ctx": {"current_action": "job_log", "awaiting": true}}
+{"text": "sì", "v": "artigiano", "expect": ["task_todo"], "amb": false, "ctx": {"current_action": "task_todo", "awaiting": true}}
+{"text": "@task richiamare la signora Neri giovedì", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "@diario oggi 3 ore dai Verdi", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "e quelle di Pietro?", "v": "artigiano", "expect": ["info_request"], "amb": false, "ctx": {"current_action": "info_request", "history": [{"role": "user", "content": "quante ore ha fatto Gino questa settimana?"}]}}
+{"text": "anche il silicone", "v": "artigiano", "expect": ["job_log"], "amb": false, "ctx": {"current_action": "job_log", "history": [{"role": "user", "content": "domani porto 10 scatole 503 dai Rossi"}]}}
+{"text": "Quando scade la patente?", "v": null, "expect": ["info_request"], "amb": false, "lists": ["spesa"]}
+{"text": "Il codice del wifi è XYZ123", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Mia sorella si chiama Anna", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Oggi è stata una giornata pesante al lavoro", "v": null, "expect": ["journal"], "amb": false, "lists": ["spesa"]}
+{"text": "Sono felice perché ho finito il progetto", "v": null, "expect": ["journal"], "amb": false, "lists": ["spesa"]}
+{"text": "Ricordami di comprare il latte", "v": null, "expect": ["task_todo"], "amb": false, "lists": ["spesa"]}
+{"text": "Devo chiamare il dentista", "v": null, "expect": ["task_todo"], "amb": false, "lists": ["spesa"]}
+{"text": "Che ristorante mi consigli a Torino?", "v": null, "expect": ["info_request"], "amb": false, "lists": ["spesa"]}
+{"text": "Aggiungi il latte alla lista della spesa", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Oggi ho speso 50 euro di benzina", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Cosa c'è nella lista della spesa?", "v": null, "expect": ["info_request"], "amb": false, "lists": ["spesa"]}
+{"text": "Netflix si rinnova il 3 di ogni mese, 13,99 euro", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Domani cena da Marco alle 20", "v": null, "expect": ["task_todo"], "amb": true, "lists": ["spesa"]}
+{"text": "Martina ha fatto pilates il 19", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Chi è il sindaco di Milano?", "v": null, "expect": ["info_request"], "amb": false, "lists": ["spesa"]}
+{"text": "Mi sento stanco ultimamente", "v": null, "expect": ["journal"], "amb": false, "lists": ["spesa"]}
+{"text": "Come cambio il tema scuro?", "v": null, "expect": ["info_request"], "amb": false, "lists": ["spesa"]}
+{"text": "Ogni domenica sera mandami i task della settimana", "v": null, "expect": ["scheduled_action"], "amb": true, "lists": ["spesa"]}
+{"text": "Segna come fatto comprare il latte", "v": null, "expect": ["task_todo"], "amb": false, "lists": ["spesa"]}
+{"text": "Prendi nota: la password del condominio è 4455", "v": null, "expect": ["info_upload"], "amb": false, "lists": ["spesa"]}
+{"text": "Ho visitato Fester, controllo ecografico di routine, tutto nella norma. Peso 4,2 kg. Richiamo vaccino tra un anno.", "v": "veterinario", "expect": ["vet_report"], "amb": true}
+{"text": "Quando è l'ultima visita di Fester?", "v": "veterinario", "expect": ["info_request"], "amb": false}
+{"text": "Ricordami di richiamare la padrona di Luna giovedì", "v": "veterinario", "expect": ["task_todo"], "amb": false}
+{"text": "Il proprietario di Fester ha cambiato numero: 333 1234567", "v": "veterinario", "expect": ["info_upload"], "amb": false}
+{"text": "Lezione funzionale per 10 persone, livello medio, allenamento gambe", "v": "fitness", "expect": ["lesson"], "amb": true}
+{"text": "Iscrivi Giulia alla lezione di pilates del lunedì", "v": "fitness", "expect": ["info_upload"], "amb": false, "lists": ["Lezioni Pilates"]}
+{"text": "Chi è iscritto alla lezione di martedì?", "v": "fitness", "expect": ["info_request"], "amb": false}
