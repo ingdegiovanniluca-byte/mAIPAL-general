@@ -1,135 +1,124 @@
-import React, { useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { Tag, Star, Trash2 } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
+import React, { useEffect, useRef, useState } from "react";
+import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { useIsMobile } from "@/hooks/use-is-mobile";
-import TodoFolders from "@/components/TodoFolders";
+import { api } from "@/lib/api";
 import TodoDetail from "@/components/TodoDetail";
 
-const COLS = [
-  { key: "da_fare", label: "Da fare", dot: "bg-neutral-400" },
-  { key: "in_corso", label: "In svolgimento", dot: "bg-blue-500" },
-  { key: "fatto", label: "Fatti", dot: "bg-green-500" },
-];
+/* To Do: one plain list, like a reminders app. A circle and the text, one per line; the circle marks it
+   done (it fills and, a moment later, goes down among the done ones); the last line writes a new one
+   (Enter, and the next one at once). The done ones are at the bottom with the filled tick: their circle
+   opens them again. Touching the text opens the to do full screen (steps, notes, due date, delete). */
 
-export default function TodoBoardPage() {
-  const [todos, setTodos] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const isMobile = useIsMobile();
+const ACCENT = "#FFAC33";     // the warm drop of the mAIPAL logo
+const DONE_SHOWN = 15;
 
-  const load = async () => {
-    const r = await api.get("/todos");
-    setTodos(r.data);
-  };
-  useEffect(() => { load(); }, []);
+const byOpen = (a, b) => (!!b.favorite - !!a.favorite) || (a.created_at || "").localeCompare(b.created_at || "");
+const byDone = (a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || "");
 
-  // Todo ordering: favorites first, then by created_at desc
-  const sortTodos = (arr) => [...arr].sort((a, b) => {
-    if (!!b.favorite !== !!a.favorite) return b.favorite ? 1 : -1;
-    return (b.created_at || "").localeCompare(a.created_at || "");
-  });
+function sub(t) {   // one short grey line under the text, only when there is something to say
+  const steps = t.steps || [];
+  const parts = [];
+  if (steps.length) parts.push(`${steps.filter((s) => s.done).length}/${steps.length} passi`);
+  else if (t.status === "in_corso") parts.push(t.completion_percent ? `in corso · ${t.completion_percent}%` : "in corso");
+  if (t.due_date) parts.push(`entro il ${new Date(`${t.due_date}T12:00:00`).toLocaleDateString("it-IT", { day: "numeric", month: "short" })}`);
+  return parts.join(" · ");
+}
 
-  const grouped = COLS.map((c) => ({ ...c, items: sortTodos(todos.filter((t) => t.status === c.key)) }));
-
-  const toggleFav = async (id, cur) => {
-    setTodos((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: !cur } : t)));
-    try { await api.post(`/todos/${id}/favorite`); }
-    catch { toast.error("Errore preferito"); setTodos((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: cur } : t))); }
-  };
-
-  const del = async (id) => {
-    toast("Eliminare questo to-do?", {
-      action: {
-        label: "Elimina",
-        onClick: async () => {
-          const prev = todos;
-          setTodos((ts) => ts.filter((t) => t.id !== id));
-          try { await api.delete(`/todos/${id}`); toast.success("To-do eliminato"); }
-          catch { toast.error("Errore eliminazione"); setTodos(prev); }
-        },
-      },
-      cancel: { label: "Annulla", onClick: () => {} },
-      duration: 6000,
-    });
-  };
-
-  // the phone: the three states as folders (TodoFolders); the desktop keeps the three columns
-  if (isMobile) {
-    return (
-      <>
-        <TodoFolders todos={todos} setTodos={setTodos} sortTodos={sortTodos} reload={load}
-          onOpenTodo={setSelected} onToggleFav={toggleFav} onDelete={del} />
-        {selected && <TodoDetail todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
-      </>
-    );
-  }
-
+function Circle({ done, onClick, label }) {
   return (
-    <div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
-        {grouped.map((c) => (
-          <div key={c.key} className="rounded-2xl p-5 bg-white/5 " data-testid={`col-${c.key}`}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${c.dot}`} />
-                <div className="kicker">{c.label}</div>
-              </div>
-              <div className="kicker">{c.items.length}</div>
-            </div>
-            <div className="mt-5 space-y-3 min-h-[240px]">
-              {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
-              {c.items.map((t) => (
-                <TodoCard key={t.id} todo={t} onClick={() => setSelected(t)} onToggleFav={() => toggleFav(t.id, !!t.favorite)} onDelete={() => del(t.id)} />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+    <button type="button" onClick={onClick} aria-label={label} data-testid="todo-circle"
+      className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center transition-colors"
+      style={done ? { background: ACCENT } : { border: "2px solid rgba(255,255,255,0.5)" }}>
+      {done && <Check size={16} strokeWidth={3} className="text-[#3b2400]" />}
+    </button>
+  );
+}
 
-      {selected && <TodoDetail todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
+function Row({ t, done, last, onToggle, onOpen }) {
+  const line = sub(t);
+  return (
+    <div className="flex items-start gap-3 pl-1" data-testid={done ? "todo-done-row" : "todo-row"} data-id={t.id}>
+      <div className="pt-[11px]"><Circle done={done} onClick={onToggle} label={done ? "Riapri" : "Segna come fatto"} /></div>
+      <button type="button" onClick={onOpen} className={`flex-1 min-w-0 text-left py-[12px] ${last ? "" : "border-b border-white/[0.12]"}`}>
+        <span className={`block text-[16px] leading-[22px] ${done ? "text-white/60" : "text-white"} ${t.favorite && !done ? "font-semibold" : ""}`}>{t.title}</span>
+        {line && !done && <span className="block mt-0.5 text-[12px] text-white/55">{line}</span>}
+      </button>
     </div>
   );
 }
 
-function TodoCard({ todo, onClick, onToggleFav, onDelete }) {
-  const priorityStripe = todo.priority === "alta" ? "priority-high" : todo.priority === "media" ? "priority-med" : todo.priority === "bassa" ? "priority-low" : "";
-  const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
-  const isFav = !!todo.favorite;
+export default function TodoBoardPage() {
+  const [todos, setTodos] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [ticking, setTicking] = useState([]);     // just ticked: filled, still in their place for a moment
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [allDone, setAllDone] = useState(false);
+  const input = useRef(null);
+
+  const load = () => api.get("/todos").then((r) => setTodos(r.data)).catch(() => setTodos((x) => x || []));
+  useEffect(() => { load(); }, []);
+
+  const setStatus = async (t, status) => {
+    const prev = t.status;
+    setTodos((ts) => ts.map((x) => (x.id === t.id ? { ...x, status, updated_at: new Date().toISOString() } : x)));
+    try { await api.patch(`/todos/${t.id}`, { status }); }
+    catch { toast.error("Non sono riuscito a salvarlo"); setTodos((ts) => ts.map((x) => (x.id === t.id ? { ...x, status: prev } : x))); }
+  };
+  const tick = (t) => {
+    setTicking((k) => [...k, t.id]);
+    setTimeout(() => { setTicking((k) => k.filter((x) => x !== t.id)); setStatus(t, "fatto"); }, 650);
+  };
+  const add = async () => {
+    const title = draft.trim();
+    if (!title || busy) return;
+    setBusy(true);
+    try {
+      const r = await api.post("/todos", { title, status: "da_fare" });
+      setTodos((ts) => [...(ts || []), r.data]);
+      setDraft("");
+      input.current?.focus();
+    } catch { toast.error("Non sono riuscito ad aggiungerlo"); }
+    finally { setBusy(false); }
+  };
+
+  if (!todos) return <div className="kicker text-center py-10">caricamento…</div>;
+  const open = todos.filter((t) => t.status !== "fatto").sort(byOpen);
+  const done = todos.filter((t) => t.status === "fatto").sort(byDone);
+  const shownDone = allDone ? done : done.slice(0, DONE_SHOWN);
+
   return (
-    <div
-      data-testid={`todo-${todo.id}`}
-      className={`relative w-full text-left card-soft ${priorityStripe} p-4 card-hover`}
-    >
-      <div className="absolute top-2 right-2 flex items-center gap-1">
-        <button data-testid="todo-fav" onClick={stop(onToggleFav)} className={`p-1.5 rounded-full ${isFav ? "text-amber-500 hover:bg-amber-50" : "text-white/40 hover:bg-white/10 hover:text-amber-500"}`} title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
-          <Star size={14} className={isFav ? "fill-current" : ""} />
-        </button>
-        <button data-testid="todo-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:bg-red-50 hover:text-red-600" title="Elimina"><Trash2 size={14} /></button>
-      </div>
-      <button onClick={onClick} className="w-full text-left pr-14">
-        <div className="font-semibold">{todo.title}</div>
-        {todo.description && <div className="text-sm text-white/60 mt-1 line-clamp-2">{todo.description}</div>}
-        {todo.status === "in_corso" && (
-          <div className="mt-3">
-            <Progress value={todo.completion_percent || 0} className="h-1.5" />
-            <div className="kicker mt-1">{todo.completion_percent || 0}%</div>
-          </div>
-        )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {(todo.tags || []).map((tag, i) => (
-            <span key={i} className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-white/10  text-white/60">
-              <Tag size={10} /> {tag}
-            </span>
-          ))}
-          {todo.notes && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
-              📝 note
-            </span>
-          )}
+    <div className="w-full max-w-[640px] mx-auto" data-testid="todo-list">
+      <div className="rounded-[26px] lg-glass px-4 pt-2 pb-3">
+        {open.map((t) => (
+          <Row key={t.id} t={t} done={ticking.includes(t.id)} onToggle={() => !ticking.includes(t.id) && tick(t)} onOpen={() => setSelected(t)} />
+        ))}
+        {/* the line that writes a new one */}
+        <div className="flex items-center gap-3 pl-1">
+          <span className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center border-2 border-dashed border-white/35 text-white/60"><Plus size={14} /></span>
+          <input ref={input} value={draft} onChange={(e) => setDraft(e.target.value)} enterKeyHint="done"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} onBlur={() => draft.trim() && add()}
+            placeholder={open.length ? "Aggiungi una cosa da fare" : "Scrivi la prima cosa da fare"} data-testid="todo-add"
+            className="flex-1 min-w-0 bg-transparent py-[13px] text-[16px] text-white placeholder:text-white/50 outline-none" />
         </div>
-        <div className="mt-3 kicker">{todo.created_at ? new Date(todo.created_at).toLocaleDateString("it-IT") : ""}</div>
-      </button>
+      </div>
+
+      {done.length > 0 && (
+        <div className="mt-5" data-testid="todo-done-list">
+          <div className="px-5 pb-1 text-[13px] font-semibold text-white/80">Fatti · {done.length}</div>
+          <div className="rounded-[26px] lg-glass px-4 pt-1 pb-2">
+            {shownDone.map((t, i) => (
+              <Row key={t.id} t={t} last={i === shownDone.length - 1 && done.length <= DONE_SHOWN} done onToggle={() => setStatus(t, "da_fare")} onOpen={() => setSelected(t)} />
+            ))}
+            {done.length > DONE_SHOWN && (
+              <button type="button" onClick={() => setAllDone((v) => !v)} className="w-full py-3 text-[13px] text-white/70" data-testid="todo-done-more">
+                {allDone ? "Mostra meno" : `Mostra tutti (${done.length})`}</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selected && <TodoDetail todo={selected} onClose={() => setSelected(null)} onUpdated={load} />}
     </div>
   );
 }

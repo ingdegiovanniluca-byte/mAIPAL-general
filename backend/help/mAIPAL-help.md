@@ -123,8 +123,12 @@ La sezione Task mostra i tuoi impegni con una data.
 
 ## To-Do
 <!-- id: todo · path: /dashboard/todos · verticale: tutti -->
-I to-do sono le cose da fare senza una data precisa.
-- Tre stati: **Da fare**, **In corso** (con la barra di avanzamento), **Fatti**.
+I to-do sono le cose da fare senza una data precisa. La sezione è un **elenco semplice**, come i promemoria del telefono (uguale su telefono e computer):
+- Ogni riga ha un **cerchio** e il testo. Tocca il cerchio per segnarla **fatta**: si riempie e dopo un attimo scende in **Fatti**, in fondo, con la spunta.
+- **Aggiungere**: scrivi nell'ultima riga, «**Aggiungi una cosa da fare**», e premi Invio. Il campo resta pronto per la successiva, così scrivi una lista di seguito.
+- I preferiti stanno in cima, in grassetto; gli altri sono in ordine di inserimento. Sotto il testo, in piccolo, vedi i passi fatti (es. «1/2 passi»), se è in corso e la scadenza.
+- In **Fatti** ci sono gli ultimi completati (con **Mostra tutti** vedi gli altri). Il cerchio pieno lo **riapre**.
+- **Tocca il testo** per aprire il to-do: lì cambi il titolo, lo stato, i passi, le note, la scadenza, la stella e lo elimini.
 - **Aprendo un to-do** si apre **a tutto schermo**. In alto: ← per tornare, la **stella** (preferito) e **⋯** (scadenza del to-do, promemoria su Telegram, elimina). Tocca il **titolo** per cambiarlo; sotto lo **stato** (Da fare / In corso / Fatto) e l'**avanzamento**.
 - **Passi** (sottotask): scrivi in «**Aggiungi un passo**» e premi Invio: si apre subito il campo per il successivo, così scrivi una lista di seguito ("contattare l'agenzia", "richiedere il preventivo", "vedere il preventivo"…).
   - Il **cerchio** lo spunta; i passi fatti scendono in **Completati** (chiusi, li apri con la freccia).
@@ -135,11 +139,6 @@ I to-do sono le cose da fare senza una data precisa.
   - La barra si riempie da sola con i passi spuntati («3 di 7 passi fatti»). Con il primo passo fatto il to-do va in **In corso**; quando li hai fatti tutti ti chiedo se segnarlo come **Fatto**.
 - **✨ Suggerisci**: mAIPAL propone una lista di passi dal titolo e dalle note; aggiungo solo quelli che scegli.
 - In basso scrivi a mAIPAL per aggiornare il to-do a parole: "aggiungi prenotare il ristorante dopo vedere il preventivo", "segna fatto contattare l'agenzia", "a metà, manca solo la stampa". I passi nuovi li prendo dalle tue parole. Sotto ci sono anche le **note**, che si salvano da sole.
-- **Sul telefono** i tre stati sono tre **cartelle**, una sotto l'altra, con il numero dei to-do e il **+**. Dalla cartella spuntano i primi to-do: passandoci sopra il dito la cartella si apre in avanti e i to-do escono a ventaglio (quello sotto il dito sale di più).
-- **Sfogliare i to-do di una cartella**: scorri in su con il dito sopra i to-do e lasciali: restano alzati. Ora scorrendo in orizzontale sfogli tutti i to-do della cartella (le caselle seguono il dito; dopo l'ultimo ricomincia dal primo, e all'indietro dall'ultimo) (il to do in primo piano si alza un po’ di più; in basso a sinistra vedi quale è, es. "3 di 7"), toccandone uno lo apri, e scorrendo in giù rientrano nella cartella.
-- Tocca una cartella per l'**elenco** di tutti i suoi to-do: la stella li mette tra i preferiti (in cima), le frecce li **spostano** in un'altra cartella, il cerchio li segna come fatti (o li riapre), il cestino li elimina; toccando il titolo li apri. Con la freccia in alto (o il tasto indietro) torni alle cartelle.
-- Il **+** su una cartella crea un to-do già in quello stato: scrivi cosa c'è da fare, le note e la priorità.
-- Sul computer i tre stati restano tre colonne affiancate.
 - Li crei anche dalla chat con l'agente Task (se non c'è una data diventa un to-do).
 
 ## Diario
