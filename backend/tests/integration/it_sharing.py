@@ -153,7 +153,7 @@ def model(text="", hours=None, materials=None, problems=None):
     MODEL_SAYS.clear(); MODEL_SAYS.update({"kind": "nota", "doubt": "", "date": "", "text": text, "hours": hours or [],
                                            "materials": materials or [], "problems": problems or [], "client": "", "commessa": ""})
 PUSHED = []
-server.push.fire_and_forget = lambda db_, uid, title, body, url="/", tag=None: PUSHED.append((uid, title, body))
+server.push.fire_and_forget = lambda db_, uid, title, body, url="/", tag=None, kind=None: PUSHED.append((uid, title, body))
 
 class Msg:
     def __init__(s, text): s.text = text; s.location = None; s.voice = None; s.photo = None; s.caption = None; s.contact = None; s.replies = []

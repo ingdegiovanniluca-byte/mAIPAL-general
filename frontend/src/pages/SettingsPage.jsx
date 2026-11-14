@@ -539,7 +539,7 @@ export default function SettingsPage() {
   );
   const secNotifications = (mode) => (
     <Section mode={mode} id="notifications" testid="notifications-card-settings" icon={Bell} title="Notifiche"
-      subtitle="Avvisi di mAIPAL su questo dispositivo, anche con l'app chiusa.">
+      subtitle="Cosa ti mando e dove: nell'app, su Telegram o entrambi.">
       <NotificationsPanel />
     </Section>
   );
@@ -579,7 +579,7 @@ export default function SettingsPage() {
     { id: "profile", icon: UserIcon, title: "Profilo", sub: profession || "Incompleto", on: !!profession },
     { id: "vertical", icon: Compass, title: "Verticale", sub: BUSINESS_VERTICALS.find((v) => v.key === businessVertical)?.label || "Nessuno", on: !!businessVertical },
     { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
-    { id: "notifications", icon: Bell, title: "Notifiche", sub: "Promemoria e diario", on: false },
+    { id: "notifications", icon: Bell, title: "Notifiche", sub: "Cosa ti mando e dove", on: false },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },
     ...(user?.can_collaborators ? [{ id: "collaborators", icon: HardHat, title: "Collaboratori",
       sub: user?.tenant?.plan ? `${user.tenant.usage?.collaborators || 0}/${user.tenant.plan.max_collaborators} · solo Telegram` : "Solo Telegram", on: false }] : []),

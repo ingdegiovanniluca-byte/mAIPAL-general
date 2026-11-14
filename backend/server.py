@@ -55,6 +55,7 @@ import agent_guard
 import help_guide
 import verticals as vx
 import push_notify as push
+import notify_prefs as nprefs
 import site_presence as sp
 import client_updates as cu
 import access as orgaccess
@@ -1465,8 +1466,8 @@ async def admin_invite_to_team(team_id: str, payload: TeamInviteCreate, current:
     if invited:
         text = (f"👥 {current.name or 'L'+chr(39)+'amministratore'} ti ha invitato nel team «{org['name']}»: "
                 "lo accetti in mAIPAL → Impostazioni → Team.")
-        push.fire_and_forget(db, invited["user_id"], "👥 Invito in un team", text, "/dashboard/settings?s=team", f"team-{team_id}")
-        if invited.get("telegram_chat_id"):
+        push.fire_and_forget(db, invited["user_id"], "👥 Invito in un team", text, "/dashboard/settings?s=team", f"team-{team_id}", kind="shares")
+        if invited.get("telegram_chat_id") and await nprefs.wants(db, invited["user_id"], "shares", "telegram"):
             try:
                 await _send_telegram_text(invited["telegram_chat_id"], text)
             except Exception:
@@ -3640,7 +3641,8 @@ async def assign_task(task_id: str, payload: TaskAssignPayload, current: User = 
     await db.tasks.update_one({"id": task_id, **_editable_query(current)}, {"$set": update})
     doc = await db.tasks.find_one({"id": task_id, **_editable_query(current)}, {"_id": 0})
 
-    if payload.assigned_to and payload.notify and assignee and assignee.get("telegram_chat_id") and assignee["user_id"] != current.user_id:
+    if payload.assigned_to and payload.notify and assignee and assignee.get("telegram_chat_id") and assignee["user_id"] != current.user_id \
+            and await nprefs.wants(db, assignee["user_id"], "shares", "telegram"):
         try:
             from telegram import Bot
             bot = Bot(token=tg.bot_token())
@@ -3835,7 +3837,7 @@ async def _todo_step_reminders(now_utc: Optional[datetime] = None) -> int:
         user = await db.users.find_one({"user_id": todo["user_id"]}, {"_id": 0, "telegram_chat_id": 1})
         text = (f"🔔 To do «{todo.get('title')}»" + (" scade oggi." if todo_due else ":")
                 + ("\n" + ("Passi in scadenza oggi:\n" if todo_due else "da fare oggi:\n") + "\n".join(lines) if lines else ""))
-        if user and await _send_telegram_text(user.get("telegram_chat_id"), text):
+        if user and await nprefs.wants(db, todo["user_id"], "task_reminder", "telegram") and await _send_telegram_text(user.get("telegram_chat_id"), text):
             sent += 1
         upd = {**({"steps": steps} if changed else {}), **({"reminded_on": today} if todo_due else {})}
         await db.todos.update_one({"id": todo["id"]}, {"$set": upd})
@@ -3956,6 +3958,8 @@ async def _notify_list_shared(current: User, coll: dict, user_ids: list):
     for r in rec:
         read = ((coll.get("share_perms") or {}).get(r["user_id"]) if r["user_id"] in (coll.get("shared_with") or [])
                 else coll.get("org_perm")) == "read"
+        if not await nprefs.wants(db, r["user_id"], "shares", "telegram"):
+            continue
         try:
             await _send_telegram_text(r["telegram_chat_id"], f"📋 {current.name} ti ha condiviso la lista «{coll['name']}»: "
                                       + ("puoi vederla (sola lettura)" if read else "puoi vederla e modificarla") + " in mAIPAL → Liste.")
@@ -4359,6 +4363,26 @@ async def push_status(payload: PushEndpointPayload, current: User = Depends(get_
                              "this": x["endpoint"] == payload.endpoint} for x in subs]}
 
 
+# ---- Which notifications, and where (app / Telegram / both): Impostazioni > Notifiche
+class NotifyPrefPayload(BaseModel):
+    on: Optional[bool] = None
+    channel: Optional[Literal["app", "telegram", "both"]] = None
+
+
+@api_router.get("/notify/prefs")
+async def get_notify_prefs(current: User = Depends(get_current_user)):
+    return {"kinds": await nprefs.listing(db, current.user_id), "telegram_linked": bool(current.telegram_chat_id),
+            "app_devices": await db.push_subscriptions.count_documents({"user_id": current.user_id})}
+
+
+@api_router.put("/notify/prefs/{kind}")
+async def put_notify_pref(kind: str, payload: NotifyPrefPayload, current: User = Depends(get_current_user)):
+    try:
+        return await nprefs.set_pref(db, current.user_id, kind, payload.on, payload.channel)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @api_router.post("/push/test")
 async def push_test(current: User = Depends(get_current_user)):
     n = await push.send_to_user(db, current.user_id, "🔔 mAIPAL", "Le notifiche funzionano: qui arriveranno i promemoria dei task e le voci dei collaboratori.", "/dashboard/settings?s=notifications", "test")
@@ -4381,7 +4405,7 @@ def _push_collab_entry(owner: User, log: dict, author: dict) -> None:
     if log.get("photos") and (log.get("raw_text") == PHOTO_ONLY_TEXT):
         body = f"📷 {len(log['photos'])} foto"
     push.fire_and_forget(db, owner.user_id, f"📒 {who} · {log.get('commessa_title') or 'Diario'}", body,
-                         f"/dashboard/journal?commessa={log['commessa_id']}", f"jlog-{log['id']}")
+                         f"/dashboard/journal?commessa={log['commessa_id']}", f"jlog-{log['id']}", kind="diary")
 
 
 async def _delete_job_diaries(commessa_ids: list) -> None:
@@ -7300,7 +7324,7 @@ async def _hours_to_approve_notice(owner: User, log: dict, author: dict, view: d
     what = f"{_short_it_date(log['date'])}: {jl.hours_line(log['hours_pending'])}{_review_detail(log)}"
     try:
         await _notify_owner(owner, f"🕒 Ore da approvare: {who} su «{view['title']}» — {view['client_name']}, {what}.\n"
-                                   "Le approvi nel diario della commessa, sezione Ore.")
+                                   "Le approvi nel diario della commessa, sezione Ore.", kind="hours")
     except Exception:
         logger.exception("hours to approve notice failed")
     # (on the phone: the entry's own notification says "da approvare")
@@ -7508,8 +7532,8 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
             if t.get("assignee_user_id"):
                 u = await db.users.find_one({"user_id": t["assignee_user_id"]}, {"_id": 0, "telegram_chat_id": 1})
                 push.fire_and_forget(db, t["assignee_user_id"], head + f" · {view['title']}", what,
-                                     f"/dashboard/journal?commessa={view['id']}", f"mat-{t['id']}-{kind}")
-                if u and u.get("telegram_chat_id"):
+                                     f"/dashboard/journal?commessa={view['id']}", f"mat-{t['id']}-{kind}", kind="materials")
+                if u and u.get("telegram_chat_id") and await nprefs.wants(db, t["assignee_user_id"], "materials", "telegram"):
                     await _send_telegram_text(u["telegram_chat_id"], text)
                 sent += 1
         except Exception:
@@ -8175,8 +8199,8 @@ async def set_commessa_sharing(commessa_id: str, payload: CommessaSharingPayload
         how = "puoi vederlo (sola lettura)" if perms.get(u["user_id"]) == "read" else "puoi vederlo e scriverci"
         text = f"📒 {current.name} ti ha condiviso il diario di «{view['title']}» — {view['client_name']}: {how} in mAIPAL → Diario."
         push.fire_and_forget(db, u["user_id"], f"📒 Commessa condivisa · {view['title']}", text, f"/dashboard/journal?commessa={commessa_id}",
-                             f"share-{commessa_id}")
-        if u.get("telegram_chat_id"):
+                             f"share-{commessa_id}", kind="shares")
+        if u.get("telegram_chat_id") and await nprefs.wants(db, u["user_id"], "shares", "telegram"):
             try:
                 await _send_telegram_text(u["telegram_chat_id"], text)
             except Exception:
@@ -8333,9 +8357,9 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
                               {"todo_id" if kind == "t" else "milestone_id": item_id}, author_name=collab.get("first_name") or _collab_name(collab))
     _day_pin_touch(collab["id"], item.get("collaborator_id"), *(item.get("shared_with") or []))
     push.fire_and_forget(db, owner.user_id, f"✅ {_collab_name(collab)} · {view.get('title')}", f"Fatta: «{what}»",
-                         f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}")
+                         f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}", kind="done")
     try:
-        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la milestone'} «{what}» su «{view['title']}» — {view['client_name']}.")
+        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la milestone'} «{what}» su «{view['title']}» — {view['client_name']}.", kind="done")
     except Exception:
         logger.exception("owner notice failed")
     return f"✅ Fatto! «{what}» è segnata come fatta, {owner.name.split(' ')[0] if owner.name else 'il titolare'} lo vede nel diario."
@@ -9065,7 +9089,7 @@ async def _budget_threshold_alert(clienti: dict, commessa_id: str) -> None:
         t = max(new)
         head = "🔴 Preventivo superato" if t >= 100 else "🟠 Attenzione al preventivo"
         await _notify_owner(User(**owner_doc), f"{head} su «{v['title']}» — {v['client_name']}: speso {jl._eur(e['cost_total'])} "
-                                               f"di {jl._eur(e['budget'])} ({pct:.0f}%), margine {jl._eur(e['margin'])}.")
+                                               f"di {jl._eur(e['budget'])} ({pct:.0f}%), margine {jl._eur(e['margin'])}.", kind="costs")
     except Exception:
         logger.exception("budget alert failed")
 
@@ -9278,7 +9302,7 @@ async def _check_forecast_alert(clienti: dict, commessa_id: str) -> None:
         if owner_doc:
             head = "📉 Al ritmo attuale chiudi in perdita" if "perdita" in new else \
                 f"📉 Margine in calo (di solito {f['hist_margin_pct']:.0f}% nei lavori simili)"
-            await _notify_owner(User(**owner_doc), f"{head} su «{view['title']}» — {view['client_name']}.\n{_forecast_line(f)}.")
+            await _notify_owner(User(**owner_doc), f"{head} su «{view['title']}» — {view['client_name']}.\n{_forecast_line(f)}.", kind="costs")
     except Exception:
         logger.exception("forecast alert failed")
 
@@ -10084,9 +10108,10 @@ async def _extra_works_from_log(current: User, target: dict, log: dict, notify: 
                         + (f"\n{x['why']}" if x["why"] else "") + (f"\n{_extra_note_line(x)}" if _extra_note_line(x) else "")
                         + f"\nNon lo trovo nel preventivo{f' v{version}' if version else ''} né nella descrizione. È un extra da far approvare al cliente?")
                 if owner:
-                    await _tg_send(owner.get("telegram_chat_id"), text, _extra_kb(x["id"]))
+                    if await nprefs.wants(db, owner["user_id"], "extra", "telegram"):
+                        await _tg_send(owner.get("telegram_chat_id"), text, _extra_kb(x["id"]))
                     push.fire_and_forget(db, owner["user_id"], "💡 Possibile lavoro extra", f"«{x['work']}» · {view['title']}",
-                                         f"/dashboard/journal?commessa={target['id']}", f"xw-{x['id']}")
+                                         f"/dashboard/journal?commessa={target['id']}", f"xw-{x['id']}", kind="extra")
         return out
     except Exception:
         logger.exception("extra works check failed")
@@ -10130,13 +10155,14 @@ async def _unplanned_materials_check(target: dict, log: dict) -> Optional[dict]:
             owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
             for x in made:
                 if owner:
-                    await _tg_send(owner.get("telegram_chat_id"),
-                                   f"💡 *Materiale non previsto* su «{view['title']}» — {view['client_name']}\n«{jl.mat_label(x['materials'][0])}»"
-                                   + (f" (pagato {jl._eur(x['materials'][0]['paid'])})" if x["materials"][0].get("paid") is not None else "")
-                                   + (f", scritto da {x['author']}" if x["author"] else "")
-                                   + f"\nNon è tra i materiali del preventivo v{version}. È un extra da far approvare al cliente?", _extra_kb(x["id"]))
+                    if await nprefs.wants(db, owner["user_id"], "extra", "telegram"):
+                        await _tg_send(owner.get("telegram_chat_id"),
+                                       f"💡 *Materiale non previsto* su «{view['title']}» — {view['client_name']}\n«{jl.mat_label(x['materials'][0])}»"
+                                       + (f" (pagato {jl._eur(x['materials'][0]['paid'])})" if x["materials"][0].get("paid") is not None else "")
+                                       + (f", scritto da {x['author']}" if x["author"] else "")
+                                       + f"\nNon è tra i materiali del preventivo v{version}. È un extra da far approvare al cliente?", _extra_kb(x["id"]))
                     push.fire_and_forget(db, owner["user_id"], "💡 Materiale non previsto", f"{jl.mat_label(x['materials'][0])} · {view['title']}",
-                                         f"/dashboard/journal?commessa={target['id']}", f"xw-{x['id']}")
+                                         f"/dashboard/journal?commessa={target['id']}", f"xw-{x['id']}", kind="extra")
         return {"names": [jl.mat_label(m) for m in found], "version": version, "flagged": bool(made)}
     except Exception:
         logger.exception("unplanned materials check failed")
@@ -10590,9 +10616,9 @@ async def _activity_confirm(activity_id: str, worker_id: str, status: str, reaso
         od = await db.users.find_one({"user_id": ctx[0].get("user_id")}, {"_id": 0})
         if od:
             await _notify_owner(User(**od), f"❌ *{found['name']}* non può esserci per «{a['description']}» su «{ctx[3]['title']}» "
-                                             f"({_short_it_date(a['date'])})" + (f": {reason}" if reason else "") + ".")
+                                             f"({_short_it_date(a['date'])})" + (f": {reason}" if reason else "") + ".", kind="confirm")
             push.fire_and_forget(db, od["user_id"], f"❌ {found['name']} non può esserci", f"«{a['description']}» · {_short_it_date(a['date'])}",
-                                 f"/dashboard/journal?commessa={a['commessa_id']}", f"act-no-{activity_id}-{worker_id}")
+                                 f"/dashboard/journal?commessa={a['commessa_id']}", f"act-no-{activity_id}-{worker_id}", kind="confirm")
         return "Ok, ho avvisato l'amministratore."
     return "👍 Confermato, grazie." if status == "confermato" else "Ok."
 
@@ -10772,7 +10798,7 @@ async def _activity_notifications(now_utc: Optional[datetime] = None) -> int:
                 admin = await _admin_of(clienti.get("user_id"))
                 if admin:
                     await _notify_owner(admin, f"⏳ Non hanno confermato «{a['description']}» di oggi su «{view['title']}»: "
-                                               + ", ".join(p["name"] for p in waiting) + ".")
+                                               + ", ".join(p["name"] for p in waiting) + ".", kind="confirm")
                     sent += 1
                 rem["alert"], changed = now.isoformat(), True
             start = _at_local(today, _expected_start(a, view, st))
@@ -10791,7 +10817,7 @@ async def _activity_notifications(now_utc: Optional[datetime] = None) -> int:
                     admin = await _admin_of(clienti.get("user_id"))
                     if admin and admin.user_id != p["id"]:
                         await _notify_owner(admin, f"⏰ *{p['name']}* non ha segnato l'arrivo su «{view['title']}» (inizio previsto {start.strftime('%H:%M')}): "
-                                                   "gli ho chiesto se ci sono problemi.")
+                                                   "gli ho chiesto se ci sono problemi.", kind="presence")
                     arrived[w] = "asked"
                     sent += 1
                 rem["arrival"], changed = arrived, True
@@ -10883,7 +10909,7 @@ async def _daily_site_summary(now_utc: Optional[datetime] = None) -> int:
                 lines.append("❗ " + "; ".join(anomalies))
             blocks.append("\n".join(lines))
         await db.users.update_one({"user_id": owner["user_id"]}, {"$set": {"site_summary_on": day}})
-        if blocks:
+        if blocks and await nprefs.wants(db, owner["user_id"], "daily_summary", "telegram"):
             if await _tg_send(owner["telegram_chat_id"], f"🌙 *Riepilogo di oggi, {_short_it_date(day)}*\n\n" + "\n\n".join(blocks)):
                 sent += 1
     return sent
@@ -11831,9 +11857,12 @@ async def _tg_send(chat_id, text: str, kb=None) -> bool:
     return False
 
 
-async def _tell_worker(w: dict, text: str, kb=None) -> bool:
-    """To whoever is on site, on Telegram: a collaborator (if active) or an app user (if linked)."""
+async def _tell_worker(w: dict, text: str, kb=None, kind: Optional[str] = None) -> bool:
+    """To whoever is on site, on Telegram: a collaborator (if active) or an app user (if linked; with a
+    kind, only if they want it on Telegram)."""
     if not w or w.get("status", "active") != "active":
+        return False
+    if w.get("is_user") and not await nprefs.wants(db, w.get("user_id"), kind, "telegram"):
         return False
     if not w.get("is_user") and kb is None:   # a plain message to a collaborator: the usual way
         return await _tell_collaborator(w, text)
@@ -11870,7 +11899,7 @@ async def _presence_start(collab: dict, owner: Optional[User], view: Optional[di
         msg += f"\n⚠️ Risulti {sp.distance_text(d)}: se sei nel posto giusto va bene così, la distanza resta segnata."
     if sp.far(d) and owner and owner.user_id != collab.get("user_id"):
         push.fire_and_forget(db, owner.user_id, f"⚠️ {_collab_name(collab)} · {view.get('title')}",
-                             f"Inizio lavoro {sp.distance_text(d)}", f"/dashboard/journal?commessa={view['id']}", f"ws-{doc['id']}")
+                             f"Inizio lavoro {sp.distance_text(d)}", f"/dashboard/journal?commessa={view['id']}", f"ws-{doc['id']}", kind="problems")
     if loc and geo is None:
         msg += "\n(La posizione del cantiere non è nota: la tua resta salvata.)"
     return msg + "\nQuando hai finito tocca 📍 Ho finito (o scrivi «ho finito»)." + ("" if loc else "\nCon il pulsante 📍 si registra anche la posizione.")
@@ -12099,15 +12128,15 @@ async def _presence_forgotten(now_utc: Optional[datetime] = None) -> int:
                     "non ho contato le ore. Scrivimi a che ora hai finito, es. «ho finito alle 17.30»"
                     + ("." if c.get("is_user") else ": vanno nel diario come ore da approvare dal titolare."))
             try:
-                await _tell_worker(c, text)
+                await _tell_worker(c, text, kind="presence")
             except Exception:
                 logger.exception("forgotten presence notice failed")
             if c.get("is_user"):
-                push.fire_and_forget(db, c["user_id"], "⏱️ Fine non segnata", text, f"/dashboard/journal?commessa={s_['commessa_id']}", f"ws-{s_['id']}")
+                push.fire_and_forget(db, c["user_id"], "⏱️ Fine non segnata", text, f"/dashboard/journal?commessa={s_['commessa_id']}", f"ws-{s_['id']}", kind="presence")
         owner_doc = await db.users.find_one({"user_id": s_["owner_user_id"]}, {"_id": 0})
         if owner_doc and c and owner_doc["user_id"] != c.get("user_id"):
             await _notify_owner(User(**owner_doc), f"⏱️ {_collab_name(c)} ha iniziato su «{s_['commessa_title']}» {when} "
-                                                   "ma non ha segnato la fine: quelle ore non sono state contate.")
+                                                   "ma non ha segnato la fine: quelle ore non sono state contate.", kind="presence")
     return n
 
 
@@ -12299,19 +12328,19 @@ async def _presence_late_check(now_utc: Optional[datetime] = None) -> int:
         since = sp.hhmm(_local(s_["start_at"]))
         text = (f"🕖 Sei ancora in cantiere su «{s_['commessa_title']}»? Risulti lì dalle {since}.\n"
                 "Se sei andato via dimmi a che ora, così chiudo il tempo giusto.")
-        await _tell_worker(w, text, _late_kb(s_["id"]))
+        await _tell_worker(w, text, _late_kb(s_["id"]), kind="presence")
         if w.get("is_user"):
             push.fire_and_forget(db, w["user_id"], "🕖 Sei ancora in cantiere?", f"«{s_['commessa_title']}», dalle {since}: rispondi nel diario.",
-                                 f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-{s_['id']}")
+                                 f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-{s_['id']}", kind="presence")
         asked += 1
         if own and own != w.get("user_id") and not s_.get("late_told_owner"):
             owner_doc = await db.users.find_one({"user_id": own}, {"_id": 0})
             if owner_doc:
                 note = (f"🕖 Alle {sp.hhmm(now.astimezone(LOCAL_TZ))} risulta ancora in cantiere *{_collab_name(w)}* su «{s_['commessa_title']}» "
                         f"(dalle {since}). Gli ho chiesto se è ancora lì: ti dico cosa risponde.")
-                await _notify_owner(User(**owner_doc), note)
+                await _notify_owner(User(**owner_doc), note, kind="presence")
                 push.fire_and_forget(db, own, "🕖 Ancora in cantiere", f"{_collab_name(w)} su «{s_['commessa_title']}» dalle {since}",
-                                     f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-o-{s_['id']}")
+                                     f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-o-{s_['id']}", kind="presence")
                 await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"late_told_owner": True}})
     return asked
 
@@ -12331,7 +12360,7 @@ async def _presence_answered(s_: dict, w: dict, still: bool = False, left_at: Op
         return
     text = (f"✅ {_collab_name(w)} conferma di essere ancora in cantiere su «{s_['commessa_title']}»." if still else
             f"🚪 {_collab_name(w)} era andato via da «{s_['commessa_title']}» alle {sp.hhmm(left_at.astimezone(LOCAL_TZ))}: ore registrate fino a lì.")
-    await _notify_owner(User(**owner_doc), text)
+    await _notify_owner(User(**owner_doc), text, kind="presence")
 
 
 async def _presence_late_answer(w: dict, sid: str, still: bool) -> str:
@@ -12399,10 +12428,10 @@ async def _presence_day_note(now_utc: Optional[datetime] = None) -> int:
                 await tg._set_state(db, w["telegram_chat_id"], w["user_id"],
                                     pending_presence_note={"commessa_id": s_["commessa_id"], "at": now.isoformat()})
             push.fire_and_forget(db, w["user_id"], "📝 Com'è andata oggi?", f"«{s_['commessa_title']}»: scrivilo nel diario.",
-                                 f"/dashboard/journal?commessa={s_['commessa_id']}", f"note-{s_['id']}")
+                                 f"/dashboard/journal?commessa={s_['commessa_id']}", f"note-{s_['id']}", kind="presence")
         else:   # what they write next goes to that commessa
             await db.collaborators.update_one({"id": w["id"]}, {"$set": {"tg_state": {"target": s_["commessa_id"], "at": now.isoformat()}}})
-        if await _tell_worker(w, text) or w.get("is_user"):
+        if await _tell_worker(w, text, kind="presence") or w.get("is_user"):
             asked += 1
     return asked
 
@@ -13028,7 +13057,7 @@ async def _send_client_update(clienti: dict, sub: dict, client: dict, link: dict
         raise RuntimeError("telegram send failed")
     await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"client_updates": {
         **(sub.get("client_updates") or {}), "last_sent_at": now, "last_text": text, "last_checked": day.isoformat()}}})
-    await _notify_owner(owner, f"📤 Avanzamento settimanale inviato a {link.get('name') or 'il cliente'}:\n\n{text}")
+    await _notify_owner(owner, f"📤 Avanzamento settimanale inviato a {link.get('name') or 'il cliente'}:\n\n{text}", kind="client")
     return text
 
 
@@ -13043,7 +13072,8 @@ async def _show_client_draft(owner_doc: dict, sub_id: str, view: dict, text: str
     head = (f"📝 *Bozza per il cliente* — {view['client_name']} · «{view['title']}»\n"
             + ("Parte su Telegram solo quando la approvi." if linked else
                "Il cliente non è collegato a Telegram: approvala e copiala per mandarla tu (WhatsApp, email).") + "\n\n")
-    await _tg_send(owner_doc.get("telegram_chat_id"), head + text, _client_draft_kb(sub_id, linked))
+    if await nprefs.wants(db, owner_doc.get("user_id"), "client", "telegram"):
+        await _tg_send(owner_doc.get("telegram_chat_id"), head + text, _client_draft_kb(sub_id, linked))
 
 
 async def _make_client_draft(clienti: dict, sub: dict, client: dict, owner_doc: dict, day: Optional[date] = None,
@@ -13064,7 +13094,7 @@ async def _make_client_draft(clienti: dict, sub: dict, client: dict, owner_doc: 
         view = _commessa_view(sub, client, clienti)
         await _show_client_draft(owner_doc, sub["id"], view, text, bool(link.get("telegram_chat_id") and link.get("status") == "active"))
         push.fire_and_forget(db, owner_doc["user_id"], "📝 Bozza per il cliente da approvare", f"{view['client_name']} · «{view['title']}»",
-                             f"/dashboard/journal?commessa={sub['id']}", f"cud-{draft['id']}")
+                             f"/dashboard/journal?commessa={sub['id']}", f"cud-{draft['id']}", kind="client")
     return draft
 
 
@@ -13305,9 +13335,10 @@ async def unlink_client_updates(commessa_id: str, current: User = Depends(get_cu
     return await _client_updates_state(clienti, sub, client)
 
 
-async def _notify_owner(owner: User, text: str) -> None:
-    """A note to the admin on Telegram (if linked): a collaborator linked, a problem reported."""
-    if owner.telegram_chat_id:
+async def _notify_owner(owner: User, text: str, kind: Optional[str] = None) -> None:
+    """A note to the admin on Telegram (if linked): a collaborator linked, a problem reported. With a
+    kind, only if they want that kind on Telegram (Impostazioni > Notifiche)."""
+    if owner.telegram_chat_id and await nprefs.wants(db, owner.user_id, kind, "telegram"):
         try:
             await _send_telegram_text(owner.telegram_chat_id, text)
         except Exception:
@@ -15669,6 +15700,8 @@ async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for
         return {"status": "error", "result": "utente non trovato"}
     user = User(**user_doc)
     chat_id = user_doc.get("telegram_chat_id")
+    if chat_id and not await nprefs.wants(db, a["user_id"], "actions", "telegram"):
+        chat_id = None   # the user doesn't want the actions' results on Telegram (Impostazioni > Notifiche)
     kind = a.get("kind")
     try:
         if kind == "list_update":
@@ -16312,7 +16345,7 @@ async def _share_kb_docs(sender: User, recipients: List[dict], doc_ids: List[str
                 **{k: v for k, v in d.items() if k not in ("conv_id", "linked", "shared_with")},
                 "doc_id": idmap[d["doc_id"]], "user_id": r["user_id"], "shared_by": by, "created_at": now_iso,
             } for d in docs])
-        if r.get("telegram_chat_id"):
+        if r.get("telegram_chat_id") and await nprefs.wants(db, r["user_id"], "shares", "telegram"):
             try:
                 await _send_telegram_text(r["telegram_chat_id"], f"📥 {sender.name} ti ha condiviso un'informazione su mAIPAL:\n\n{preview}")
             except Exception:
@@ -16463,7 +16496,7 @@ async def _reminders_loop():
             )
             async for t in cursor:
                 user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
-                if not user or not user.get("telegram_chat_id"):
+                if not user or not user.get("telegram_chat_id") or not await nprefs.wants(db, t["user_id"], "task_reminder", "telegram"):
                     await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True}})
                     continue
                 try:
@@ -16582,12 +16615,13 @@ async def _exact_reminders_tick(now: Optional[datetime] = None) -> None:
         if t.get("reminder_push_for") != fire_at.isoformat():
             await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_push_for": fire_at.isoformat()}})
             try:
-                await push.send_to_user(db, t["user_id"], f"🔔 {t.get('title') or 'Promemoria'}",
-                                        (f"Tra {minutes_left} minuti" if minutes_left else "Adesso") + f" ({due_time})"
-                                        + (f" · {t['notes']}" if t.get("notes") else ""), "/dashboard/tasks", f"task-{t['id']}")
+                if await nprefs.wants(db, t["user_id"], "task_reminder", "app"):
+                    await push.send_to_user(db, t["user_id"], f"🔔 {t.get('title') or 'Promemoria'}",
+                                            (f"Tra {minutes_left} minuti" if minutes_left else "Adesso") + f" ({due_time})"
+                                            + (f" · {t['notes']}" if t.get("notes") else ""), "/dashboard/tasks", f"task-{t['id']}")
             except Exception:
                 logger.exception("task reminder push failed")
-        if not user or not user.get("telegram_chat_id"):
+        if not user or not user.get("telegram_chat_id") or not await nprefs.wants(db, t["user_id"], "task_reminder", "telegram"):
             await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_msg_sent": True, "reminder_msg_sent_at": datetime.now(timezone.utc).isoformat()}})
             continue
         try:
@@ -16915,7 +16949,7 @@ async def _run_daily_news_for_user(user: dict, today: str):
         })
     await db.news_items.insert_many(docs)
 
-    if user.get("telegram_chat_id"):
+    if user.get("telegram_chat_id") and await nprefs.wants(db, user["user_id"], "news", "telegram"):
         try:
             from telegram import Bot
             bot = Bot(token=tg.bot_token())

@@ -143,7 +143,7 @@ async def fake_geocode(addr):
     GEOCODED.append(addr); return SITES.get(addr)
 sp.geocode = fake_geocode
 PUSHED = []
-server.push.fire_and_forget = lambda db_, uid, title, body, url="/", tag=None: PUSHED.append((uid, title, body))
+server.push.fire_and_forget = lambda db_, uid, title, body, url="/", tag=None, kind=None: PUSHED.append((uid, title, body))
 
 class Loc:
     def __init__(s, lat, lon): s.latitude = lat; s.longitude = lon

@@ -478,20 +478,15 @@ Con l'app mAIPAL per **Galaxy Watch** parli con gli agenti e guardi task, to-do 
 
 ## Notifiche
 <!-- id: notifiche · verticale: tutti -->
-mAIPAL può mandarti le notifiche direttamente sul telefono o sul computer, anche con l'app chiusa.
-- **Cosa arriva**: i **promemoria dei task** e, per gli artigiani, le **voci scritte dai collaboratori** nel diario delle commesse (testo, ore, problemi o foto) e le attività o milestone che segnano come fatte. Toccando la notifica si apre la pagina giusta.
-- **Attivarle**: Impostazioni → **Notifiche** → **Attiva su questo dispositivo**, poi consenti le notifiche quando il telefono lo chiede. Ogni dispositivo si attiva per conto suo; con **Manda una prova** controlli che arrivino, con **Disattiva** le spegni.
-- **iPhone**: le notifiche arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home) e con iOS 16.4 o successivo.
-  1. Apri mAIPAL **dall'icona** sulla schermata Home, non da Safari.
-  2. Vai in Impostazioni → Notifiche → **Attiva su questo dispositivo**, poi **Consenti**.
-  3. Prova con **Manda una prova**.
-  4. Se non arriva, sull'iPhone apri **Impostazioni → Notifiche → mAIPAL** e accendi «Consenti notifiche».
-
-  Ogni dispositivo va attivato a parte: averle attive sul telefono Android non le attiva sull'iPhone.
+In Impostazioni → **Notifiche** scegli **cosa** ti manda mAIPAL e **dove**: nell'**app** (le notifiche del telefono o del computer, anche con l'app chiusa), su **Telegram** o in **entrambi**.
+- **Notifiche su questo dispositivo**: l'interruttore in alto le accende o le spegne sul telefono o computer che stai usando (consenti quando te lo chiede). Ogni dispositivo si attiva per conto suo. Quando è acceso, **Manda una prova** ti manda una notifica per controllare.
+- **Cosa ti mando**: l'elenco di tutte le notifiche, ognuna con il suo **interruttore** (verde = attiva) e, sotto, dove riceverla: **App**, **Telegram** o **Entrambi**. All'inizio sono tutte attive, su entrambi.
+  - **Promemoria dei task**, **Riepilogo della giornata** (la sera), **Diario dei collaboratori**, **Problemi dai cantieri**, **Attività fatte**, **Presenze in cantiere** (arrivi, fine non segnata, «sei ancora in cantiere?», «com'è andata oggi?»), **Conferme delle attività**, **Ore da approvare**, **Lavori extra e materiali non previsti**, **Materiali da prendere**, **Costi e budget**, **Aggiornamenti ai clienti**, **Condivisioni e inviti** (anche i task assegnati a te), **News del mattino**, **Azioni programmate**.
+  - Spegnendone una non ti arriva più, né nell'app né su Telegram. Gli avvisi importanti di sistema (per esempio un problema a salvare i file sull'archivio) arrivano sempre.
+  - Se Telegram non è collegato, puoi scegliere solo **App**.
+- **iPhone**: le notifiche dell'app arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home), con iOS 16.4 o successivo. Aprila **dall'icona**, accendi l'interruttore e tocca **Consenti**. Se non arrivano, sull'iPhone apri **Impostazioni → Notifiche → mAIPAL** e accendi «Consenti notifiche».
   Ogni volta che apri l'app, il dispositivo ricomunica la sua iscrizione alle notifiche: se l'iPhone l'ha rinnovata, le notifiche ripartono senza riattivarle.
-- **Non arriva una notifica?** In Impostazioni → Notifiche, sotto **Ultima notifica**, vedi l'ultima mandata e com'è andata: a quanti dispositivi è arrivata, "nessun dispositivo con le notifiche attive" (attivale su quel dispositivo), un dispositivo non più iscritto (riattivale lì) o l'errore del servizio di notifiche. Se risulta arrivata ma non la vedi, controlla che le notifiche di mAIPAL (o del browser) siano permesse nelle impostazioni del telefono e che non sia attiva la modalità Non disturbare / Full immersion.
 - Se le hai bloccate per errore, riattivale dalle impostazioni del browser o del telefono.
-- Telegram, se collegato, continua a ricevere i suoi avvisi come prima.
 
 ## Organizzazione
 <!-- id: organizzazione · verticale: tutti -->

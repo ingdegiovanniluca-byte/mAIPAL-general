@@ -311,7 +311,7 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         if log.get("problems"):
             who = _collab_name(rec) + (f" ({rec['company']})" if rec.get("company") else "")
             await _notify_owner(owner, f"⚠️ {who} segnala su «{view['title']}» — {view['client_name']}:\n"
-                                       + "\n".join(f"• {p}" for p in log["problems"]))
+                                       + "\n".join(f"• {p}" for p in log["problems"]), kind="problems")
         return
     if res["status"] == "question":
         from server import _collab_level

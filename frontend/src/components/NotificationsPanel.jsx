@@ -1,41 +1,33 @@
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Bell, BellOff, Loader2, NotebookPen, AlarmClock } from "lucide-react";
 import { api } from "@/lib/api";
 import { pushSupported, currentPushSubscription, enablePush, disablePush, isIos, isStandalone, pushKeyMatches } from "@/lib/pwa";
+import IosSwitch from "@/components/IosSwitch";
 
-/* Impostazioni > Notifiche: the app's notifications on THIS device, also with mAIPAL closed.
-   Only two kinds: what external collaborators write in a commessa's diary, and the tasks'
-   reminders. Each device (phone, computer) is turned on by itself. */
+/* Impostazioni > Notifiche: first the app's notifications on THIS device (a switch: each device by
+   itself), then the list of what mAIPAL can send - each kind with its switch and where it goes:
+   in the app, on Telegram or both. */
+const CHANNELS = [["app", "App"], ["telegram", "Telegram"], ["both", "Entrambi"]];
+
 export default function NotificationsPanel() {
   const [state, setState] = useState("checking");   // checking | unsupported | ios_home | denied | off | on
   const [busy, setBusy] = useState(false);
-  const [last, setLast] = useState(null);   // the last notification sent to this account
-  const [stale, setStale] = useState(false);  // this device subscribed with an old key: nothing would arrive
-  const keyRef = useRef(null);                // the server's public key, read before the tap (iPhone: see enablePush)
-  const [diag, setDiag] = useState(null);     // what this device says (and the server): when nothing arrives, where it stops
+  const keyRef = useRef(null);                       // the server's public key, read before the tap (iPhone: see enablePush)
+  const [kinds, setKinds] = useState(null);
+  const [tgLinked, setTgLinked] = useState(false);
 
-  // this device's state + the last notification sent (shown whatever the state: it says why one didn't arrive)
-  const status = async (endpoint) => {
-    try {
-      const r = (await api.post("/push/status", { endpoint: endpoint || "" })).data;
-      setLast(r.last || null);
-      setDiag(await deviceCheck(r));
-      return r;
-    } catch { return null; }
-  };
   const check = async () => {
-    if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); status(); return; }
-    if (Notification.permission === "denied") { setState("denied"); status(); return; }
+    if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); return; }
+    if (Notification.permission === "denied") { setState("denied"); return; }
     try { keyRef.current = (await api.get("/push/key")).data.public_key; } catch { /* read again on the tap */ }
     const sub = await currentPushSubscription();
-    let old = false;
-    if (sub && keyRef.current) old = pushKeyMatches(sub, keyRef.current) === false;
-    setStale(old);
-    const r = await status(sub?.endpoint);
-    setState(sub && r?.subscribed && !old ? "on" : "off");
+    const old = !!(sub && keyRef.current && pushKeyMatches(sub, keyRef.current) === false);
+    let on = false;
+    try { on = !!(sub && (await api.post("/push/status", { endpoint: sub.endpoint })).data.subscribed); } catch { /* off */ }
+    setState(on && !old ? "on" : "off");
   };
-  useEffect(() => { check(); }, []);
+  const loadKinds = () => api.get("/notify/prefs").then((r) => { setKinds(r.data.kinds); setTgLinked(!!r.data.telegram_linked); }).catch(() => setKinds([]));
+  useEffect(() => { check(); loadKinds(); }, []);
 
   const turnOn = async () => {
     setBusy(true);
@@ -44,12 +36,9 @@ export default function NotificationsPanel() {
       const sub = await enablePush(key);
       await api.post("/push/subscribe", { subscription: sub.toJSON() });
       setState("on");
-      setStale(false);
-      status(sub.endpoint);
-      toast.success("Notifiche attive su questo dispositivo");
     } catch (e) {
       if (e.message === "denied") setState("denied");
-      else if (e.message === "dismissed") toast("Notifiche non attivate: tocca di nuovo «Attiva» e scegli «Consenti».");
+      else if (e.message === "dismissed") toast("Notifiche non attivate: riprova e scegli «Consenti».");
       else toast.error(e.response?.data?.detail || `Non sono riuscito ad attivare le notifiche${isIos() ? " (iPhone: serve iOS 16.4 o successivo, con mAIPAL aperta dalla schermata Home)" : ""}`);
     } finally { setBusy(false); }
   };
@@ -59,126 +48,75 @@ export default function NotificationsPanel() {
       const endpoint = await disablePush();
       if (endpoint) await api.post("/push/unsubscribe", { endpoint });
       setState("off");
-      toast.success("Notifiche spente su questo dispositivo");
     } catch { toast.error("Errore"); } finally { setBusy(false); }
   };
   const test = async () => {
-    setBusy(true);
-    try { await api.post("/push/test"); toast.success(isIos() ? "Notifica di prova inviata: se non arriva, su iPhone apri Impostazioni → Notifiche → mAIPAL e attiva «Consenti notifiche» (e controlla che la modalità Full immersion non le blocchi)" : "Notifica di prova inviata: se non la vedi, controlla le notifiche di mAIPAL nelle impostazioni del telefono"); }
-    catch (e) { toast.error(e.response?.data?.detail || "Errore"); } finally { setBusy(false); await check(); }
+    try { await api.post("/push/test"); toast.success("Notifica di prova inviata"); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
+  const setKind = async (key, body) => {
+    const prev = kinds;
+    setKinds((ks) => ks.map((k) => (k.key === key ? { ...k, ...body } : k)));
+    try { await api.put(`/notify/prefs/${key}`, body); }
+    catch { setKinds(prev); toast.error("Non sono riuscito a salvarlo"); }
+  };
+
+  const deviceNote = {
+    ios_home: "Su iPhone le notifiche arrivano solo dall'app sulla schermata Home: in Safari tocca Condividi → Aggiungi alla schermata Home e apri mAIPAL da lì.",
+    unsupported: "Questo browser non riceve notifiche: prova con Chrome, Edge o Firefox, oppure dall'app installata.",
+    denied: "Le notifiche di mAIPAL sono bloccate su questo dispositivo: riattivale dalle impostazioni del telefono o del browser.",
+  }[state];
 
   return (
     <div data-testid="notifications-panel">
-      <div className="space-y-2.5 mb-4">
-        <div className="flex items-start gap-3 text-sm text-white/85"><NotebookPen size={16} className="shrink-0 mt-0.5" /> Le voci scritte dai collaboratori nel diario delle commesse</div>
-        <div className="flex items-start gap-3 text-sm text-white/85"><AlarmClock size={16} className="shrink-0 mt-0.5" /> I promemoria dei task</div>
+      {/* this device */}
+      <div className="flex items-center gap-3 py-1">
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] text-white">Notifiche su questo dispositivo</div>
+          <div className="text-[12px] text-white/55">Anche con l'app chiusa. Ogni dispositivo si attiva da sé.</div>
+        </div>
+        {state === "checking" ? <span className="text-[12px] text-white/50">…</span> : (
+          <IosSwitch checked={state === "on"} disabled={busy || !!deviceNote} onChange={(v) => (v ? turnOn() : turnOff())}
+            label="Notifiche su questo dispositivo" testid="push-switch" />
+        )}
       </div>
-      {state === "checking" && <div className="kicker">controllo…</div>}
-      {state === "ios_home" && (
-        <p className="text-sm text-white/70" data-testid="push-ios-home">
-          Su iPhone le notifiche arrivano solo dall'app sulla schermata Home: in Safari tocca Condividi → <b>Aggiungi alla schermata Home</b>, apri mAIPAL da lì e torna qui.
-        </p>
-      )}
-      {state === "unsupported" && <p className="text-sm text-white/70">Questo browser non riceve notifiche dalle app web. Prova con Chrome, Edge o Firefox, oppure dall'app installata.</p>}
-      {state === "denied" && (
-        <p className="text-sm text-white/70" data-testid="push-denied">
-          Le notifiche di mAIPAL sono bloccate su questo dispositivo: riattivale dalle impostazioni del browser (icona del lucchetto accanto all'indirizzo) o del telefono, poi torna qui.
-        </p>
-      )}
-      {state === "off" && stale && (
-        <p className="text-sm text-amber-300 mb-3" data-testid="push-stale">Su questo dispositivo le notifiche erano attivate con una chiave che non vale più: riattivale.</p>
-      )}
-      {state === "off" && isIos() && (
-        <p className="text-xs text-white/60 mb-3" data-testid="push-ios-hint">Su iPhone: tocca «Attiva» e poi «Consenti». Serve iOS 16.4 o successivo e mAIPAL aperta dall'icona sulla schermata Home.</p>
-      )}
-      {state === "off" && (
-        <button onClick={turnOn} disabled={busy} data-testid="push-enable" className="pill-btn inline-flex items-center gap-2 disabled:opacity-60">
-          {busy ? <Loader2 size={15} className="animate-spin" /> : <Bell size={15} />} Attiva su questo dispositivo
-        </button>
-      )}
+      {deviceNote && <p className="mt-1 text-[12px] text-white/65" data-testid={`push-${state}`}>{deviceNote}</p>}
       {state === "on" && (
-        <div>
-          <div className="text-sm text-white flex items-center gap-2 mb-3" data-testid="push-on"><Bell size={15} /> Attive su questo dispositivo</div>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={test} disabled={busy} data-testid="push-test" className="px-4 py-2 rounded-full text-sm bg-white/15 text-white disabled:opacity-60">Manda una prova</button>
-            <button onClick={turnOff} disabled={busy} data-testid="push-disable" className="px-4 py-2 rounded-full text-sm text-white/80 hover:bg-white/10 inline-flex items-center gap-1.5 disabled:opacity-60">
-              <BellOff size={14} /> Disattiva
-            </button>
-          </div>
+        <button type="button" onClick={test} className="mt-1 text-[12px] text-white/70 underline underline-offset-2" data-testid="push-test">Manda una prova</button>
+      )}
+
+      {/* what mAIPAL can send, and where */}
+      <div className="mt-6 text-[12px] font-semibold uppercase tracking-[0.12em] text-white/60">Cosa ti mando</div>
+      {!kinds ? <div className="py-3 text-[12px] text-white/50">…</div> : (
+        <div className="mt-1" data-testid="notify-kinds">
+          {kinds.map((k) => (
+            <div key={k.key} className="py-3 border-b border-white/[0.1] last:border-0" data-testid={`notify-${k.key}`}>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[15px] text-white">{k.label}</div>
+                  <div className="text-[12px] leading-[16px] text-white/55">{k.help}</div>
+                </div>
+                <IosSwitch checked={k.on} onChange={(v) => setKind(k.key, { on: v })} label={k.label} testid={`notify-${k.key}-switch`} />
+              </div>
+              {k.on && (
+                <div className="mt-2 inline-flex rounded-full bg-white/[0.12] p-[3px]" role="radiogroup" aria-label={`Dove: ${k.label}`}>
+                  {CHANNELS.map(([c, label]) => {
+                    const off = c !== "app" && !tgLinked;
+                    return (
+                      <button key={c} type="button" role="radio" aria-checked={k.channel === c} disabled={off}
+                        title={off ? "Collega Telegram in Impostazioni per riceverle lì" : undefined}
+                        onClick={() => setKind(k.key, { channel: c })} data-testid={`notify-${k.key}-${c}`}
+                        className={`px-3 py-1 rounded-full text-[12px] transition-colors disabled:opacity-35 ${k.channel === c ? "bg-white text-[#403A3C] font-semibold" : "text-white/80"}`}>
+                        {label}</button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
-      {last && <LastSending last={last} />}
-      {diag && <DeviceCheck diag={diag} />}
-      <p className="text-xs text-white/50 mt-4">Ogni dispositivo si attiva per conto suo. Telegram, se collegato, continua a ricevere i suoi avvisi come prima.</p>
-    </div>
-  );
-}
-
-/* what happened to the last notification: when one doesn't arrive, here is why */
-// this device, step by step: installed (iPhone), permission, service worker, subscription and its service, known to the server
-async function deviceCheck(server) {
-  const ua = navigator.userAgent;
-  const iosV = (ua.match(/OS (\d+)[_.](\d+)/) || []).slice(1, 3).join(".");
-  const out = { ios: isIos(), iosVersion: iosV, standalone: isStandalone(), supported: pushSupported(),
-    permission: typeof Notification !== "undefined" ? Notification.permission : "assente", sw: "assente", sub: null, server, ua };
-  try {
-    const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
-    out.sw = reg ? (reg.active ? "attivo" : "in attivazione") : "assente";
-    const sub = reg && reg.pushManager ? await reg.pushManager.getSubscription() : null;
-    out.sub = sub ? new URL(sub.endpoint).host : null;
-  } catch { /* the browser doesn't say */ }
-  return out;
-}
-const svc = (host) => (!host ? "" : host.includes("push.apple.com") ? "Apple" : host.includes("googleapis") ? "Google" : host.includes("mozilla") ? "Mozilla" : host);
-function DeviceCheck({ diag }) {
-  const ok = (b) => (b ? "✓" : "✗");
-  const rows = [
-    ...(diag.ios ? [[`iPhone/iPad con iOS ${diag.iosVersion || "?"}`, !diag.iosVersion || parseFloat(diag.iosVersion) >= 16.4, "serve iOS 16.4 o successivo"],
-                    ["App aperta dall'icona sulla schermata Home", diag.standalone, "aprila dall'icona, non da Safari"]] : []),
-    ["Il browser riceve notifiche", diag.supported, "questo browser non le riceve"],
-    [`Permesso: ${diag.permission === "granted" ? "consentito" : diag.permission === "denied" ? "bloccato" : "non chiesto"}`, diag.permission === "granted",
-      diag.permission === "denied" ? "riattivalo nelle impostazioni del telefono" : "tocca «Attiva su questo dispositivo»"],
-    [`Service worker ${diag.sw}`, diag.sw === "attivo", "chiudi e riapri l'app"],
-    [diag.sub ? `Iscritto al servizio ${svc(diag.sub)}` : "Non iscritto", !!diag.sub, "tocca «Attiva su questo dispositivo»"],
-    ["Registrato sul server", !!diag.server?.subscribed, "tocca «Disattiva» e poi di nuovo «Attiva»"],
-  ];
-  const text = ["Diagnosi notifiche mAIPAL", ...rows.map(([l, v, fix]) => `${ok(v)} ${l}${v ? "" : ` — ${fix}`}`),
-    `Dispositivi attivi: ${(diag.server?.device_list || []).map((d) => `${d.device} (${d.service})`).join(", ") || "nessuno"}`,
-    ...((diag.server?.last?.detail || []).map((d) => `Ultimo invio a ${d.device} (${d.service}): ${d.ok ? "consegnato ad Apple/Google" : d.error}`)),
-    `Browser: ${diag.ua}`].join("\n");
-  const copy = async () => { try { await navigator.clipboard.writeText(text); toast.success("Diagnosi copiata: incollala dove vuoi"); } catch { toast.error("Non riesco a copiarla"); } };
-  return (
-    <div className="mt-4 rounded-2xl bg-white/[0.06] px-3.5 py-3 text-xs" data-testid="push-diagnosis">
-      <div className="flex items-center mb-1.5">
-        <span className="flex-1 text-[10px] uppercase tracking-widest text-white/50">diagnosi di questo dispositivo</span>
-        <button type="button" onClick={copy} className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 text-white" data-testid="push-diagnosis-copy">Copia</button>
-      </div>
-      {rows.map(([l, v, fix], i) => (
-        <div key={i} className="flex gap-2 py-0.5"><span className={v ? "text-[#8ED973]" : "text-amber-300"}>{ok(v)}</span>
-          <span className="text-white/85">{l}{!v && <span className="text-amber-300/90"> — {fix}</span>}</span></div>
-      ))}
-      {(diag.server?.device_list || []).length > 0 && (
-        <div className="mt-1.5 text-white/65">Dispositivi attivi: {diag.server.device_list.map((d) => `${d.device} (${d.service})${d.this ? " ← questo" : ""}`).join(", ")}</div>
-      )}
-    </div>
-  );
-}
-
-function LastSending({ last }) {
-  const when = new Date(last.at).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  const outcome = !last.devices ? "non partita: nessun dispositivo con le notifiche attive"
-    : last.sent === last.devices ? `arrivata a ${last.sent === 1 ? "1 dispositivo" : `${last.sent} dispositivi`}`
-    : `arrivata a ${last.sent} di ${last.devices} dispositivi`;
-  return (
-    <div className="mt-4 rounded-2xl bg-white/[0.06] px-3.5 py-3 text-xs" data-testid="push-last">
-      <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1">ultima notifica · {when}</div>
-      <div className="text-white/85 break-words">{last.title}</div>
-      <div className={last.sent ? "text-white/60 mt-0.5" : "text-amber-300 mt-0.5"}>{outcome}</div>
-      {(last.detail || []).length > 0
-        ? last.detail.map((d, i) => <div key={i} className={`mt-0.5 break-words ${d.ok ? "text-white/60" : "text-amber-300/90"}`}>
-            {d.ok ? "✓" : "✗"} {d.device} ({d.service}): {d.ok ? "consegnata al servizio di notifiche" : d.error}</div>)
-        : (last.errors || []).map((e, i) => <div key={i} className="text-amber-300/90 mt-0.5 break-words">{e}</div>)}
+      {kinds && !tgLinked && <p className="mt-2 text-[12px] text-white/55">Telegram non è collegato: per ora arrivano solo nell'app.</p>}
     </div>
   );
 }

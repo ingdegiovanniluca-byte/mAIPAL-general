@@ -1,8 +1,8 @@
 """The app's own notifications (Web Push): they arrive on the phone or the computer also with
 mAIPAL closed, once the user turned them on for that device (Impostazioni > Notifiche).
 
-Only two kinds, by design: what an external collaborator writes in a commessa's diary, and the
-tasks' reminders. Each device is a subscription ({endpoint, keys}) of one user; a device that
+Which kinds arrive (and whether in the app, on Telegram or both) each user chooses in
+Impostazioni > Notifiche (notify_prefs). Each device is a subscription ({endpoint, keys}) of one user; a device that
 is gone (404/410 from the push service) is forgotten. The VAPID keys come from the environment
 (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY) or, the first time, are made and kept in the database.
 """
@@ -159,9 +159,14 @@ async def send_to_user(db, user_id: str, title: str, body: str, url: str = "/das
 _running: set = set()   # the tasks in flight: a task nobody refers to can be collected before it ends
 
 
-def fire_and_forget(db, user_id: str, title: str, body: str, url: str = "/dashboard", tag: Optional[str] = None) -> None:
+def fire_and_forget(db, user_id: str, title: str, body: str, url: str = "/dashboard", tag: Optional[str] = None,
+                    kind: Optional[str] = None) -> None:
+    """Sent in the background; with a kind, only if the user wants that kind in the app (notify_prefs)."""
     async def run():
         try:
+            import notify_prefs as nprefs
+            if not await nprefs.wants(db, user_id, kind, "app"):
+                return
             await send_to_user(db, user_id, title, body, url, tag)
         except Exception:
             logger.exception("web push failed")
