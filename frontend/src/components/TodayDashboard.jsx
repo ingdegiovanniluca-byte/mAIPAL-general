@@ -93,7 +93,7 @@ function Clock({ items, now }) {
         {/* the round ends start right at the start time */}
         <path d={round ? arc(x.a + cap, x.a + x.span - cap) : arc(x.a, x.a + x.span)} stroke={bg} strokeWidth={SW} fill="none" strokeLinecap={round ? "round" : "butt"} />
         {room >= x.time.length && <path id={id} d={arc(x.a + 1.5, x.a + x.span - 1.5)} fill="none" stroke="none" />}
-        {room >= x.time.length && <text fontSize="8.4" fontWeight="600" fill={fg} dominantBaseline="middle">
+        {room >= x.time.length && <text fontSize="8" fontWeight="600" fill={fg} dominantBaseline="middle">
           <textPath href={`#${id}`} startOffset="50%" textAnchor="middle">{chipLabel(x, room)}</textPath>
         </text>}
       </g>
@@ -114,7 +114,7 @@ function Clock({ items, now }) {
       })}
       <circle cx={CX} cy={CY} r="56" fill="rgba(255,255,255,0.16)" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
       {[0, 90, 180, 270].map((d) => { const [a, b] = polar(d, 53), [c, e] = polar(d, 48); return <line key={d} x1={a} y1={b} x2={c} y2={e} stroke="rgba(255,255,255,0.85)" strokeWidth="2" strokeLinecap="round" />; })}
-      {Array.from({ length: 12 }, (_, i) => { const [x, y] = polar((i || 12) * 30, 39); return <text key={i} x={x} y={y + 3.8} fontSize="10.5" fontWeight="500" fill="rgba(255,255,255,0.92)" textAnchor="middle">{i || 12}</text>; })}
+      {Array.from({ length: 12 }, (_, i) => { const [x, y] = polar((i || 12) * 30, 39); return <text key={i} x={x} y={y + 3.8} fontSize="10" fontWeight="500" fill="rgba(255,255,255,0.92)" textAnchor="middle">{i || 12}</text>; })}
       <line x1={CX} y1={CY} x2={hx} y2={hy} stroke="#fff" strokeWidth="5" strokeLinecap="round" />
       <line x1={CX} y1={CY} x2={mx} y2={my} stroke="#DD772F" strokeWidth="2.5" strokeLinecap="round" />
       <circle cx={CX} cy={CY} r="4.5" fill="#fff" />
@@ -131,7 +131,7 @@ const Alert = ({ size = 15, label }) => (
 );
 
 const Kicker = ({ children }) => (
-  <div className="text-[11.5px] font-semibold tracking-[0.14em] uppercase text-white" style={{ textShadow: "0 1px 6px rgba(60,20,50,.35)" }}>{children}</div>
+  <div className="text-[11px] font-semibold tracking-[0.14em] uppercase text-white" style={{ textShadow: "0 1px 6px rgba(60,20,50,.35)" }}>{children}</div>
 );
 const box = "rounded-[26px] lg-glass";
 const fade = { WebkitMaskImage: "linear-gradient(180deg,#000 85%,transparent)", maskImage: "linear-gradient(180deg,#000 85%,transparent)" };
@@ -177,7 +177,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
         <button type="button" onClick={() => setSheet("clock")} className={`${box} p-3 pb-2 text-left flex flex-col`} data-testid="today-tasks">
           <Kicker>task di oggi</Kicker>
           <div className="mt-0.5 flex-1 min-h-0"><Clock items={d.clock} now={now} /></div>
-          <div className="flex justify-between text-[10.5px] text-white/75 mt-0.5">
+          <div className="flex justify-between text-[10px] text-white/75 mt-0.5">
             <span>{d.clock.length} oggi{done ? ` · ${done} ${done === 1 ? "fatto" : "fatti"}` : ""}</span>
             {d.clock.length - timed > 0 && <span>+{d.clock.length - timed} senza ora</span>}
           </div>
@@ -194,7 +194,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
                 <span className="block text-[10px] text-white/75 leading-tight truncate">{label}</span></span>
             </div>
           ))}
-          {on.paused > 0 && <div className="mt-auto pt-2 text-[10.5px] text-[#FFE3A1] flex items-center gap-1"><Pause size={10} fill="currentColor" /> {on.paused} in pausa</div>}
+          {on.paused > 0 && <div className="mt-auto pt-2 text-[10px] text-[#FFE3A1] flex items-center gap-1"><Pause size={10} fill="currentColor" /> {on.paused} in pausa</div>}
         </button>
       </div>
 
@@ -207,7 +207,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
           <span className="flex justify-center text-white"><AlertTriangle size={14} /></span>
         </div>
         <div className="overflow-y-auto overscroll-contain pb-2" style={{ ...fade, maxHeight: h && h < 560 ? 96 : 132 }}>
-          {d.commesse.length === 0 && <div className="py-3 text-[12.5px] text-white/70">Nessuna commessa prevista oggi e nessuno in cantiere.</div>}
+          {d.commesse.length === 0 && <div className="py-3 text-[12px] text-white/70">Nessuna commessa prevista oggi e nessuno in cantiere.</div>}
           {d.commesse.map((c) => (
             <button key={c.id} type="button" onClick={() => onOpenCommessa(c.id)} data-testid="today-commessa"
               className="w-full grid grid-cols-[14px_1fr_40px_22px] gap-2 items-center py-[7px] border-b border-white/[0.14] last:border-0 text-left active:opacity-70">
@@ -229,7 +229,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
       <div className={`${box} px-3.5 pt-3 flex-1 min-h-[96px] flex flex-col`} data-testid="today-notes">
         <Kicker>note di oggi</Kicker>
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-4 mt-1" style={fade}>
-          {empty && <div className="py-2 text-[11.5px] text-white/70">Niente di previsto oggi.</div>}
+          {empty && <div className="py-2 text-[11px] text-white/70">Niente di previsto oggi.</div>}
           {n.activities.length > 0 && <Part title="Attività previste">
             {n.activities.map((a, i) => (
               <div key={i} className={a.done ? "opacity-60" : ""}><b className="font-semibold">{a.commessa}</b> — {a.time ? `${a.time} ` : ""}{a.text}
@@ -260,7 +260,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
               <span className="w-12 text-[13px] tabular-nums text-white/80">{x.time || "—"}</span>
               <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: (CHIP[x.kind === "task" && x.main ? "main" : x.kind] || CHIP.task)[0] }} />
               <span className={`flex-1 min-w-0 text-[14px] text-white ${x.done ? "line-through opacity-60" : ""}`}>{x.title}
-                {x.commessa && <span className="block text-[11.5px] text-white/60">{x.label} · {x.commessa}</span>}</span>
+                {x.commessa && <span className="block text-[11px] text-white/60">{x.label} · {x.commessa}</span>}</span>
               {x.done && <Check size={15} className="text-[#8ED973]" />}
             </button>
           ))}
@@ -274,7 +274,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
               <span className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center" style={{ background: p.employee ? "#8FD3F4" : "#F2C14E", color: "#2b2430" }}>
                 {p.employee ? <User size={13} /> : <HardHat size={13} />}</span>
               <span className="flex-1 min-w-0"><span className="block text-[14px] text-white truncate">{p.name}{p.company ? <span className="text-white/55"> · {p.company}</span> : ""}</span>
-                <span className="block text-[11.5px] text-white/60 truncate">{p.client} · {p.commessa} · dalle {hhmm(p.since)}{p.paused_at ? ` · in pausa dalle ${hhmm(p.paused_at)}` : ""}</span></span>
+                <span className="block text-[11px] text-white/60 truncate">{p.client} · {p.commessa} · dalle {hhmm(p.since)}{p.paused_at ? ` · in pausa dalle ${hhmm(p.paused_at)}` : ""}</span></span>
             </button>
           ))}
         </GlassBottomSheet>
@@ -286,9 +286,9 @@ export default function TodayDashboard({ onOpenCommessa }) {
 function Part({ title, children }) {
   return (
     <div className="mt-2.5">
-      <div className="flex items-center gap-2 text-[12.5px] font-semibold text-white">
+      <div className="flex items-center gap-2 text-[12px] font-semibold text-white">
         <span className="h-[7px] w-[7px] rounded-full bg-white/80 shrink-0" />{title}</div>
-      <div className="pl-[15px] mt-1 space-y-1 text-[11.5px] leading-snug text-white/90">{children}</div>
+      <div className="pl-[15px] mt-1 space-y-1 text-[11px] leading-snug text-white/90">{children}</div>
     </div>
   );
 }
