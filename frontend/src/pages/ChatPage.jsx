@@ -2863,9 +2863,16 @@ export default function ChatPage() {
                   <div>
                     <div className="kicker mb-1"></div>
                     {thread.liveHelp && <HelpTag />}
-                    <div className="prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white">
-                      {thread.liveAnswer}<span className="animate-pulse">▊</span>
-                    </div>
+                    {thread.liveAnswer ? (
+                      <div className="prose-answer whitespace-pre-wrap text-[15px] px-4 py-2 text-white">
+                        {thread.liveAnswer} <span className="typing-dots small text-white/80" aria-hidden><i /><i /><i /></span>
+                      </div>
+                    ) : (
+                      // still working on it: the three dots, in a small bubble
+                      <div className="inline-flex px-4 py-3 rounded-[18px] bg-white/[0.14] text-white" data-testid="chat-typing" role="status" aria-label="Sta scrivendo">
+                        <span className="typing-dots" aria-hidden><i /><i /><i /></span>
+                      </div>
+                    )}
                   </div>
                 )}
                 <div ref={threadEndRef} />
