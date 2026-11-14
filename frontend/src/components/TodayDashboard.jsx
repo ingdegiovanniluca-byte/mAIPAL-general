@@ -115,8 +115,8 @@ function Clock({ items, now }) {
       <circle cx={CX} cy={CY} r="56" fill="rgba(255,255,255,0.16)" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
       {[0, 90, 180, 270].map((d) => { const [a, b] = polar(d, 53), [c, e] = polar(d, 48); return <line key={d} x1={a} y1={b} x2={c} y2={e} stroke="rgba(255,255,255,0.85)" strokeWidth="2" strokeLinecap="round" />; })}
       {Array.from({ length: 12 }, (_, i) => { const [x, y] = polar((i || 12) * 30, 39); return <text key={i} x={x} y={y + 3.8} fontSize="10.5" fontWeight="500" fill="rgba(255,255,255,0.92)" textAnchor="middle">{i || 12}</text>; })}
-      <line x1={CX} y1={CY} x2={hx} y2={hy} stroke="#DD772F" strokeWidth="5" strokeLinecap="round" />
-      <line x1={CX} y1={CY} x2={mx} y2={my} stroke="#fff" strokeWidth="3.5" strokeLinecap="round" />
+      <line x1={CX} y1={CY} x2={hx} y2={hy} stroke="#fff" strokeWidth="5" strokeLinecap="round" />
+      <line x1={CX} y1={CY} x2={mx} y2={my} stroke="#DD772F" strokeWidth="2.5" strokeLinecap="round" />
       <circle cx={CX} cy={CY} r="4.5" fill="#fff" />
     </svg>
   );
