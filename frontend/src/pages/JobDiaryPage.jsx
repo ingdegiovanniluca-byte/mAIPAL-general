@@ -2632,6 +2632,24 @@ export default function JobDiaryPage() {
   const rangeTo = range.to || todayIso();
   const nEntries = shownLogs.filter((lg) => !lg.kind).length;
   const docs = detail?.docs || { total: 0 };
+  // Documenti: the commessa's folder on Drive / OneDrive (mAIPAL/Clienti/<cliente>/<commessa>), opened at
+  // once - the window is opened right on the tap (the phone blocks one opened after waiting) and then
+  // sent to the folder, made the first time if it isn't there yet
+  const [folderBusy, setFolderBusy] = useState(false);
+  const openFolder = async () => {
+    if (!c || folderBusy) return;
+    const win = window.open("", "_blank");
+    setFolderBusy(true);
+    try {
+      const r = await api.post(`/jobs/commesse/${c.id}/folder`);
+      const link = Object.values(r.data.drive_folder?.links || {}).find(Boolean);
+      if (!link) throw new Error("no link");
+      if (win) win.location.href = link; else window.location.href = link;
+    } catch (e) {
+      if (win) win.close();
+      toast.error(e.response?.data?.detail || "Non riesco ad aprire la cartella della commessa: controlla Drive / OneDrive in Impostazioni.");
+    } finally { setFolderBusy(false); }
+  };
   const applyCustom = () => {
     if (!customFrom || !customTo) { toast.error("Scegli le due date"); return; }
     setPeriod({ key: "custom", from: customFrom <= customTo ? customFrom : customTo, to: customFrom <= customTo ? customTo : customFrom });
@@ -2701,7 +2719,8 @@ export default function JobDiaryPage() {
           note={msSum.late ? `${msSum.late} in ritardo` : msSum.next ? `prossima ${shortDay(msSum.next.due_date)}` : ""} />
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
-        <InfoCard icon={FileText} label="Documenti" value={String(docs.total)} testid="glance-documenti" ariaLabel={`${docs.photos || 0} foto e ${docs.reports || 0} report`} />
+        <InfoCard icon={FileText} label="Documenti" value={folderBusy ? "apro…" : String(docs.total)} testid="glance-documenti" onClick={openFolder}
+          ariaLabel={`Apri la cartella della commessa su Drive (${docs.photos || 0} foto e ${docs.reports || 0} report)`} note="apri la cartella" />
         <InfoCard icon={Contact} label="Contatti" value={String((detail.contacts || []).length)} testid="glance-contatti"
           ariaLabel="Contatti utili della commessa" onClick={() => setContactsOpen(true)}
           note={(detail.contacts || []).slice(0, 2).map((x) => x.role || x.name).join(", ")} />
