@@ -115,7 +115,7 @@ function Clock({ items, now }) {
       <circle cx={CX} cy={CY} r="56" fill="rgba(255,255,255,0.16)" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
       {[0, 90, 180, 270].map((d) => { const [a, b] = polar(d, 53), [c, e] = polar(d, 48); return <line key={d} x1={a} y1={b} x2={c} y2={e} stroke="rgba(255,255,255,0.85)" strokeWidth="2" strokeLinecap="round" />; })}
       {Array.from({ length: 12 }, (_, i) => { const [x, y] = polar((i || 12) * 30, 39); return <text key={i} x={x} y={y + 3.8} fontSize="10.5" fontWeight="500" fill="rgba(255,255,255,0.92)" textAnchor="middle">{i || 12}</text>; })}
-      <line x1={CX} y1={CY} x2={hx} y2={hy} stroke="#fff" strokeWidth="5" strokeLinecap="round" />
+      <line x1={CX} y1={CY} x2={hx} y2={hy} stroke="#DD772F" strokeWidth="5" strokeLinecap="round" />
       <line x1={CX} y1={CY} x2={mx} y2={my} stroke="#fff" strokeWidth="3.5" strokeLinecap="round" />
       <circle cx={CX} cy={CY} r="4.5" fill="#fff" />
     </svg>
@@ -234,14 +234,14 @@ export default function TodayDashboard({ onOpenCommessa }) {
             ))}
           </Part>}
           {n.materials.length > 0 && <Part title="Materiali da prendere">
-            {n.materials.map((m, i) => <div key={i}>{m.text}<span className="text-white/65">{[m.who, m.commessa && `per ${m.commessa}`].filter(Boolean).length ? ` — ${[m.who, m.commessa && `per ${m.commessa}`].filter(Boolean).join(", ")}` : ""}{m.late ? " · in ritardo" : ""}</span></div>)}
+            {n.materials.map((m, i) => <div key={i}>{m.text}<span className="text-white/65">{[m.who, m.commessa && `per ${m.commessa}`].filter(Boolean).length ? ` — ${[m.who, m.commessa && `per ${m.commessa}`].filter(Boolean).join(", ")}` : ""}</span></div>)}
           </Part>}
           {n.news.length > 0 && <Part title="News principali">
             {n.news.map((x, i) => <div key={i}>{x.url ? <a href={x.url} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">{x.title}</a> : x.title}</div>)}
           </Part>}
           {n.tips.length > 0 && <Part title="Consigli">
             {n.tips.map((t, i) => (
-              <button key={i} type="button" onClick={() => t.commessa_id && onOpenCommessa(t.commessa_id)} className="block w-full text-left text-[#FFE3A1]">💡 {t.text}</button>
+              <button key={i} type="button" onClick={() => t.commessa_id && onOpenCommessa(t.commessa_id)} className="block w-full text-left text-white">💡 {t.text}</button>
             ))}
           </Part>}
         </div>

@@ -12495,12 +12495,11 @@ async def _today_dashboard(current: User, now_utc: Optional[datetime] = None) ->
         notes["activities"].append({"commessa_id": a["commessa_id"], "commessa": f"{v.get('client_name') or ''} · {v.get('title') or ''}".strip(" ·"),
                                     "time": a.get("start_time"), "end": a.get("end_time"), "text": a.get("description") or "",
                                     "who": [p.get("name") for p in a.get("assignees") or [] if p.get("name")], "done": a.get("status") == "svolta"})
-    # B) the materials to take (today's and the late ones)
-    for t in (await db.job_todos.find({"commessa_id": {"$in": ids}, "kind": "materiale", "done": False}, {"_id": 0}).to_list(1000) if ids else []):
-        if (t.get("due_date") or today) <= today:
-            v = views.get(t["commessa_id"]) or {}
-            notes["materials"].append({"text": re.sub(r"^Da prendere:\s*", "", t.get("text") or ""), "who": t.get("who") or "",
-                                       "commessa": v.get("client_name") or v.get("title") or "", "late": (t.get("due_date") or today) < today})
+    # B) the materials to take today (only today's: the ones of the past days stay in the To Do)
+    for t in (await db.job_todos.find({"commessa_id": {"$in": ids}, "kind": "materiale", "done": False, "due_date": today}, {"_id": 0}).to_list(1000) if ids else []):
+        v = views.get(t["commessa_id"]) or {}
+        notes["materials"].append({"text": re.sub(r"^Da prendere:\s*", "", t.get("text") or ""), "who": t.get("who") or "",
+                                   "commessa": v.get("client_name") or v.get("title") or ""})
     # C) the main news of today (the ones liked first)
     news = await db.news_items.find({"user_id": current.user_id, "date": today}, {"_id": 0, "title": 1, "url": 1, "feedback": 1, "created_at": 1}).to_list(50)
     news.sort(key=lambda n: (n.get("feedback") != "up", n.get("feedback") == "down", n.get("created_at") or ""))

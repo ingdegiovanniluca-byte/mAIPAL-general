@@ -165,7 +165,7 @@ La **Dashboard** è la tua giornata in uno schermo: la apri dal menu **+** in ba
   - Toccando una commessa si apre il suo diario e con ← si torna alla Dashboard. L'elenco completo di clienti e commesse è nella sezione **Diario**.
 - **Note di oggi**:
   - **Attività previste**, per commessa, con orario e persone;
-  - **Materiali da prendere** (anche quelli in ritardo);
+  - **Materiali da prendere** oggi (quelli dei giorni passati non fatti restano tra i **To Do**);
   - **News principali** di oggi (prima quelle con 👍, mai quelle con 👎);
   - **Consigli**, presi dai dati: un cantiere con problemi aperti entro 5 km da uno di oggi, un cantiere previsto senza nessuno, un problema risolto da poco di cui aggiornare il cliente, il meteo avverso sui cantieri di oggi. Toccando un consiglio si apre la commessa.
 - Si aggiorna da sola ogni 2 minuti.

@@ -333,6 +333,7 @@ async def main():
                              "problem_status": {"0": {"status": "risolta", "at": now.isoformat()}}})
     db.job_todos.docs.append({"id": "m1", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(),
                               "text": "Da prendere: 20 m corrugato, 10 scatole 503", "who": "Gino"})
+    db.job_todos.docs.append({"id": "m0", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": (today - timedelta(days=1)).isoformat(), "text": "Da prendere: ieri"})
     db.job_todos.docs.append({"id": "m2", "commessa_id": "s_all", "kind": "materiale", "done": False, "due_date": (today + timedelta(days=1)).isoformat(), "text": "Da prendere: sirena"})
     db.tasks.docs.append({"id": "t1", "user_id": "u1", "title": "Chiamare il fornitore", "due_date": today.isoformat(), "due_time": "10:30", "priority": "media", "duration_minutes": 45})
     db.tasks.docs.append({"id": "t2", "user_id": "u1", "title": "Fattura Rossi", "due_date": today.isoformat(), "due_time": None, "completed": True})
