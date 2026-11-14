@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 import os
+import base64
 import json
 import logging
 import re
@@ -3533,7 +3534,65 @@ async def update_todo(todo_id: str, payload: dict, current: User = Depends(get_c
 @api_router.delete("/todos/{todo_id}")
 async def delete_todo(todo_id: str, current: User = Depends(get_current_user)):
     await db.todos.delete_one({"id": todo_id, "user_id": current.user_id})
+    await db.todo_covers.delete_many({"todo_id": todo_id, "user_id": current.user_id})
     return {"ok": True}
+
+
+# ---- The photo of a to do (a trip, a room to paint...): shown in its coloured box. Kept apart from the
+# to do (the list of the to dos stays light); the app sends it already made smaller (a JPEG of ~1600 px).
+TODO_COVER_MAX = 3 * 1024 * 1024
+_IMAGE_MAGIC = {"image/jpeg": (b"\xff\xd8\xff",), "image/png": (b"\x89PNG\r\n\x1a\n",), "image/webp": (b"RIFF",)}
+
+
+class TodoCoverPayload(BaseModel):
+    image: str      # data:image/jpeg;base64,...
+
+
+def _cover_bytes(data_url: str) -> tuple:
+    """-> (mime, raw bytes) of a picture the app sent, or HTTPException: only a real JPEG / PNG / WebP,
+    not too big (what is uploaded is not trusted: the bytes must say they are that picture)."""
+    m = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)", (data_url or "").strip())
+    if not m:
+        raise HTTPException(status_code=400, detail="Carica una foto (JPEG, PNG o WebP)")
+    try:
+        raw = base64.b64decode(re.sub(r"\s", "", m.group(2)), validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Foto non leggibile")
+    if len(raw) > TODO_COVER_MAX:
+        raise HTTPException(status_code=413, detail="Foto troppo grande (al massimo 3 MB)")
+    mime = m.group(1)
+    if not raw.startswith(_IMAGE_MAGIC[mime]) or (mime == "image/webp" and raw[8:12] != b"WEBP"):
+        raise HTTPException(status_code=400, detail="Il file non è una foto valida")
+    return mime, raw
+
+
+@api_router.put("/todos/{todo_id}/cover")
+async def put_todo_cover(todo_id: str, payload: TodoCoverPayload, current: User = Depends(get_current_user)):
+    await _todo_of(current, todo_id)
+    mime, raw = _cover_bytes(payload.image)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.todo_covers.update_one({"todo_id": todo_id, "user_id": current.user_id},
+                                    {"$set": {"todo_id": todo_id, "user_id": current.user_id, "mime": mime,
+                                              "data": base64.b64encode(raw).decode(), "at": now}}, upsert=True)
+    await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": {"has_cover": True, "cover_v": now, "updated_at": now}})
+    return await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0, "embedding": 0})
+
+
+@api_router.get("/todos/{todo_id}/cover")
+async def get_todo_cover(todo_id: str, current: User = Depends(get_current_user)):
+    c = await db.todo_covers.find_one({"todo_id": todo_id, "user_id": current.user_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Nessuna foto")
+    return {"image": f"data:{c['mime']};base64,{c['data']}"}
+
+
+@api_router.delete("/todos/{todo_id}/cover")
+async def delete_todo_cover(todo_id: str, current: User = Depends(get_current_user)):
+    await _todo_of(current, todo_id)
+    await db.todo_covers.delete_many({"todo_id": todo_id, "user_id": current.user_id})
+    now = datetime.now(timezone.utc).isoformat()
+    await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": {"has_cover": False, "cover_v": None, "updated_at": now}})
+    return await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0, "embedding": 0})
 
 
 @api_router.post("/tasks/{task_id}/complete")

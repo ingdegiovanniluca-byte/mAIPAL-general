@@ -2,18 +2,20 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Reorder, motion, useDragControls, animate, useMotionValue, useTransform } from "framer-motion";
 import { ArrowLeft, Star, MoreHorizontal, Check, Plus, Trash2, CalendarDays, Bell, Sparkles,
-  ArrowUp, Loader2, X } from "lucide-react";
+  ArrowUp, Loader2, X, ChevronDown, ImagePlus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
-/* A to do, full screen, like a reminders list: the title, one grey line (how many steps are done,
-   the due date), then its STEPS - a circle and the text, one per line: the circle ticks it (filled,
+/* A to do, full screen: the title in the middle and one line under it (how many steps are done, the due
+   date); a coloured box with what it is about and, if wanted, a photo (a trip, a room...); then the rows,
+   what on the left and its content on the right: Avvio / Stato (the start date and the state), Note,
+   Passi. The STEPS are like a reminders list - a circle and the text, one per line: the circle ticks it (filled,
    in the warm colour of the logo, the done ones at the bottom), the last open line writes the next
    one (Enter, and the next right away), a long press picks a step up to move it, sliding it left
    shows date / delete, touching it rewrites it with main, due date, reminder and a line of note.
-   Everything else (suggest the steps, favourite, due date of the to do, done, delete) is in ⋯; the
-   notes under the list; the bar at the bottom is the to do's chat with mAIPAL. */
+   Everything else (suggest the steps, favourite, due date, done, remove the photo, delete) is in ⋯;
+   the bar at the bottom is the to do's chat with mAIPAL. */
 
 const MON = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const DOW = ["dom", "lun", "mar", "mer", "gio", "ven", "sab"];
@@ -24,6 +26,24 @@ const dayLabel = (iso, withDow = false) => {
   const dt = new Date(y, m - 1, d);
   return `${withDow ? `${DOW[dt.getDay()]} ` : ""}${d} ${MON[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ""}`;
 };
+const STATO = { da_fare: ["Da fare", "rgba(255,255,255,0.88)", "#5a2a48"], in_corso: ["In corso", "#007E9A", "#ffffff"], fatto: ["Fatto", "#FFAC33", "#3b2400"] };
+
+// a photo from the phone, made smaller before it is sent (a JPEG of at most 1600 px)
+async function shrinkPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = url; });
+    const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.82);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+const RowLabel = ({ title, sub }) => (
+  <div className="pt-1 min-w-0"><div className="text-[16px] text-white">{title}</div><div className="text-[13px] text-white/55 leading-tight">{sub}</div></div>
+);
 const ACTIONS_W = 148;   // the two buttons behind a step slid to the left
 
 const ACCENT = "#FFAC33";   // the warm drop of the mAIPAL logo: the done ones
@@ -143,6 +163,18 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
   const [hidden, setHidden] = useState([]);           // steps deleted, waiting for their "Annulla"
   const addRef = useRef(null);
   const dueRef = useRef(null);
+  const fileRef = useRef(null);
+  const [desc, setDesc] = useState(initial.description || "");
+  const [editDesc, setEditDesc] = useState(false);
+  const [cover, setCover] = useState(null);           // the photo (a data: URL), loaded apart
+  const [coverBusy, setCoverBusy] = useState(false);
+  useEffect(() => { if (!editDesc) setDesc(t.description || ""); }, [t.description]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!t.has_cover) { setCover(null); return; }
+    let alive = true;
+    api.get(`/todos/${t.id}/cover`).then((r) => alive && setCover(r.data.image)).catch(() => alive && setCover(null));
+    return () => { alive = false; };
+  }, [t.id, t.has_cover, t.cover_v]);
 
   const steps = (t.steps || []).filter((x) => !hidden.includes(x.id));
   // the main ones on top (in their order), then the others
@@ -219,6 +251,18 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
     setSuggest(null);
     if (texts.length) await call(() => api.post(`/todos/${t.id}/steps`, { texts }), `${texts.length} ${texts.length === 1 ? "passo aggiunto" : "passi aggiunti"}`);
   };
+  const pickCover = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setCoverBusy(true);
+    try {
+      const image = await shrinkPhoto(file);
+      await call(() => api.put(`/todos/${t.id}/cover`, { image }));
+    } catch { toast.error("Non riesco a leggere questa foto"); }
+    finally { setCoverBusy(false); }
+  };
+  const saveDesc = () => { setEditDesc(false); if (desc.trim() !== (t.description || "")) patchTodo({ description: desc.trim() }); };
   const send = async () => {
     if (!msg.trim()) return;
     setBusy(true);
@@ -234,9 +278,12 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
   const total = steps.length;
   const done = doneSteps.length;
   const late = t.due_date && t.status !== "fatto" && t.due_date < todayIso();
+  const start = t.start_date || (t.created_at || "").slice(0, 10) || todayIso();
+  const sub = [total > 0 && <span key="p" data-testid="todo-detail-progress">{done} di {total} passi fatti</span>,
+    t.due_date && <span key="d" className={late ? "text-[#FFB3A3]" : ""}>{late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " 🔔" : ""}</span>].filter(Boolean);
 
   return createPortal(
-    <div className="fixed inset-0 z-[65] overflow-y-auto overscroll-contain" data-testid="todo-detail" role="dialog" aria-label={t.title}
+    <motion.div layoutScroll className="fixed inset-0 z-[65] overflow-y-auto overscroll-contain" data-testid="todo-detail" role="dialog" aria-label={t.title}
       style={{ background: "linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%)" }}>
       <div className="mx-auto w-full max-w-[640px] px-5 pb-[130px]" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
         {/* top: back, and everything else in ⋯ */}
@@ -265,6 +312,10 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
                 )}
                 <button type="button" onClick={() => { setMenu(false); patchTodo({ status: t.status === "fatto" ? "da_fare" : "fatto" }); }} data-testid="todo-detail-done"
                   className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Check size={15} /> {t.status === "fatto" ? "Riapri il to do" : "Segna il to do come fatto"}</button>
+                {t.has_cover && (
+                  <button type="button" onClick={() => { setMenu(false); call(() => api.delete(`/todos/${t.id}/cover`)); }} data-testid="todo-cover-remove"
+                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><ImagePlus size={15} /> Togli la foto</button>
+                )}
                 <button type="button" onClick={del} data-testid="todo-detail-delete"
                   className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-[#FF9A85]"><Trash2 size={15} /> Elimina il to do</button>
               </div>
@@ -274,17 +325,14 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
         <input ref={dueRef} type="date" value={t.due_date || ""} onChange={(e) => e.target.value && patchTodo({ due_date: e.target.value })}
           className="absolute opacity-0 pointer-events-none w-0 h-0" tabIndex={-1} aria-hidden />
 
-        {/* the title and one line under it */}
+        {/* the title, in the middle, and one line under it */}
         <textarea value={title} onChange={(e) => setTitle(e.target.value)} rows={1} data-testid="todo-detail-title"
           onBlur={() => { if (title.trim() && title.trim() !== t.title) patchTodo({ title: title.trim() }); else setTitle(t.title); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
-          className="mt-4 w-full resize-none bg-transparent text-[28px] font-bold leading-tight text-white outline-none [field-sizing:content]" />
-        {(total > 0 || t.due_date || t.status === "fatto") && (
-          <div className="mt-0.5 text-[13px] text-white/65" data-testid="todo-detail-meta">
-            {[t.status === "fatto" && "fatto",
-              total > 0 && <span key="p" data-testid="todo-detail-progress">{done} di {total} fatti</span>,
-              t.due_date && <span key="d" className={late ? "text-[#FFB3A3]" : ""}>{late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " 🔔" : ""}</span>,
-            ].filter(Boolean).reduce((acc, x, k) => (k ? [...acc, " · ", x] : [x]), [])}
+          className="mt-2 w-full resize-none bg-transparent text-center text-[32px] font-bold leading-tight text-white outline-none [field-sizing:content]" />
+        {sub.length > 0 && (
+          <div className="text-center text-[15px] text-white/80" data-testid="todo-detail-meta">
+            {sub.reduce((acc, x, k) => (k ? [...acc, " · ", x] : [x]), [])}
           </div>
         )}
         {askDone && (
@@ -295,32 +343,73 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           </div>
         )}
 
-        {/* the steps, like a reminders list: the open ones, the line to add, the done ones */}
-        <div className="mt-5 rounded-[26px] lg-glass px-4 pt-1 pb-1">
-          <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div" data-testid="todo-steps">
-            {order.map((st) => (
-              <StepRow key={st.id} step={st} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
-                onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} onDragEnd={saveOrder} />
-            ))}
-          </Reorder.Group>
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={addStep} aria-label="Aggiungi il passo"
-              className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center border-2 border-dashed border-white/35 text-white/60"><Plus size={14} /></button>
-            <input ref={addRef} value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
-              placeholder={order.length || doneSteps.length ? "Aggiungi un passo" : "Scrivi il primo passo"} data-testid="todo-step-add" enterKeyHint="next"
-              className={`flex-1 min-w-0 bg-transparent py-[13px] text-[16px] text-white placeholder:text-white/50 outline-none ${doneSteps.length ? "border-b border-white/[0.12]" : ""}`} />
+        {/* the coloured box: what it is about, and a photo if there is one (a trip, a room...) */}
+        <div className="relative mt-5 rounded-[26px] overflow-hidden aspect-[16/10] shadow-[0_18px_40px_rgba(60,10,40,0.35)]" data-testid="todo-cover"
+          style={cover ? { background: "#3a2030" } : { background: "linear-gradient(135deg, #FF7E00 0%, #FF0061 55%, #B9006C 100%)" }}>
+          {cover && <img src={cover} alt="" className="absolute inset-0 h-full w-full object-cover" data-testid="todo-cover-img" />}
+          {cover && <div className="absolute inset-0" style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.08) 55%, rgba(0,0,0,0.18) 100%)" }} />}
+          <div className="absolute top-3 left-4 right-3 flex items-center justify-between">
+            <span className="text-[13px] font-semibold text-white/90">To Do</span>
+            <button type="button" onClick={() => fileRef.current?.click()} data-testid="todo-cover-pick"
+              className="text-[12px] px-3 py-1 rounded-full bg-black/25 text-white inline-flex items-center gap-1"><ImagePlus size={13} /> {cover ? "Cambia foto" : "Foto"}</button>
           </div>
-          {doneSteps.map((st, k) => (
-            <StepRow key={st.id} step={st} canDrag={false} last={k === doneSteps.length - 1} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
-              onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} />
-          ))}
+          {editDesc ? (
+            <textarea autoFocus value={desc} onChange={(e) => setDesc(e.target.value)} onBlur={saveDesc} data-testid="todo-desc-edit"
+              placeholder="Di cosa si tratta?" className="absolute inset-x-4 top-12 bottom-4 bg-black/10 rounded-2xl p-2 text-[18px] leading-snug font-semibold text-white placeholder:text-white/70 outline-none resize-none" />
+          ) : (
+            <button type="button" onClick={() => setEditDesc(true)} className="absolute inset-x-4 top-12 bottom-4 text-left flex items-end" data-testid="todo-desc">
+              <span className={`text-[18px] leading-snug font-semibold line-clamp-4 ${desc ? "text-white" : "text-white/75"}`}>{desc || "Tocca per scrivere di cosa si tratta"}</span>
+            </button>
+          )}
+          {coverBusy && <div className="absolute inset-0 bg-black/30 flex items-center justify-center text-white"><Loader2 size={22} className="animate-spin" /></div>}
         </div>
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickCover} data-testid="todo-cover-file" />
 
-        {/* notes */}
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== (t.notes || "") && patchTodo({ notes })}
-          placeholder="Note" rows={2} data-testid="todo-notes"
-          className="mt-5 w-full rounded-[22px] bg-white/10 px-4 py-3 text-[16px] leading-relaxed text-white/90 placeholder:text-white/45 outline-none resize-none [field-sizing:content] min-h-[56px]" />
-        {t.description && <div className="mt-3 text-[13px] text-white/60 whitespace-pre-wrap">{t.description}</div>}
+        {/* the rows: what on the left, its content on the right */}
+        <div className="mt-7 grid grid-cols-[84px_minmax(0,1fr)] gap-x-3 gap-y-6 items-start">
+          <RowLabel title="Avvio" sub="Stato" />
+          <div className="flex flex-wrap items-center gap-2" data-testid="todo-start">
+            <label className="relative rounded-full bg-white/[0.14] px-3 py-1.5 text-[14px] text-white inline-flex items-center gap-1.5 cursor-pointer">
+              <CalendarDays size={14} /> {dayLabel(start)}
+              <input type="date" value={start} onChange={(e) => e.target.value && patchTodo({ start_date: e.target.value })} data-testid="todo-start-date"
+                className="absolute inset-0 opacity-0 cursor-pointer" aria-label="Data di avvio" />
+            </label>
+            <label className="relative rounded-full px-3 py-1.5 text-[14px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+              style={{ background: STATO[t.status]?.[1] || STATO.da_fare[1], color: STATO[t.status]?.[2] || STATO.da_fare[2] }}>
+              {STATO[t.status]?.[0] || "Da fare"} <ChevronDown size={14} />
+              <select value={t.status || "da_fare"} onChange={(e) => patchTodo({ status: e.target.value })} data-testid="todo-status"
+                className="absolute inset-0 opacity-0 cursor-pointer" aria-label="Stato">
+                {Object.entries(STATO).map(([k, [label]]) => <option key={k} value={k}>{label}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <RowLabel title="Note" sub="si salvano da sole" />
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== (t.notes || "") && patchTodo({ notes })}
+            placeholder="Scrivi una nota…" rows={2} data-testid="todo-notes"
+            className="w-full rounded-[18px] bg-white/[0.12] px-3.5 py-3 text-[16px] leading-relaxed text-white placeholder:text-white/45 outline-none resize-none [field-sizing:content] min-h-[56px]" />
+
+          <RowLabel title="Passi" sub={total ? `${done} di ${total} fatti` : "da fare"} />
+          <div className="rounded-[18px] bg-white/[0.12] px-3 min-w-0">
+            <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div" data-testid="todo-steps">
+              {order.map((st) => (
+                <StepRow key={st.id} step={st} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
+                  onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} onDragEnd={saveOrder} />
+              ))}
+            </Reorder.Group>
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={addStep} aria-label="Aggiungi il passo"
+                className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center border-2 border-dashed border-white/35 text-white/60"><Plus size={14} /></button>
+              <input ref={addRef} value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
+                placeholder={order.length || doneSteps.length ? "Aggiungi un passo" : "Scrivi il primo passo"} data-testid="todo-step-add" enterKeyHint="next"
+                className={`flex-1 min-w-0 bg-transparent py-[13px] text-[16px] text-white placeholder:text-white/50 outline-none ${doneSteps.length ? "border-b border-white/[0.12]" : ""}`} />
+            </div>
+            {doneSteps.map((st, k) => (
+              <StepRow key={st.id} step={st} canDrag={false} last={k === doneSteps.length - 1} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
+                onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} />
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* the chat with mAIPAL */}
@@ -363,7 +452,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           )}
         </GlassBottomSheet>
       )}
-    </div>,
+    </motion.div>,
     document.body,
   );
 }
