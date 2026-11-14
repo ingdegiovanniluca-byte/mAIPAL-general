@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Reorder, motion, useDragControls, animate, useMotionValue, useTransform } from "framer-motion";
-import { ArrowLeft, Star, MoreHorizontal, Check, Plus, Trash2, CalendarDays, Bell, Sparkles,
-  ArrowUp, Loader2, X, ChevronDown, ImagePlus } from "lucide-react";
+import { ArrowLeft, MoreHorizontal, Check, Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -14,8 +13,7 @@ import GlassBottomSheet from "@/components/GlassBottomSheet";
    in the warm colour of the logo, the done ones at the bottom), the last open line writes the next
    one (Enter, and the next right away), a long press picks a step up to move it, sliding it left
    shows date / delete, touching it rewrites it with main, due date, reminder and a line of note.
-   Everything else (suggest the steps, favourite, due date, done, remove the photo, delete) is in ⋯;
-   the bar at the bottom is the to do's chat with mAIPAL. */
+   Everything else (suggest the steps, favourite, due date, done, remove the photo, delete) is in ⋯. */
 
 const MON = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const DOW = ["dom", "lun", "mar", "mer", "gio", "ven", "sab"];
@@ -88,9 +86,9 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
       {/* behind: the date and delete, shown by sliding the step left */}
       <motion.div className="absolute inset-y-0 right-0 flex" style={{ opacity: behind }}>
         <button type="button" onClick={() => { close(); pickDate(); }} className="w-[74px] bg-white/[0.18] text-white text-[12px] font-medium flex items-center justify-center gap-1">
-          <CalendarDays size={12} /> Data</button>
+          Data</button>
         <button type="button" onClick={() => { close(); onDelete(); }} data-testid="step-delete-swipe"
-          className="w-[74px] bg-[#E8663F] text-white text-[12px] font-medium flex items-center justify-center gap-1"><Trash2 size={12} /> Elimina</button>
+          className="w-[74px] bg-[#E8663F] text-white text-[12px] font-medium flex items-center justify-center gap-1">Elimina</button>
       </motion.div>
       <motion.div drag={open || lifted ? false : "x"} dragDirectionLock dragConstraints={{ left: -ACTIONS_W, right: 0 }} dragElastic={0.05}
         onDragEnd={(_e, info) => animate(x, info.offset.x < -60 ? -ACTIONS_W : 0, { type: "spring", stiffness: 500, damping: 40 })}
@@ -102,7 +100,7 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
           <span className={`block text-[14px] leading-[20px] break-words ${step.done ? "text-white/55" : step.main ? "font-semibold text-white" : "text-white"}`}>{step.text}</span>
           {(step.due_date || step.note) && !open && !step.done && (
             <span className="block text-[12px] mt-0.5">
-              {step.due_date && <span className={late ? "text-[#FFB3A3]" : "text-white/55"}>{late ? "scaduto " : "entro "}{dayLabel(step.due_date, true)}{step.reminder ? " · 🔔" : ""}</span>}
+              {step.due_date && <span className={late ? "text-[#FFB3A3]" : "text-white/55"}>{late ? "scaduto " : "entro "}{dayLabel(step.due_date, true)}{step.reminder ? " · promemoria" : ""}</span>}
               {step.note && <span className="text-white/55">{step.due_date ? " · " : ""}{step.note}</span>}
             </span>
           )}
@@ -116,20 +114,20 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
             data-testid="step-edit-text" className="w-full bg-transparent text-[16px] text-white outline-none border-b-[1px] border-white/55 pb-1.5" />
           <div className="flex flex-wrap gap-1.5 mt-2.5">
             <button type="button" onClick={() => onPatch({ main: !step.main })} data-testid="step-edit-main"
-              className={`text-[12px] px-3 py-1 rounded-full ${step.main ? "bg-[#FFAC33] text-[#3b2400] font-semibold" : "bg-white/[0.12] text-white"}`}>★ Principale</button>
+              className={`text-[12px] px-3 py-1 rounded-full ${step.main ? "bg-[#FFAC33] text-[#3b2400] font-semibold" : "bg-white/[0.12] text-white"}`}>Principale</button>
             <label className="relative text-[12px] px-3 py-1 rounded-full bg-white/[0.12] text-white inline-flex items-center gap-1 cursor-pointer">
-              <CalendarDays size={12} /> {step.due_date ? `Entro ${dayLabel(step.due_date, true)}` : "Scadenza"}
+              {step.due_date ? `Entro ${dayLabel(step.due_date, true)}` : "Scadenza"}
               <input type="date" value={step.due_date || ""} onChange={(e) => onPatch({ due_date: e.target.value || "" })} data-testid="step-edit-date"
                 className="absolute inset-0 opacity-0 cursor-pointer" />
             </label>
             {step.due_date && (
-              <button type="button" onClick={() => onPatch({ due_date: "" })} className="text-[12px] px-2 py-1 rounded-full bg-white/[0.06] text-white/70" aria-label="Togli la scadenza"><X size={12} /></button>
+              <button type="button" onClick={() => onPatch({ due_date: "" })} className="text-[12px] px-2 py-1 rounded-full bg-white/[0.06] text-white/70" aria-label="Togli la scadenza">Togli</button>
             )}
             <button type="button" disabled={!step.due_date} onClick={() => onPatch({ reminder: !step.reminder })} data-testid="step-edit-reminder"
               title={step.due_date ? "Ti scrivo su Telegram il giorno della scadenza" : "Prima metti una scadenza"}
               className={`text-[12px] px-3 py-1 rounded-full inline-flex items-center gap-1 disabled:opacity-40 ${step.reminder ? "bg-white text-[#403A3C] font-semibold" : "bg-white/[0.12] text-white"}`}>
-              <Bell size={12} /> Promemoria</button>
-            <button type="button" onClick={onDelete} className="text-[12px] px-3 py-1 rounded-full bg-white/[0.12] text-white" aria-label="Elimina il passo" data-testid="step-edit-delete"><Trash2 size={12} /></button>
+              Promemoria</button>
+            <button type="button" onClick={onDelete} className="text-[12px] px-3 py-1 rounded-full bg-white/[0.12] text-white" data-testid="step-edit-delete">Elimina</button>
           </div>
           <input value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => note !== (step.note || "") && onPatch({ note })}
             placeholder="Una riga di nota (facoltativa)" data-testid="step-edit-note"
@@ -158,8 +156,6 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
   const [menu, setMenu] = useState(false);
   const [askDone, setAskDone] = useState(false);
   const [suggest, setSuggest] = useState(null);       // {loading} | {steps, picked}
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
   const [hidden, setHidden] = useState([]);           // steps deleted, waiting for their "Annulla"
   const addRef = useRef(null);
   const dueRef = useRef(null);
@@ -264,29 +260,18 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
     finally { setCoverBusy(false); }
   };
   const saveDesc = () => { setEditDesc(false); if (desc.trim() !== (t.description || "")) patchTodo({ description: desc.trim() }); };
-  const send = async () => {
-    if (!msg.trim()) return;
-    setBusy(true);
-    try {
-      const r = await api.post(`/todos/${t.id}/chat`, { message: msg.trim() });
-      setMsg("");
-      if (r.data.todo) apply(r.data.todo);
-      if (r.data.answer) toast.success(r.data.answer.slice(0, 160));
-    } catch { toast.error("Errore"); }
-    finally { setBusy(false); }
-  };
 
   const total = steps.length;
   const done = doneSteps.length;
   const late = t.due_date && t.status !== "fatto" && t.due_date < todayIso();
   const start = t.start_date || (t.created_at || "").slice(0, 10) || todayIso();
   const sub = [total > 0 && <span key="p" data-testid="todo-detail-progress">{done} di {total} passi fatti</span>,
-    t.due_date && <span key="d" className={late ? "text-[#FFB3A3]" : ""}>{late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " 🔔" : ""}</span>].filter(Boolean);
+    t.due_date && <span key="d" className={late ? "text-[#FFB3A3]" : ""}>{late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " · promemoria" : ""}</span>].filter(Boolean);
 
   return createPortal(
     <motion.div layoutScroll className="fixed inset-0 z-[65] overflow-y-auto overscroll-contain" data-testid="todo-detail" role="dialog" aria-label={t.title}
       style={{ fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif", background: "linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%)" }}>
-      <div className="mx-auto w-full max-w-[640px] px-5 pb-[130px]" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
+      <div className="mx-auto w-full max-w-[640px] px-5 pb-12" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
         {/* top: back, and everything else in ⋯ */}
         <div className="flex items-center gap-2.5 pt-2">
           <button type="button" onClick={onClose} aria-label="Indietro" data-testid="todo-back"
@@ -298,27 +283,27 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             {menu && (
               <div className="glass-panel absolute right-0 top-12 z-10 w-[240px] py-1" role="menu">
                 <button type="button" onClick={() => { setMenu(false); runSuggest(); }} data-testid="todo-suggest"
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Sparkles size={15} /> Suggerisci i passi</button>
+                  className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">Suggerisci i passi</button>
                 <button type="button" onClick={() => { setMenu(false); toggleFav(); }} data-testid="todo-detail-fav"
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Star size={15} className={t.favorite ? "fill-current" : ""} /> {t.favorite ? "Togli dai preferiti" : "Aggiungi ai preferiti"}</button>
+                  className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">{t.favorite ? "Togli dai preferiti" : "Aggiungi ai preferiti"}</button>
                 <button type="button" onClick={() => { setMenu(false); try { dueRef.current?.showPicker?.(); } catch { /* */ } dueRef.current?.focus(); dueRef.current?.click(); }}
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><CalendarDays size={15} /> {t.due_date ? "Cambia la scadenza" : "Scadenza del to do"}</button>
+                  className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">{t.due_date ? "Cambia la scadenza" : "Scadenza del to do"}</button>
                 {t.due_date && (
                   <button type="button" onClick={() => { setMenu(false); patchTodo({ reminder: !t.reminder }); }}
-                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Bell size={15} /> {t.reminder ? "Togli il promemoria" : "Promemoria su Telegram"}</button>
+                    className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">{t.reminder ? "Togli il promemoria" : "Promemoria su Telegram"}</button>
                 )}
                 {t.due_date && (
                   <button type="button" onClick={() => { setMenu(false); patchTodo({ due_date: null, reminder: false }); }}
-                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><X size={15} /> Togli la scadenza</button>
+                    className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">Togli la scadenza</button>
                 )}
                 <button type="button" onClick={() => { setMenu(false); patchTodo({ status: t.status === "fatto" ? "da_fare" : "fatto" }); }} data-testid="todo-detail-done"
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Check size={15} /> {t.status === "fatto" ? "Riapri il to do" : "Segna il to do come fatto"}</button>
+                  className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">{t.status === "fatto" ? "Riapri il to do" : "Segna il to do come fatto"}</button>
                 {t.has_cover && (
                   <button type="button" onClick={() => { setMenu(false); call(() => api.delete(`/todos/${t.id}/cover`)); }} data-testid="todo-cover-remove"
-                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><ImagePlus size={15} /> Togli la foto</button>
+                    className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-white">Togli la foto</button>
                 )}
                 <button type="button" onClick={del} data-testid="todo-detail-delete"
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-[#FF9A85]"><Trash2 size={15} /> Elimina il to do</button>
+                  className="glass-row w-full flex items-center px-5 py-3 text-left text-[14px] text-[#FF9A85]">Elimina il to do</button>
               </div>
             )}
           </div>
@@ -352,7 +337,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           <div className="absolute top-3.5 left-4 right-4 flex items-center justify-between">
             <span className="text-[13px] text-white"><b className="font-bold">mAIPAL</b> To Do</span>
             <button type="button" onClick={() => fileRef.current?.click()} data-testid="todo-cover-pick"
-              className="text-[13px] text-white inline-flex items-center gap-1"><ImagePlus size={13} /> {cover ? "Cambia foto" : "Foto"}</button>
+              className="text-[13px] text-white inline-flex items-center gap-1">{cover ? "Cambia foto" : "Foto"}</button>
           </div>
           {/* the description, from the top */}
           {editDesc ? (
@@ -379,7 +364,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             <span className="text-white/45">·</span>
             <label className="relative inline-flex items-center gap-1.5 cursor-pointer">
               <span className="h-2 w-2 rounded-full" style={{ background: STATO[t.status]?.[1] || STATO.da_fare[1] }} />
-              {STATO[t.status]?.[0] || "Da fare"} <ChevronDown size={13} className="text-white/60" />
+              {STATO[t.status]?.[0] || "Da fare"}
               <select value={t.status || "da_fare"} onChange={(e) => patchTodo({ status: e.target.value })} data-testid="todo-status"
                 className="absolute inset-0 opacity-0 cursor-pointer" aria-label="Stato">
                 {Object.entries(STATO).map(([k, [label]]) => <option key={k} value={k}>{label}</option>)}
@@ -422,20 +407,9 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
         </div>
       </div>
 
-      {/* the chat with mAIPAL */}
-      <div className="fixed left-0 right-0 bottom-0 px-3.5" style={{ paddingBottom: "max(18px, env(safe-area-inset-bottom))" }}>
-        <div className="mx-auto max-w-[640px] lg-glass rounded-[28px] pl-4 pr-1.5 py-1.5 flex items-center gap-2">
-          <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} data-testid="todo-chat-input"
-            placeholder="Scrivi a mAIPAL: aggiungi, sposta, aggiorna…" className="flex-1 min-w-0 bg-transparent py-2 text-[13px] text-white placeholder:text-white/60 outline-none" />
-          <button type="button" onClick={send} disabled={busy || !msg.trim()} aria-label="Invia" data-testid="todo-chat-send"
-            className="h-[34px] w-[34px] shrink-0 rounded-full bg-white text-[#7A2A5C] flex items-center justify-center disabled:opacity-50">
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <ArrowUp size={16} />}</button>
-        </div>
-      </div>
-
       {suggest && (
         <GlassBottomSheet onClose={() => setSuggest(null)} testid="todo-suggest-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
-          <div className="kicker inline-flex items-center gap-1.5"><Sparkles size={12} /> passi proposti per «{t.title}»</div>
+          <div className="kicker">passi proposti per «{t.title}»</div>
           {suggest.loading ? (
             <div className="py-8 flex items-center justify-center text-white/75 text-[13px] gap-2"><Loader2 size={15} className="animate-spin" /> Penso ai passi…</div>
           ) : (
