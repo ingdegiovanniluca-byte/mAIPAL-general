@@ -46,6 +46,15 @@
 
 html, body, #root {
     min-height: 100%;
+}
+
+/* No "rubber band" on the page itself (iPhone): dragging past the top or the bottom no longer pulls the
+   whole page under the header and back. The boxes that scroll inside still scroll as before. */
+html, body {
+    overscroll-behavior-y: none;
+}
+
+html, body, #root {
     font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
