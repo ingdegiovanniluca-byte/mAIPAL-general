@@ -479,12 +479,12 @@ Con l'app mAIPAL per **Galaxy Watch** parli con gli agenti e guardi task, to-do 
 ## Notifiche
 <!-- id: notifiche · verticale: tutti -->
 In Impostazioni → **Notifiche** scegli **cosa** ti manda mAIPAL e **dove**: nell'**app** (le notifiche del telefono o del computer, anche con l'app chiusa), su **Telegram** o in **entrambi**.
-- **Cosa ti mando**: l'elenco di tutte le notifiche, ognuna con il suo **interruttore** (verde = attiva) e, sotto, dove riceverla: **App**, **Telegram** o **Entrambi**. All'inizio sono tutte attive, su entrambi.
+- **Cosa ti mando**: l'elenco di tutte le notifiche, ognuna con il suo **interruttore** (verde = attiva). Sotto, in piccolo, dove arriva («Arriva nell'app e su Telegram»): toccala per scegliere **Nell'app e su Telegram**, **Solo nell'app** o **Solo su Telegram**. All'inizio sono tutte attive, nell'app e su Telegram.
   - **Promemoria dei task**, **Riepilogo della giornata** (la sera), **Diario dei collaboratori**, **Problemi dai cantieri**, **Attività fatte**, **Presenze in cantiere** (arrivi, fine non segnata, «sei ancora in cantiere?», «com'è andata oggi?»), **Conferme delle attività**, **Ore da approvare**, **Lavori extra e materiali non previsti**, **Materiali da prendere**, **Costi e budget**, **Aggiornamenti ai clienti**, **Condivisioni e inviti** (anche i task assegnati a te), **News del mattino**, **Azioni programmate**.
   - Spegnendone una non ti arriva più, né nell'app né su Telegram. Gli avvisi importanti di sistema (per esempio un problema a salvare i file sull'archivio) arrivano sempre.
-  - Se Telegram non è collegato, puoi scegliere solo **App**.
-  - **Su un nuovo telefono o computer**: la prima volta che accendi una notifica o tocchi **App** / **Entrambi**, il dispositivo ti chiede il permesso per le notifiche: consenti e da lì arrivano anche lì. Poi l'app resta collegata da sola.
-- **iPhone**: le notifiche dell'app arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home), con iOS 16.4 o successivo. Aprila **dall'icona**, vai in Impostazioni → Notifiche, tocca **App** o **Entrambi** su una notifica e poi **Consenti**. Se non arrivano, sull'iPhone apri **Impostazioni → Notifiche → mAIPAL** e accendi «Consenti notifiche».
+  - Se Telegram non è collegato, puoi scegliere solo **Solo nell'app**.
+  - **Su un nuovo telefono o computer**: la prima volta che accendi una notifica o scegli dove riceverla nell'app, il dispositivo ti chiede il permesso per le notifiche: consenti e da lì arrivano anche lì. Poi l'app resta collegata da sola.
+- **iPhone**: le notifiche dell'app arrivano solo dall'app aggiunta alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home), con iOS 16.4 o successivo. Aprila **dall'icona**, vai in Impostazioni → Notifiche, scegli su una notifica **Nell'app e su Telegram** (o **Solo nell'app**) e poi **Consenti**. Se non arrivano, sull'iPhone apri **Impostazioni → Notifiche → mAIPAL** e accendi «Consenti notifiche».
   Ogni volta che apri l'app, il dispositivo ricomunica la sua iscrizione alle notifiche: se l'iPhone l'ha rinnovata, le notifiche ripartono senza riattivarle.
 - Se le hai bloccate per errore, riattivale dalle impostazioni del browser o del telefono.
 

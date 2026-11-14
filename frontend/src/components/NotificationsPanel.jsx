@@ -8,7 +8,7 @@ import IosSwitch from "@/components/IosSwitch";
    goes: in the app, on Telegram or both. No separate switch for the device: the first time a kind is
    turned on or sent to the app from here, this device is subscribed (the phone asks the permission
    right from that tap, as the iPhone wants); afterwards the app keeps it up to date by itself. */
-const CHANNELS = [["app", "App"], ["telegram", "Telegram"], ["both", "Entrambi"]];
+const CHANNELS = [["both", "nell'app e su Telegram"], ["app", "solo nell'app"], ["telegram", "solo su Telegram"]];
 
 export default function NotificationsPanel() {
   const [state, setState] = useState("checking");   // checking | unsupported | ios_home | denied | off | on
@@ -16,6 +16,7 @@ export default function NotificationsPanel() {
   const keyRef = useRef(null);                       // the server's public key, read before the tap (iPhone: see enablePush)
   const [kinds, setKinds] = useState(null);
   const [tgLinked, setTgLinked] = useState(false);
+  const [pick, setPick] = useState(null);            // the kind whose "where" is being chosen
 
   const check = async () => {
     if (!pushSupported()) { setState(isIos() && !isStandalone() ? "ios_home" : "unsupported"); return; }
@@ -29,6 +30,13 @@ export default function NotificationsPanel() {
   };
   const loadKinds = () => api.get("/notify/prefs").then((r) => { setKinds(r.data.kinds); setTgLinked(!!r.data.telegram_linked); }).catch(() => setKinds([]));
   useEffect(() => { check(); loadKinds(); }, []);
+  // the small menu closes touching anywhere else
+  useEffect(() => {
+    if (!pick) return undefined;
+    const away = (e) => { if (!e.target.closest("[data-pick-menu]") && !e.target.closest(`[data-testid="notify-${pick}-where"]`)) setPick(null); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [pick]);
 
   const turnOn = async () => {
     setBusy(true);
@@ -77,18 +85,27 @@ export default function NotificationsPanel() {
                 </div>
                 <IosSwitch checked={k.on} onChange={(v) => setKind(k.key, { on: v })} label={k.label} testid={`notify-${k.key}-switch`} />
               </div>
+              {/* where it arrives: one quiet line, the choice opens only when touched */}
               {k.on && (
-                <div className="mt-2 inline-flex rounded-full bg-white/[0.12] p-[3px]" role="radiogroup" aria-label={`Dove: ${k.label}`}>
-                  {CHANNELS.map(([c, label]) => {
-                    const off = c !== "app" && !tgLinked;
-                    return (
-                      <button key={c} type="button" role="radio" aria-checked={k.channel === c} disabled={off}
-                        title={off ? "Collega Telegram in Impostazioni per riceverle lì" : undefined}
-                        onClick={() => setKind(k.key, { channel: c })} data-testid={`notify-${k.key}-${c}`}
-                        className={`px-3 py-1 rounded-full text-[12px] transition-colors disabled:opacity-35 ${k.channel === c ? "bg-white text-[#403A3C] font-semibold" : "text-white/80"}`}>
-                        {label}</button>
-                    );
-                  })}
+                <div className="relative mt-1">
+                  <button type="button" onClick={() => setPick((p) => (p === k.key ? null : k.key))} aria-expanded={pick === k.key}
+                    data-testid={`notify-${k.key}-where`} className="text-[12px] text-white/60">
+                    Arriva <span className="underline decoration-dotted underline-offset-2">{(CHANNELS.find(([c]) => c === (tgLinked ? k.channel : "app")) || CHANNELS[0])[1]}</span>
+                  </button>
+                  {pick === k.key && (
+                    <div className="absolute left-0 top-6 z-10 w-[220px] py-1 rounded-[18px] border border-white/20 shadow-[0_16px_36px_rgba(40,10,30,0.4)]" role="menu"
+                      data-pick-menu style={{ background: "rgba(74,36,60,0.96)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" }}>
+                      {CHANNELS.map(([c, label]) => {
+                        const off = c !== "app" && !tgLinked;
+                        return (
+                          <button key={c} type="button" role="menuitemradio" aria-checked={k.channel === c} disabled={off}
+                            onClick={() => { setPick(null); setKind(k.key, { channel: c }); }} data-testid={`notify-${k.key}-${c}`}
+                            className={`w-full px-4 py-2.5 text-left text-[14px] border-b border-white/10 last:border-0 disabled:opacity-35 ${k.channel === c ? "text-white font-semibold" : "text-white/85"}`}>
+                            {label.charAt(0).toUpperCase() + label.slice(1)}</button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
