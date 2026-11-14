@@ -169,7 +169,14 @@ export default function TodayDashboard({ onOpenCommessa }) {
   const n = d.notes;
   const timed = d.clock.filter((x) => x.time).length;
   const done = d.clock.filter((x) => x.done).length;
-  const empty = !n.activities.length && !n.materials.length && !n.news.length && !n.tips.length;
+  const empty = !n.urgent.length && !n.today.length && !n.materials.length && !n.news.length && !n.tips.length;
+  // a task of today ticked from here (the activities tick themselves when done on the site)
+  const tickTask = async (x) => {
+    const flip = (dd, v) => ({ ...dd, clock: dd.clock.map((c) => (c.id === x.id ? { ...c, done: v } : c)),
+      notes: { ...dd.notes, today: dd.notes.today.map((c) => (c.id === x.id ? { ...c, done: v } : c)) } });
+    setD((dd) => flip(dd, !x.done));
+    try { await api.post(`/tasks/${x.id}/complete`); } catch { setD((dd) => flip(dd, x.done)); }
+  };
   return (
     <div ref={wrap} className="flex flex-col gap-2.5" style={{ height: h || undefined }} data-testid="today-dashboard">
       <div className="grid grid-cols-[1.7fr_1fr] gap-2.5 shrink-0">
@@ -230,16 +237,31 @@ export default function TodayDashboard({ onOpenCommessa }) {
         <Kicker>note di oggi</Kicker>
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-4 mt-1" style={fade}>
           {empty && <div className="py-2 text-[11px] text-white/70">Niente di previsto oggi.</div>}
-          {n.activities.length > 0 && <Part title="Attività previste">
-            {n.activities.map((a, i) => (
-              <div key={i} className={a.done ? "opacity-60" : ""}><b className="font-semibold">{a.commessa}</b> — {a.time ? `${a.time} ` : ""}{a.text}
-                {a.who.length > 0 && <span className="text-white/65"> ({a.who.join(", ")})</span>}</div>
+          {n.urgent.length > 0 && <Part title="Da guardare subito" dot="#FF6B5B" testid="notes-urgent">
+            {n.urgent.map((u, i) => (
+              <button key={i} type="button" onClick={() => u.commessa_id && onOpenCommessa(u.commessa_id)} className="block w-full text-left text-white">{u.text}</button>
+            ))}
+          </Part>}
+          {n.today.length > 0 && <Part title="Da fare oggi" testid="notes-today">
+            {n.today.map((x) => (
+              <div key={x.id} className="flex items-start gap-2" data-testid="notes-today-row" data-done={x.done ? "1" : "0"}>
+                <button type="button" disabled={x.kind !== "task"} onClick={() => tickTask(x)} aria-pressed={!!x.done}
+                  aria-label={x.kind === "task" ? (x.done ? "Segna da fare" : "Segna fatto") : (x.done ? "Svolta" : "Da svolgere")}
+                  className="mt-[2px] h-[13px] w-[13px] shrink-0 rounded-full flex items-center justify-center"
+                  style={x.done ? { background: "#FFAC33" } : { border: "1px solid rgba(255,255,255,0.75)" }}>
+                  {x.done && <Check size={9} strokeWidth={3} className="text-[#3b2400]" />}
+                </button>
+                <button type="button" onClick={() => x.commessa_id && onOpenCommessa(x.commessa_id)} className={`flex-1 min-w-0 text-left ${x.done ? "text-white/55" : "text-white"}`}>
+                  {x.time ? `${x.time} ` : ""}{x.text}
+                  {x.commessa && <span className={x.done ? "" : "text-white/65"}> — {x.commessa}{x.who.length > 0 ? ` (${x.who.join(", ")})` : ""}</span>}
+                </button>
+              </div>
             ))}
           </Part>}
           {n.materials.length > 0 && <Part title="Materiali da prendere">
             {n.materials.map((m, i) => <div key={i}>{m.text}<span className="text-white/65">{[m.who, m.commessa && `per ${m.commessa}`].filter(Boolean).length ? ` — ${[m.who, m.commessa && `per ${m.commessa}`].filter(Boolean).join(", ")}` : ""}</span></div>)}
           </Part>}
-          {n.news.length > 0 && <Part title="News principali">
+          {n.news.length > 0 && <Part title="News">
             {n.news.map((x, i) => <div key={i}>{x.url ? <a href={x.url} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">{x.title}</a> : x.title}</div>)}
           </Part>}
           {n.tips.length > 0 && <Part title="Consigli">
@@ -283,11 +305,11 @@ export default function TodayDashboard({ onOpenCommessa }) {
   );
 }
 
-function Part({ title, children }) {
+function Part({ title, dot, testid, children }) {
   return (
-    <div className="mt-2.5">
+    <div className="mt-2.5" data-testid={testid}>
       <div className="flex items-center gap-2 text-[12px] font-semibold text-white">
-        <span className="h-[7px] w-[7px] rounded-full bg-white/80 shrink-0" />{title}</div>
+        <span className="h-[7px] w-[7px] rounded-full shrink-0" style={{ background: dot || "rgba(255,255,255,0.8)" }} />{title}</div>
       <div className="pl-[15px] mt-1 space-y-1 text-[11px] leading-snug text-white/90">{children}</div>
     </div>
   );

@@ -331,13 +331,24 @@ async def main():
     db.job_logs.docs.append({"id": "L2", "commessa_id": "s_all", "date": today.isoformat(), "problems": ["manca la sirena"], "hours": []})
     db.job_logs.docs.append({"id": "L3", "commessa_id": "s_el", "date": today.isoformat(), "problems": ["quadro bagnato"], "hours": [],
                              "problem_status": {"0": {"status": "risolta", "at": now.isoformat()}}})
-    db.job_todos.docs.append({"id": "m1", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(),
-                              "text": "Da prendere: 20 m corrugato, 10 scatole 503", "who": "Gino"})
+    db.job_todos.docs.append({"id": "m1", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(), "user_id": "u1",
+                              "created_by_user": "u1", "text": "Da prendere: 20 m corrugato, 10 scatole 503", "who": "Gino"})
+    # the ones put by others are not in my notes: a collaborator's (through my account), a team mate's, an old one of a collaborator
+    db.job_todos.docs.append({"id": "m3", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(), "user_id": "u1",
+                              "created_by_user": None, "author_name": "Gino", "text": "Da prendere: silicone", "who": "Gino"})
+    db.job_todos.docs.append({"id": "m4", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(), "user_id": "u2",
+                              "created_by_user": "u2", "text": "Da prendere: trapano", "who": "Marco"})
+    db.job_todos.docs.append({"id": "m5", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(), "user_id": "u1",
+                              "author_name": "Gino", "text": "Da prendere: guanti", "who": "Gino"})
+    db.job_todos.docs.append({"id": "m6", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": today.isoformat(), "user_id": "u1",
+                              "author_name": server._first_name(U["name"]), "text": "Da prendere: viti", "who": "Luca"})
     db.job_todos.docs.append({"id": "m0", "commessa_id": "s_bagno", "kind": "materiale", "done": False, "due_date": (today - timedelta(days=1)).isoformat(), "text": "Da prendere: ieri"})
     db.job_todos.docs.append({"id": "m2", "commessa_id": "s_all", "kind": "materiale", "done": False, "due_date": (today + timedelta(days=1)).isoformat(), "text": "Da prendere: sirena"})
     db.tasks.docs.append({"id": "t1", "user_id": "u1", "title": "Chiamare il fornitore", "due_date": today.isoformat(), "due_time": "10:30", "priority": "media", "duration_minutes": 45})
     db.tasks.docs.append({"id": "t2", "user_id": "u1", "title": "Fattura Rossi", "due_date": today.isoformat(), "due_time": None, "completed": True})
     db.tasks.docs.append({"id": "t3", "user_id": "u1", "title": "Domani", "due_date": (today + timedelta(days=1)).isoformat(), "due_time": "09:00"})
+    db.tasks.docs.append({"id": "t4", "user_id": "u1", "title": "Preventivo Bianchi", "due_date": (today - timedelta(days=1)).isoformat(), "due_time": "18:00"})
+    db.tasks.docs.append({"id": "t5", "user_id": "u1", "title": "Vecchio fatto", "due_date": (today - timedelta(days=2)).isoformat(), "completed": True})
     db.news_items.docs += [{"id": "n1", "user_id": "u1", "date": today.isoformat(), "title": "Bonus casa 2027", "created_at": "2"},
                            {"id": "n2", "user_id": "u1", "date": today.isoformat(), "title": "Rame in calo", "feedback": "up", "created_at": "1"},
                            {"id": "n3", "user_id": "u1", "date": today.isoformat(), "title": "Non mi interessa", "feedback": "down", "created_at": "3"}]
@@ -363,16 +374,26 @@ async def main():
     assert (rows["Impianto elettrico"]["status"], rows["Impianto elettrico"]["present"], rows["Impianto elettrico"]["expected"]) == ("yellow", 2, 1)
     assert (rows["Cancello"]["status"], rows["Cancello"]["expected"], rows["Cancello"]["problems"]) == ("yellow", 0, 1)
     assert [c["status"] for c in d["commesse"]][0] == "red" and "Tetto" not in rows
-    # the notes: activities (not the cancelled one), materials (today's), news (liked first, not the disliked), tips
+    # the notes: 1) to look at at once, 2) to do today, 3) my materials, 4) news, 5) tips
     n = d["notes"]
-    assert [a["text"] for a in n["activities"]] == ["Posa piatto doccia", "Cablaggio centrale", "Quadro elettrico"]
-    assert n["activities"][0]["who"] == ["Gino", "Marco"] and n["activities"][0]["commessa"] == "Mario Rossi · Bagno"
-    assert [m["text"] for m in n["materials"]] == ["20 m corrugato, 10 scatole 503"]
+    urgent = [u["text"] for u in n["urgent"]]
+    assert "Luca D · Impianto allarme: manca la sirena" in urgent and "Bianchi · Cancello: il motore non parte" in urgent, urgent
+    assert "Luca D · Impianto allarme: nessuno in cantiere e 2 persone previste." in urgent, urgent
+    assert "Preventivo Bianchi: scaduto ieri." in urgent and not any("Vecchio fatto" in u for u in urgent), urgent
+    assert any("pioggia probabile (70%) oggi" in u for u in urgent), urgent
+    assert not any("quadro bagnato" in u for u in urgent)                # solved
+    # to do today: the tasks and the activities (not the cancelled one) by time, the done ones marked
+    assert [(x["kind"], x["time"], x["text"]) for x in n["today"]] == [
+        ("attivita", "08:00", "Posa piatto doccia"), ("attivita", "09:00", "Cablaggio centrale"), ("task", "10:30", "Chiamare il fornitore"),
+        ("task", None, "Fattura Rossi"), ("attivita", None, "Quadro elettrico")], n["today"]
+    assert n["today"][0]["who"] == ["Gino", "Marco"] and n["today"][0]["commessa"] == "Mario Rossi · Bagno"
+    assert next(x for x in n["today"] if x["text"] == "Fattura Rossi")["done"] and not n["today"][2]["done"]
+    # my materials of today only
+    assert [m["text"] for m in n["materials"]] == ["20 m corrugato, 10 scatole 503", "viti"], n["materials"]
     assert [x["title"] for x in n["news"]] == ["Rame in calo", "Bonus casa 2027"]
     tips = " | ".join(t["text"] for t in n["tips"])
-    assert "Luca D · Impianto allarme: nessuno in cantiere e 2 persone previste." in tips, tips
     assert "Martina S · Impianto elettrico: risolto «quadro bagnato». Aggiorna il cliente." in tips, tips
-    assert "pioggia probabile (70%) oggi" in tips, tips
+    assert "nessuno in cantiere" not in tips and "pioggia" not in tips    # those are among the urgent ones
     assert not any("Vicino a" in t["text"] for t in n["tips"])        # the Cancello (with its problem) is one of today's
     # a site with a problem near today's (not one of today's): told; a closed one never
     db.collection_sub_items.docs.append({"id": "s_far", "collection_id": cl["id"], "item_id": "c_bia", "data": {"titolo": "Cancello 2", "stato": "in lavorazione"},
@@ -383,6 +404,8 @@ async def main():
     tips = " | ".join(t["text"] for t in d["notes"]["tips"])
     assert "Vicino a Bianchi · Cancello (445 m) c'è Bianchi · Cancello 2 con un problema aperto (motore bloccato): passaci." in tips, tips
     assert "Tetto" not in tips
+    urgent = [u["text"] for u in d["notes"]["urgent"]]
+    assert "Bianchi · Cancello 2: motore bloccato" in urgent and not any("Tetto" in u for u in urgent), urgent   # recent elsewhere; closed never
     # the endpoint; another vertical: only its tasks
     assert (await server.jobs_today(me))["on_site"]["total"] == 5
     print("ALL OK")

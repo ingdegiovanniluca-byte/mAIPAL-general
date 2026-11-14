@@ -166,11 +166,12 @@ La **Dashboard** è la tua giornata in uno schermo: la apri dal menu **+** in ba
   - Il pallino è **verde** se ci sono le persone previste, **giallo** se il numero è diverso (o la commessa non era prevista), **rosso** se non c'è nessuno. Le persone previste sono quelle assegnate alle attività di oggi.
   - Il numero più grande sono le persone in cantiere adesso, accanto (più piccolo) quelle previste; il triangolo rosso indica problemi aperti.
   - Toccando una commessa si apre il suo diario e con ← si torna alla Dashboard. L'elenco completo di clienti e commesse è nella sezione **Diario**.
-- **Note di oggi**:
-  - **Attività previste**, per commessa, con orario e persone;
-  - **Materiali da prendere** oggi (quelli dei giorni passati non fatti restano tra i **To Do**);
-  - **News principali** di oggi (prima quelle con 👍, mai quelle con 👎);
-  - **Consigli**, presi dai dati: un cantiere con problemi aperti entro 5 km da uno di oggi, un cantiere previsto senza nessuno, un problema risolto da poco di cui aggiornare il cliente, il meteo avverso sui cantieri di oggi. Toccando un consiglio si apre la commessa.
+- **Note di oggi**, in cinque parti:
+  1. **Da guardare subito** (pallino rosso): i **problemi aperti** sui cantieri di oggi (e quelli degli ultimi 3 giorni sugli altri cantieri aperti), un cantiere previsto **senza nessuno**, i **task scaduti** non fatti (ultimi 30 giorni) e il **meteo avverso** sui cantieri di oggi. Toccandone uno si apre la commessa.
+  2. **Da fare oggi**: i task di oggi e le attività previste sulle commesse, in ordine di orario, con un cerchio che si **spunta man mano** durante la giornata. Le attività si spuntano da sole quando sono segnate come svolte; i task li spunti anche da qui, toccando il cerchio.
+  3. **Materiali da prendere** oggi, solo quelli **inseriti da te** (quelli dei collaboratori o dei colleghi stanno nei loro To Do).
+  4. **News** di oggi (prima quelle con 👍, mai quelle con 👎).
+  5. **Consigli**, presi dai dati: un cantiere con problemi aperti entro 5 km da uno di oggi, un problema risolto da poco di cui aggiornare il cliente. Toccando un consiglio si apre la commessa.
 - Si aggiorna da sola ogni 2 minuti.
 
 ## Diario di commessa
