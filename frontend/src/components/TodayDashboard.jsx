@@ -213,7 +213,10 @@ export default function TodayDashboard({ onOpenCommessa }) {
               className="w-full grid grid-cols-[14px_1fr_40px_22px] gap-2 items-center py-[7px] border-b border-white/[0.14] last:border-0 text-left active:opacity-70">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS_DOT[c.status] }} data-status={c.status} />
               <span className="min-w-0 truncate text-[13px] text-white"><b className="font-semibold">{c.client}</b> · {c.title}</span>
-              <span className="text-center tabular-nums whitespace-nowrap" data-testid="today-present"><span className="text-[16px] font-medium leading-none text-white">{c.present}</span><span className="text-[11px] text-white/50">/{c.expected}</span></span>
+              <span className="flex justify-center tabular-nums whitespace-nowrap" data-testid="today-present">
+                {/* the people there centred under the icon, the planned ones beside them */}
+                <span className="relative text-[16px] font-medium leading-none text-white">{c.present}
+                  <span className="absolute left-full bottom-0 text-[10px] font-normal text-white/50">/{c.expected}</span></span></span>
               <span className="flex justify-center">{c.problems
                 ? <Alert size={13} label={`${c.problems} problemi aperti`} />
                 : <span className="text-white/25">–</span>}</span>
