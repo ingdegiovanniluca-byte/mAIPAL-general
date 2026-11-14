@@ -8,6 +8,43 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+// With no signal the app still opens (on a site with no network): the last answer of a few reads is kept on
+// the phone and given back when the network doesn't answer at all - who you are, the commesse, the day,
+// the tasks and to dos. Only for the network missing: an answer of the server (401, 500...) is never hidden.
+const KEEP = [/^\/auth\/me$/, /^\/jobs\/commesse$/, /^\/jobs\/today$/, /^\/tasks$/, /^\/todos$/];
+const CACHE_PREFIX = "maipal-cache:";
+const kept = (url) => {
+  const path = (url || "").replace(API, "").split("?")[0];
+  return KEEP.some((re) => re.test(path)) ? path : null;
+};
+api.interceptors.response.use(
+  (res) => {
+    const path = res.config?.method === "get" && kept(res.config.url);
+    if (path) {
+      try {
+        const body = JSON.stringify(res.data);
+        if (body.length < 1500000) localStorage.setItem(CACHE_PREFIX + path, body);
+      } catch { /* full or blocked: never mind */ }
+    }
+    return res;
+  },
+  (err) => {
+    const cfg = err.config || {};
+    const path = cfg.method === "get" && !err.response && kept(cfg.url);
+    if (path) {
+      try {
+        const body = localStorage.getItem(CACHE_PREFIX + path);
+        if (body) return Promise.resolve({ data: JSON.parse(body), status: 200, statusText: "OK", headers: {}, config: cfg, fromCache: true });
+      } catch { /* nothing kept */ }
+    }
+    return Promise.reject(err);
+  },
+);
+// out of the account (or another one): nothing of it stays on the phone
+export function clearKeptData() {
+  try { Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => localStorage.removeItem(k)); } catch { /* */ }
+}
+
 export async function streamChat(payload, onDelta, onDone, onError, onEvent) {
   try {
     const res = await fetch(`${API}/chat/stream`, {

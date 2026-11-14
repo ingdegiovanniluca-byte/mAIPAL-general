@@ -18,6 +18,7 @@ import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { api } from "@/lib/api";
 import { syncPush } from "@/lib/pwa";
+import OfflineStrip from "@/components/OfflineStrip";
 import HelpSheet from "@/components/HelpSheet";
 import ChatPage from "@/pages/ChatPage";
 import { ChatPaneContext, SheetHostContext } from "@/lib/chatPane";
@@ -215,6 +216,7 @@ export default function DashboardLayout() {
   return (
     <div className={split ? "h-screen overflow-hidden relative" : "min-h-screen relative"}>
       <PageBackground />
+      <OfflineStrip />
 
       <div className={split ? "relative z-10 h-full flex flex-col" : "relative z-10"}>
         {/* ===== Desktop header (>=1100px, above the split) — unchanged content, now fixed in place

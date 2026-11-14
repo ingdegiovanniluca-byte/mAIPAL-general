@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, clearKeptData } from "@/lib/api";
 
 const AuthCtx = createContext(null);
 
@@ -24,6 +24,7 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     try { await api.post("/auth/logout"); } catch {}
+    clearKeptData();
     setUser(null);
     window.location.href = "/";
   };

@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { isClosed } from "@/lib/commessaStati";
+import { keepDiaryEntry, newClientId, isNetworkError, takeReplies } from "@/lib/outbox";
 import { api, streamChat, API } from "@/lib/api";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -848,14 +849,37 @@ export default function ChatPage() {
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, jobCommessaId: res.log.commessa_id }] }));
   };
 
+  // no signal: the entry is kept on the phone and sent by itself when the network is back (lib/outbox)
+  const keepOffline = async ({ content, images, voice, hint, shown }) => {
+    const entry = await keepDiaryEntry({ client_id: newClientId(), text: content || "", images, voice: voice || null,
+      hint_commessa_id: hint, label: (content || (voice ? "Vocale" : "Foto dal cantiere")).slice(0, 80) });
+    setThread((th) => {
+      const base = (th && th.action === "job_log") ? th : { conv_id: null, action: "job_log", messages: [], liveAnswer: "" };
+      const msgs = shown ? [...base.messages, { role: "user", content: shown }] : base.messages;
+      return { ...base, messages: [...msgs, { role: "assistant", pendingId: entry.client_id,
+        content: "⏳ Senza rete: l'ho salvata sul telefono. La invio da sola appena torna il segnale." }] };
+    });
+  };
   const sendJobLog = async () => {
     const voice = await takeVoice();
     let content = text.trim();
     const hadVoice = !!voice;
+    const offlineHint = thread?.action === "job_log" ? [...thread.messages].reverse().find((m) => m.jobCommessaId)?.jobCommessaId || null : null;
     if (voice) {
+      const imgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
+      const keepVoice = async () => {   // no network for the transcription: the audio waits on the phone
+        await keepOffline({ content, images: imgs, voice: voice.blob, hint: offlineHint,
+          shown: `${content ? `${content}\n` : ""}🎤 vocale${imgs.length ? `\n📷 ${imgs.length} foto` : ""}` });
+        setText(""); setAttachments([]); setPendingVoice(null);
+      };
+      if (navigator.onLine === false) { await keepVoice(); return; }
       setTranscribing(true);
       try { content = [content, await transcribeBlob(voice.blob)].filter(Boolean).join(" ").trim(); }
-      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      catch (e) {
+        setTranscribing(false);
+        if (isNetworkError(e)) { await keepVoice(); return; }
+        toast.error("Trascrizione fallita: " + e.message); return;
+      }
       setTranscribing(false);
       setPendingVoice(null);
     }
@@ -874,19 +898,60 @@ export default function ChatPage() {
       : { conv_id: null, action: "job_log", messages: [{ role: "user", content: shown }], liveAnswer: "" });
     setText("");
     setAttachments([]);
+    const { main: logText } = splitMentions(content);
+    if (navigator.onLine === false) {
+      await keepOffline({ content: logText || content, images, hint });
+      setStreaming(false);
+      return;
+    }
+    const clientId = newClientId();
     try {
-      const { main: logText } = splitMentions(content);
-      const r = await api.post("/jobs/logs", { text: logText || content, images, hint_commessa_id: hint });
+      const r = await api.post("/jobs/logs", { text: logText || content, images, hint_commessa_id: hint, client_id: clientId, written_at: new Date().toISOString() });
       appendJobLogResult(r.data, images);
       const lg = r.data?.status === "ok" ? r.data.log : null;
       await dispatchTagged(content, lg ? { type: "job_log", id: lg.id, commessa_id: lg.commessa_id, date: lg.date, created_at: lg.created_at, preview: (lg.text || "").slice(0, 200) } : null);
     } catch (e) {
-      const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a salvare la voce");
-      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+      if (isNetworkError(e)) {   // the network dropped on the way: kept (same id: if it did arrive, it isn't saved twice)
+        const entry = await keepDiaryEntry({ client_id: clientId, text: logText || content, images, hint_commessa_id: hint, label: (logText || content).slice(0, 80) });
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", pendingId: entry.client_id,
+          content: "⏳ Senza rete: l'ho salvata sul telefono. La invio da sola appena torna il segnale." }] }));
+      } else {
+        const errText = "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a salvare la voce");
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+      }
     } finally {
       setStreaming(false);
     }
   };
+  // an entry kept offline was sent: its waiting line becomes the answer (or the question to answer)
+  useEffect(() => {
+    const show = (reply) => {
+      setThread((th) => {
+        const base = (th && th.action === "job_log") ? th : { conv_id: null, action: "job_log", messages: [{ role: "user", content: reply.text }], liveAnswer: "" };
+        const msgs = base.messages.map((m) => (m.pendingId === reply.client_id ? { ...m, pendingId: null, content: "✓ Inviata appena è tornata la rete." } : m));
+        return { ...base, messages: msgs };
+      });
+      appendJobLogResult(reply.res, reply.images);
+    };
+    const onSent = (ev) => {
+      const reply = ev.detail;
+      const here = thread?.messages?.some((m) => m.pendingId === reply.client_id);
+      const needsAnswer = !["ok", "planned", "description", "commessa_update"].includes(reply.res?.status);
+      if (here || needsAnswer) { ev.preventDefault(); show(reply); }
+    };
+    window.addEventListener("maipal-outbox-sent", onSent);
+    return () => window.removeEventListener("maipal-outbox-sent", onSent);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+  // the answers that arrived while the chat was closed (a question like "quale commessa?")
+  useEffect(() => {
+    takeReplies().then((list) => list.forEach((reply) => {
+      setThread((th) => {
+        const base = (th && th.action === "job_log") ? th : { conv_id: null, action: "job_log", messages: [], liveAnswer: "" };
+        return { ...base, messages: [...base.messages, { role: "user", content: reply.text }] };
+      });
+      appendJobLogResult(reply.res, reply.images);
+    })).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolveCommessaDraft = async (draft, key) => {
     setStreaming(true);

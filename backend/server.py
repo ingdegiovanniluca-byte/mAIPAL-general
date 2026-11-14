@@ -6592,6 +6592,8 @@ class JobLogPayload(BaseModel):
     client_item_id: Optional[str] = None      # chosen among namesakes: its open commessa, or a new one
     conv_id: Optional[str] = None
     material_choice: Optional[str] = None     # answer to "usati o da prendere?": usato | da_prendere
+    client_id: Optional[str] = None           # the phone's own id of the entry: sent again (no signal), saved once
+    written_at: Optional[str] = None          # when it was written (ISO), if sent later: its day is that one
 
 
 class JobTodoPayload(BaseModel):
@@ -7974,11 +7976,38 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
             "commessa_created": bool(created.get("commessa")), "message": msg, "todos": todos}
 
 
+def _written_day(written_at: Optional[str]) -> Optional[date]:
+    """The local day an entry sent late was written: only a past moment of the last week counts."""
+    if not written_at:
+        return None
+    try:
+        at = datetime.fromisoformat(written_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if at > now + timedelta(minutes=5) or at < now - timedelta(days=7):
+        return None
+    day = at.astimezone(LOCAL_TZ).date()
+    return day if day != now.astimezone(LOCAL_TZ).date() else None
+
+
 @api_router.post("/jobs/logs")
 async def create_job_log(payload: JobLogPayload, current: User = Depends(get_current_user)):
-    return await _save_job_log(current, payload.text, payload.images, payload.commessa_id, payload.hint_commessa_id,
-                               payload.new_client_name, payload.conv_id, client_item_id=payload.client_item_id,
-                               material_choice=payload.material_choice)
+    cid = (payload.client_id or "").strip()[:80] or None
+    if cid:   # already arrived (the answer was lost on the way): the same entry, not a second one
+        done = await db.job_logs.find_one({"client_id": cid, "author_user_id": current.user_id}, {"_id": 0, "embedding": 0})
+        if done:
+            return {"status": "ok", "log": done, "message": "Questa voce era già salvata.", "duplicate": True}
+    with jl.as_of(_written_day(payload.written_at)):
+        res = await _save_job_log(current, payload.text, payload.images, payload.commessa_id, payload.hint_commessa_id,
+                                  payload.new_client_name, payload.conv_id, client_item_id=payload.client_item_id,
+                                  material_choice=payload.material_choice)
+    if cid and res.get("status") == "ok" and (res.get("log") or {}).get("id"):
+        await db.job_logs.update_one({"id": res["log"]["id"]}, {"$set": {"client_id": cid, "author_user_id": current.user_id}})
+        res["log"]["client_id"] = cid
+    return res
 
 
 async def _shared_commesse(current: User, skip: set) -> list:
@@ -16407,6 +16436,7 @@ async def start_services():
         await db.job_logs.create_index([("commessa_id", 1), ("date", -1)])
         await db.job_logs.create_index([("user_id", 1), ("date", -1)])
         await db.job_logs.create_index([("org_id", 1), ("date", -1)])
+        await db.job_logs.create_index([("client_id", 1), ("author_user_id", 1)], sparse=True)   # an entry sent again offline
         await db.job_photos.create_index([("log_id", 1)])
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])

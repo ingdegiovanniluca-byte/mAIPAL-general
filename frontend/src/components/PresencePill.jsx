@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, MapPin, Square, Pause, Play } from "lucide-react";
+import { keepDiaryEntry, newClientId, isNetworkError } from "@/lib/outbox";
 import { api } from "@/lib/api";
 import { isClosed } from "@/lib/commessaStati";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -40,12 +41,19 @@ function EndSheet({ end, onClose, onSaved }) {
   const save = async () => {
     if (!note.trim()) { onClose(); return; }
     setBusy(true);
+    const clientId = newClientId();
     try {
-      await api.post("/jobs/logs", { text: note.trim(), commessa_id: end.commessa_id });
+      await api.post("/jobs/logs", { text: note.trim(), commessa_id: end.commessa_id, client_id: clientId, written_at: new Date().toISOString() });
       toast.success("Scritto nel diario");
       onSaved();
       onClose();
-    } catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a salvarlo"); }
+    } catch (e) {
+      if (isNetworkError(e)) {   // no signal: kept on the phone, sent when the network is back
+        await keepDiaryEntry({ client_id: clientId, text: note.trim(), commessa_id: end.commessa_id, label: note.trim().slice(0, 80) });
+        toast.success("Senza rete: salvato sul telefono, lo invio appena torna il segnale");
+        onClose();
+      } else toast.error(e.response?.data?.detail || "Non sono riuscito a salvarlo");
+    }
     finally { setBusy(false); }
   };
   return (

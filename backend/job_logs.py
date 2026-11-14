@@ -6,6 +6,8 @@ hours per person, materials with quantity and unit, problems. The model only rea
 said - never invents quantities or hours. Which commessa it belongs to is decided by the
 caller (server.py), deterministically where possible.
 """
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -27,8 +29,23 @@ LOCAL_TZ = ZoneInfo("Europe/Rome")
 IT_WEEKDAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 
 
+# the day an entry was WRITTEN, when it is sent later (written offline on a site with no signal, sent when
+# the network came back): "oggi", "ieri", "domani" and the entry's own date are about that day
+_AS_OF: contextvars.ContextVar = contextvars.ContextVar("job_logs_as_of", default=None)
+
+
 def today_local() -> date:
-    return datetime.now(LOCAL_TZ).date()
+    return _AS_OF.get() or datetime.now(LOCAL_TZ).date()
+
+
+@contextlib.contextmanager
+def as_of(day: Optional[date]):
+    """Inside it, today_local() is `day` (None: the real today)."""
+    token = _AS_OF.set(day)
+    try:
+        yield
+    finally:
+        _AS_OF.reset(token)
 
 
 def _track(resp, user_id: Optional[str], channel: str, status: str = "ok"):

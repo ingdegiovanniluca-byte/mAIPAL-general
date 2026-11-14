@@ -8,6 +8,7 @@ import { api, API } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import InfoCard from "@/components/InfoCard";
+import { keepDiaryEntry, newClientId, isNetworkError } from "@/lib/outbox";
 import CommessaContacts from "@/components/CommessaContacts";
 import ClientUpdatesSheet from "@/components/ClientUpdatesSheet";
 import CommessaShareSheet from "@/components/CommessaShareSheet";
@@ -2262,8 +2263,9 @@ function CommessaChat({ commessa, onClose, onSaved }) {
 
   // a question or an unclear entry is not saved; materials to take make a reminder ("planned");
   // "usati o da prendere?" is asked with two buttons
-  const saveEntry = async (body, images, fromIdx = null, materialChoice = null) => {
-    const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id, ...(materialChoice ? { material_choice: materialChoice } : {}) });
+  const saveEntry = async (body, images, fromIdx = null, materialChoice = null, clientId = null) => {
+    const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id, ...(materialChoice ? { material_choice: materialChoice } : {}),
+      ...(clientId ? { client_id: clientId, written_at: new Date().toISOString() } : {}) });
     const ok = ["ok", "planned", "description", "commessa_update"].includes(r.data.status);
     const ask = r.data.status === "material_doubt" ? { body, images } : null;
     setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false, matAsk: null } : m)),
@@ -2275,23 +2277,31 @@ function CommessaChat({ commessa, onClose, onSaved }) {
     saveEntry(ask.body, ask.images, i, choice).catch((e) => toast.error(e.response?.data?.detail || "Errore")).finally(() => setBusy(false));
   };
 
+  // no signal: kept on the phone, sent by itself when the network is back (lib/outbox)
+  const keepOffline = async (body, images, clientId) => {
+    await keepDiaryEntry({ client_id: clientId || newClientId(), text: body, images, commessa_id: commessa.id, label: body.slice(0, 80) });
+    setMessages((ms) => [...ms, { role: "assistant", content: "⏳ Senza rete: l'ho salvata sul telefono. La invio da sola appena torna il segnale.", saved: true }]);
+  };
   const send = async () => {
     const body = text.trim() || (mode === "diary" && photos.length ? "Foto dal cantiere" : "");
     if (!body || busy) return;
     const images = mode === "diary" ? photos : [];
     setMessages((ms) => [...ms, { role: "user", content: images.length ? `${body}\n📷 ${images.length} foto` : body, mode }]);
     setText(""); setPhotos([]);
+    if (mode === "diary" && navigator.onLine === false) { await keepOffline(body, images); return; }
     setBusy(true);
+    const clientId = newClientId();
     try {
       if (mode === "diary") {
-        await saveEntry(body, images);
+        await saveEntry(body, images, null, null, clientId);
       } else {
         const history = messages.filter((m) => m.mode !== "diary" && !m.saved).slice(-8).map((m) => ({ role: m.role, content: m.content }));
         const r = await api.post(`/jobs/commesse/${commessa.id}/ask`, { question: body, history });
         setMessages((ms) => [...ms, { role: "assistant", content: r.data.answer, offerSave: r.data.is_entry ? body : null }]);
       }
     } catch (e) {
-      setMessages((ms) => [...ms, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]);
+      if (mode === "diary" && isNetworkError(e)) await keepOffline(body, images, clientId);
+      else setMessages((ms) => [...ms, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]);
     } finally { setBusy(false); }
   };
 

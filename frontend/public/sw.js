@@ -1,22 +1,33 @@
 /* mAIPAL service worker - makes the app installable and quick to open.
  *
  * - Pages: network first (always the latest version when online), the cached app shell
- *   when offline.
+ *   when offline. At install the whole app's code is kept, so it opens with no signal.
  * - /static/ assets: cache first (their file names change with every build).
  * - /api/: never cached - data is always live.
  * - Share target: files/text shared to mAIPAL from another app (Android "Condividi") are
  *   parked in a cache and picked up by the chat page, then the app opens there.
  */
-const VERSION = "maipal-v1";
+const VERSION = "maipal-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const STATIC_CACHE = `${VERSION}-static`;
 const SHARE_CACHE = "maipal-share-inbox";
 const BASE = new URL(self.registration.scope).pathname.replace(/\/$/, ""); // "/general"
 
+// the whole app is kept at install (every page's code, not only the ones already opened): on a site with
+// no signal it opens anyway, and the diary written there waits on the phone (src/lib/outbox.js)
+async function precacheApp() {
+  const shell = await caches.open(SHELL_CACHE);
+  await shell.addAll([`${BASE}/`, `${BASE}/manifest.json`, `${BASE}/icon-192.png`]).catch(() => {});
+  try {
+    const m = await (await fetch(`${BASE}/asset-manifest.json`, { cache: "no-store" })).json();
+    const files = Object.values(m.files || {}).filter((f) => /\.(js|css|png|jpe?g|svg|webp|gif|woff2?)$/.test(f) && f.includes("/static/"));
+    const stat = await caches.open(STATIC_CACHE);
+    await Promise.all(files.map((f) => stat.add(f).catch(() => {})));
+  } catch (e) { /* no manifest (dev): the pages are kept as they are opened */ }
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(SHELL_CACHE).then((c) => c.addAll([`${BASE}/`, `${BASE}/manifest.json`, `${BASE}/icon-192.png`])).catch(() => {})
-  );
+  event.waitUntil(precacheApp());
   self.skipWaiting();
 });
 
