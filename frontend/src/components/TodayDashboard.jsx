@@ -226,7 +226,7 @@ export default function TodayDashboard({ onOpenCommessa }) {
       <div className={`${box} px-3.5 pt-3 flex-1 min-h-[96px] flex flex-col`} data-testid="today-notes">
         <Kicker>note di oggi</Kicker>
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-4 mt-1" style={fade}>
-          {empty && <div className="py-2 text-[12.5px] text-white/70">Niente di previsto oggi.</div>}
+          {empty && <div className="py-2 text-[11.5px] text-white/70">Niente di previsto oggi.</div>}
           {n.activities.length > 0 && <Part title="Attività previste">
             {n.activities.map((a, i) => (
               <div key={i} className={a.done ? "opacity-60" : ""}><b className="font-semibold">{a.commessa}</b> — {a.time ? `${a.time} ` : ""}{a.text}
@@ -285,7 +285,7 @@ function Part({ title, children }) {
     <div className="mt-2.5">
       <div className="flex items-center gap-2 text-[12.5px] font-semibold text-white">
         <span className="h-[7px] w-[7px] rounded-full bg-white/80 shrink-0" />{title}</div>
-      <div className="pl-[15px] mt-1 space-y-1 text-[12.5px] leading-snug text-white/90">{children}</div>
+      <div className="pl-[15px] mt-1 space-y-1 text-[11.5px] leading-snug text-white/90">{children}</div>
     </div>
   );
 }
