@@ -26,7 +26,7 @@ const dayLabel = (iso, withDow = false) => {
   const dt = new Date(y, m - 1, d);
   return `${withDow ? `${DOW[dt.getDay()]} ` : ""}${d} ${MON[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ""}`;
 };
-const STATO = { da_fare: ["Da fare", "rgba(255,255,255,0.88)", "#5a2a48"], in_corso: ["In corso", "#007E9A", "#ffffff"], fatto: ["Fatto", "#FFAC33", "#3b2400"] };
+const STATO = { da_fare: ["Da fare", "rgba(255,255,255,0.85)"], in_corso: ["In corso", "#36C5E0"], fatto: ["Fatto", "#FFAC33"] };
 
 // a photo from the phone, made smaller before it is sent (a JPEG of at most 1600 px)
 async function shrinkPhoto(file) {
@@ -42,7 +42,7 @@ async function shrinkPhoto(file) {
 }
 
 const RowLabel = ({ title, sub }) => (
-  <div className="pt-1 min-w-0"><div className="text-[16px] text-white">{title}</div><div className="text-[13px] text-white/55 leading-tight">{sub}</div></div>
+  <div className="min-w-0"><div className="text-[14px] leading-[20px] text-white">{title}</div><div className="text-[12px] leading-[16px] text-white/55">{sub}</div></div>
 );
 const ACTIONS_W = 148;   // the two buttons behind a step slid to the left
 
@@ -52,9 +52,9 @@ const HOLD_MS = 380;        // a long press on a step picks it up, to move it
 function Circle({ done, onClick, label, testid }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={!!done} aria-label={label} data-testid={testid}
-      className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center transition-colors"
-      style={done ? { background: ACCENT } : { border: "2px solid rgba(255,255,255,0.5)" }}>
-      {done && <Check size={16} strokeWidth={3} className="text-[#3b2400]" />}
+      className="h-[22px] w-[22px] shrink-0 rounded-full flex items-center justify-center transition-colors"
+      style={done ? { background: ACCENT } : { border: "1px solid rgba(255,255,255,0.75)" }}>
+      {done && <Check size={13} strokeWidth={3} className="text-[#3b2400]" />}
     </button>
   );
 }
@@ -95,14 +95,14 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
       <motion.div drag={open || lifted ? false : "x"} dragDirectionLock dragConstraints={{ left: -ACTIONS_W, right: 0 }} dragElastic={0.05}
         onDragEnd={(_e, info) => animate(x, info.offset.x < -60 ? -ACTIONS_W : 0, { type: "spring", stiffness: 500, damping: 40 })}
         className="relative flex items-start gap-3 select-none" style={{ x }}>
-        <div className="pt-[11px]">
+        <div className="pt-[9px]">
           <Circle done={step.done} onClick={() => onPatch({ done: !step.done })} label={step.done ? "Segna da fare" : "Segna fatto"} testid="step-check" />
         </div>
-        <button type="button" onClick={onToggleOpen} className={`flex-1 min-w-0 text-left py-[12px] ${last && !open ? "" : "border-b border-white/[0.12]"}`} data-testid="step-text">
-          <span className={`block text-[16px] leading-[22px] break-words ${step.done ? "text-white/60" : step.main ? "font-semibold text-white" : "text-white"}`}>{step.text}</span>
+        <button type="button" onClick={onToggleOpen} className="flex-1 min-w-0 text-left py-[9px]" data-testid="step-text">
+          <span className={`block text-[14px] leading-[20px] break-words ${step.done ? "text-white/55" : step.main ? "font-semibold text-white" : "text-white"}`}>{step.text}</span>
           {(step.due_date || step.note) && !open && !step.done && (
             <span className="block text-[12px] mt-0.5">
-              {step.due_date && <span className={late ? "text-[#FFB3A3]" : "text-white/60"}>{late ? "scaduto " : "entro "}{dayLabel(step.due_date, true)}{step.reminder ? " · 🔔" : ""}</span>}
+              {step.due_date && <span className={late ? "text-[#FFB3A3]" : "text-white/55"}>{late ? "scaduto " : "entro "}{dayLabel(step.due_date, true)}{step.reminder ? " · 🔔" : ""}</span>}
               {step.note && <span className="text-white/55">{step.due_date ? " · " : ""}{step.note}</span>}
             </span>
           )}
@@ -111,7 +111,7 @@ function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd,
       <input ref={dateRef} type="date" value={step.due_date || ""} onChange={(e) => onPatch({ due_date: e.target.value || "" })}
         className="absolute opacity-0 pointer-events-none w-0 h-0 bottom-0 left-1/2" tabIndex={-1} aria-hidden />
       {open && (
-        <div className="ml-[38px] mt-1 mb-3 rounded-[18px] bg-white/[0.14] px-3.5 py-3" data-testid="step-edit">
+        <div className="ml-[34px] mt-1 mb-3 rounded-[16px] bg-white/[0.12] px-3.5 py-3" data-testid="step-edit">
           <input value={text} onChange={(e) => setText(e.target.value)} onBlur={saveText} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             data-testid="step-edit-text" className="w-full bg-transparent text-[16px] text-white outline-none border-b-[1px] border-white/55 pb-1.5" />
           <div className="flex flex-wrap gap-1.5 mt-2.5">
@@ -166,6 +166,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
   const fileRef = useRef(null);
   const [desc, setDesc] = useState(initial.description || "");
   const [editDesc, setEditDesc] = useState(false);
+  const [editNotes, setEditNotes] = useState(false);
   const [cover, setCover] = useState(null);           // the photo (a data: URL), loaded apart
   const [coverBusy, setCoverBusy] = useState(false);
   useEffect(() => { if (!editDesc) setDesc(t.description || ""); }, [t.description]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -284,7 +285,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
 
   return createPortal(
     <motion.div layoutScroll className="fixed inset-0 z-[65] overflow-y-auto overscroll-contain" data-testid="todo-detail" role="dialog" aria-label={t.title}
-      style={{ background: "linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%)" }}>
+      style={{ fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif", background: "linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%)" }}>
       <div className="mx-auto w-full max-w-[640px] px-5 pb-[130px]" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
         {/* top: back, and everything else in ⋯ */}
         <div className="flex items-center gap-2.5 pt-2">
@@ -329,9 +330,9 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
         <textarea value={title} onChange={(e) => setTitle(e.target.value)} rows={1} data-testid="todo-detail-title"
           onBlur={() => { if (title.trim() && title.trim() !== t.title) patchTodo({ title: title.trim() }); else setTitle(t.title); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
-          className="mt-2 w-full resize-none bg-transparent text-center text-[32px] font-bold leading-tight text-white outline-none [field-sizing:content]" />
+          className="mt-4 w-full resize-none bg-transparent text-center text-[30px] font-semibold tracking-[-0.02em] leading-tight text-white outline-none [field-sizing:content]" />
         {sub.length > 0 && (
-          <div className="text-center text-[15px] text-white/80" data-testid="todo-detail-meta">
+          <div className="mt-0.5 text-center text-[15px] text-white/85" data-testid="todo-detail-meta">
             {sub.reduce((acc, x, k) => (k ? [...acc, " · ", x] : [x]), [])}
           </div>
         )}
@@ -343,40 +344,42 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           </div>
         )}
 
-        {/* the coloured box: what it is about, and a photo if there is one (a trip, a room...) */}
-        <div className="relative mt-5 rounded-[26px] overflow-hidden aspect-[16/10] shadow-[0_18px_40px_rgba(60,10,40,0.35)]" data-testid="todo-cover"
+        {/* the only box: what it is about, and a photo if there is one (a trip, a room...) */}
+        <div className="relative mt-6 rounded-[22px] overflow-hidden aspect-[16/9] shadow-[0_16px_36px_rgba(60,10,40,0.3)]" data-testid="todo-cover"
           style={cover ? { background: "#3a2030" } : { background: "linear-gradient(135deg, #FF7E00 0%, #FF0061 55%, #B9006C 100%)" }}>
           {cover && <img src={cover} alt="" className="absolute inset-0 h-full w-full object-cover" data-testid="todo-cover-img" />}
-          {cover && <div className="absolute inset-0" style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.08) 55%, rgba(0,0,0,0.18) 100%)" }} />}
-          <div className="absolute top-3 left-4 right-3 flex items-center justify-between">
-            <span className="text-[13px] font-semibold text-white/90">To Do</span>
+          {cover && <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.12) 55%, rgba(0,0,0,0) 100%)" }} />}
+          <div className="absolute top-3.5 left-4 right-4 flex items-center justify-between">
+            <span className="text-[13px] text-white"><b className="font-bold">mAIPAL</b> To Do</span>
             <button type="button" onClick={() => fileRef.current?.click()} data-testid="todo-cover-pick"
-              className="text-[12px] px-3 py-1 rounded-full bg-black/25 text-white inline-flex items-center gap-1"><ImagePlus size={13} /> {cover ? "Cambia foto" : "Foto"}</button>
+              className="text-[13px] text-white inline-flex items-center gap-1"><ImagePlus size={13} /> {cover ? "Cambia foto" : "Foto"}</button>
           </div>
+          {/* the description, from the top */}
           {editDesc ? (
             <textarea autoFocus value={desc} onChange={(e) => setDesc(e.target.value)} onBlur={saveDesc} data-testid="todo-desc-edit"
-              placeholder="Di cosa si tratta?" className="absolute inset-x-4 top-12 bottom-4 bg-black/10 rounded-2xl p-2 text-[18px] leading-snug font-semibold text-white placeholder:text-white/70 outline-none resize-none" />
+              placeholder="Di cosa si tratta?" className="absolute inset-x-4 top-11 bottom-4 bg-transparent p-0 text-[17px] leading-snug font-semibold text-white placeholder:text-white/70 outline-none resize-none" />
           ) : (
-            <button type="button" onClick={() => setEditDesc(true)} className="absolute inset-x-4 top-12 bottom-4 text-left flex items-end" data-testid="todo-desc">
-              <span className={`text-[18px] leading-snug font-semibold line-clamp-4 ${desc ? "text-white" : "text-white/75"}`}>{desc || "Tocca per scrivere di cosa si tratta"}</span>
+            <button type="button" onClick={() => setEditDesc(true)} className="absolute inset-x-4 top-11 bottom-4 text-left flex items-start" data-testid="todo-desc">
+              <span className={`text-[17px] leading-snug font-semibold line-clamp-5 ${desc ? "text-white" : "text-white/75"}`}>{desc || "Tocca per scrivere di cosa si tratta"}</span>
             </button>
           )}
           {coverBusy && <div className="absolute inset-0 bg-black/30 flex items-center justify-center text-white"><Loader2 size={22} className="animate-spin" /></div>}
         </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickCover} data-testid="todo-cover-file" />
 
-        {/* the rows: what on the left, its content on the right */}
-        <div className="mt-7 grid grid-cols-[84px_minmax(0,1fr)] gap-x-3 gap-y-6 items-start">
+        {/* the rows, no boxes: what on the left, its content on the right */}
+        <div className="mt-8 grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-7 items-start">
           <RowLabel title="Avvio" sub="Stato" />
-          <div className="flex flex-wrap items-center gap-2" data-testid="todo-start">
-            <label className="relative rounded-full bg-white/[0.14] px-3 py-1.5 text-[14px] text-white inline-flex items-center gap-1.5 cursor-pointer">
-              <CalendarDays size={14} /> {dayLabel(start)}
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[14px] text-white pt-px" data-testid="todo-start">
+            <label className="relative cursor-pointer">
+              {dayLabel(start)}
               <input type="date" value={start} onChange={(e) => e.target.value && patchTodo({ start_date: e.target.value })} data-testid="todo-start-date"
                 className="absolute inset-0 opacity-0 cursor-pointer" aria-label="Data di avvio" />
             </label>
-            <label className="relative rounded-full px-3 py-1.5 text-[14px] font-semibold inline-flex items-center gap-1 cursor-pointer"
-              style={{ background: STATO[t.status]?.[1] || STATO.da_fare[1], color: STATO[t.status]?.[2] || STATO.da_fare[2] }}>
-              {STATO[t.status]?.[0] || "Da fare"} <ChevronDown size={14} />
+            <span className="text-white/45">·</span>
+            <label className="relative inline-flex items-center gap-1.5 cursor-pointer">
+              <span className="h-2 w-2 rounded-full" style={{ background: STATO[t.status]?.[1] || STATO.da_fare[1] }} />
+              {STATO[t.status]?.[0] || "Da fare"} <ChevronDown size={13} className="text-white/60" />
               <select value={t.status || "da_fare"} onChange={(e) => patchTodo({ status: e.target.value })} data-testid="todo-status"
                 className="absolute inset-0 opacity-0 cursor-pointer" aria-label="Stato">
                 {Object.entries(STATO).map(([k, [label]]) => <option key={k} value={k}>{label}</option>)}
@@ -384,13 +387,20 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             </label>
           </div>
 
-          <RowLabel title="Note" sub="si salvano da sole" />
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== (t.notes || "") && patchTodo({ notes })}
-            placeholder="Scrivi una nota…" rows={2} data-testid="todo-notes"
-            className="w-full rounded-[18px] bg-white/[0.12] px-3.5 py-3 text-[16px] leading-relaxed text-white placeholder:text-white/45 outline-none resize-none [field-sizing:content] min-h-[56px]" />
+          <RowLabel title="Note" sub="testo libero" />
+          {editNotes ? (
+            <textarea autoFocus value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="todo-notes"
+              onBlur={() => { setEditNotes(false); if (notes !== (t.notes || "")) patchTodo({ notes }); }}
+              placeholder="Scrivi una nota…" rows={2}
+              className="w-full bg-transparent p-0 text-[14px] leading-[20px] text-white placeholder:text-white/45 outline-none resize-none [field-sizing:content]" />
+          ) : (
+            <button type="button" onClick={() => setEditNotes(true)} className="text-left pt-px" data-testid="todo-notes-view">
+              <span className={`block text-[14px] leading-[20px] whitespace-pre-wrap break-words ${notes ? "text-white/90" : "text-white/45"}`}>{notes || "Scrivi una nota…"}</span>
+            </button>
+          )}
 
           <RowLabel title="Passi" sub={total ? `${done} di ${total} fatti` : "da fare"} />
-          <div className="rounded-[18px] bg-white/[0.12] px-3 min-w-0">
+          <div className="min-w-0 -mt-[7px]">
             <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div" data-testid="todo-steps">
               {order.map((st) => (
                 <StepRow key={st.id} step={st} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
@@ -399,10 +409,10 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             </Reorder.Group>
             <div className="flex items-center gap-3">
               <button type="button" onClick={addStep} aria-label="Aggiungi il passo"
-                className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center border-2 border-dashed border-white/35 text-white/60"><Plus size={14} /></button>
+                className="h-[22px] w-[22px] shrink-0 rounded-full flex items-center justify-center border border-dashed border-white/60 text-white/60"><Plus size={12} /></button>
               <input ref={addRef} value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
                 placeholder={order.length || doneSteps.length ? "Aggiungi un passo" : "Scrivi il primo passo"} data-testid="todo-step-add" enterKeyHint="next"
-                className={`flex-1 min-w-0 bg-transparent py-[13px] text-[16px] text-white placeholder:text-white/50 outline-none ${doneSteps.length ? "border-b border-white/[0.12]" : ""}`} />
+                className="flex-1 min-w-0 bg-transparent py-[9px] text-[14px] text-white placeholder:text-white/45 outline-none" />
             </div>
             {doneSteps.map((st, k) => (
               <StepRow key={st.id} step={st} canDrag={false} last={k === doneSteps.length - 1} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
