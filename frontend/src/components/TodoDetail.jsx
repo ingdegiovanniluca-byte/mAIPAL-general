@@ -1,19 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Reorder, motion, useDragControls, animate, useMotionValue, useTransform } from "framer-motion";
-import { ArrowLeft, Star, MoreHorizontal, Check, Plus, ChevronDown, GripVertical, Trash2, CalendarDays, Bell, Sparkles,
+import { ArrowLeft, Star, MoreHorizontal, Check, Plus, Trash2, CalendarDays, Bell, Sparkles,
   ArrowUp, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
-/* A to do, full screen: its title, state, progress and its STEPS - added one after the other,
-   ticked, marked as main (they stay on top, in bold), dragged by ⋮⋮ to reorder, slid left for
-   date / delete, tapped to rewrite them with their due date, reminder and a line of note. The
-   done ones go down in «Completati». ✨ Suggerisci proposes steps (only the ones picked are
-   added); the bar at the bottom is the to do's chat with mAIPAL ("aggiungi …", "segna fatto …"). */
+/* A to do, full screen, like a reminders list: the title, one grey line (how many steps are done,
+   the due date), then its STEPS - a circle and the text, one per line: the circle ticks it (filled,
+   in the warm colour of the logo, the done ones at the bottom), the last open line writes the next
+   one (Enter, and the next right away), a long press picks a step up to move it, sliding it left
+   shows date / delete, touching it rewrites it with main, due date, reminder and a line of note.
+   Everything else (suggest the steps, favourite, due date of the to do, done, delete) is in ⋯; the
+   notes under the list; the bar at the bottom is the to do's chat with mAIPAL. */
 
-const STATI = [["da_fare", "Da fare"], ["in_corso", "In corso"], ["fatto", "Fatto"]];
 const MON = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const DOW = ["dom", "lun", "mar", "mer", "gio", "ven", "sab"];
 const todayIso = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -25,65 +26,77 @@ const dayLabel = (iso, withDow = false) => {
 };
 const ACTIONS_W = 148;   // the two buttons behind a step slid to the left
 
-function StepRow({ step, open, onToggleOpen, onPatch, onDelete, onDragEnd, canDrag = true }) {
+const ACCENT = "#FFAC33";   // the warm drop of the mAIPAL logo: the done ones
+const HOLD_MS = 380;        // a long press on a step picks it up, to move it
+
+function Circle({ done, onClick, label, testid }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={!!done} aria-label={label} data-testid={testid}
+      className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center transition-colors"
+      style={done ? { background: ACCENT } : { border: "2px solid rgba(255,255,255,0.5)" }}>
+      {done && <Check size={16} strokeWidth={3} className="text-[#3b2400]" />}
+    </button>
+  );
+}
+
+function StepRow({ step, open, last, onToggleOpen, onPatch, onDelete, onDragEnd, canDrag = true }) {
   const controls = useDragControls();
   const x = useMotionValue(0);
   const behind = useTransform(x, [-ACTIONS_W, -8, 0], [1, 1, 0]);   // the buttons behind show only when the row is slid
   const [text, setText] = useState(step.text);
   const [note, setNote] = useState(step.note || "");
+  const [lifted, setLifted] = useState(false);
   const dateRef = useRef(null);
+  const hold = useRef(null);
   useEffect(() => { setText(step.text); setNote(step.note || ""); }, [step.text, step.note]);
   const close = () => animate(x, 0, { type: "spring", stiffness: 500, damping: 40 });
   const saveText = () => { if (text.trim() && text.trim() !== step.text) onPatch({ text: text.trim() }); else setText(step.text); };
   const pickDate = () => { try { dateRef.current?.showPicker?.(); } catch { /* old browsers */ } dateRef.current?.focus(); dateRef.current?.click(); };
   const late = step.due_date && !step.done && step.due_date < todayIso();
+  // long press: the step lifts and follows the finger (no handle to look for); a move before it is a scroll or a swipe
+  const cancelHold = () => { if (hold.current) { clearTimeout(hold.current.t); hold.current = null; } };
+  const onPointerDown = (e) => {
+    if (!canDrag || open) return;
+    const ev = e.nativeEvent;
+    cancelHold();
+    hold.current = { x: e.clientX, y: e.clientY, t: setTimeout(() => { hold.current = null; setLifted(true); controls.start(ev); }, HOLD_MS) };
+  };
+  const onPointerMove = (e) => { if (hold.current && Math.hypot(e.clientX - hold.current.x, e.clientY - hold.current.y) > 8) cancelHold(); };
   const body = (
-    <div className="relative overflow-hidden border-t border-white/[0.14]">
+    <div className="relative overflow-hidden" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={cancelHold} onPointerCancel={cancelHold}
+      onContextMenu={(e) => canDrag && e.preventDefault()} style={{ WebkitTouchCallout: "none" }}>
       {/* behind: the date and delete, shown by sliding the step left */}
       <motion.div className="absolute inset-y-0 right-0 flex" style={{ opacity: behind }}>
-        <button type="button" onClick={() => { close(); pickDate(); }} className="w-[74px] bg-white/[0.18] text-white text-[11.5px] font-medium flex items-center justify-center gap-1">
+        <button type="button" onClick={() => { close(); pickDate(); }} className="w-[74px] bg-white/[0.18] text-white text-[12px] font-medium flex items-center justify-center gap-1">
           <CalendarDays size={12} /> Data</button>
         <button type="button" onClick={() => { close(); onDelete(); }} data-testid="step-delete-swipe"
-          className="w-[74px] bg-[#E8663F] text-white text-[11.5px] font-medium flex items-center justify-center gap-1"><Trash2 size={12} /> Elimina</button>
+          className="w-[74px] bg-[#E8663F] text-white text-[12px] font-medium flex items-center justify-center gap-1"><Trash2 size={12} /> Elimina</button>
       </motion.div>
-      <motion.div drag={open ? false : "x"} dragDirectionLock dragConstraints={{ left: -ACTIONS_W, right: 0 }} dragElastic={0.05}
+      <motion.div drag={open || lifted ? false : "x"} dragDirectionLock dragConstraints={{ left: -ACTIONS_W, right: 0 }} dragElastic={0.05}
         onDragEnd={(_e, info) => animate(x, info.offset.x < -60 ? -ACTIONS_W : 0, { type: "spring", stiffness: 500, damping: 40 })}
-        className="relative flex items-center gap-2.5 py-[11px]"
-        style={{ x }}>
-        {canDrag ? (
-          <span onPointerDown={(e) => { e.preventDefault(); controls.start(e); }} data-testid="step-grip"
-            className="touch-none cursor-grab active:cursor-grabbing text-white/35 -ml-1 pl-1 pr-0.5 py-1"><GripVertical size={15} /></span>
-        ) : <span className="w-[15px]" />}
-        <button type="button" onClick={() => onPatch({ done: !step.done })} aria-pressed={!!step.done} data-testid="step-check"
-          aria-label={step.done ? "Segna da fare" : "Segna fatto"}
-          className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center ${step.done ? "bg-white/55 text-[#7A2A5C]" : "border-[1.5px] border-white/55"}`}>
-          {step.done && <Check size={12} strokeWidth={3} />}
-        </button>
-        <button type="button" onClick={onToggleOpen} className="flex-1 min-w-0 text-left" data-testid="step-text">
-          <span className={`block text-[14.5px] leading-snug break-words ${step.done ? "line-through text-white/50" : step.main ? "font-semibold text-white" : "text-white/95"}`}>{step.text}</span>
-          {(step.due_date || step.note) && !open && (
-            <span className="block text-[11.5px] mt-0.5">
-              {step.due_date && <span className={late ? "text-[#FF9A85]" : "text-[#F2C14E]"}>{late ? "scaduto " : "entro "}{dayLabel(step.due_date, true)}{step.reminder ? " · 🔔" : ""}</span>}
+        className="relative flex items-start gap-3 select-none" style={{ x }}>
+        <div className="pt-[11px]">
+          <Circle done={step.done} onClick={() => onPatch({ done: !step.done })} label={step.done ? "Segna da fare" : "Segna fatto"} testid="step-check" />
+        </div>
+        <button type="button" onClick={onToggleOpen} className={`flex-1 min-w-0 text-left py-[12px] ${last && !open ? "" : "border-b border-white/[0.12]"}`} data-testid="step-text">
+          <span className={`block text-[16px] leading-[22px] break-words ${step.done ? "text-white/60" : step.main ? "font-semibold text-white" : "text-white"}`}>{step.text}</span>
+          {(step.due_date || step.note) && !open && !step.done && (
+            <span className="block text-[12px] mt-0.5">
+              {step.due_date && <span className={late ? "text-[#FFB3A3]" : "text-white/60"}>{late ? "scaduto " : "entro "}{dayLabel(step.due_date, true)}{step.reminder ? " · 🔔" : ""}</span>}
               {step.note && <span className="text-white/55">{step.due_date ? " · " : ""}{step.note}</span>}
             </span>
           )}
         </button>
-        {!step.done && (
-          <button type="button" onClick={() => onPatch({ main: !step.main })} aria-pressed={!!step.main} data-testid="step-main"
-            aria-label={step.main ? "Non è principale" : "Segna come principale"} className={`p-1 ${step.main ? "text-[#F2C14E]" : "text-white/35"}`}>
-            <Star size={16} className={step.main ? "fill-current" : ""} />
-          </button>
-        )}
       </motion.div>
       <input ref={dateRef} type="date" value={step.due_date || ""} onChange={(e) => onPatch({ due_date: e.target.value || "" })}
         className="absolute opacity-0 pointer-events-none w-0 h-0 bottom-0 left-1/2" tabIndex={-1} aria-hidden />
       {open && (
-        <div className="mb-2.5 rounded-[18px] bg-white/[0.14] px-3.5 py-3" data-testid="step-edit">
+        <div className="ml-[38px] mt-1 mb-3 rounded-[18px] bg-white/[0.14] px-3.5 py-3" data-testid="step-edit">
           <input value={text} onChange={(e) => setText(e.target.value)} onBlur={saveText} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-            data-testid="step-edit-text" className="w-full bg-transparent text-[14.5px] text-white outline-none border-b-[1.5px] border-white/55 pb-1.5" />
+            data-testid="step-edit-text" className="w-full bg-transparent text-[16px] text-white outline-none border-b-[1px] border-white/55 pb-1.5" />
           <div className="flex flex-wrap gap-1.5 mt-2.5">
             <button type="button" onClick={() => onPatch({ main: !step.main })} data-testid="step-edit-main"
-              className={`text-[12px] px-3 py-1 rounded-full ${step.main ? "bg-[#F2C14E] text-[#403A3C] font-semibold" : "bg-white/[0.12] text-white"}`}>★ Principale</button>
+              className={`text-[12px] px-3 py-1 rounded-full ${step.main ? "bg-[#FFAC33] text-[#3b2400] font-semibold" : "bg-white/[0.12] text-white"}`}>★ Principale</button>
             <label className="relative text-[12px] px-3 py-1 rounded-full bg-white/[0.12] text-white inline-flex items-center gap-1 cursor-pointer">
               <CalendarDays size={12} /> {step.due_date ? `Entro ${dayLabel(step.due_date, true)}` : "Scadenza"}
               <input type="date" value={step.due_date || ""} onChange={(e) => onPatch({ due_date: e.target.value || "" })} data-testid="step-edit-date"
@@ -100,14 +113,15 @@ function StepRow({ step, open, onToggleOpen, onPatch, onDelete, onDragEnd, canDr
           </div>
           <input value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => note !== (step.note || "") && onPatch({ note })}
             placeholder="Una riga di nota (facoltativa)" data-testid="step-edit-note"
-            className="mt-2.5 w-full bg-transparent text-[12.5px] text-white/85 placeholder:text-white/45 outline-none" />
+            className="mt-2.5 w-full bg-transparent text-[16px] text-white/85 placeholder:text-white/45 outline-none" />
         </div>
       )}
     </div>
   );
   if (!canDrag) return body;
   return (
-    <Reorder.Item as="div" value={step} id={step.id} dragListener={false} dragControls={controls} onDragEnd={onDragEnd} data-testid="step-row"
+    <Reorder.Item as="div" value={step} id={step.id} dragListener={false} dragControls={controls} data-testid="step-row"
+      onDragEnd={() => { setLifted(false); onDragEnd(); }}
       whileDrag={{ scale: 1.02, boxShadow: "0 14px 28px rgba(0,0,0,0.28)", background: "rgba(255,255,255,0.22)", borderRadius: 16, zIndex: 5 }}
       style={{ position: "relative" }}>
       {body}
@@ -120,7 +134,6 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
   const [title, setTitle] = useState(initial.title || "");
   const [notes, setNotes] = useState(initial.notes || "");
   const [openStep, setOpenStep] = useState(null);
-  const [showDone, setShowDone] = useState(false);
   const [adding, setAdding] = useState("");
   const [menu, setMenu] = useState(false);
   const [askDone, setAskDone] = useState(false);
@@ -220,38 +233,40 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
 
   const total = steps.length;
   const done = doneSteps.length;
-  const pct = total ? Math.round((done / total) * 100) : t.completion_percent || 0;
   const late = t.due_date && t.status !== "fatto" && t.due_date < todayIso();
 
   return createPortal(
     <div className="fixed inset-0 z-[65] overflow-y-auto overscroll-contain" data-testid="todo-detail" role="dialog" aria-label={t.title}
       style={{ background: "linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%)" }}>
       <div className="mx-auto w-full max-w-[640px] px-5 pb-[130px]" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
-        {/* top */}
+        {/* top: back, and everything else in ⋯ */}
         <div className="flex items-center gap-2.5 pt-2">
           <button type="button" onClick={onClose} aria-label="Indietro" data-testid="todo-back"
             className="h-10 w-10 rounded-full lg-glass flex items-center justify-center text-white"><ArrowLeft size={18} /></button>
           <span className="flex-1" />
-          <button type="button" onClick={toggleFav} aria-pressed={!!t.favorite} aria-label="Preferito" data-testid="todo-detail-fav"
-            className={`h-10 w-10 rounded-full lg-glass flex items-center justify-center ${t.favorite ? "text-[#F2C14E]" : "text-white/80"}`}>
-            <Star size={17} className={t.favorite ? "fill-current" : ""} /></button>
           <div className="relative">
             <button type="button" onClick={() => setMenu((m) => !m)} aria-label="Altro" data-testid="todo-detail-menu"
               className="h-10 w-10 rounded-full lg-glass flex items-center justify-center text-white"><MoreHorizontal size={18} /></button>
             {menu && (
-              <div className="glass-panel absolute right-0 top-12 z-10 w-[220px] py-1" role="menu">
+              <div className="glass-panel absolute right-0 top-12 z-10 w-[240px] py-1" role="menu">
+                <button type="button" onClick={() => { setMenu(false); runSuggest(); }} data-testid="todo-suggest"
+                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Sparkles size={15} /> Suggerisci i passi</button>
+                <button type="button" onClick={() => { setMenu(false); toggleFav(); }} data-testid="todo-detail-fav"
+                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Star size={15} className={t.favorite ? "fill-current" : ""} /> {t.favorite ? "Togli dai preferiti" : "Aggiungi ai preferiti"}</button>
                 <button type="button" onClick={() => { setMenu(false); try { dueRef.current?.showPicker?.(); } catch { /* */ } dueRef.current?.focus(); dueRef.current?.click(); }}
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14.5px] text-white"><CalendarDays size={15} /> {t.due_date ? "Cambia la scadenza" : "Scadenza del to do"}</button>
+                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><CalendarDays size={15} /> {t.due_date ? "Cambia la scadenza" : "Scadenza del to do"}</button>
                 {t.due_date && (
                   <button type="button" onClick={() => { setMenu(false); patchTodo({ reminder: !t.reminder }); }}
-                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14.5px] text-white"><Bell size={15} /> {t.reminder ? "Togli il promemoria" : "Promemoria su Telegram"}</button>
+                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Bell size={15} /> {t.reminder ? "Togli il promemoria" : "Promemoria su Telegram"}</button>
                 )}
                 {t.due_date && (
                   <button type="button" onClick={() => { setMenu(false); patchTodo({ due_date: null, reminder: false }); }}
-                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14.5px] text-white"><X size={15} /> Togli la scadenza</button>
+                    className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><X size={15} /> Togli la scadenza</button>
                 )}
+                <button type="button" onClick={() => { setMenu(false); patchTodo({ status: t.status === "fatto" ? "da_fare" : "fatto" }); }} data-testid="todo-detail-done"
+                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-white"><Check size={15} /> {t.status === "fatto" ? "Riapri il to do" : "Segna il to do come fatto"}</button>
                 <button type="button" onClick={del} data-testid="todo-detail-delete"
-                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14.5px] text-[#FF9A85]"><Trash2 size={15} /> Elimina il to do</button>
+                  className="glass-row w-full flex items-center gap-3 px-5 py-3 text-left text-[14px] text-[#FF9A85]"><Trash2 size={15} /> Elimina il to do</button>
               </div>
             )}
           </div>
@@ -259,87 +274,60 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
         <input ref={dueRef} type="date" value={t.due_date || ""} onChange={(e) => e.target.value && patchTodo({ due_date: e.target.value })}
           className="absolute opacity-0 pointer-events-none w-0 h-0" tabIndex={-1} aria-hidden />
 
-        {/* title, when, state, progress */}
+        {/* the title and one line under it */}
         <textarea value={title} onChange={(e) => setTitle(e.target.value)} rows={1} data-testid="todo-detail-title"
           onBlur={() => { if (title.trim() && title.trim() !== t.title) patchTodo({ title: title.trim() }); else setTitle(t.title); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
-          className="mt-4 w-full resize-none bg-transparent text-[30px] font-bold leading-tight text-white outline-none [field-sizing:content]" />
-        <div className="mt-0.5 text-[12px] text-white/62 text-white/60" data-testid="todo-detail-meta">
-          {t.created_at ? `creato il ${dayLabel(t.created_at.slice(0, 10))}` : ""}
-          {t.due_date && <span className={late ? "text-[#FFB3A3]" : ""}> · {late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " 🔔" : ""}</span>}
-        </div>
-        <div className="mt-3.5 inline-flex rounded-full bg-white/[0.12] p-[3px]" data-testid="todo-detail-status">
-          {STATI.map(([k, label]) => (
-            <button key={k} type="button" onClick={() => patchTodo({ status: k })} data-testid={`status-${k}`}
-              className={`px-3.5 py-1.5 rounded-full text-[12.5px] transition-colors ${t.status === k ? "bg-white text-[#403A3C] font-semibold" : "text-white/80"}`}>{label}</button>
-          ))}
-        </div>
-        {(total > 0 || t.status === "in_corso") && (
-          <div className="mt-4">
-            <div className="h-1.5 rounded-full bg-white/[0.18] overflow-hidden"><div className="h-full rounded-full bg-white/85 transition-all" style={{ width: `${pct}%` }} /></div>
-            {total > 0 ? <div className="mt-1.5 text-[12px] text-white/72 text-white/70" data-testid="todo-detail-progress">{done} di {total} passi fatti</div> : (
-              <input type="range" min="0" max="100" value={pct} onChange={(e) => setT((x) => ({ ...x, completion_percent: parseInt(e.target.value, 10) }))}
-                onMouseUp={(e) => patchTodo({ completion_percent: parseInt(e.target.value, 10) })} onTouchEnd={(e) => patchTodo({ completion_percent: parseInt(e.target.value, 10) })}
-                className="w-full mt-1" data-testid="todo-progress" aria-label="Completamento" />
-            )}
+          className="mt-4 w-full resize-none bg-transparent text-[28px] font-bold leading-tight text-white outline-none [field-sizing:content]" />
+        {(total > 0 || t.due_date || t.status === "fatto") && (
+          <div className="mt-0.5 text-[13px] text-white/65" data-testid="todo-detail-meta">
+            {[t.status === "fatto" && "fatto",
+              total > 0 && <span key="p" data-testid="todo-detail-progress">{done} di {total} fatti</span>,
+              t.due_date && <span key="d" className={late ? "text-[#FFB3A3]" : ""}>{late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " 🔔" : ""}</span>,
+            ].filter(Boolean).reduce((acc, x, k) => (k ? [...acc, " · ", x] : [x]), [])}
           </div>
         )}
         {askDone && (
           <div className="mt-3 rounded-2xl bg-white/[0.14] px-3.5 py-2.5 flex items-center gap-2 text-[13px] text-white" data-testid="todo-ask-done">
             <span className="flex-1">Tutti i passi sono fatti: segno il to do come fatto?</span>
-            <button type="button" onClick={() => { setAskDone(false); patchTodo({ status: "fatto" }); }} className="px-3 py-1 rounded-full bg-white text-[#403A3C] font-semibold text-[12.5px]">Sì</button>
-            <button type="button" onClick={() => setAskDone(false)} className="px-3 py-1 rounded-full bg-white/[0.12] text-[12.5px]">No</button>
+            <button type="button" onClick={() => { setAskDone(false); patchTodo({ status: "fatto" }); }} className="px-3 py-1 rounded-full bg-white text-[#403A3C] font-semibold text-[12px]">Sì</button>
+            <button type="button" onClick={() => setAskDone(false)} className="px-3 py-1 rounded-full bg-white/[0.12] text-[12px]">No</button>
           </div>
         )}
 
-        {/* the steps */}
-        <div className="mt-6 flex items-center pb-1.5">
-          <span className="kicker flex-1">passi</span>
-          <button type="button" onClick={runSuggest} data-testid="todo-suggest"
-            className="text-[12px] px-3 py-1 rounded-full bg-white/[0.14] text-white inline-flex items-center gap-1"><Sparkles size={12} /> Suggerisci</button>
-        </div>
-        <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div" data-testid="todo-steps">
-          {order.map((st) => (
-            <StepRow key={st.id} step={st} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
-              onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} onDragEnd={saveOrder} />
-          ))}
-        </Reorder.Group>
-        <div className="flex items-center gap-2.5 py-[11px] border-t border-white/[0.14]">
-          <span className="w-[15px]" />
-          <button type="button" onClick={addStep} aria-label="Aggiungi il passo"
-            className="h-5 w-5 shrink-0 rounded-full bg-white/[0.18] flex items-center justify-center text-white"><Plus size={13} /></button>
-          <input ref={addRef} value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
-            placeholder="Aggiungi un passo" data-testid="todo-step-add" enterKeyHint="next"
-            className="flex-1 min-w-0 bg-transparent text-[14.5px] text-white placeholder:text-white/55 outline-none" />
-        </div>
-        {doneSteps.length > 0 && (
-          <>
-            <button type="button" onClick={() => setShowDone((v) => !v)} aria-expanded={showDone} data-testid="todo-done-fold"
-              className="w-full flex items-center gap-2 py-3 border-t border-white/[0.14] text-[12.5px] text-white/65">
-              <span className="h-4 w-4 rounded-full bg-white/55 text-[#7A2A5C] flex items-center justify-center"><Check size={10} strokeWidth={3} /></span>
-              <span className="flex-1 text-left">Completati · {doneSteps.length}</span>
-              <ChevronDown size={15} className={`transition-transform ${showDone ? "rotate-180" : ""}`} />
-            </button>
-            {showDone && doneSteps.map((st) => (
-              <StepRow key={st.id} step={st} canDrag={false} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
-                onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} />
+        {/* the steps, like a reminders list: the open ones, the line to add, the done ones */}
+        <div className="mt-5 rounded-[26px] lg-glass px-4 pt-1 pb-1">
+          <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div" data-testid="todo-steps">
+            {order.map((st) => (
+              <StepRow key={st.id} step={st} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
+                onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} onDragEnd={saveOrder} />
             ))}
-          </>
-        )}
+          </Reorder.Group>
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={addStep} aria-label="Aggiungi il passo"
+              className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center border-2 border-dashed border-white/35 text-white/60"><Plus size={14} /></button>
+            <input ref={addRef} value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
+              placeholder={order.length || doneSteps.length ? "Aggiungi un passo" : "Scrivi il primo passo"} data-testid="todo-step-add" enterKeyHint="next"
+              className={`flex-1 min-w-0 bg-transparent py-[13px] text-[16px] text-white placeholder:text-white/50 outline-none ${doneSteps.length ? "border-b border-white/[0.12]" : ""}`} />
+          </div>
+          {doneSteps.map((st, k) => (
+            <StepRow key={st.id} step={st} canDrag={false} last={k === doneSteps.length - 1} open={openStep === st.id} onToggleOpen={() => setOpenStep((o) => (o === st.id ? null : st.id))}
+              onPatch={(b) => patchStep(st.id, b)} onDelete={() => delStep(st)} />
+          ))}
+        </div>
 
         {/* notes */}
-        <div className="kicker mt-6 mb-2">note</div>
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== (t.notes || "") && patchTodo({ notes })}
-          placeholder="Aggiungi una nota…" rows={3} data-testid="todo-notes"
-          className="w-full rounded-[18px] bg-white/10 px-3.5 py-3 text-[13.5px] leading-relaxed text-white/90 placeholder:text-white/45 outline-none resize-none [field-sizing:content] min-h-[76px]" />
-        {t.description && <div className="mt-3 text-[12.5px] text-white/60 whitespace-pre-wrap">{t.description}</div>}
+          placeholder="Note" rows={2} data-testid="todo-notes"
+          className="mt-5 w-full rounded-[22px] bg-white/10 px-4 py-3 text-[16px] leading-relaxed text-white/90 placeholder:text-white/45 outline-none resize-none [field-sizing:content] min-h-[56px]" />
+        {t.description && <div className="mt-3 text-[13px] text-white/60 whitespace-pre-wrap">{t.description}</div>}
       </div>
 
       {/* the chat with mAIPAL */}
       <div className="fixed left-0 right-0 bottom-0 px-3.5" style={{ paddingBottom: "max(18px, env(safe-area-inset-bottom))" }}>
         <div className="mx-auto max-w-[640px] lg-glass rounded-[28px] pl-4 pr-1.5 py-1.5 flex items-center gap-2">
           <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} data-testid="todo-chat-input"
-            placeholder="Scrivi a mAIPAL: aggiungi, sposta, aggiorna…" className="flex-1 min-w-0 bg-transparent py-2 text-[13.5px] text-white placeholder:text-white/60 outline-none" />
+            placeholder="Scrivi a mAIPAL: aggiungi, sposta, aggiorna…" className="flex-1 min-w-0 bg-transparent py-2 text-[13px] text-white placeholder:text-white/60 outline-none" />
           <button type="button" onClick={send} disabled={busy || !msg.trim()} aria-label="Invia" data-testid="todo-chat-send"
             className="h-[34px] w-[34px] shrink-0 rounded-full bg-white text-[#7A2A5C] flex items-center justify-center disabled:opacity-50">
             {busy ? <Loader2 size={15} className="animate-spin" /> : <ArrowUp size={16} />}</button>
@@ -353,14 +341,15 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
             <div className="py-8 flex items-center justify-center text-white/75 text-[13px] gap-2"><Loader2 size={15} className="animate-spin" /> Penso ai passi…</div>
           ) : (
             <>
-              <div className="text-[11.5px] text-white/60 mt-1">Li aggiungo solo se li scegli; poi li cambi come vuoi.</div>
+              <div className="text-[11px] text-white/60 mt-1">Li aggiungo solo se li scegli; poi li cambi come vuoi.</div>
               <div className="mt-2">
                 {suggest.steps.map((s, i) => (
                   <button key={i} type="button" onClick={() => setSuggest((x) => ({ ...x, picked: x.picked.map((p, j) => (j === i ? !p : p)) }))}
                     className="w-full flex items-center gap-2.5 py-[11px] border-t border-white/[0.14] text-left" data-testid="todo-suggest-item">
-                    <span className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center ${suggest.picked[i] ? "bg-white/55 text-[#7A2A5C]" : "border-[1.5px] border-white/55"}`}>
-                      {suggest.picked[i] && <Check size={12} strokeWidth={3} />}</span>
-                    <span className="text-[14.5px] text-white">{s}</span>
+                    <span className="h-[26px] w-[26px] shrink-0 rounded-full flex items-center justify-center"
+                      style={suggest.picked[i] ? { background: ACCENT } : { border: "2px solid rgba(255,255,255,0.5)" }}>
+                      {suggest.picked[i] && <Check size={16} strokeWidth={3} className="text-[#3b2400]" />}</span>
+                    <span className="text-[16px] text-white">{s}</span>
                   </button>
                 ))}
               </div>
