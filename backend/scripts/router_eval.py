@@ -1,6 +1,6 @@
 """Measures the chat router (router.py) - it changes NOTHING: it only reads.
 
-Two measures:
+Three measures:
 
   --golden   the labelled examples (router_golden.jsonl), through the whole router with the
              real model: how many go to the right agent, how many ask (right only for the ambiguous
@@ -8,12 +8,15 @@ Two measures:
   --history  the real conversations in the database (last --days days, at most --max messages): each
              user message with the agent the user chose then. How often the router agrees, and every
              disagreement, to read one by one (the user may have chosen wrong, or the router).
+  --shadow   what the shadow mode collected on real use (router_shadow: app chat and Telegram, every
+             message with the agent used and where the router would have sent it) - no model call.
 
 Run on the server (needs OPENAI_API_KEY; --history also MONGO_URL / DB_NAME, as the backend):
 
     docker compose exec backend python scripts/router_eval.py --golden
     docker compose exec backend python scripts/router_eval.py --history --days 30 --max 300 --out /app/router_report.md
     docker compose cp backend:/app/router_report.md .
+    docker compose exec backend python scripts/router_eval.py --shadow --days 14 --out /app/router_shadow.md
 
 --no-model measures only the context and the rules (free, instant). The report has the users' messages:
 it stays on the server; share only what you choose.
@@ -137,22 +140,63 @@ async def eval_history(days: int, max_n: int, use_model: bool) -> list:
     return lines
 
 
+async def eval_shadow(days: int) -> list:
+    """What the shadow mode collected (router_shadow): the router next to the agent actually used, on real use."""
+    from motor.motor_asyncio import AsyncIOMotorClient
+    db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = await db.router_shadow.find({"at": {"$gte": since}}, {"_id": 0}).sort("at", -1).to_list(20000)
+    n = len(rows)
+    lines = [f"# Router · modalità ombra (ultimi {days} giorni, {n} messaggi)\n"]
+    if not n:
+        return lines + ["Nessun messaggio raccolto: la modalità ombra è accesa (ROUTER_SHADOW) e qualcuno ha scritto in chat?"]
+    agree = sum(1 for r in rows if r["agree"])
+    asks = sum(1 for r in rows if r["mode"] == "ask")
+    wrong_go = sum(1 for r in rows if not r["agree"] and r["mode"] != "ask")
+    ms = sorted(r.get("ms") or 0 for r in rows)
+    lines += [f"- **D'accordo con l'agente usato**: {agree} ({_pct(agree, n)})",
+              f"- Avrebbe chiesto: {asks} ({_pct(asks, n)})",
+              f"- **In disaccordo senza chiedere**: {wrong_go} ({_pct(wrong_go, n)})  ← da leggere uno per uno",
+              "- Deciso da: " + ", ".join(f"{k} {v}" for k, v in Counter(r["level"] for r in rows).most_common()),
+              f"- Tempo: mediana {statistics.median(ms):.0f} ms, 95° percentile {ms[int(0.95 * (n - 1))]} ms",
+              "\n| canale | d'accordo | messaggi |", "|---|---|---|"]
+    by_ch = defaultdict(lambda: [0, 0])
+    by_ag = defaultdict(lambda: [0, 0])
+    for r in rows:
+        by_ch[r["channel"]][1] += 1; by_ch[r["channel"]][0] += 1 if r["agree"] else 0
+        by_ag[r["chosen"]][1] += 1; by_ag[r["chosen"]][0] += 1 if r["agree"] else 0
+    lines += [f"| {c} | {_pct(ok, t)} | {t} |" for c, (ok, t) in by_ch.items()]
+    lines += ["\n| agente usato | d'accordo | messaggi |", "|---|---|---|"]
+    lines += [f"| {router.LABELS.get(a, a)} ({a}) | {_pct(ok, t)} | {t} |" for a, (ok, t) in sorted(by_ag.items(), key=lambda x: -x[1][1])]
+    dis = [r for r in rows if not r["agree"]]
+    if dis:
+        lines.append("\n## Disaccordi (i più recenti; ha sbagliato chi ha scelto o il router?)\n")
+        for r in dis[:150]:
+            lines.append(f"- {r['channel']}, usato **{router.LABELS.get(r['chosen'], r['chosen'])}**, router **{router.LABELS.get(r['intent'], r['intent'])}** "
+                         f"({r['confidence']}, {r['level']}, {'chiede' if r['mode'] == 'ask' else 'va'}"
+                         f"{', seguito' if r.get('follow_up') else ''}): «{r['text'][:200]}»")
+    return lines
+
+
 async def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--golden", action="store_true")
     ap.add_argument("--history", action="store_true")
+    ap.add_argument("--shadow", action="store_true")
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--max", type=int, default=300)
     ap.add_argument("--no-model", action="store_true")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
-    if not (a.golden or a.history):
+    if not (a.golden or a.history or a.shadow):
         a.golden = True
     lines = []
     if a.golden:
         lines += await eval_golden(not a.no_model)
     if a.history:
         lines += [""] + await eval_history(a.days, a.max, not a.no_model)
+    if a.shadow:
+        lines += [""] + await eval_shadow(a.days)
     text = "\n".join(lines) + "\n"
     if a.out:
         Path(a.out).write_text(text)

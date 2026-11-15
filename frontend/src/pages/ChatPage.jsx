@@ -778,6 +778,7 @@ export default function ChatPage() {
       // period); the type selected and the chips only count for what the message doesn't say
       const opts = commessaReport ? { include: comParts || [], period: comPeriod, date_from: comPeriod === "custom" ? comFrom || null : null,
                                       date_to: comPeriod === "custom" ? comTo || null : null } : {};
+      shadowRoute("work_report", workText || content);
       const r = await api.post("/work/generate-report", { text: workText || content, report_type: workType, ...opts });
       appendWorkReportResult(r.data, opts);
       await dispatchTagged(content, r.data?.id ? { type: "work_report", id: r.data.id, preview: (workText || "").slice(0, 200) } : null);
@@ -849,6 +850,14 @@ export default function ChatPage() {
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: res.message, jobCommessaId: res.log.commessa_id }] }));
   };
 
+  // the router's shadow mode: where it WOULD send this message, next to the agent chosen here (backend
+  // router.py / shadow_route) - fire and forget, never in the way; measured before it chooses for real
+  const shadowRoute = (action, msg, hasImages = false) => {
+    if (!(msg || "").trim() && !hasImages) return;
+    const history = (thread?.messages || []).slice(-4).map((m) => ({ role: m.role, content: String(m.content || "").slice(0, 300) }));
+    api.post("/router/shadow", { action, text: String(msg || "").slice(0, 2500), history, current_action: thread?.action || null, has_images: hasImages })
+      .catch(() => {});
+  };
   // no signal: the entry is kept on the phone and sent by itself when the network is back (lib/outbox)
   const keepOffline = async ({ content, images, voice, hint, shown }) => {
     const entry = await keepDiaryEntry({ client_id: newClientId(), text: content || "", images, voice: voice || null,
@@ -888,6 +897,7 @@ export default function ChatPage() {
     if (!content && hadVoice) { toast.error("Non ho capito il vocale: registralo di nuovo o scrivi la descrizione"); return; }
     if (!content && images.length) content = "Foto dal cantiere";
     if (!content) { toast.error("Racconta cosa avete fatto"); return; }
+    shadowRoute("job_log", content, images.length > 0);
     if (streaming || transcribing || uploadingFiles.length) return;
     const hint = thread?.action === "job_log"
       ? [...thread.messages].reverse().find((m) => m.jobCommessaId)?.jobCommessaId || null : null;
@@ -1009,6 +1019,7 @@ export default function ChatPage() {
 
     try {
       const { main: visitText } = splitMentions(content);
+      shadowRoute("vet_report", visitText || content);
       const r = await api.post("/vet/generate-report", { text: visitText || content, visit_type: visitType });
       appendVetReportResult(r.data);
       // "@task richiamo vaccino tra un anno": linked to this report (and its patient)
@@ -1047,6 +1058,7 @@ export default function ChatPage() {
     setText("");
     try {
       const { main } = splitMentions(content);
+      shadowRoute("lesson", main || content);
       const r = await api.post("/fitness/generate-lesson", { prompt: main || content, ...(isNew ? {} : { replace_id: last }) });
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: r.data.message, lessonId: r.data.lesson.id }] }));
       await dispatchTagged(content, null);
@@ -1087,6 +1099,7 @@ export default function ChatPage() {
       : { conv_id: null, action: "scheduled_action", messages: [{ role: "user", content }], liveAnswer: "" });
     try {
       const { main: schedText, parts: schedTags } = splitMentions(content);
+      shadowRoute("scheduled_action", schedText);
       const r = schedText
         ? await api.post("/scheduled-actions/interpret", { text: schedText, previous_text: pendingDraft?.schedDraft?.text || null })
         : { data: null };
@@ -1441,6 +1454,7 @@ export default function ChatPage() {
 
     setStreaming(true);
     let currentQuestion = [text.trim(), voiceText].filter(Boolean).join(" ").trim();
+    shadowRoute(active, currentQuestion, attachments.length > 0);
 
     // "Salva informazioni" doubles as "modifica lista": a thread already recognized as a
     // list edit keeps going as one; a fresh message gets a cheap classification pass so

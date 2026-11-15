@@ -56,6 +56,7 @@ import help_guide
 import verticals as vx
 import push_notify as push
 import notify_prefs as nprefs
+import router as chat_router
 import site_presence as sp
 import client_updates as cu
 import access as orgaccess
@@ -1720,6 +1721,66 @@ async def agents_check(payload: AgentCheckPayload, current: User = Depends(get_c
     """Before a NEW chat goes to the chosen agent: is it surely the wrong one? Then the chat
     suggests the right agent instead of answering (see agent_guard.py)."""
     return {"suggestion": await agent_guard.check(payload.text, payload.action, user_id=current.user_id)}
+
+
+# ---- The router's SHADOW MODE: on every message the user sends to an agent (app chat, Telegram), the router
+# (router.py) decides in the background where it WOULD have sent it; both are kept (router_shadow, 60 days) to
+# measure it on real use before it chooses for real (scripts/router_eval.py --shadow). Nothing changes for the
+# user: never awaited by the chat, any error ignored. ROUTER_SHADOW=0 turns it off.
+ROUTER_SHADOW = os.environ.get("ROUTER_SHADOW", "1") != "0"
+_SHADOW_SLOTS = asyncio.Semaphore(4)
+
+
+async def _router_shadow(user_id: str, vertical: Optional[str], text: str, chosen: str, channel: str,
+                         ctx: dict, has_images: bool, lists: list) -> None:
+    try:
+        async with _SHADOW_SLOTS:
+            d = await chat_router.route(text, vertical=vertical, context=ctx, lists=lists, has_images=has_images,
+                                        user_id=user_id, channel=channel)
+        agree = d["intent"] == chosen or (d["mode"] == "ask" and chosen in d["options"])
+        now = datetime.now(timezone.utc)
+        await db.router_shadow.insert_one({
+            "id": f"rs_{uuid.uuid4().hex[:12]}", "user_id": user_id, "vertical": vertical, "channel": channel,
+            "at": now.isoformat(), "at_dt": now, "text": (text or "")[:600], "has_images": has_images, "chosen": chosen,
+            "intent": d["intent"], "mode": d["mode"], "options": d["options"], "confidence": d["confidence"],
+            "level": d["level"], "reason": d["reason"], "ms": d["ms"], "agree": agree,
+            "follow_up": bool(ctx.get("current_action")), "ctx_action": ctx.get("current_action")})
+    except Exception:
+        logger.exception("router shadow failed")
+
+
+def shadow_route(user_id: str, vertical: Optional[str], text: str, chosen: str, channel: str = "web",
+                 ctx: Optional[dict] = None, has_images: bool = False, lists: Optional[list] = None) -> None:
+    """Starts the router in the background next to the agent the user (or Telegram) chose."""
+    if not ROUTER_SHADOW or not ((text or "").strip() or has_images):
+        return
+    chosen = {"list_update": "info_upload", "journal": "job_log" if vertical == "artigiano" else "journal"}.get(chosen, chosen)
+    if chosen not in chat_router.intents_for(vertical):
+        return
+    _bg(_router_shadow(user_id, vertical, text, chosen, channel, ctx or {}, has_images, lists or []))
+
+
+class RouterShadowPayload(BaseModel):
+    action: str
+    text: str = ""
+    history: List[dict] = []                  # the last messages of the conversation on screen
+    current_action: Optional[str] = None      # the agent of that conversation
+    has_images: bool = False
+
+
+@api_router.post("/router/shadow")
+async def router_shadow(payload: RouterShadowPayload, current: User = Depends(get_current_user)):
+    """The app's chat tells what the user sent and to which agent (fire and forget): see shadow_route."""
+    hist = [{"role": str(m.get("role") or ""), "content": str(m.get("content") or "")[:300]} for m in (payload.history or [])[-4:]]
+    ctx = {"current_action": payload.current_action, "history": hist} if payload.current_action and hist else {}
+    if hist and hist[-1]["role"] == "assistant" and hist[-1]["content"].rstrip().endswith("?"):
+        ctx["awaiting"] = True
+    try:
+        lists = [c.get("name") for c in await db.collections.find(_lists_query(current), {"_id": 0, "name": 1}).to_list(100) if c.get("name")]
+    except Exception:
+        lists = []
+    shadow_route(current.user_id, current.business_vertical, payload.text[:2500], payload.action, "web", ctx, payload.has_images, lists)
+    return {"ok": True}
 
 
 @api_router.get("/help/sections")
@@ -16437,6 +16498,8 @@ async def start_services():
         await db.job_logs.create_index([("user_id", 1), ("date", -1)])
         await db.job_logs.create_index([("org_id", 1), ("date", -1)])
         await db.job_logs.create_index([("client_id", 1), ("author_user_id", 1)], sparse=True)   # an entry sent again offline
+        await db.router_shadow.create_index("at_dt", expireAfterSeconds=60 * 86400)   # the router's shadow: 60 days
+        await db.router_shadow.create_index([("user_id", 1), ("at", -1)])
         await db.job_photos.create_index([("log_id", 1)])
         await db.job_photos.create_index([("commessa_id", 1)])
         await db.job_todos.create_index([("commessa_id", 1)])

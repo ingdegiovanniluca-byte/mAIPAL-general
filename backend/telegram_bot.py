@@ -71,6 +71,19 @@ async def _user_list_names(db, user_doc: dict) -> list[str]:
     return [c["name"] for c in colls]
 
 
+def _shadow(user: dict, text: str, action: str, prev_ctx: dict | None) -> None:
+    """The chat router's shadow mode (server.shadow_route): where it WOULD send this message, next to where
+    Telegram's own classifier sent it - measured before the router chooses for real. Never in the way."""
+    try:
+        from server import shadow_route
+        ctx = ({"current_action": prev_ctx.get("current_action"),
+                "history": [{"role": "user", "content": (prev_ctx.get("last_user_message") or "")[:300]}]}
+               if prev_ctx and prev_ctx.get("current_action") else {})
+        shadow_route(user["user_id"], user.get("business_vertical"), text, action, "telegram", ctx)
+    except Exception:
+        logger.exception("router shadow (telegram) failed")
+
+
 # ============ INTENT CLASSIFIER ============
 async def _classify_intent(text: str, last_context: dict | None, list_names: list[str] | None = None,
                             user_id: Optional[str] = None, vertical: Optional[str] = None) -> dict:
@@ -670,6 +683,7 @@ async def _run_main_message(update, ctx, db, user, content, forced_action, force
             return
         intent = await _classify_intent(content, prev_ctx, list_names, user_id=user["user_id"], vertical=user.get("business_vertical"))
         action = intent["action"]
+        _shadow(user, content, action, prev_ctx)
         if action == "list_update":
             import list_updates as lu
             if lu.looks_like_note(content):   # "salva che ogni mese spendo 30 € per internet"
@@ -1515,6 +1529,7 @@ async def _msg_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         list_names = await _user_list_names(db, user)
         intent = await _classify_intent(transcript, prev_ctx, list_names, user_id=user["user_id"])
         action = intent["action"]
+        _shadow(user, transcript, action, prev_ctx)
         _track_stt(_TG_ACTION_TO_FEATURE.get(action, "altro"))
         if action == "list_update":
             await _run_list_update_flow(update, ctx, db, user, transcript)
