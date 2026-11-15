@@ -110,3 +110,7 @@
 {"text": "Lezione funzionale per 10 persone, livello medio, allenamento gambe", "v": "fitness", "expect": ["lesson"], "amb": true}
 {"text": "Iscrivi Giulia alla lezione di pilates del lunedì", "v": "fitness", "expect": ["info_upload"], "amb": false, "lists": ["Lezioni Pilates"]}
 {"text": "Chi è iscritto alla lezione di martedì?", "v": "fitness", "expect": ["info_request"], "amb": false}
+{"text": "Registra come spesa mensile l’abbonamento a tim per la rete mobile di 7,99€ al mese", "v": "artigiano", "expect": ["info_upload"], "amb": false, "real": true}
+{"text": "@task ricordami di sentire martedì il cliente per chiedere se ha visto l'offerta", "v": "artigiano", "expect": ["task_todo"], "amb": false, "real": true}
+{"text": "Ho finirò alle 19", "v": "artigiano", "expect": ["task_todo"], "amb": false, "real": true, "ctx": {"current_action": "task_todo", "history": [{"role": "user", "content": "ricordami di chiamare il cliente domani"}, {"role": "assistant", "content": "Fatto: domani. Vuoi un orario?"}]}}
+{"text": "Alle 19", "v": "artigiano", "expect": ["info_request"], "amb": false, "real": true, "ctx": {"current_action": "info_request", "history": [{"role": "user", "content": "che impegni ho domani?"}, {"role": "assistant", "content": "Domani hai il sopralluogo dai Verdi."}]}}

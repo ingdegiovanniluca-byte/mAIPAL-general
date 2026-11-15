@@ -3,10 +3,11 @@
 Four levels, in order; the first that decides, decides:
 
 1. CONTEXT (no model): mAIPAL is waiting for an answer ("di quale commessa?", "usati o da prendere?",
-   a confirmation) -> the same agent; an explicit @tag -> that agent; only photos -> the diary.
+   a confirmation) -> the same agent; an explicit @tag -> that agent; only photos -> the diary; a short
+   follow-up in a conversation going on ("alle 19") -> the same agent (after the rules).
 2. RULES (no model): the shapes that are never ambiguous - "ricordami di ...", "salva che ...", a plain
    question, "4 ore dai Rossi, posato ..." for an artigiano. Written to be PRECISE: when unsure they say
-   nothing and the next level decides (tests/router_golden.jsonl checks they are never wrong).
+   nothing and the next level decides (router_golden.jsonl and tests/test_router.py check they are never wrong).
 3. MODEL: a small, fast model with the context (the agent of the conversation, the last messages, the
    trade, the lists, the open commesse) -> intent, confidence, reason, and a second choice. Bounded by a
    timeout: if it doesn't answer, level 4.
@@ -172,6 +173,24 @@ def by_rules(text: str, vertical: Optional[str], lists: list) -> Optional[dict]:
     return None
 
 
+def by_follow_up(text: str, ctx: dict, vertical: Optional[str]) -> Optional[dict]:
+    """A short message inside a conversation going on ("alle 19", "e quelle di Pietro", "anche il silicone",
+    "ho finito alle 19" to a task's "a che ora?") is its continuation: same agent. Only when the rules found
+    nothing of its own in it (they run first)."""
+    cur = ctx.get("current_action")
+    if cur not in intents_for(vertical) or not ctx.get("history"):
+        return None
+    words = re.findall(r"\w+", text or "")
+    if 0 < len(words) <= 4 or (len(words) <= 8 and _FOLLOW.match((text or "").strip())):
+        return _decision(cur, 0.85, "context", "seguito della conversazione", vertical=vertical)
+    return None
+
+
+# the way a continuation starts: "e quelle di Pietro", "anche il silicone", "alle 19", "sì, alle 10", "no, giovedì"
+_FOLLOW = re.compile(r"^(e|ed|anche|pure|invece|poi|allora|alle|dalle|per\s+le|verso\s+le|s[iì]|no|ok|okay|va\s+bene|perfetto|esatto|"
+                     r"quell[oaie]|quest[oaie]|lui|lei|loro|il\s+primo|la\s+prima|l'altr[oa])\b", re.I)
+
+
 def guess(text: str, vertical: Optional[str]) -> str:
     """A weak guess when nothing else decides (fallback only, always asked)."""
     t = (text or "").strip().lower()
@@ -265,7 +284,8 @@ async def route(text: str, *, vertical: Optional[str] = None, context: Optional[
     "history": [{"role", "content"}...]}."""
     t0 = time.monotonic()
     ctx = context or {}
-    out = (by_context(text, ctx, vertical, has_images) or by_rules(text, vertical, lists or []))
+    out = (by_context(text, ctx, vertical, has_images) or by_rules(text, vertical, lists or [])
+           or by_follow_up(text, ctx, vertical))
     if out is None and use_model:
         out = await by_model(text, vertical, ctx, lists or [], commesse or [], user_id, channel, client)
     if out is None:   # no model (off, slow, broken): the conversation's agent (shown, to be changed), else ASKED

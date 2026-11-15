@@ -2,7 +2,7 @@
 
 Two measures:
 
-  --golden   the labelled examples (tests/router/router_golden.jsonl), through the whole router with the
+  --golden   the labelled examples (router_golden.jsonl), through the whole router with the
              real model: how many go to the right agent, how many ask (right only for the ambiguous
              ones), how many go to a WRONG one (the number that must stay near zero), and the time.
   --history  the real conversations in the database (last --days days, at most --max messages): each
@@ -32,7 +32,7 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 import router  # noqa: E402
 
-GOLDEN = HERE / "tests" / "router" / "router_golden.jsonl"
+GOLDEN = HERE / "router_golden.jsonl"   # next to router.py (tests/ is not in the Docker image)
 
 
 def _pct(a, b):

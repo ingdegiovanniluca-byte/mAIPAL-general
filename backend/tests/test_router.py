@@ -1,6 +1,6 @@
 """The chat router (router.py), offline: no model is called.
 
-- The context and the rules must NEVER be wrong on the golden set (tests/router/router_golden.jsonl):
+- The context and the rules must NEVER be wrong on the golden set (router_golden.jsonl, next to router.py):
   when they decide, the agent is one of the expected ones (or, for an ambiguous message, they ask).
 - The model level is checked with a fake client: its answer, a broken answer, a timeout.
 - The thresholds: go / go_show / ask, and what changes data is asked unless sure.
@@ -16,7 +16,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import router  # noqa: E402
 
-GOLDEN = [json.loads(x) for x in (Path(__file__).parent / "router" / "router_golden.jsonl").read_text().splitlines() if x.strip()]
+GOLDEN = [json.loads(x) for x in (Path(__file__).resolve().parent.parent / "router_golden.jsonl").read_text().splitlines() if x.strip()]
 
 
 def _offline(case):
