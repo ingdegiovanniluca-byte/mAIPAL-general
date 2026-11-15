@@ -1033,6 +1033,33 @@ def plan_said(text: str) -> bool:
     return bool(_PLAN_SAID.match(text or ""))
 
 
+# a job to do on a coming day, said as a fact rather than with "pianifica": "domani Avanzino deve sostituire il filtro
+# della caldaia", "giovedì Gino fa la prova fumi", "lunedì c'è da montare i sanitari" -> a PLANNED activity (Pianificazione,
+# the day's to do, the person told), not a diary note. Only when the whole message is about later: a message that also
+# tells work done ("finito il bagno, domani le finiture") stays an entry; "domani porto / deve prendere ..." is a material to take.
+_FUTURE_DAY = re.compile(
+    r"\b(domani|dopodomani|stasera|luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sabato|domenica|"
+    r"il\s+\d{1,2}(?:[/.-]\d{1,2})?|la\s+prossima\s+settimana|settimana\s+prossima|tra\s+\w+\s+giorn[oi]|fra\s+\w+\s+giorn[oi])\b", re.I)
+_TO_DO = re.compile(
+    r"\b(deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|c'[eè]\s+da|ci\s+sono\s+da|da\s+fare|si\s+fa|si\s+fanno|"
+    r"far[aà]|faranno|faremo|fa\s+(la|il|lo|i|le|gli|l')|fanno\s+(la|il|lo|i|le|gli|l')|andr[aà]\s+a|andranno\s+a|va\s+a|vanno\s+a|"
+    r"verr[aà]\s+a|verranno\s+a|viene\s+a|vengono\s+a|ha\s+da|hanno\s+da|tocca\s+a)\b", re.I)
+_TO_TAKE = re.compile(r"\b(?:deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|devo)\s+(?:\w+\s+){0,2}?"
+                      r"(?:portare|prendere|comprare|ordinare|recuperare|ritirare|procurare)\b|^\s*(?:domani\s+)?(?:porto|portiamo|prendo|prendiamo|compro|ordino)\b", re.I)
+_DONE_NOW = re.compile(r"\b(oggi|ieri|stamattina|stamani)\b.*\b(fatt[oaie]|finit[oaie]|posat\w*|montat\w*|ore)\b", re.I | re.S)
+
+
+def future_activity_said(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or t.endswith("?") or _QUESTION_START.match(t):
+        return False
+    if not (_FUTURE_DAY.search(t) and _TO_DO.search(t)):
+        return False
+    if _TO_TAKE.search(t) or _DONE_NOW.search(t) or _DONE_WORDS.search(t):   # a material to take; work done told too
+        return False
+    return True
+
+
 def activity_done(text: str, descriptions: list) -> list:
     """The planned activities a note says were carried out ("smontati i sanitari" -> "smontaggio
     sanitari"): a word of doing and most of the activity's words. -> indexes."""
@@ -1486,7 +1513,8 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         reps.append(f"- {r.get('template_name')} del {(r.get('created_at') or '')[:10]}: {filled[:2500]}")
     today = today_local()
     system = (
-        "Sei l'assistente di un'impresa artigiana e rispondi su UNA commessa, usando SOLO i dati qui sotto (scheda, "
+        f"Sei l'assistente di un'impresa artigiana nella chat della commessa «{commessa.get('title')}» di {commessa.get('client_name')}: "
+        "l'utente parla SEMPRE di questa commessa, non chiedere mai a quale commessa si riferisce. Rispondi usando SOLO i dati qui sotto (scheda, "
         "diario, report). Se un dato non c'è, dillo chiaramente: non inventare ore, materiali, date o importi. Le ore \"da "
         "approvare\" sono scritte da un collaboratore in una nota e non sono ancora conteggiate: tienile separate e dillo. Fai i conti "
         "quando servono (ore per persona, per periodo, materiali sommati). Risposte brevi e concrete, in italiano. "
@@ -1494,7 +1522,8 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         f"SCHEDA\n{card}\n\nTOTALI\n{totals_s}\n\nDIARIO (dal più vecchio)\n{diary}\n\n"
         f"REPORT\n{chr(10).join(reps) or '(nessuno)'}\n\n"
         "Se il messaggio dell'utente NON è una domanda ma il racconto di lavoro fatto da registrare (es. 'oggi posati 10 "
-        "metri di tubo'), rispondi brevemente che puoi salvarlo nel diario e metti is_entry a true.\n"
+        "metri di tubo') o un lavoro da fare in un giorno (es. 'domani Gino deve fare la prova fumi'), rispondi brevemente che "
+        "puoi salvarlo nel diario e metti is_entry a true.\n"
         "Rispondi SOLO con JSON: {\"answer\": \"...\", \"is_entry\": false}"
     )
     msgs = [{"role": "system", "content": system}]

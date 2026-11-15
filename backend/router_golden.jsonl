@@ -117,3 +117,6 @@
 {"text": "Di' a Gino di portare domani il trapano dai Verdi", "v": "artigiano", "expect": ["job_log"], "amb": false}
 {"text": "Ricorda a Pietro che deve ritirare i sanitari per il bagno Rossi", "v": "artigiano", "expect": ["job_log"], "amb": false}
 {"text": "Ricordami di comprare il latte", "v": "artigiano", "expect": ["task_todo"], "amb": false}
+{"text": "Salva nella commessa impianto elettrico del cliente Luca D che domani avanzino deve sostituire il filtro della caldaia", "v": "artigiano", "expect": ["job_log"], "amb": false, "real": true}
+{"text": "domani Avanzino deve fare la prova fumi sulla caldaia", "v": "artigiano", "expect": ["job_log"], "amb": false, "real": true}
+{"text": "Giovedì Gino fa la prova fumi dai Rossi", "v": "artigiano", "expect": ["job_log"], "amb": false, "real": false}

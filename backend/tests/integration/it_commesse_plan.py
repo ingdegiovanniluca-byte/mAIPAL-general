@@ -333,6 +333,27 @@ async def main():
     assert r["status"] == "commessa_update" and "Posa piastrelle" in r["message"] and "Marco Bianchi" in r["message"] and "DPI: casco" in r["message"], r
     d = await server.get_job_commessa("s_bagno", current=me)
     assert [x["description"] for x in d["activities"]][-1] == "Posa piastrelle" and d["activities"][0]["status"] in ("svolta",)
+
+    # 8) said as a fact, without "pianifica": "domani Marco deve fare la prova fumi" - a planned activity for tomorrow,
+    #    to Marco, not a diary note (nor a change to the commessa's description)
+    async def read_act2(text, people, user_id=None, channel="web"):
+        assert "Marco Bianchi" in people
+        return {"description": "Prova fumi sulla caldaia", "date": (today + timedelta(days=1)).isoformat(), "start": "", "end": "",
+                "assignees": ["Marco Bianchi"], "items": [], "info": ""}
+    jl.read_activity = read_act2
+    n_logs = len(db.job_logs.docs)
+    r = await server._save_job_log(me, "domani Marco deve fare la prova fumi sulla caldaia", commessa_id="s_bagno")
+    assert r["status"] == "commessa_update" and "Prova fumi sulla caldaia" in r["message"] and "Marco Bianchi" in r["message"], r
+    new = db.job_logs.docs[n_logs:]                              # no diary note: only the diary's event of the plan
+    assert all(x.get("kind") for x in new) and any("Prova fumi" in (x.get("text") or "") for x in new), new
+    a = next(x for x in db.job_activities.docs if x["description"] == "Prova fumi sulla caldaia")
+    assert a["date"] == (today + timedelta(days=1)).isoformat() and [p["name"] for p in a["assignees"]] == ["Marco Bianchi"]
+    # from Salva in the general chat: classified as a plan, not as a change of the Clienti list
+    assert (await server.classify_save_intent(server.ClassifySaveIntentPayload(
+        text="Salva nella commessa Bagno del cliente Mario Rossi che domani Marco deve sostituire il filtro della caldaia"), me))["kind"] == "job_plan"
+    # not a plan: work done + tomorrow's, a material to take, a question
+    for t in ["Finito il bagno, domani si fanno le finiture", "Domani Marco deve prendere il corrugato", "Cosa deve fare domani Marco?"]:
+        assert not jl.future_activity_said(t), t
     print("ALL OK")
 
 asyncio.run(main())

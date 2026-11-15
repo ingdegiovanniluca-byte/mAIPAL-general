@@ -163,6 +163,10 @@ def by_rules(text: str, vertical: Optional[str], lists: list) -> Optional[dict]:
     question = t.endswith("?") or bool(_Q_START.match(t))
     if _RECURRING_COMMAND.match(t) and not low.startswith(("ricordami", "promemoria")):
         return _decision("scheduled_action", 0.85, "rules", "comando da ripetere nel tempo", "task_todo", vertical)   # risky: asked
+    if vertical == "artigiano":   # a job on a coming day ("domani Avanzino deve sostituire il filtro"): planned by the diary
+        import job_logs as _jl
+        if _jl.future_activity_said(t):
+            return _decision("job_log", 0.9, "rules", "lavoro da fare in un giorno", vertical=vertical)
     if vertical == "artigiano" and _MATERIAL_FOR.match(t):
         return _decision("job_log", 0.9, "rules", "materiali da prendere per qualcuno", vertical=vertical)
     if _TASK.match(t) or _TASK_DONE.match(t):

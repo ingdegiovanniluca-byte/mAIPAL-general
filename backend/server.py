@@ -4605,6 +4605,10 @@ async def delete_sub_item(collection_id: str, item_id: str, sub_id: str, code: O
 # ---- Rilevamento automatico "salva nota" vs "modifica lista" (un solo tasto in chat) ----
 @api_router.post("/classify-save-intent")
 async def classify_save_intent(payload: ClassifySaveIntentPayload, current: User = Depends(get_current_user)):
+    # an artigiano's job to do on a coming day ("salva nella commessa X che domani Avanzino deve sostituire il filtro"):
+    # not a change to the commessa's card in the Clienti list - a planned activity, made by the commessa's diary
+    if current.business_vertical == "artigiano" and jl.future_activity_said(payload.text):
+        return {"kind": "job_plan"}
     colls = await db.collections.find(_lists_query(current), {"_id": 0, "name": 1}).to_list(200)
     kind = await lu.classify_save_intent(payload.text, [c["name"] for c in colls], user_id=current.user_id, channel="web")
     return {"kind": kind}
@@ -7913,7 +7917,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
         await _commessa_or_404(current, target["id"])
 
-    if not author and not images and _is_org_admin(current) and jl.plan_said(text):   # "pianifica … il 12/11 con Gino"
+    if not author and not images and _is_org_admin(current) and (jl.plan_said(text) or jl.future_activity_said(text)):
+        # "pianifica … il 12/11 con Gino", or "domani Avanzino deve sostituire il filtro della caldaia": a planned activity
         return await _plan_from_message(current, clienti, target, text, channel)
     outcome = jl.quote_outcome_said(text) if not author and not images and _is_org_admin(current) else None
     if outcome and parsed.get("kind") != "descrizione":   # "il preventivo dei Rossi è stato accettato" (RF-PRE-03)

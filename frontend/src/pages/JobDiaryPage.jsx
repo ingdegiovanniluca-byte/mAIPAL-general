@@ -1094,6 +1094,8 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
 }
 
 // ===== Pianificazione: the planned activities - when, who (and whether they confirmed), what to bring
+// a question to the commessa's chat: "?" at the end, or how a question starts; anything else is something to record
+const QUESTION_RX = /\?\s*$|^(che\s+cosa|cosa|cos'|quando|dove|chi|come|quale|quali|qual|quanto|quanti|quante|perch[eé]|mi\s+dici|dimmi|sai|c'è|ci\s+sono|abbiamo|hai|ha|hanno|com'è|elenca|mostrami|riassumi|fammi)\b/i;
 const ACT_CATEGORIES = [["materiali", "Materiali"], ["attrezzi", "Attrezzi"], ["dpi", "DPI"], ["documenti", "Documenti"]];
 const ACT_STATUS = { pianificata: ["Pianificata", "#F2C14E"], confermata: ["Confermata", "#8ED973"], in_corso: ["In corso", "#7FC8F8"],
   svolta: ["Svolta", "rgba(255,255,255,0.55)"], annullata: ["Annullata", "rgba(255,255,255,0.35)"] };
@@ -2288,11 +2290,13 @@ function CommessaChat({ commessa, onClose, onSaved }) {
     const images = mode === "diary" ? photos : [];
     setMessages((ms) => [...ms, { role: "user", content: images.length ? `${body}\n📷 ${images.length} foto` : body, mode }]);
     setText(""); setPhotos([]);
-    if (mode === "diary" && navigator.onLine === false) { await keepOffline(body, images); return; }
+    // in "Chiedi" a message that is not a question (an entry, a job for tomorrow) goes to the diary by itself
+    const asDiary = mode === "diary" || !QUESTION_RX.test(body.trim());
+    if (asDiary && navigator.onLine === false) { await keepOffline(body, images); return; }
     setBusy(true);
     const clientId = newClientId();
     try {
-      if (mode === "diary") {
+      if (asDiary) {
         await saveEntry(body, images, null, null, clientId);
       } else {
         const history = messages.filter((m) => m.mode !== "diary" && !m.saved).slice(-8).map((m) => ({ role: m.role, content: m.content }));
@@ -2300,7 +2304,7 @@ function CommessaChat({ commessa, onClose, onSaved }) {
         setMessages((ms) => [...ms, { role: "assistant", content: r.data.answer, offerSave: r.data.is_entry ? body : null }]);
       }
     } catch (e) {
-      if (mode === "diary" && isNetworkError(e)) await keepOffline(body, images, clientId);
+      if (asDiary && isNetworkError(e)) await keepOffline(body, images, clientId);
       else setMessages((ms) => [...ms, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]);
     } finally { setBusy(false); }
   };

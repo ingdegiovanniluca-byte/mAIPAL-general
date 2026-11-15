@@ -1519,6 +1519,14 @@ export default function ChatPage() {
           kind = (await api.post("/classify-save-intent", { text: mainQuestion })).data?.kind;
         } catch { /* classification failed: fall through to a normal save */ }
       }
+      if (kind === "job_plan") {   // "salva nella commessa X che domani Avanzino deve …": planned on that commessa
+        setText(""); setAttachments([]);
+        setThread({ conv_id: null, action: "job_log", messages: [{ role: "user", content: mainQuestion }], liveAnswer: "" });
+        try { appendJobLogResult((await api.post("/jobs/logs", { text: mainQuestion, client_id: newClientId(), written_at: new Date().toISOString() })).data, []); }
+        catch (e) { setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a pianificarla") }] })); }
+        finally { setStreaming(false); }
+        return;
+      }
       if (kind === "list_create" || kind === "list_update" || thread?.action === "list_update") {
         setText("");
         const shown = [mainQuestion, ...attachments.map((a) => `📎 ${a.name}`)].join("\n");
