@@ -114,3 +114,6 @@
 {"text": "@task ricordami di sentire martedì il cliente per chiedere se ha visto l'offerta", "v": "artigiano", "expect": ["task_todo"], "amb": false, "real": true}
 {"text": "Ho finirò alle 19", "v": "artigiano", "expect": ["task_todo"], "amb": false, "real": true, "ctx": {"current_action": "task_todo", "history": [{"role": "user", "content": "ricordami di chiamare il cliente domani"}, {"role": "assistant", "content": "Fatto: domani. Vuoi un orario?"}]}}
 {"text": "Alle 19", "v": "artigiano", "expect": ["info_request"], "amb": false, "real": true, "ctx": {"current_action": "info_request", "history": [{"role": "user", "content": "che impegni ho domani?"}, {"role": "assistant", "content": "Domani hai il sopralluogo dai Verdi."}]}}
+{"text": "Di' a Gino di portare domani il trapano dai Verdi", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Ricorda a Pietro che deve ritirare i sanitari per il bagno Rossi", "v": "artigiano", "expect": ["job_log"], "amb": false}
+{"text": "Ricordami di comprare il latte", "v": "artigiano", "expect": ["task_todo"], "amb": false}

@@ -140,6 +140,9 @@ def _site(t: str) -> bool:
 
 _ARRIVE = re.compile(r"^(sono\s+arrivat[oa]|arrivat[oa]\s+(in|al|dal|dai|da)|ho\s+finito(\s+(alle|per\s+oggi))?|finito\s+per\s+oggi|inizio\s+(il\s+)?lavoro|"
                      r"stacco|vado\s+via|pausa\s+pranzo|riprendo)\b", re.I)
+# an artigiano's materials to take for someone ("ricorda a Mario di prendere ...", "di' a Gino di portare ..."): the diary
+# makes them the commessa's "Da prendere", for that person (on Telegram too) - not a plain task
+_MATERIAL_FOR = re.compile(r"^(ricorda|di'|dì|dire)\s+a\s+[A-Za-zÀ-ÿ]+\s+(di|che\s+deve)\s+(prendere|portare|comprare|ordinare|recuperare|ritirare)\b", re.I)
 _RECURRING_COMMAND = re.compile(r"^ogni\s+(giorno|mattina|sera|settimana|mese|luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sabato|domenica)\b"
                                 r".{0,60}\b(svuota|cancella|elimina|azzera|manda|mandami|invia|inviami|esporta|genera|aggiorna)\b", re.I | re.S)
 
@@ -153,6 +156,8 @@ def by_rules(text: str, vertical: Optional[str], lists: list) -> Optional[dict]:
     question = t.endswith("?") or bool(_Q_START.match(t))
     if _RECURRING_COMMAND.match(t) and not low.startswith(("ricordami", "promemoria")):
         return _decision("scheduled_action", 0.85, "rules", "comando da ripetere nel tempo", "task_todo", vertical)   # risky: asked
+    if vertical == "artigiano" and _MATERIAL_FOR.match(t):
+        return _decision("job_log", 0.9, "rules", "materiali da prendere per qualcuno", vertical=vertical)
     if _TASK.match(t) or _TASK_DONE.match(t):
         return _decision("task_todo", 0.95, "rules", "promemoria / cosa da fare", vertical=vertical)
     if _SAVE.match(t):
@@ -218,7 +223,8 @@ def _system(vertical: Optional[str], allowed: list, ctx: dict, lists: list, comm
         "- Un fatto da ricordare o una spesa personale è info_upload; aggiungere/togliere/cambiare in una lista è info_upload.\n"
         "- Una cosa da FARE in futuro (anche senza data: 'devo comprare il silicone') è task_todo.\n"
         + ("- Per l'artigiano: il RACCONTO del lavoro su un cantiere/commessa (fatto, ore, materiali, problemi) è job_log; "
-           "anche 'domani porto 10 scatole 503 dai Rossi' (materiali da prendere per una commessa) e 'sono arrivato'/'ho finito' "
+           "anche 'domani porto 10 scatole 503 dai Rossi' e 'ricorda a Mario di prendere il corrugato per i Bianchi' (materiali da "
+           "prendere per una commessa, anche per un'altra persona) e 'sono arrivato'/'ho finito' "
            "sono job_log. Una spesa pagata per i materiali di una commessa è job_log; una spesa personale è info_upload.\n"
            if vertical == "artigiano" else "")
         + "- Se il messaggio continua il discorso della conversazione in corso, resta con quell'agente.\n"
