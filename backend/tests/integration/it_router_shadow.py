@@ -173,6 +173,9 @@ async def main():
     await done()
     x = db.router_shadow.docs[-1]
     assert x["agree"] and x["follow_up"] and x["level"] == "context", x
+    # all it saw is kept (to decide again later with a corrected router) and which version decided
+    assert x["ctx"]["current_action"] == "task_todo" and x["ctx"]["history"][-1]["content"] == "A che ora?"
+    assert x["router_version"] == server.chat_router.VERSION and len(x["router_version"]) == 8
 
     # 3) Telegram: next to its own classifier; its "journal" is the artigiano's diary
     tg._shadow({"user_id": "u1", "business_vertical": "artigiano"}, "Oggi 4 ore dai Rossi, posato il corrugato", "journal", None)

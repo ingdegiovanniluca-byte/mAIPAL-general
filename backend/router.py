@@ -32,6 +32,13 @@ import mentions
 logger = logging.getLogger(__name__)
 
 MODEL = os.environ.get("ROUTER_MODEL", "gpt-4o-mini")
+# which router decided (its rules and instructions): a short fingerprint of this file - every correction
+# changes it, so the shadow's records say which version saw them (and old ones can be replayed with a new one)
+try:
+    import hashlib
+    VERSION = hashlib.sha1(open(__file__, "rb").read()).hexdigest()[:8]
+except Exception:   # pragma: no cover
+    VERSION = "dev"
 TIMEOUT_S = float(os.environ.get("ROUTER_TIMEOUT_S", "2.5"))
 GO = 0.80        # at or above: go
 SHOW = 0.55      # at or above (below GO): go, with "· cambia" shown

@@ -1744,7 +1744,9 @@ async def _router_shadow(user_id: str, vertical: Optional[str], text: str, chose
             "at": now.isoformat(), "at_dt": now, "text": (text or "")[:600], "has_images": has_images, "chosen": chosen,
             "intent": d["intent"], "mode": d["mode"], "options": d["options"], "confidence": d["confidence"],
             "level": d["level"], "reason": d["reason"], "ms": d["ms"], "agree": agree,
-            "follow_up": bool(ctx.get("current_action")), "ctx_action": ctx.get("current_action")})
+            "follow_up": bool(ctx.get("current_action")), "ctx_action": ctx.get("current_action"),
+            # all it saw, so a later version of the router can decide again on the same message (--replay)
+            "ctx": ctx, "lists": (lists or [])[:40], "router_version": chat_router.VERSION, "model": chat_router.MODEL})
     except Exception:
         logger.exception("router shadow failed")
 

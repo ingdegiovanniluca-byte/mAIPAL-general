@@ -17,6 +17,7 @@ Run on the server (needs OPENAI_API_KEY; --history also MONGO_URL / DB_NAME, as 
     docker compose exec backend python scripts/router_eval.py --history --days 30 --max 300 --out /app/router_report.md
     docker compose cp backend:/app/router_report.md .
     docker compose exec backend python scripts/router_eval.py --shadow --days 14 --out /app/router_shadow.md
+    docker compose exec backend python scripts/router_eval.py --shadow --replay --days 14   (after a correction)
 
 --no-model measures only the context and the rules (free, instant). The report has the users' messages:
 it stays on the server; share only what you choose.
@@ -140,7 +141,7 @@ async def eval_history(days: int, max_n: int, use_model: bool) -> list:
     return lines
 
 
-async def eval_shadow(days: int) -> list:
+async def eval_shadow(days: int, replay: bool = False) -> list:
     """What the shadow mode collected (router_shadow): the router next to the agent actually used, on real use."""
     from motor.motor_asyncio import AsyncIOMotorClient
     db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
@@ -168,6 +169,28 @@ async def eval_shadow(days: int) -> list:
     lines += [f"| {c} | {_pct(ok, t)} | {t} |" for c, (ok, t) in by_ch.items()]
     lines += ["\n| agente usato | d'accordo | messaggi |", "|---|---|---|"]
     lines += [f"| {router.LABELS.get(a, a)} ({a}) | {_pct(ok, t)} | {t} |" for a, (ok, t) in sorted(by_ag.items(), key=lambda x: -x[1][1])]
+    versions = Counter(r.get("router_version") or "?" for r in rows)
+    if len(versions) > 1:
+        lines += ["\n| versione del router | d'accordo | messaggi |", "|---|---|---|"]
+        for v, t in versions.most_common():
+            ok = sum(1 for r in rows if (r.get("router_version") or "?") == v and r["agree"])
+            lines.append(f"| {v} | {_pct(ok, t)} | {t} |")
+    if replay:   # the same messages, decided again by the router as it is NOW (after the corrections)
+        changed, now_ok = [], 0
+        for r in rows:
+            d = await router.route(r["text"], vertical=r.get("vertical"), context=r.get("ctx") or {}, lists=r.get("lists") or [],
+                                   has_images=bool(r.get("has_images")), channel="eval")
+            ok = d["intent"] == r["chosen"] or (d["mode"] == "ask" and r["chosen"] in d["options"])
+            now_ok += 1 if ok else 0
+            if ok != r["agree"] or d["intent"] != r["intent"]:
+                changed.append((r, d, ok))
+        lines += [f"\n## Rigiocati con il router di adesso (versione {router.VERSION})\n",
+                  f"- **D'accordo**: {now_ok} ({_pct(now_ok, n)}) — prima {agree} ({_pct(agree, n)})",
+                  f"- Decisioni cambiate: {len(changed)}"]
+        for r, d, ok in changed[:150]:
+            lines.append(f"- {'✓ ora giusto' if ok and not r['agree'] else '✗ ora sbagliato' if not ok and r['agree'] else '· diverso'}: "
+                         f"usato **{router.LABELS.get(r['chosen'], r['chosen'])}**, prima {router.LABELS.get(r['intent'], r['intent'])}, "
+                         f"ora **{d['label']}** ({d['confidence']}, {d['level']}): «{r['text'][:160]}»")
     dis = [r for r in rows if not r["agree"]]
     if dis:
         lines.append("\n## Disaccordi (i più recenti; ha sbagliato chi ha scelto o il router?)\n")
@@ -183,6 +206,7 @@ async def main():
     ap.add_argument("--golden", action="store_true")
     ap.add_argument("--history", action="store_true")
     ap.add_argument("--shadow", action="store_true")
+    ap.add_argument("--replay", action="store_true", help="con --shadow: ridecide i messaggi raccolti con il router di adesso")
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--max", type=int, default=300)
     ap.add_argument("--no-model", action="store_true")
@@ -196,7 +220,7 @@ async def main():
     if a.history:
         lines += [""] + await eval_history(a.days, a.max, not a.no_model)
     if a.shadow:
-        lines += [""] + await eval_shadow(a.days)
+        lines += [""] + await eval_shadow(a.days, a.replay)
     text = "\n".join(lines) + "\n"
     if a.out:
         Path(a.out).write_text(text)
