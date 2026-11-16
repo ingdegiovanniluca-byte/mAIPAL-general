@@ -325,6 +325,7 @@ async def main():
     assert await server._daily_site_summary(at(tomorrow, 20, 30)) == 0
 
     # 7) planned from the chat: "pianifica … con Marco"
+    real_read_activity = jl.read_activity
     async def read_act(text, people, user_id=None, channel="web"):
         return {"description": "Posa piastrelle", "date": (today + timedelta(days=5)).isoformat(), "start": "08:30", "end": "",
                 "assignees": ["Marco Bianchi"], "items": ["colla per piastrelle", "casco"], "info": ""}
@@ -354,6 +355,27 @@ async def main():
     # not a plan: work done + tomorrow's, a material to take, a question
     for t in ["Finito il bagno, domani si fanno le finiture", "Domani Marco deve prendere il corrugato", "Cosa deve fare domani Marco?"]:
         assert not jl.future_activity_said(t), t
+
+    # 9) the model writes the day as a word ("domani") and the name is misspelled: the day is counted from the words,
+    #    the person found anyway; with the day really missing, what is missing is said
+    import json as _json, types
+    SAYS = {}
+    class _Comp:
+        async def create(self, **k):
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=_json.dumps(SAYS)))], usage=None, model="x")
+    class _Cl:
+        def __init__(self, *a, **k): self.chat = types.SimpleNamespace(completions=_Comp())
+    jl.openai.AsyncOpenAI = _Cl
+    jl.read_activity = real_read_activity
+    SAYS.update(description="Smontare la caldaia e sostituire il ventilatore", date="domani", start="", end="", assignees=["Marcho"], items=[], info="")
+    r = await server._save_job_log(me, "domani marcho deve smontare la caldaia e sostituire il ventilatore", commessa_id="s_bagno")
+    assert r["status"] == "commessa_update" and "Smontare la caldaia e sostituire il ventilatore" in r["message"], r
+    a = next(x for x in db.job_activities.docs if x["description"] == "Smontare la caldaia e sostituire il ventilatore")
+    assert a["date"] == (today + timedelta(days=1)).isoformat() and [p["name"] for p in a["assignees"]] == ["Marco Bianchi"], a
+    SAYS.update(description="Smontaggio caldaia", date="")
+    r = await server._save_job_log(me, "pianifica smontaggio caldaia con Marco", commessa_id="s_bagno")
+    assert r["status"] == "unclear" and r["message"].startswith("Per pianificarla mi manca il giorno"), r
+    assert jl.person_named("Mario", ["Marco Bianchi"]) is None and jl.person_named("avanzion", ["Avanzino Neri"]) == "Avanzino Neri"
     print("ALL OK")
 
 asyncio.run(main())

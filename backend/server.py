@@ -11142,9 +11142,11 @@ async def _plan_from_message(current: User, clienti: dict, target: dict, text: s
     people = await _activity_people(clienti, target["id"])
     names = [p["name"] for p in people]
     f = await jl.read_activity(text, names, current.user_id, channel)
-    if not f["description"] or not f["date"]:
-        return {"status": "unclear", "commessa": target, "message": "Per pianificare mi servono l'attività e il giorno, es. «pianifica smontaggio "
-                                                                    "sanitari il 12/11 alle 8 con Gino»."}
+    if not f["description"] or not f["date"]:   # what is missing, said
+        missing = " e ".join(x for x, ok in (("cosa va fatto", f["description"]), ("il giorno", f["date"])) if not ok)
+        return {"status": "unclear", "commessa": target, "message": f"Per pianificarla mi manca {missing}: riscrivimela con "
+                                                                    f"{'il giorno' if f['description'] else 'cosa va fatto'}, es. «domani Gino "
+                                                                    "smonta i sanitari alle 8» o «pianifica smontaggio sanitari il 12/11 con Gino»."}
     by_name = {p["name"]: p for p in people}
     chosen = [{"type": by_name[n]["type"], "id": by_name[n]["id"]} for n in f["assignees"] if n in by_name]
     a = await _new_activity(current, clienti, target, f["description"], f["date"], f["start"], f["end"], chosen,

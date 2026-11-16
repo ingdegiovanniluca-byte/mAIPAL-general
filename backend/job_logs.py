@@ -1080,6 +1080,75 @@ def activity_done(text: str, descriptions: list) -> list:
     return out
 
 
+_WEEKDAYS_IT = ["lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato", "domenica"]
+
+
+def said_day(text: str, today: date) -> str:
+    """The day said in words, counted from today: "oggi", "domani", "dopodomani", "giovedì" (the next one), "il 12" /
+    "il 12/11" / "12/11/2026" (not a past one), "tra 3 giorni". "" when none or more than one is said."""
+    n = _norm(text or "")
+    days = set()
+    if re.search(r"\bdopodomani\b", n):
+        days.add(today + timedelta(days=2))
+    elif re.search(r"\bdomani\b", n):
+        days.add(today + timedelta(days=1))
+    if re.search(r"\b(?:oggi|stasera|stamattina|oggi pomeriggio)\b", n):
+        days.add(today)
+    for i, w in enumerate(_WEEKDAYS_IT):
+        if re.search(rf"\b{w[:-1]}[iì]?\b" if w.endswith("i") else rf"\b{w}\b", n):
+            days.add(today + timedelta(days=(i - today.weekday()) % 7 or 7))
+    m = re.search(r"\b(?:tra|fra)\s+(\d{1,2}|due|tre|quattro|cinque|sei|sette)\s+giorn[oi]\b", n)
+    if m:
+        k = int(m.group(1)) if m.group(1).isdigit() else _NUM_WORDS[m.group(1)]
+        days.add(today + timedelta(days=int(k)))
+    for m in re.finditer(r"\b(?:il\s+|l'\s*)?(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b", n):
+        dd, mm, yy = int(m.group(1)), int(m.group(2)), m.group(3)
+        y = (2000 + int(yy) if len(yy) == 2 else int(yy)) if yy else today.year
+        try:
+            d = date(y, mm, dd)
+        except ValueError:
+            continue
+        if not yy and d < today:
+            try:
+                d = date(y + 1, mm, dd)
+            except ValueError:
+                continue
+        days.add(d)
+    if not re.search(r"\d{1,2}[/.-]\d{1,2}", n):
+        m = re.search(r"\bil\s+(\d{1,2})\b(?!\s*(?:ore|h|:|\.\d|metri|m\b|pz|pezzi|euro|€))", n)
+        if m and 1 <= int(m.group(1)) <= 31:
+            d0 = int(m.group(1))
+            y, mo = today.year, today.month
+            for _ in range(2):
+                try:
+                    d = date(y, mo, d0)
+                    if d >= today:
+                        days.add(d)
+                        break
+                except ValueError:
+                    pass
+                y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    return next(iter(days)).isoformat() if len(days) == 1 else ""
+
+
+def person_named(name: str, people: list) -> Optional[str]:
+    """One of `people` named, even misspelled ("Avanzion" -> "Avanzino Neri") or by first name only."""
+    from difflib import SequenceMatcher
+    key = _norm(name).strip()
+    if not key:
+        return None
+    for p in people:
+        if _norm(p) == key:
+            return p
+    best, score = None, 0.0
+    for p in people:
+        full = _norm(p)
+        r = max(SequenceMatcher(None, key, full).ratio(), max((SequenceMatcher(None, key, part).ratio() for part in full.split()), default=0))
+        if r > score:
+            best, score = p, r
+    return best if score >= 0.85 else None   # (a typo, not another name: "Mario" is not "Marco")
+
+
 async def read_activity(text: str, people: list, user_id: Optional[str] = None, channel: str = "web") -> dict:
     """"Pianifica smontaggio sanitari il 12/11 alle 8 con Gino e Marco, portare i flessibili" ->
     {"description", "date", "start", "end", "assignees": [names among `people`], "items": [str], "info"}."""
@@ -1087,7 +1156,8 @@ async def read_activity(text: str, people: list, user_id: Optional[str] = None, 
     system = (
         "Sei l'assistente di un'impresa artigiana. Il messaggio PIANIFICA un'attività di cantiere. "
         f"Oggi è {IT_WEEKDAYS[today.weekday()]} {today.isoformat()}. Persone che possono essere assegnate: {', '.join(people) or 'nessuna'}.\n"
-        "Estrai SOLO ciò che è scritto: \"description\": l'attività in breve; \"date\": il giorno (YYYY-MM-DD; \"domani\", \"il 12\", \"giovedì\"); "
+        "Estrai SOLO ciò che è scritto: \"description\": l'attività in breve; \"date\": il giorno come data YYYY-MM-DD (calcolala tu da "
+        "\"domani\", \"il 12\", \"giovedì\": mai la parola); "
         "\"start\" e \"end\": orari HH:MM se scritti; \"assignees\": i nomi delle persone assegnate SCELTI dall'elenco; "
         "\"items\": materiale, attrezzi, DPI o documenti da portare, uno per elemento; \"info\": altre informazioni utili. MAI inventare.\n"
         "Rispondi SOLO con JSON: {\"description\": \"\", \"date\": \"\", \"start\": \"\", \"end\": \"\", \"assignees\": [], \"items\": [], \"info\": \"\"}"
@@ -1102,17 +1172,19 @@ async def read_activity(text: str, people: list, user_id: Optional[str] = None, 
     _track(resp, user_id, channel)
     m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
     p = json.loads(m.group(0)) if m else {}
-    try:
-        d = date.fromisoformat(str(p.get("date") or "")[:10])
-        day = d.isoformat() if today - timedelta(days=1) <= d <= today + timedelta(days=366) else ""
-    except ValueError:
-        day = ""
+    day = said_day(text, today)   # "domani", "giovedì", "il 12/11": counted here, the model's date only when the words don't say it
+    if not day:
+        try:
+            d = date.fromisoformat(str(p.get("date") or "")[:10])
+            day = d.isoformat() if today - timedelta(days=1) <= d <= today + timedelta(days=366) else ""
+        except ValueError:
+            day = ""
     def hhmm(v):
         mm = re.fullmatch(r"(\d{1,2})[:.](\d{2})", str(v or "").strip())
         return f"{int(mm.group(1)):02d}:{mm.group(2)}" if mm and int(mm.group(1)) < 24 and int(mm.group(2)) < 60 and _clock_said(f"{int(mm.group(1)):02d}:{mm.group(2)}", text) else ""
-    names = {n.lower(): n for n in people}
+    chosen = [x for x in (person_named(str(a), people) for a in (p.get("assignees") or [])) if x]
     return {"description": " ".join(str(p.get("description") or "").split())[:200], "date": day, "start": hhmm(p.get("start")), "end": hhmm(p.get("end")),
-            "assignees": [names[str(x).lower()] for x in (p.get("assignees") or []) if str(x).lower() in names],
+            "assignees": list(dict.fromkeys(chosen)),
             "items": [" ".join(str(x).split())[:160] for x in (p.get("items") or []) if str(x or "").strip()][:20],
             "info": " ".join(str(p.get("info") or "").split())[:500]}
 
