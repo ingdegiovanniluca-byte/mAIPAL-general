@@ -308,13 +308,22 @@ async def main():
     assert any(x.get("kind") == "preventivo" and "Preventivo v1" in x["text"] for x in db.job_logs.docs)
     await deny(server.confirm_quote(up["quote"]["id"], server.QuoteConfirmPayload(), me), 404)   # once
     # v2 with another value: the administrator chooses (AUT-PRE-03)
-    QUOTE.update(total=11000.0, taxable=10000.0)
+    QUOTE.update(total=11000.0, taxable=10000.0, description="Rifacimento del bagno:\n- demolizione\n- posa gres\n- sanitari sospesi")
     up2 = await server._ingest_commessa_document(me, sid, "prev2.txt", b"PREVENTIVO v2 Totale imponibile 10.000,00 Totale 11.000,00", "application/pdf",
                                                  hint="preventivo")
     assert "⚖️ Il valore della commessa ora è € 12.500" in up2["message"]
+    assert up2["description_from_quote"] is True     # (the app proposes to replace it with this one's)
     BOT_SENT.clear()
     c2 = await server.confirm_quote(up2["quote"]["id"], server.QuoteConfirmPayload(), me)
     assert c2["quote"]["version"] == 2 and c2["quote"]["value_pending"] and any("quale tengo" in t for _c, t, _k in BOT_SENT)
+    # the description of the work came from v1: now it is v2's (one written by hand would stay)
+    sub = next(x for x in db.collection_sub_items.docs if x["id"] == sid)
+    assert sub["data"]["descrizione"].endswith("- sanitari sospesi") and sub["description_meta"]["file"] == "prev2.txt"
+    await server._set_commessa_description(me, next(c for c in db.collections.docs if c["id"] == sub["collection_id"]), sid, "Scritta da me")
+    up3 = await server._ingest_commessa_document(me, sid, "prev3.txt", b"PREVENTIVO v3 Totale imponibile 10.000,00 Totale 11.000,00", "application/pdf",
+                                                 hint="preventivo")
+    assert up3["description_from_quote"] is False
+    await server.discard_quote(up3["quote"]["id"], me)
     assert (f"{base} / Preventivi", f"preventivo_{today}_v2.txt") in SAVED
     assert (await server.choose_quote_value(up2["quote"]["id"], server.QuoteValuePayload(choice="new"), me))["message"].startswith("💶 Valore")
     assert next(e for e in db.job_economics.docs if e["commessa_id"] == sid)["budget"] == 10000.0

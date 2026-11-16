@@ -9652,7 +9652,8 @@ async def _quote_proposal(current: User, clienti: dict, sub: dict, view: dict, n
     st, en = _quote_dates(view, q)
     return {"type": "quote", "quote": _quote_public(doc), "value": value, "current_budget": econ.get("budget"), "history_check": history,
             "plan_default": _plan_default(view, q), "plan_dates": {"start": st.isoformat() if st else None, "end": en.isoformat() if en else None},
-            "current_description": view.get("descrizione") or "", "loss_feedback": feedback, "can_choose_value": _is_org_admin(current),
+            "current_description": view.get("descrizione") or "", "description_from_quote": _description_from_quote(sub),
+            "loss_feedback": feedback, "can_choose_value": _is_org_admin(current),
             "options": [{"name": o["name"], "title": o.get("title") or "", "value": o.get("taxable") or o.get("total")} for o in q.get("options") or []],
             "message": msg + ("\nSu quale soluzione lavoriamo? Puoi anche decidere più tardi, quando il cliente sceglie." if q.get("options") else "\nConfermi i dati?")}
 
@@ -9730,6 +9731,12 @@ async def _quote_value_set(current: User, clienti: dict, view: dict, quote_id: s
             await _ask_value_choice(clienti, view, quote_id, value, budget)
 
 
+def _description_from_quote(sub: dict) -> bool:
+    """The commessa's description was filled from a quote (not written or dictated by hand)."""
+    meta = (sub or {}).get("description_meta") or {}
+    return meta.get("source") == "documento" and meta.get("kind") == "preventivo"
+
+
 async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[str] = None, description_text: Optional[str] = None,
                          description_mode: str = "sostituisci", plan: Optional[str] = None, option: Optional[int] = None) -> dict:
     """The quote confirmed: its version, its file in Preventivi, the commessa "preventivo inviato",
@@ -9778,7 +9785,8 @@ async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[st
     if description_text is not None and description_text.strip():
         await _set_commessa_description(current, clienti, view["id"], description_text, description_mode, source="documento",
                                         file_name=q["file_name"], doc_kind="preventivo")
-    elif not view.get("descrizione") and d.get("description"):
+    elif d.get("description") and (not view.get("descrizione") or _description_from_quote(sub)):
+        # (Telegram, the chat: empty, or the one of an earlier quote -> this quote's; never one written by hand)
         await _set_commessa_description(current, clienti, view["id"], d["description"], "sostituisci", source="documento",
                                         file_name=q["file_name"], doc_kind="preventivo")
     await db.job_quotes.update_one({"id": quote_id}, {"$set": upd})

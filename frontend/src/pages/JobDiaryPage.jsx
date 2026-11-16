@@ -104,7 +104,6 @@ const SECTIONS = [
   { key: "materiali", label: "Materiali" },
   { key: "costi", label: "Costi" },
   { key: "pianificazione", label: "Pianificazione" },
-  { key: "descrizione", label: "Descrizione" },
   { key: "sopralluogo", label: "Sopralluogo" },
   { key: "preventivo", label: "Preventivo" },
 ];
@@ -700,11 +699,10 @@ function ProblemsBlock({ problems, canEdit, onChanged }) {
   );
 }
 
-// ===== The description of the activities to carry out: written here, dictated in the chat
-// («descrizione attività: …») or read from the site-survey report / the quote uploaded (the
-// quote also gives the commessa's value). Only its owner or an administrator changes it.
+// ===== The description of the work, on top of the Preventivo section: filled with the quote's activities when the
+// quote is confirmed, written here or dictated in the chat («descrizione attività: …»). Only its owner or an
+// administrator changes it.
 const DOC_KIND_LABEL = { preventivo: "dal preventivo", sopralluogo: "dal report di sopralluogo", altro: "dal documento" };
-const DESC_ACCEPT = ".pdf,.docx,.xlsx,.txt,.md,image/*";
 
 function descSource(info) {
   if (!info) return "";
@@ -714,72 +712,10 @@ function descSource(info) {
   return [capFirst(what), info.by, when].filter(Boolean).join(" · ");
 }
 
-function DescriptionDocSheet({ commessa, doc, onClose, onSaved }) {
-  const [text, setText] = useState(doc.description || "");
-  const [mode, setMode] = useState("sostituisci");
-  const [useAmount, setUseAmount] = useState(!!doc.amount);
-  const [busy, setBusy] = useState(false);
-  const seg = (on) => `px-3 py-1 rounded-full text-[12px] transition-colors ${on ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`;
-  const save = async () => {
-    setBusy(true);
-    try {
-      await api.put(`/jobs/commesse/${commessa.id}/description`, { text, mode, file_name: doc.file_name, doc_kind: doc.kind,
-        ...(useAmount && doc.amount ? { budget: doc.amount } : {}) });
-      toast.success(useAmount && doc.amount ? `Descrizione e valore della commessa (${eur(doc.amount)}) salvati` : "Descrizione salvata");
-      onSaved();
-    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
-    finally { setBusy(false); }
-  };
-  return (
-    <GlassBottomSheet onClose={onClose} testid="desc-doc-sheet" className="max-h-[90vh] md:left-1/2 md:right-auto md:w-[560px] md:-translate-x-1/2 md:bottom-8">
-      <div className="kicker">· {DOC_KIND_LABEL[doc.kind] || "dal documento"}</div>
-      <div className="text-lg font-semibold text-white mt-1 break-words">{doc.file_name}</div>
-      <div className="text-[12.5px] text-white/60 mt-0.5">Descrizione delle attività da svolgere: controllala e correggila prima di salvarla.</div>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={9} data-testid="desc-doc-text"
-        className="mt-3 w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[14px] leading-relaxed text-white outline-none resize-y" />
-      {doc.current_description && (
-        <div className="mt-2 flex items-center gap-2 text-[12px] text-white/70">
-          C'è già una descrizione:
-          <span className="inline-flex rounded-full bg-white/10 p-0.5" data-testid="desc-doc-mode">
-            <button type="button" onClick={() => setMode("sostituisci")} className={seg(mode === "sostituisci")}>Sostituiscila</button>
-            <button type="button" onClick={() => setMode("aggiungi")} className={seg(mode === "aggiungi")}>Aggiungi in fondo</button>
-          </span>
-        </div>
-      )}
-      {doc.amount ? (
-        <button type="button" onClick={() => setUseAmount((v) => !v)} aria-pressed={useAmount} data-testid="desc-doc-amount"
-          className="mt-4 w-full flex items-start gap-3 text-left rounded-2xl bg-white/[0.06] px-3.5 py-3">
-          <span className={`mt-0.5 h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${useAmount ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
-            {useAmount && <Check size={12} strokeWidth={2.8} />}
-          </span>
-          <span className="min-w-0">
-            <span className="block text-[14px] text-white">Valore della commessa: <b>{eur(doc.amount)}</b>{doc.amount_basis === "imponibile" ? " (imponibile, senza IVA)" : ""}</span>
-            <span className="block text-[11.5px] text-white/55">
-              Va nel preventivo dei Costi, per il margine.{doc.current_budget && doc.current_budget !== doc.amount ? ` Ora è ${eur(doc.current_budget)}.` : ""}
-            </span>
-          </span>
-        </button>
-      ) : doc.kind === "preventivo" ? (
-        <div className="mt-3 text-[12px] text-white/55">Nel preventivo non trovo un totale chiaro: il valore della commessa lo puoi scrivere in Costi.</div>
-      ) : null}
-      <div className="mt-4 flex gap-2">
-        <button type="button" onClick={save} disabled={busy || !text.trim()} data-testid="desc-doc-save"
-          className="flex-1 h-11 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
-          {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Salva
-        </button>
-        <button type="button" onClick={onClose} className="h-11 px-5 rounded-full lg-glass text-[14px] text-white">Annulla</button>
-      </div>
-    </GlassBottomSheet>
-  );
-}
-
-function DescriptionView({ commessa, canEdit, budget, onChanged, isAdmin }) {
+function DescriptionView({ commessa, canEdit, budget, onChanged }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [reading, setReading] = useState(false);
-  const [doc, setDoc] = useState(null);
-  const fileRef = useRef(null);
   const text = commessa.descrizione || "";
   const saveText = async () => {
     setBusy(true);
@@ -787,39 +723,20 @@ function DescriptionView({ commessa, canEdit, budget, onChanged, isAdmin }) {
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
     finally { setBusy(false); }
   };
-  const upload = async (file) => {
-    if (!file) return;
-    setReading(true);
-    const fd = new FormData();
-    fd.append("file", file);
-    try {
-      const r = await api.post(`/jobs/commesse/${commessa.id}/documents`, fd);
-      if (r.data.type === "quote") setQuote(r.data);   // a quote: its sheet (it also fills the description)
-      else { toast.success(r.data.message.split("\n")[0]); onChanged(); if (r.data.doc_description) setDoc({ description: r.data.doc_description, file_name: r.data.file_name, kind: r.data.kind, amount: null, current_description: text }); }
-    }
-    catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a leggere il documento"); }
-    finally { setReading(false); if (fileRef.current) fileRef.current.value = ""; }
-  };
-  const [quote, setQuote] = useState(null);
-  const action = "inline-flex items-center gap-1.5 active:opacity-70 disabled:opacity-50";
   return (
     <div data-testid="job-description">
-      {canEdit && !editing && (
-        <div className="mt-1.5 flex items-center justify-center gap-5 text-[12px] text-white/80">
-          <button type="button" onClick={() => { setDraft(text); setEditing(true); }} data-testid="desc-edit" className={action}>
-            <Pencil size={13} /> {text ? "Modifica" : "Scrivi"}
-          </button>
-          <button type="button" onClick={() => fileRef.current?.click()} disabled={reading} data-testid="desc-upload" className={action}>
-            {reading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} {reading ? "Leggo il documento…" : "Carica sopralluogo o preventivo"}
-          </button>
-          <input ref={fileRef} type="file" accept={DESC_ACCEPT} className="hidden" data-testid="desc-file" onChange={(e) => upload(e.target.files?.[0])} />
-        </div>
-      )}
+      <div className="mt-1.5 flex items-center justify-center gap-3">
+        <span className="text-[10px] uppercase tracking-widest text-white/55">descrizione del lavoro</span>
+        {canEdit && !editing && (
+          <button type="button" onClick={() => { setDraft(text); setEditing(true); }} data-testid="desc-edit"
+            className="text-[12px] text-white/80 underline-offset-2 active:opacity-70">{text ? "Modifica" : "Scrivi"}</button>
+        )}
+      </div>
       {editing ? (
         <div className="mt-3">
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} autoFocus data-testid="desc-textarea"
             placeholder="Cosa prevede il lavoro: l'oggetto e l'elenco delle lavorazioni."
-            className="w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[14px] leading-relaxed text-white placeholder:text-white/40 outline-none resize-y" />
+            className="w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[16px] leading-relaxed text-white placeholder:text-white/40 outline-none resize-y" />
           <div className="mt-2 flex gap-2 justify-end">
             <button type="button" onClick={() => setEditing(false)} className="h-9 px-4 rounded-full lg-glass text-[13px] text-white">Annulla</button>
             <button type="button" onClick={saveText} disabled={busy} data-testid="desc-save"
@@ -829,22 +746,20 @@ function DescriptionView({ commessa, canEdit, budget, onChanged, isAdmin }) {
           </div>
         </div>
       ) : text ? (
-        <div className="mt-3 pt-4 border-t border-white/[0.16]">
-          <div className="text-[14.5px] leading-relaxed text-white/90 whitespace-pre-wrap break-words" data-testid="desc-text">{text}</div>
-          <div className="mt-3 text-[11.5px] text-white/55 flex flex-wrap gap-x-3 gap-y-1">
+        <div className="mt-2 pt-3 border-t border-white/[0.16]">
+          <div className="text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap break-words" data-testid="desc-text">{text}</div>
+          <div className="mt-3 text-[11px] text-white/55 flex flex-wrap gap-x-3 gap-y-1">
             {commessa.descrizione_info && <span data-testid="desc-source">{descSource(commessa.descrizione_info)}</span>}
             {budget ? <span data-testid="desc-budget">Valore della commessa {eur(budget)}</span> : null}
           </div>
         </div>
       ) : (
-        <div className="mt-3 py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="desc-empty">
-          {canEdit ? <>Nessuna descrizione delle attività. Scrivila qui, dettala nella chat della commessa (es. «descrizione attività: rifacimento
-            del bagno con…») oppure carica il report di sopralluogo o il preventivo: la leggo io, e dal preventivo prendo anche il valore della commessa.</>
-            : "Nessuna descrizione delle attività, per ora."}
+        <div className="mt-2 py-5 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="desc-empty">
+          {canEdit ? <>Nessuna descrizione del lavoro. Quando carichi il preventivo la compilo con le sue attività (la controlli prima di
+            confermare). Puoi anche scriverla qui o dettarla nella chat della commessa, es. «descrizione attività: rifacimento del bagno con…».</>
+            : "Nessuna descrizione del lavoro, per ora."}
         </div>
       )}
-      {doc && <DescriptionDocSheet commessa={commessa} doc={doc} onClose={() => setDoc(null)} onSaved={() => { setDoc(null); onChanged(); }} />}
-      {quote && <QuoteSheet commessa={commessa} proposal={quote} onClose={() => setQuote(null)} onSaved={() => { setQuote(null); onChanged(); }} />}
     </div>
   );
 }
@@ -978,8 +893,9 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
   const differs = value && proposal.current_budget && Math.abs(proposal.current_budget - value) >= 0.01;
   const [valueChoice, setValueChoice] = useState(differs ? "new" : null);
   const [desc, setDesc] = useState(d.description || "");
-  const [mode, setMode] = useState(proposal.current_description ? "aggiungi" : "sostituisci");
-  const [useDesc, setUseDesc] = useState(!proposal.current_description);
+  // the description of an earlier quote: replaced by this one's; one written by hand: this one's added at the end
+  const [mode, setMode] = useState(proposal.current_description && !proposal.description_from_quote ? "aggiungi" : "sostituisci");
+  const [useDesc, setUseDesc] = useState(true);   // the description of the work comes from the quote
   const [plan, setPlan] = useState(proposal.plan_default || "none");
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (differs && !valueChoice) setValueChoice("new"); }, [differs, valueChoice]);
@@ -1066,7 +982,7 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
         <div className="mt-3">
           <button type="button" onClick={() => setUseDesc((v) => !v)} aria-pressed={useDesc} className="flex items-center gap-2.5 text-[13px] text-white">
             <span className={`h-5 w-5 rounded-full flex items-center justify-center ${useDesc ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>{useDesc && <Check size={12} strokeWidth={2.8} />}</span>
-            Usa le attività come descrizione della commessa
+            Usa le attività come descrizione del lavoro
           </button>
           {useDesc && (
             <>
@@ -2713,7 +2629,7 @@ export default function JobDiaryPage() {
           note={c.stato === "persa" && c.lost_reason ? (LOST_CATEGORIES.find(([k]) => k === c.lost_reason.category) || [])[1] : ""} />
         <InfoCard icon={ScrollText} label="Attività" testid="glance-descrizione" ariaLabel="La descrizione delle attività da svolgere"
           value={c.descrizione ? (c.descrizione.split("\n")[0].slice(0, 26) + (c.descrizione.length > 26 ? "…" : "")) : "da descrivere"}
-          onClick={() => pickSection("descrizione")} />
+          onClick={() => pickSection("preventivo")} />
         {(detail.on_site || []).length > 0 && (
           // one: the name; more: how many and of which role - tapped, everyone by role
           <InfoCard icon={HardHat} label="In cantiere ora" testid="glance-on-site" ariaLabel="Chi sta lavorando ora in cantiere" wide
@@ -2780,19 +2696,19 @@ export default function JobDiaryPage() {
         <button type="button" onClick={() => pickSection(secAt(secIdx + 1).key)} className="flex-1 basis-0 text-left text-[15px] font-medium text-white/30">{secAt(secIdx + 1).label}</button>
       </div>
 
-      {/* Costi, Milestone, To Do and Descrizione: their own content instead of the period and the days */}
+      {/* Costi, Pianificazione, Sopralluogo and Preventivo (with the description of the work): their own content instead of the period and the days */}
       {section === "sopralluogo" ? (
         <SurveyView commessa={c} survey={detail.survey} logs={detail.survey_logs || []} canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
       ) : section === "preventivo" ? (
         <>
+          <DescriptionView commessa={c} canEdit={!ro && (access.is_owner || me?.role === "admin")} budget={detail.economics?.budget}
+            onChanged={() => loadDetail(selectedId)} />
+          <div className="mt-7 text-[10px] uppercase tracking-widest text-white/55 text-center">preventivo</div>
           <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
             onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
           {detail.can_see_costs && <HistoryEstimate commessa={c} />}
           {detail.is_admin && !ro && <ExtraWorksView commessa={c} rows={detail.extra_works || []} onChanged={() => loadDetail(selectedId)} />}
         </>
-      ) : section === "descrizione" ? (
-        <DescriptionView commessa={c} canEdit={!ro && (access.is_owner || me?.role === "admin")} budget={detail.economics?.budget}
-          onChanged={() => loadDetail(selectedId)} />
       ) : section === "costi" ? (
         <div className={ro ? "pointer-events-none" : ""} data-testid={ro ? "costs-read-only" : undefined}>
           <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
