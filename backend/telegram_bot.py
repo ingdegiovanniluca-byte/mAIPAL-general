@@ -1207,6 +1207,18 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
         except Exception as e:
             await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+    elif data.startswith("wt:"):   # a work waiting for a go-ahead: how it went (the administrator, or who wrote the note)
+        from server import _wait_answer, _wait_by_user
+        _k, choice, wid = (data.split(":", 2) + ["", ""])[:3]
+        by = await _wait_by_user(user, wid)
+        if not by:
+            await ctx.bot.send_message(chat_id=chat_id, text="Questa attività non è tua.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await ctx.bot.send_message(chat_id=chat_id, text=await _wait_answer(wid, choice, by))
     elif data.startswith("cud:"):   # the client's weekly draft: approve, edit, discard (AUT-WEEK-03)
         from server import _decide_client_draft, _commessa_ctx, _is_org_admin
         _k, choice, sub_id = data.split(":", 2)

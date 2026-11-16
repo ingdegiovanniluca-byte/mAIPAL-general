@@ -440,10 +440,15 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "trasporti: \"comprato nastro 8 €\" -> {\"description\": \"nastro\", \"amount\": 8, \"supplier\": \"\"}), con il fornitore se detto. "
         "Senza importo scritto non è una spesa. Se la spesa è il costo di un materiale usato (\"montato un interruttore da 50 A, costo 50 €\"), "
         "mettilo in \"materials\" E in \"expenses\" con lo stesso nome. Nessuna: [].\n"
+        "9. \"waiting\": se la nota dice che un LAVORO DA FARE è IN ATTESA del via libera, dell'ok, di una conferma, di un'autorizzazione o "
+        "di una decisione di qualcuno (proprietario, cliente, amministratore di condominio, direttore lavori: \"ventilatore danneggiato, si "
+        "attende il via libera per la sostituzione dal proprietario\"), {\"work\": il lavoro in attesa, breve, con le parole della nota "
+        "(\"Sostituzione del ventilatore\"), \"from\": da chi si attende, senza articolo (\"proprietario\"), \"what\": cosa si attende, "
+        "senza articolo (\"via libera\")}. Se non è scritto: null.\n"
         "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
         "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
         "\"hours\": [], \"materials\": [], \"problems\": [], \"expenses\": [], \"times\": {\"start\": null, \"end\": null}, "
-        "\"client\": \"\", \"commessa\": \"\"}"
+        "\"waiting\": null, \"client\": \"\", \"commessa\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -474,6 +479,7 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "problems": clean_problems(parsed.get("problems")),
         "times": clock_times(parsed.get("times"), text),
         "expenses": clean_expenses(parsed.get("expenses"), text),
+        "waiting": clean_waiting(parsed.get("waiting"), text),
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),
     }
@@ -1194,18 +1200,23 @@ def covered_by(work: str, scope: list) -> Optional[str]:
     return None
 
 
-async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[str] = None, channel: str = "web") -> list:
+async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[str] = None, channel: str = "web",
+                      to_do: bool = False) -> list:
     """The works DONE in a diary note that neither the quote's items and activities nor the
     commessa's description cover. Conservative (in doubt: not extra); each work in the note's
-    own words (grounded), never one already in the scope. -> [{"work", "why"}]"""
+    own words (grounded), never one already in the scope. -> [{"work", "why"}]
+    `to_do`: the works still TO DO that the note says (one waiting for the owner's go-ahead)."""
     if not extra_candidate(note) or not scope:
         return []
+    which = ("- solo lavori ancora DA FARE (in attesa di un via libera o di una decisione), non quelli già fatti, non problemi, "
+             "non materiali da comprare o portare;\n") if to_do else \
+        "- solo lavori GIÀ FATTI (non da fare, non problemi, non materiali da comprare o portare, non presenze);\n"
     system = (
         "Sei l'assistente di un'impresa artigiana. Ricevi (1) le voci e le attività del PREVENTIVO e la descrizione dei lavori "
         f"della commessa «{commessa.get('title')}» e (2) una NOTA del diario di cantiere.\n"
-        "Trova nella nota i LAVORI ESEGUITI che NON rientrano in nessuna voce o attività del preventivo né nella descrizione: lavori "
-        "aggiuntivi, varianti chieste dal cliente, imprevisti risolti con lavoro in più.\n"
-        "Regole:\n- solo lavori GIÀ FATTI (non da fare, non problemi, non materiali da comprare o portare, non presenze);\n"
+        f"Trova nella nota i LAVORI {'DA FARE' if to_do else 'ESEGUITI'} che NON rientrano in nessuna voce o attività del preventivo né "
+        "nella descrizione: lavori aggiuntivi, varianti chieste dal cliente, imprevisti risolti con lavoro in più.\n"
+        "Regole:\n" + which +
         "- se un lavoro può rientrare in una voce, anche detta con altre parole o come parte di essa, NON è extra;\n"
         "- nel dubbio NON è extra;\n- \"work\": il lavoro con le parole della nota, breve; \"why\": in una frase perché non rientra.\n"
         "Rispondi SOLO con JSON: {\"extras\": [{\"work\": \"...\", \"why\": \"...\"}]}"
@@ -1427,6 +1438,87 @@ def problems_resolved(text: str, open_problems: list) -> list:
         if words and sum(1 for w in words if _said(w, said)) / len(words) >= 0.5:
             out.append(i)
     return out
+
+
+# ---- a work WAITING for someone's go-ahead ("ventilatore danneggiato, si attende il via libera per la sostituzione
+# dal proprietario"): the model reads what and from whom, only when the note says it is waited for
+_WAITING = re.compile(
+    r"\b(?:si\s+attend\w*|attend\w*|in\s+attesa|aspett\w*)\b.{0,60}?\b(?:via\s*libera|ok|okay|conferma|autorizzazion\w*|approvazion\w*|"
+    r"benestare|decision\w*|risposta|consenso|permesso|nulla\s*osta)\b"
+    r"|\b(?:aspett\w*|attend\w*|in\s+attesa)\s+che\b.{0,60}?\b(?:decid\w*|confermi\w*|approvi\w*|autorizzi\w*|dia|diano|rispond\w*)\b"
+    r"|\b(?:deve|devono)\s+(?:ancora\s+)?(?:dare\s+(?:il|l')\s*(?:via\s*libera|ok|okay|benestare|consenso)|decidere|autorizzare|approvare)\b")
+# "il proprietario ha dato il via libera", "è arrivato l'ok del cliente", "ha approvato la sostituzione" (never "non ha dato…")
+_GO_AHEAD = re.compile(
+    r"\b(?:dato|data|arrivat\w*|ricevut\w*|ottenut\w*|abbiamo|c'e|ce)\s+(?:il\s+|l'\s*|la\s+)?(?:via\s*libera|ok|okay|benestare|"
+    r"autorizzazione|approvazione|conferma|consenso)\b|\b(?:ha|hanno)\s+(?:approvato|autorizzato|confermato|accettato|detto\s+(?:di\s+)?si)\b")
+_NOT_BEFORE = re.compile(r"\b(?:non|ancora\s+non|niente)\s+(?:\w+\s+){0,2}$")
+
+
+def waiting_said(text: str) -> bool:
+    return bool(_WAITING.search(_norm(text or "")))
+
+
+def clean_waiting(w, raw: str) -> Optional[dict]:
+    """The model's {"work", "from", "what"}: kept only when the note says something is waited for
+    and the work is in its words."""
+    if not isinstance(w, dict) or not waiting_said(raw):
+        return None
+    work = " ".join(str(w.get("work") or "").split()).strip(" .-•")[:200]
+    if not work or not grounded(work, raw, 0.6):
+        return None
+    clean = lambda v: " ".join(str(v or "").split()).strip(" .,")[:40]
+    said = set(_words(raw))
+    who = clean(w.get("from"))
+    who = who if who and all(_said(x, said) for x in _words(who)) else ""
+    what = clean(w.get("what")) or "via libera"
+    return {"work": work[0].upper() + work[1:], "from": who, "what": what}
+
+
+def go_ahead_said(text: str) -> bool:
+    """The go-ahead given, said in a note; not a "non ha dato il via libera"."""
+    n = _norm(text or "")
+    return any(not _NOT_BEFORE.search(n[:m.start()]) for m in _GO_AHEAD.finditer(n))
+
+
+def work_named(text: str, work: str) -> bool:
+    """Most of the work's words are in the note (the same root or the word misspelled)."""
+    said = set(_words(text))
+    words = [w for w in _words(work) if w not in {"lavoro", "lavori", "intervento"}]
+    return bool(words) and sum(1 for w in words if _said(w, said)) / len(words) >= 0.5
+
+
+def _article(word: str, forms: tuple) -> str:
+    """forms (masculine, feminine, before a vowel): "il proprietario", "la conferma", "l'ok"."""
+    w = (word or "").strip()
+    first = _norm(w[:1])
+    if not w or (w[:1].isupper() and " " not in w):   # a name: "a Rossi", "di Rossi"
+        return ""
+    if first in "aeiou":
+        return forms[2]
+    head = _norm(w.split()[0])
+    if head in ("via", "nulla"):
+        return forms[0]
+    return forms[1] if head.endswith(("a", "ione", "ice")) else forms[0]
+
+
+def with_article(word: str, prep: str = "") -> str:
+    """"il via libera", "al proprietario", "dell'amministratore", "della conferma", "a Rossi"."""
+    w = (word or "").strip()
+    forms = {"": ("il ", "la ", "l'"), "a": ("al ", "alla ", "all'"), "di": ("del ", "della ", "dell'")}[prep]
+    art = _article(w, forms)
+    if not art:
+        return f"{prep} {w}".strip()
+    return f"{art}{w}"
+
+
+def waiting_label(w: dict) -> str:
+    """"in attesa del via libera del proprietario"."""
+    return f"in attesa {with_article(w.get('what') or 'via libera', 'di')}" + (f" {with_article(w['from'], 'di')}" if w.get("from") else "")
+
+
+def ask_label(w: dict) -> str:
+    """"Chiedere il via libera al proprietario"."""
+    return f"Chiedere {with_article(w.get('what') or 'via libera')}" + (f" {with_article(w['from'], 'a')}" if w.get("from") else "")
 
 
 def _eur(x: Optional[float]) -> str:

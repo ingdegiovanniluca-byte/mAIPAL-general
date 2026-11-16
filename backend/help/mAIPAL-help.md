@@ -273,6 +273,22 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 - Per ogni extra vedi chi l'ha scritto e quando, perché non rientra e, nella stessa nota, ore e materiali con il **costo registrato** (ore × tariffa, materiali × prezzo; solo a chi vede i costi). L'**importo per il cliente** lo scrivi tu: non lo invento.
 - **Prepara la variante per il cliente**: crea il documento «Lavori extra / variante» con i lavori, i materiali, gli importi (o «da definire») e lo spazio per le firme. Lo salva nella cartella **Preventivi** (`preventivo_<data>_variante_v1.docx`) e te lo manda.
 - **👍 Approvato dal cliente** (serve l'importo): l'importo si **aggiunge al valore della commessa**, va nel diario e nello storico, e il margine si aggiorna. **✋ Rifiutato** lo chiude senza toccare il valore.
+
+**Lavori in attesa di un via libera**
+- Una nota che dice che un lavoro **aspetta il via libera, l'ok, una conferma o una decisione** di qualcuno, per esempio «controllo caldaia, ventilatore danneggiato, si attende il via libera per la sostituzione dal proprietario», resta un **problema** e in più:
+  - all'**amministratore** va un To Do della commessa, «Chiedere il via libera al proprietario: sostituzione del ventilatore», per **2 giorni lavorativi** dopo. Quella mattina, dalle 8.30, arriva su Telegram e nell'app, con i pulsanti **👍 Via libera, da fare**, **✅ Già fatto**, **⏳ Ancora in attesa** e **❌ Ha detto no**. È anche in **Dashboard → Da fare oggi**, dove si spunta;
+  - il **lavoro** («Sostituzione del ventilatore (in attesa del via libera del proprietario)») va tra i **To Do** della commessa, per chi ha scritto la nota;
+  - se il lavoro non è nel **preventivo** né nella **descrizione**, l'amministratore lo riceve come **possibile lavoro extra da fare**, da far approvare al cliente insieme al via libera (vedi Lavori extra sopra);
+  - a **chi ha scritto la nota** (un collaboratore su Telegram o un utente dell'app), dopo **3 giorni lavorativi**, se il lavoro non è ancora segnato come fatto, chiedo se il proprietario ha dato il via libera e se il lavoro è stato fatto, con gli stessi pulsanti.
+- Se l'amministratore scrive la nota lui stesso, c'è solo il suo To Do: non viene chiesto a nessun altro.
+- **Le risposte**:
+  - **👍 Via libera**: il To Do dell'amministratore si chiude, il lavoro resta da fare e dopo 3 giorni lavorativi chiedo se è stato fatto;
+  - **✅ Fatto**: si chiudono i due To Do e il problema della nota;
+  - **⏳ Ancora in attesa**: lo richiedo dopo qualche giorno;
+  - **❌ Ha detto no**: il lavoro viene tolto dai To Do.
+  Ogni risposta finisce nel **diario**, e lo sa anche l'altra persona: l'amministratore se risponde chi ha scritto la nota, e viceversa.
+- **Basta anche scriverlo nel diario**: «sostituito il ventilatore» lo segna come fatto, «il proprietario ha dato il via libera» come via libera. Anche spuntare il lavoro nei To Do lo chiude, e nessuno viene più richiesto.
+- Le notifiche sono quelle di **Problemi dai cantieri** (Impostazioni → Notifiche). Lo stesso lavoro scritto due volte non crea un secondo promemoria.
 - **Controlla il diario** confronta le note scritte prima (fino a 60 non ancora controllate); con **+** aggiungi a mano un extra che conosci già.
 - Gli extra ancora da valutare o da far approvare compaiono nel **report del venerdì** e nel controllo prima di **chiudere** la commessa. I lavori extra li gestisce solo l'amministratore; i collaboratori non li vedono.
 

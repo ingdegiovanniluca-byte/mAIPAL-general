@@ -575,6 +575,22 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             pass
         await _reply(update, answer)
         return
+    if data.startswith("cwt:"):   # a work they wrote was waiting for a go-ahead: how it went
+        from server import _wait_answer, _collab_name
+        _, choice, wid = (data.split(":", 2) + ["", ""])[:3]
+        wait = await db.job_waits.find_one({"id": wid}, {"_id": 0, "operator": 1})
+        op = (wait or {}).get("operator") or {}
+        mine = next((r for r in active if op.get("kind") == "collab" and op.get("id") == r["id"]), None)
+        if not mine:
+            await _reply(update, "Non risulta tua.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await _reply(update, await _wait_answer(wid, choice, {"kind": "collab", "id": mine["id"],
+                                                              "name": mine.get("first_name") or _collab_name(mine)}))
+        return
     if data.startswith("cldone:"):   # "✅ Fatto" under a To Do / milestone given to them
         from server import _collab_mark_done, COLLAB_NOT_YOURS as NOT_YOURS
         _, kind, item_id = (data.split(":", 2) + ["", ""])[:3]

@@ -184,13 +184,17 @@ export default function TodayDashboard({ onOpenCommessa }) {
   const timed = d.clock.filter((x) => x.time).length;
   const done = d.clock.filter((x) => x.done).length;
   const empty = !n.urgent.length && !n.today.length && !n.materials.length && !n.news.length && !n.tips.length;
-  // a task of today ticked from here (the activities tick themselves when done on the site)
+  // a task (or a To Do of a commessa) of today ticked from here (the activities tick themselves when done on the site)
   const tickTask = async (x) => {
     const flip = (dd, v) => ({ ...dd, clock: dd.clock.map((c) => (c.id === x.id ? { ...c, done: v } : c)),
       notes: { ...dd.notes, today: dd.notes.today.map((c) => (c.id === x.id ? { ...c, done: v } : c)) } });
     setD((dd) => flip(dd, !x.done));
-    try { await api.post(`/tasks/${x.id}/complete`); } catch { setD((dd) => flip(dd, x.done)); }
+    try {
+      if (x.kind === "todo") await api.patch(`/jobs/todos/${x.id}`, { done: !x.done });
+      else await api.post(`/tasks/${x.id}/complete`);
+    } catch { setD((dd) => flip(dd, x.done)); }
   };
+  const tickable = (x) => x.kind === "task" || x.kind === "todo";
   return (
     <div ref={wrap} className="flex flex-col gap-2.5" style={{ height: h || undefined }} data-testid="today-dashboard">
       <div className="grid grid-cols-[1.7fr_1fr] gap-2.5 shrink-0">
@@ -260,8 +264,8 @@ export default function TodayDashboard({ onOpenCommessa }) {
           {n.today.length > 0 && <Part title="Da fare oggi" testid="notes-today">
             {n.today.map((x) => (
               <div key={x.id} className="flex items-start gap-2" data-testid="notes-today-row" data-done={x.done ? "1" : "0"}>
-                <button type="button" disabled={x.kind !== "task"} onClick={() => tickTask(x)} aria-pressed={!!x.done}
-                  aria-label={x.kind === "task" ? (x.done ? "Segna da fare" : "Segna fatto") : (x.done ? "Svolta" : "Da svolgere")}
+                <button type="button" disabled={!tickable(x)} onClick={() => tickTask(x)} aria-pressed={!!x.done}
+                  aria-label={tickable(x) ? (x.done ? "Segna da fare" : "Segna fatto") : (x.done ? "Svolta" : "Da svolgere")}
                   className="mt-[2px] h-[13px] w-[13px] shrink-0 rounded-full flex items-center justify-center"
                   style={x.done ? { background: "#FFAC33" } : { border: "1px solid rgba(255,255,255,0.75)" }}>
                   {x.done && <Check size={9} strokeWidth={3} className="text-[#3b2400]" />}

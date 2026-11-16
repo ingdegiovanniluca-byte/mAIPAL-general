@@ -4476,6 +4476,7 @@ async def _delete_job_diaries(commessa_ids: list) -> None:
         await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_waits.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_milestones.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_contacts.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.work_sessions.delete_many({"commessa_id": {"$in": commessa_ids}})
@@ -8019,8 +8020,11 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     log["unplanned"] = [] if survey else await _unplanned_materials_check(target, log)
     log["problems_solved"] = await _solve_problems(current, target, log, text, author)
     log["activities_done"] = await _activities_from_note(current, target, log, text, author)
+    waits_said = await _waits_from_note(current, target, log, text, author)
+    wait = await _waiting_from_log(current, clienti, target, log, parsed["waiting"], author) \
+        if parsed.get("waiting") and not survey else None
     if not survey:
-        _bg(_extra_works_from_log(current, target, log))
+        _bg(_after_entry(current, target, log, wait))
     if images:
         await _store_job_photos(current, log, images)
     if survey:
@@ -8032,6 +8036,11 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if log["hours"] or log["materials"]:
         asyncio.create_task(_check_budget_alert(clienti, target["id"]))
     msg = _job_log_message(log, created)
+    if waits_said:
+        msg += "\n" + "\n".join(waits_said)
+    if wait:
+        msg += "\n" + _waiting_line(wait)
+        log["waiting"] = {k: wait[k] for k in ("id", "work", "from", "what", "label", "admin_due", "ask_on")}
     if survey:
         msg += "\n🔎 Nella sezione Sopralluogo" + (" (leggo anche gli appunti nelle foto)" if images else "") + "."
     if claim["missing"]:
@@ -8363,12 +8372,13 @@ async def _resolve_assignee(current: User, commessa_id: str, who: Optional[str],
     return (hit[0]["name"] if hit else who), (hit[0]["id"] if hit else None)
 
 
-async def _tell_collaborator(collab: dict, text: str, done_data: Optional[str] = None) -> bool:
-    """A message to a collaborator's Telegram, with the "✅ Fatto" button when given."""
+async def _tell_collaborator(collab: dict, text: str, done_data: Optional[str] = None, kb=None) -> bool:
+    """A message to a collaborator's Telegram, with the "✅ Fatto" button when given (or other buttons)."""
     if not collab.get("telegram_chat_id") or collab.get("status") != "active" or not tg.bot_token():
         return False
     from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Fatto", callback_data=done_data)]]) if done_data else None
+    if done_data:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Fatto", callback_data=done_data)]])
     bot = Bot(token=tg.bot_token())
     for mode in ("Markdown", None):
         try:
@@ -10776,6 +10786,341 @@ async def _activities_from_note(current: User, target: dict, log: dict, text: st
     return done
 
 
+# ---- A WORK WAITING FOR SOMEONE'S GO-AHEAD: "controllo caldaia, ventilatore danneggiato, si attende il via libera per
+# la sostituzione dal proprietario". Besides the problem, three things: the administrator gets a To Do "Chiedere il via
+# libera al proprietario" a few working days later (that morning: Telegram and app, the answers as buttons); the work
+# becomes a To Do of the commessa (for who wrote it), checked against the quote - an extra to have approved when it isn't
+# in it; who wrote it is asked a few days later, if it isn't done yet, whether the go-ahead came and whether it was done.
+# A later note that says the go-ahead came, or that the work was done, answers by itself.
+
+WAIT_ADMIN_WORKDAYS = 2     # the administrator hears the owner after…
+WAIT_ASK_WORKDAYS = 3       # who wrote it is asked after…
+WAIT_AGAIN_WORKDAYS = 3     # "ancora in attesa" / "non ancora": asked again after…
+WAIT_AT = "08:30"
+WAIT_OPEN = ("attesa", "via_libera")
+
+
+def _wait_kb(wid: str, status: str, prefix: str = "wt"):
+    """The answers: "wt" in a user's chat, "cwt" in a collaborator's."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    b = lambda label, choice: InlineKeyboardButton(label, callback_data=f"{prefix}:{choice}:{wid}")
+    if status == "via_libera":
+        return InlineKeyboardMarkup([[b("✅ Sì, fatto", "fatto"), b("⏳ Non ancora", "attesa")]])
+    return InlineKeyboardMarkup([[b("👍 Via libera, da fare", "via"), b("✅ Già fatto", "fatto")],
+                                 [b("⏳ Ancora in attesa", "attesa"), b("❌ Ha detto no", "no")]])
+
+
+def _wait_where(view: dict) -> str:
+    return f"«{view.get('title')}» — {view.get('client_name')}"
+
+
+def _lower_first(s: str) -> str:
+    return s[:1].lower() + s[1:] if s[1:2].islower() else s
+
+
+def _go_ahead_text(w: dict) -> str:
+    """"il via libera del proprietario"."""
+    return jl.with_article(w.get("what") or "via libera") + (f" {jl.with_article(w['from'], 'di')}" if w.get("from") else "")
+
+
+async def _waiting_from_log(current: User, clienti: dict, target: dict, log: dict, w: dict, author: Optional[dict]) -> Optional[dict]:
+    """The two To Do and the wait, from a note that says a work waits for someone's go-ahead. -> what to say, or None."""
+    for x in await db.job_waits.find({"commessa_id": target["id"], "status": {"$in": list(WAIT_OPEN)}}, {"_id": 0}).to_list(100):
+        if jl.grounded(w["work"], x["work"], 0.8) or jl.grounded(x["work"], w["work"], 0.8):
+            return None   # already waited for: not twice
+    owner_id = clienti.get("user_id") or current.user_id
+    owner = await db.users.find_one({"user_id": owner_id}, {"_id": 0}) or {}
+    owner_first = _first_name(owner.get("name")) or _first_name(current.name)
+    if author:
+        operator = {"kind": "collab", "id": author["id"], "name": author.get("first_name") or author.get("name") or ""}
+    elif current.user_id != owner_id:
+        operator = {"kind": "user", "id": current.user_id, "name": _first_name(current.name)}
+    else:
+        operator = None   # the administrator wrote it: their To Do is enough
+    today = jl.today_local()
+    admin_due = mtpl.add_workdays(today, WAIT_ADMIN_WORKDAYS).isoformat()
+    ask_on = mtpl.add_workdays(today, WAIT_ASK_WORKDAYS).isoformat() if operator else None
+    wid = f"wait_{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc).isoformat()
+    base = {"commessa_id": target["id"], "collection_id": clienti["id"], "user_id": current.user_id, "org_id": current.org_id,
+            "author_name": log.get("author_name") or "", "created_by_user": None, "done": False, "done_at": None, "reminded": {},
+            "from_log_id": log["id"], "wait_id": wid, "created_at": now}
+    ask = {**base, "id": f"jtodo_{uuid.uuid4().hex[:12]}", "kind": "attesa", "text": f"{jl.ask_label(w)}: {_lower_first(w['work'])}",
+           "who": owner_first, "collaborator_id": None, "assignee_user_id": owner_id, "due_date": admin_due}
+    work = {**base, "id": f"jtodo_{uuid.uuid4().hex[:12]}", "kind": "lavoro", "text": f"{w['work']} ({jl.waiting_label(w)})",
+            "who": (operator or {}).get("name") or owner_first,
+            "collaborator_id": operator["id"] if operator and operator["kind"] == "collab" else None,
+            "assignee_user_id": operator["id"] if operator and operator["kind"] == "user" else (None if operator else owner_id),
+            "due_date": None}
+    await db.job_todos.insert_one(dict(ask))
+    await db.job_todos.insert_one(dict(work))
+    wait = {"id": wid, "commessa_id": target["id"], "collection_id": clienti["id"], "owner_user_id": owner_id, "log_id": log["id"],
+            "work": w["work"], "from": w.get("from") or "", "what": w.get("what") or "via libera", "status": "attesa",
+            "since": today.isoformat(), "ask_todo_id": ask["id"], "work_todo_id": work["id"], "operator": operator,
+            "ask_on": ask_on, "asked_on": None, "created_at": now}
+    await db.job_waits.insert_one(dict(wait))
+    if operator and owner:   # the administrator: what was put for them
+        text = (f"⏳ *In attesa* su {_wait_where(target)}: «{w['work']}», {jl.waiting_label(w)} (scritto da {operator['name']}).\n"
+                f"Ti ho messo da fare per il {_short_it_date(admin_due)}: «{ask['text']}». "
+                f"Il {_short_it_date(ask_on)} chiedo a {operator['name']} se è arrivato e se il lavoro è stato fatto.")
+        await _notify_owner(User(**owner), text, kind="problems")
+        push.fire_and_forget(db, owner_id, f"⏳ {target.get('title')}", f"{w['work']}: {jl.waiting_label(w)}",
+                             f"/dashboard/journal?commessa={target['id']}", f"wait-{wid}", kind="problems")
+    return {**wait, "label": jl.waiting_label(w), "ask_text": ask["text"], "admin_due": admin_due, "owner": owner_first}
+
+
+def _waiting_line(wv: dict) -> str:
+    line = f"⏳ {wv['work']}: {wv['label']}. È tra le cose da fare della commessa."
+    if wv.get("operator"):
+        return line + (f" Avviso {wv['owner']}; il {_short_it_date(wv['ask_on'])} ti chiedo se è arrivato "
+                       f"{jl.with_article(wv['what'])} e se è stato fatto.")
+    return line + f" Il {_short_it_date(wv['admin_due'])} ti ricordo: «{wv['ask_text']}»."
+
+
+async def _waiting_extra(target: dict, log: dict, wait: dict) -> Optional[dict]:
+    """The work waited for, checked against the quote and the description: not in them -> a possible extra (to do) for
+    the administrator, to have approved by the client together with the go-ahead."""
+    try:
+        ctx = await _commessa_ctx(target["id"])
+        if not ctx or vx.norm_stato(ctx[3]["stato"]) not in (vx.WORKING_STATO, "sospesa"):
+            return None
+        clienti, sub, _client, view = ctx
+        scope, version = await _extras_scope(target["id"], sub, clienti)
+        if not scope or jl.covered_by(wait["work"], scope):
+            return None
+        found = await jl.find_extras(log.get("raw_text") or log.get("text") or "", scope, view, user_id=clienti.get("user_id"),
+                                     channel=log.get("channel") or "web", to_do=True)
+        f = next((f for f in found if jl.grounded(f["work"], wait["work"], 0.5) or jl.grounded(wait["work"], f["work"], 0.5)), None)
+        if not f:
+            return None
+        known = [x["work"] for x in await db.job_extra_works.find({"commessa_id": target["id"]}, {"_id": 0, "work": 1}).to_list(1000)]
+        if any(jl.grounded(wait["work"], k, 0.8) or jl.grounded(k, wait["work"], 0.8) for k in known):
+            return None
+        x = {"id": f"xw_{uuid.uuid4().hex[:10]}", "commessa_id": target["id"], "collection_id": clienti["id"], "work": wait["work"],
+             "why": f["why"], "log_ids": [log["id"]], "date": log.get("date"), "author": log.get("author_name") or "", "hours": 0,
+             "materials": [], "quote_version": version, "status": "da_valutare", "to_do": True, "wait_id": wait["id"], "amount": None,
+             "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.job_extra_works.insert_one(dict(x))
+        await db.job_waits.update_one({"id": wait["id"]}, {"$set": {"extra_id": x["id"]}})
+        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+        if owner:
+            text = (f"💡 *Possibile lavoro extra da fare* su {_wait_where(view)}\n«{x['work']}» ({jl.waiting_label(wait)})"
+                    + (f"\n{x['why']}" if x["why"] else "")
+                    + f"\nNon lo trovo nel preventivo{f' v{version}' if version else ''} né nella descrizione. "
+                      "Se è un extra, fallo approvare al cliente insieme al via libera.")
+            if await nprefs.wants(db, owner["user_id"], "extra", "telegram"):
+                await _tg_send(owner.get("telegram_chat_id"), text, _extra_kb(x["id"]))
+            push.fire_and_forget(db, owner["user_id"], "💡 Possibile lavoro extra da fare", f"«{x['work']}» · {view['title']}",
+                                 f"/dashboard/journal?commessa={target['id']}", f"xw-{x['id']}", kind="extra")
+        return x
+    except Exception:
+        logger.exception("waiting work extra check failed")
+        return None
+
+
+async def _after_entry(current: User, target: dict, log: dict, wait: Optional[dict]) -> None:
+    """After a diary entry, in the background: the works done out of the quote, then the one waited for (not twice)."""
+    await _extra_works_from_log(current, target, log)
+    if wait:
+        await _waiting_extra(target, log, wait)
+
+
+async def _tell_wait_operator(wait: dict, text: str, kb_status: Optional[str] = None) -> bool:
+    """To who wrote the note: a collaborator on Telegram, or an app user (Telegram and app)."""
+    op = wait.get("operator") or {}
+    if op.get("kind") == "collab":
+        c = await db.collaborators.find_one({"id": op["id"]}, {"_id": 0})
+        if not c or wait["commessa_id"] not in (c.get("commesse") or []):
+            return False
+        return await _tell_collaborator(c, text, kb=_wait_kb(wait["id"], kb_status, "cwt") if kb_status else None)
+    if op.get("kind") == "user":
+        u = await db.users.find_one({"user_id": op["id"]}, {"_id": 0})
+        if not u:
+            return False
+        push.fire_and_forget(db, u["user_id"], text.split("\n")[0][:80], wait["work"],
+                             f"/dashboard/journal?commessa={wait['commessa_id']}", f"wait-{wait['id']}", kind="problems")
+        if await nprefs.wants(db, u["user_id"], "problems", "telegram"):
+            await _tg_send(u.get("telegram_chat_id"), text, _wait_kb(wait["id"], kb_status) if kb_status else None)
+        return True
+    return False
+
+
+async def _wait_answer(wid: str, choice: str, by: dict) -> str:
+    """How it went - from the buttons or from a note. `by`: {"kind": owner|user|collab, "id", "name"}.
+    fatto: both To Do done, the note's problem solved; via: the go-ahead came, the work stays to do (asked again
+    later whether it was done); attesa: asked again in a few days; no: the work isn't done. -> the answer to `by`."""
+    wait = await db.job_waits.find_one({"id": wid}, {"_id": 0})
+    if not wait:
+        return "Non trovo più questa attività."
+    if choice not in ("fatto", "via", "attesa", "no"):
+        return "Risposta non valida."
+    if wait["status"] not in WAIT_OPEN:
+        return f"«{wait['work']}» è già chiusa 👍"
+    ctx = await _commessa_ctx(wait["commessa_id"])
+    if not ctx:
+        return "Questa commessa non c'è più."
+    view = ctx[3]
+    owner_doc = await db.users.find_one({"user_id": wait["owner_user_id"]}, {"_id": 0})
+    owner = User(**owner_doc) if owner_doc else None
+    today = jl.today_local()
+    now = datetime.now(timezone.utc).isoformat()
+    work, where, name = wait["work"], _wait_where(view), by.get("name") or ""
+    upd = {"updated_at": now, "answered_by": name}
+    event = other = None
+    later = mtpl.add_workdays(today, WAIT_AGAIN_WORKDAYS).isoformat()
+    if choice == "fatto":
+        upd.update(status="fatto", done_on=today.isoformat())
+        for tid in (wait["ask_todo_id"], wait["work_todo_id"]):
+            await db.job_todos.update_one({"id": tid, "done": False}, {"$set": {"done": True, "done_at": now, "done_by": name}})
+        lg = await db.job_logs.find_one({"id": wait["log_id"]}, {"_id": 0, "problems": 1, "problem_status": 1}) or {}
+        probs = lg.get("problems") or []
+        for i, p in enumerate(probs):   # the problem that note told
+            if (len(probs) == 1 or jl.work_named(p, work)) and ((lg.get("problem_status") or {}).get(str(i)) or {}).get("status") != "risolta":
+                await _set_problem_status(wait["log_id"], i, True, name)
+        event = f"✅ {work}: fatto (segnato da {name})."
+        mine = f"✅ Bene! «{work}» è segnata come fatta e il problema è chiuso."
+        other = f"✅ {name}: «{work}» su {where} è fatta."
+    elif choice == "via":
+        if wait["status"] == "via_libera":
+            return "Il via libera era già segnato 👍"
+        upd.update(status="via_libera", go_on=today.isoformat(), ask_on=later if wait.get("operator") else None, asked_on=None)
+        await db.job_todos.update_one({"id": wait["ask_todo_id"], "done": False}, {"$set": {"done": True, "done_at": now, "done_by": name}})
+        await db.job_todos.update_one({"id": wait["work_todo_id"]}, {"$set": {"text": work}})
+        event = f"👍 {work}: c'è {_go_ahead_text(wait)}, si può fare (segnato da {name})."
+        mine = (f"👍 Segnato: c'è {_go_ahead_text(wait)}. «{work}» resta tra le cose da fare"
+                + (f": il {_short_it_date(later)} ti chiedo se è stata fatta." if by.get("kind") != "owner" and wait.get("operator") else "."))
+        other = f"👍 {name}: c'è {_go_ahead_text(wait)} per «{work}» su {where}. Si può fare."
+    elif choice == "attesa":
+        if wait.get("operator"):
+            upd.update(ask_on=later, asked_on=None)
+        if by.get("kind") == "owner":
+            if wait["status"] == "attesa":
+                again = mtpl.add_workdays(today, WAIT_ADMIN_WORKDAYS).isoformat()
+                await db.job_todos.update_one({"id": wait["ask_todo_id"]}, {"$set": {"due_date": again, "reminded": {}, "done": False}})
+                mine = f"⏳ Ok, te lo ricordo di nuovo il {_short_it_date(again)}."
+            else:
+                mine = "⏳ Ok."
+        else:
+            mine = f"⏳ Ok, te lo richiedo il {_short_it_date(later)}."
+            other = (f"⏳ {name}: «{work}» su {where} è ancora {jl.waiting_label(wait)}." if wait["status"] == "attesa"
+                     else f"⏳ {name}: «{work}» su {where} non è ancora fatta.")
+    else:   # no
+        upd.update(status="no")
+        await db.job_todos.update_one({"id": wait["ask_todo_id"], "done": False}, {"$set": {"done": True, "done_at": now, "done_by": name}})
+        await db.job_todos.delete_one({"id": wait["work_todo_id"]})
+        event = f"❌ {work}: niente {wait['what']}" + (f" {jl.with_article(wait['from'], 'di')}" if wait.get("from") else "") + f", non si fa (segnato da {name})."
+        mine = f"Segnato: «{work}» non si fa, l'ho tolto dalle cose da fare."
+        other = f"❌ {name}: per «{work}» su {where} niente {wait['what']}, non si fa."
+    await db.job_waits.update_one({"id": wid}, {"$set": upd})
+    if event and owner:
+        await _log_commessa_event(owner, view, "todo", event, {"wait_id": wid}, author_name=name)
+    op = wait.get("operator") or {}
+    if other:
+        if by.get("kind") == "owner":
+            if op and op.get("id") != by.get("id"):
+                await _tell_wait_operator(wait, other)
+        elif owner:
+            await _notify_owner(owner, other, kind="problems")
+            push.fire_and_forget(db, owner.user_id, f"{other[:2]} {view.get('title')}", other[2:].strip()[:140],
+                                 f"/dashboard/journal?commessa={view['id']}", f"wait-{wid}", kind="problems")
+    if op.get("kind") == "collab":
+        _day_pin_touch(op["id"])
+    return mine
+
+
+async def _wait_by_user(user: dict, wid: str) -> Optional[dict]:
+    """Who answers from an app user's Telegram: the administrator (or one of the firm's), or who wrote the note."""
+    wait = await db.job_waits.find_one({"id": wid}, {"_id": 0, "owner_user_id": 1, "operator": 1})
+    if not wait:
+        return None
+    name = _first_name(user.get("name"))
+    op = wait.get("operator") or {}
+    if op.get("kind") == "user" and op.get("id") == user["user_id"]:
+        return {"kind": "user", "id": user["user_id"], "name": name}
+    if user["user_id"] == wait["owner_user_id"]:
+        return {"kind": "owner", "id": user["user_id"], "name": name}
+    owner = await db.users.find_one({"user_id": wait["owner_user_id"]}, {"_id": 0, "tenant_id": 1})
+    if owner and owner.get("tenant_id") and owner["tenant_id"] == user.get("tenant_id") and _is_org_admin(User(**user)):
+        return {"kind": "owner", "id": user["user_id"], "name": name}
+    return None
+
+
+async def _waits_from_note(current: User, target: dict, log: dict, text: str, author: Optional[dict]) -> list:
+    """A later note says it: "sostituito il ventilatore" -> done; "il proprietario ha dato il via libera" -> go-ahead
+    (the work named, or the only one waiting on the commessa). -> lines for the answer."""
+    open_ = [w for w in await db.job_waits.find({"commessa_id": target["id"], "status": {"$in": list(WAIT_OPEN)}}, {"_id": 0}).to_list(50)
+             if w["log_id"] != log["id"]]
+    if not open_:
+        return []
+    if author:
+        by = {"kind": "collab", "id": author["id"], "name": author.get("first_name") or author.get("name") or ""}
+    else:
+        by = {"kind": "owner" if all(current.user_id == w["owner_user_id"] for w in open_) else "user", "id": current.user_id,
+              "name": _first_name(current.name)}
+    out = []
+    for w in open_:
+        named = jl.work_named(text, w["work"])
+        if named and jl.activity_done(text, [w["work"]]):
+            await _wait_answer(w["id"], "fatto", by)
+            out.append(f"✅ Fatto: {w['work']} (era {jl.waiting_label(w)}).")
+        elif w["status"] == "attesa" and jl.go_ahead_said(text) and (named or len(open_) == 1):
+            await _wait_answer(w["id"], "via", by)
+            out.append(f"👍 C'è {_go_ahead_text(w)} per «{w['work']}»: resta da fare.")
+    return out
+
+
+async def _waiting_followups(now_utc: Optional[datetime] = None) -> int:
+    """Every few minutes: the administrator on the day of their To Do, who wrote the note on the day they are asked.
+    A work done or removed in the app closes its wait (nobody asked any more). -> how many sent."""
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_local.strftime("%H:%M") < WAIT_AT:
+        return 0
+    today = now_local.date().isoformat()
+    sent = 0
+    for wait in await db.job_waits.find({"status": {"$in": list(WAIT_OPEN)}}, {"_id": 0}).to_list(2000):
+        work_t = await db.job_todos.find_one({"id": wait["work_todo_id"]}, {"_id": 0})
+        if not work_t or work_t.get("done"):
+            await db.job_waits.update_one({"id": wait["id"]}, {"$set": {"status": "fatto" if work_t else "tolto",
+                                                                        "updated_at": datetime.now(timezone.utc).isoformat()}})
+            if work_t:
+                await db.job_todos.update_one({"id": wait["ask_todo_id"], "done": False},
+                                              {"$set": {"done": True, "done_at": datetime.now(timezone.utc).isoformat()}})
+            continue
+        ctx = await _commessa_ctx(wait["commessa_id"])
+        if not ctx or vx.is_closed(ctx[3]["stato"]):
+            continue
+        view = ctx[3]
+        where = _wait_where(view)
+        url = f"/dashboard/journal?commessa={view['id']}"
+        ask_t = await db.job_todos.find_one({"id": wait["ask_todo_id"]}, {"_id": 0})
+        if wait["status"] == "attesa" and ask_t and not ask_t.get("done") and ask_t.get("due_date") and ask_t["due_date"] <= today \
+                and (ask_t.get("reminded") or {}).get("due") != ask_t["due_date"]:
+            await db.job_todos.update_one({"id": ask_t["id"]}, {"$set": {"reminded": {**(ask_t.get("reminded") or {}), "due": ask_t["due_date"]}}})
+            owner = await db.users.find_one({"user_id": wait["owner_user_id"]}, {"_id": 0})
+            if owner:
+                op = wait.get("operator") or {}
+                label = jl.waiting_label(wait)
+                text = (f"📞 Da fare oggi: *{jl.ask_label(wait)}*\n«{wait['work']}» su {where}\n{label[0].upper() + label[1:]} "
+                        f"dal {_short_it_date(wait['since'])}" + (f", scritto da {op['name']}" if op.get("name") else "") + ".\nCom'è andata?")
+                push.fire_and_forget(db, owner["user_id"], f"📞 {jl.ask_label(wait)}", f"{wait['work']} · {view.get('title')}", url,
+                                     f"wait-{wait['id']}", kind="problems")
+                if await nprefs.wants(db, owner["user_id"], "problems", "telegram") \
+                        and await _tg_send(owner.get("telegram_chat_id"), text, _wait_kb(wait["id"], "attesa")):
+                    sent += 1
+        if wait.get("operator") and wait.get("ask_on") and wait["ask_on"] <= today and wait.get("asked_on") != wait["ask_on"]:
+            await db.job_waits.update_one({"id": wait["id"]}, {"$set": {"asked_on": wait["ask_on"]}})
+            if wait["status"] == "attesa":
+                who = jl.with_article(wait["from"]) if wait.get("from") else ""
+                q = (f"🔧 {where}\n«{wait['work']}» era {jl.waiting_label(wait)}.\n"
+                     + (f"Sai se {who} ha dato {jl.with_article(wait['what'])}?" if who else f"Sai se c'è {jl.with_article(wait['what'])}?")
+                     + " È stato fatto?")
+            else:
+                q = f"🔧 {where}\n«{wait['work']}»: è stato fatto?"
+            if await _tell_wait_operator(wait, q, wait["status"]):
+                sent += 1
+    return sent
+
+
 async def _activities_started(worker_id: str, commessa_id: str, at: datetime) -> None:
     """A check-in on the day of an activity of theirs: the activity is in progress."""
     day = at.astimezone(LOCAL_TZ).date().isoformat()
@@ -12694,6 +13039,13 @@ async def _today_dashboard(current: User, now_utc: Optional[datetime] = None) ->
                                "commessa": f"{v.get('client_name') or ''} · {v.get('title') or ''}".strip(" ·"),
                                "time": a.get("start_time"), "text": a.get("description") or "",
                                "who": [p.get("name") for p in a.get("assignees") or [] if p.get("name")], "done": a.get("status") == "svolta"})
+    # (and the To Do of mine of today or left behind: "Chiedere il via libera al proprietario")
+    for t in (await db.job_todos.find({"commessa_id": {"$in": ids}, "kind": "attesa", "assignee_user_id": current.user_id, "done": False,
+                                       "due_date": {"$lte": today}}, {"_id": 0}).to_list(200) if ids else []):
+        v = views.get(t["commessa_id"]) or {}
+        notes["today"].append({"kind": "todo", "id": t["id"], "commessa_id": t["commessa_id"],
+                               "commessa": f"{v.get('client_name') or ''} · {v.get('title') or ''}".strip(" ·"),
+                               "time": None, "text": t.get("text") or "", "who": [], "done": False})
     notes["today"].sort(key=lambda x: x["time"] or "99:99")
     # 1) to look at at once: the open problems on today's sites (and the ones of the last days on the others),
     #    a site planned with nobody there, the tasks left behind; the bad weather is added below
@@ -13052,6 +13404,7 @@ async def _collab_reminder_loop():
                 await _collab_day_briefs()
                 await _todo_reminders()
                 await _material_reminders()
+                await _waiting_followups()
                 await _presence_forgotten()
                 await _presence_late_check()
                 await _presence_day_note()
