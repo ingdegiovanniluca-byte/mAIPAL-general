@@ -495,6 +495,60 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
     }
 
 
+# ---- materials shown in a photo: "oggi ho usato 5 di questi" with the photo of the part or of its box - what it is
+# comes from the photo (name, brand, code if readable), how many only from the words
+# (a quantity or a use pointing at the photo: "5 di questi", "ho usato questi", "ne ho montati 3 come in foto" - not a
+# description of the photo, "nella foto c'è il quadro")
+_PHOTO_REF = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s*(?:pz\s+|pezzi\s+|m\s+|metri\s+|confezioni\s+|scatole\s+|rotoli\s+)?(?:di\s+|dei\s+|delle\s+)?quest[ieao]\b"
+    r"|\b(?:usat\w*|montat\w*|mess[oiae]|posat\w*|installat\w*|servono|serve|prendere|portare|ordinare|comprare|preso|presi)\b"
+    r"[^.]{0,25}?\b(?:quest[ieao]|come\s+(?:in|da|nella)\s+foto|quell[ieao]\s+(?:in|della|nella)\s+foto)\b"
+    r"|\b\d+(?:[.,]\d+)?\b[^.]{0,20}?\bcome\s+(?:in|da|nella)\s+foto\b", re.I)
+
+
+def photo_materials_said(text: str) -> bool:
+    return bool(_PHOTO_REF.search(text or ""))
+
+
+def deictic_name(name: str) -> bool:
+    """A material "named" by pointing at the photo ("questi", "quelli in foto"): no real name."""
+    words = [w for w in _words(name) if w not in {"questi", "queste", "questo", "questa", "foto", "pezzi", "pezzo", "materiale"}]
+    return not words
+
+
+async def read_photo_materials(text: str, images: list, user_id: Optional[str] = None, channel: str = "web") -> list:
+    """-> [{name, qty, unit, from_photo}] - the name read in the photo, the quantity only if written in the message."""
+    pics = [i for i in images or [] if isinstance(i, str) and i.startswith("data:image")][:3]
+    if not pics:
+        return []
+    system = (
+        "Sei l'assistente di un'impresa artigiana. L'operatore manda la foto di un componente o della sua confezione e scrive quanti "
+        "ne ha usati o deve prendere (\"oggi ho usato 5 di questi\"). Dalla FOTO leggi cos'è: il nome del materiale in italiano, la "
+        "marca e il modello o codice SOLO se sono leggibili nella foto. La quantità e l'unità SOLO se scritte nel messaggio, altrimenti null. "
+        "Se nella foto non si capisce che materiale è, non scriverlo. MAI inventare marche o codici.\n"
+        "Rispondi SOLO con JSON: {\"materials\": [{\"name\": \"\", \"brand\": \"\", \"code\": \"\", \"qty\": null, \"unit\": \"\"}]}"
+    )
+    content = [{"type": "text", "text": f"Messaggio: {text}"}] + [{"type": "image_url", "image_url": {"url": u}} for u in pics]
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=600, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": content}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    out = []
+    for r in (json.loads(m.group(0)) if m else {}).get("materials") or []:
+        if not isinstance(r, dict) or not str(r.get("name") or "").strip():
+            continue
+        name = " ".join(" ".join(str(r.get(k) or "") for k in ("name", "brand", "code")).split())[:120]
+        qty = _num(r.get("qty"))
+        out.append({"name": name[0].upper() + name[1:], "qty": qty if qty is not None and _qty_in_text(qty, text) else None,
+                    "unit": str(r.get("unit") or "").strip()[:20] if qty is not None else "", "from_photo": True})
+    return out[:5]
+
+
 # ---- a new commessa said in a message: "Nuova commessa per Mario Rossi, rifacimento bagno in via
 # Garibaldi 5 a Torino, inizio 10 novembre" (RF-CRE-02). Only what is written; asked when missing.
 # "crea una commessa …", "creami una commessa", "mi crei una nuova commessa", "per Luca D crea commessa …", "nuova commessa",
@@ -1020,6 +1074,37 @@ _LOST_CATS = [("prezzo", re.compile(r"\b(?:prezz\w*|car[oaie]\b|costos\w*|costa\
               ("rinuncia_cliente", re.compile(r"\b(?:rinunci\w*|non\s+(?:lo\s+)?fa\s+più|non\s+se\s+ne\s+fa)", re.I))]
 
 
+# ---- the commessa's value said by the administrator: "il valore della commessa è 12.500 €", "valore commessa 12500",
+# "aggiungi 800 € al valore della commessa" -> {"amount", "mode": set|add}
+_AMOUNT = r"(?:€\s*)?(\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(k\b|mila\b)?\s*(?:€|euro|eur\b)?"
+_VALUE_SET = re.compile(r"\b(?:il\s+)?valore\s+(?:della\s+|del\s+)?(?:commessa|lavoro|contratto|appalto|cantiere)\b[^\d€]{0,30}?" + _AMOUNT, re.I)
+_VALUE_ADD = re.compile(r"\b(?:aggiungi|aggiungere|somma|sommare|aumenta|aumentare)\s+" + _AMOUNT
+                        + r"[^\d]{0,20}?\bal\s+valore\b", re.I)
+
+
+def _amount(num: str, mult: Optional[str]) -> Optional[float]:
+    t = num.replace(" ", "")
+    t = re.sub(r"\.(?=\d{3}(?:\D|$))", "", t).replace(",", ".")
+    try:
+        v = float(t)
+    except ValueError:
+        return None
+    return v * 1000 if mult else v
+
+
+def value_said(text: str) -> Optional[dict]:
+    t = text or ""
+    m = _VALUE_ADD.search(t)
+    if m:
+        v = _amount(m.group(1), m.group(2))
+        return {"amount": v, "mode": "add"} if v else None
+    m = _VALUE_SET.search(t)
+    if m and not is_plain_question(t):
+        v = _amount(m.group(1), m.group(2))
+        return {"amount": v, "mode": "set"} if v else None
+    return None
+
+
 def quote_outcome_said(text: str) -> Optional[dict]:
     """-> {"outcome": accettato | perso | in_attesa, "category": prezzo|tempi|concorrente|rinuncia_cliente|altro|"",
     "reason": the words after "per/perché"} or None (not about a quote's outcome)."""
@@ -1432,7 +1517,11 @@ def price_key(name: str, unit: str = "") -> str:
 
 
 def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[float] = None,
-              prices: Optional[dict] = None, extras: Optional[list] = None, budget: Optional[float] = None) -> dict:
+              prices: Optional[dict] = None, extras: Optional[list] = None, budget: Optional[float] = None,
+              commessa_prices: Optional[dict] = None) -> dict:
+    """A material's price: what the note says it cost ("costo 50 €"), else the price set on this commessa, else the
+    organization's price list (`prices`); none of them: not counted (never guessed). Each material keeps the notes it
+    came from."""
     tot = totals(logs)
     rates = {k.lower(): float(v) for k, v in (rates or {}).items() if v is not None}
     labor, unpriced_hours = [], 0.0
@@ -1451,13 +1540,22 @@ def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[f
                 k = same(m["name"], m.get("unit"))
                 q, a = paid.get(k, (0.0, 0.0))
                 paid[k] = (q + float(m.get("qty") or 0), a + float(m["paid"]))
-    by_root = {same(*(k.split("|", 1) + [""])[:2]): v for k, v in (prices or {}).items()}
+    listino = {same(*(k.split("|", 1) + [""])[:2]): v for k, v in (prices or {}).items()}
+    own = {same(*(k.split("|", 1) + [""])[:2]): v for k, v in (commessa_prices or {}).items()}
+    val = lambda p: p.get("price") if isinstance(p, dict) else p
+    notes: dict = {}   # (root, unit) -> the notes that used it
+    for lg in logs:
+        for m in lg.get("materials") or []:
+            if lg.get("id"):
+                notes.setdefault(same(m["name"], m.get("unit")), []).append(
+                    {"id": lg["id"], "date": lg.get("date"), "author": lg.get("author_name") or "", "qty": m.get("qty"), "unit": m.get("unit") or ""})
     mats, unpriced_mats = [], []
     for m in tot["materials"]:
         key = price_key(m["name"], m.get("unit") or "")
         rk = same(m["name"], m.get("unit"))
-        p = (prices or {}).get(key, by_root.get(rk))
-        price = p.get("price") if isinstance(p, dict) else p
+        list_price = val(listino.get(rk))
+        price, source = (val(own[rk]), "commessa") if rk in own and val(own[rk]) is not None else (list_price, "listino" if list_price is not None else None)
+        m = {**m, "price_source": source, "listino_price": list_price, "notes": sorted(notes.get(rk, []), key=lambda x: x.get("date") or "")}
         if rk in paid:
             pq, pa = paid[rk]
             rest = max(0.0, float(m.get("qty") or 0) - pq)
@@ -1751,7 +1849,8 @@ def hours_line(hours: list) -> str:
 
 def materials_line(materials: list) -> str:
     return ", ".join(" ".join(x for x in (_fmt_num(m.get("qty")), m.get("unit") or "", m["name"]) if x).strip()
-                     + (f" ({_eur(m['paid'])})" if m.get("paid") is not None else "") for m in materials)
+                     + (f" ({_eur(m['paid'])})" if m.get("paid") is not None else "") + (" (dalla foto)" if m.get("from_photo") else "")
+                     for m in materials)
 
 
 def unplanned_materials(materials: list, planned: list) -> list:

@@ -315,7 +315,7 @@ async def main():
     assert up2["description_from_quote"] is True     # (the app proposes to replace it with this one's)
     BOT_SENT.clear()
     c2 = await server.confirm_quote(up2["quote"]["id"], server.QuoteConfirmPayload(), me)
-    assert c2["quote"]["version"] == 2 and c2["quote"]["value_pending"] and any("quale tengo" in t for _c, t, _k in BOT_SENT)
+    assert c2["quote"]["version"] == 2 and c2["quote"]["value_pending"] and any("tengo quello che c'è" in t for _c, t, _k in BOT_SENT)
     # the description of the work came from v1: now it is v2's (one written by hand would stay)
     sub = next(x for x in db.collection_sub_items.docs if x["id"] == sid)
     assert sub["data"]["descrizione"].endswith("- sanitari sospesi") and sub["description_meta"]["file"] == "prev2.txt"

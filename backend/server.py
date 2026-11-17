@@ -6444,7 +6444,7 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
             extras = [x for x in econ.get("extras") or [] if not period or start.isoformat() <= (x.get("date") or "")[:10] <= end.isoformat()]
             costs = clienti.get("costs") or {}
             e = jl.economics(work, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), extras,
-                             econ.get("budget") if not period else None)
+                             econ.get("budget") if not period else None, commessa_prices=econ.get("prices"))
             fields = {"Manodopera": jl._eur(e["labor_total"]), "Materiali": jl._eur(e["materials_total"]),
                       "Altre spese": jl._eur(e["extras_total"]), "Totale costi": jl._eur(e["cost_total"])}
             if e.get("budget"):
@@ -7786,6 +7786,12 @@ PHOTO_ONLY_TEXT = "Foto dal cantiere"
 PHOTO_DESCRIBE_MINUTES = 20   # a description sent within this time completes the photo sent just before
 
 
+async def _photos_as_uris(log_id: str) -> list:
+    """The photos of an entry as data URIs (to read what they show)."""
+    return [f"data:{p.get('mime') or 'image/jpeg'};base64,{p['data_b64']}"
+            for p in await db.job_photos.find({"log_id": log_id}, {"_id": 0, "mime": 1, "data_b64": 1}).to_list(3) if p.get("data_b64")]
+
+
 async def _photo_awaiting_text(current: User, author: Optional[dict], commessa_id: Optional[str]) -> Optional[dict]:
     """The last entry of this author that is only photos ("Foto dal cantiere"), sent in the last
     minutes - on that commessa when it is known. The message that follows describes it."""
@@ -8001,8 +8007,10 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     # lavoro consiste in …"): only the owner or an administrator - never a collaborator
     said_description = jl.description_said(text) if not author and not images and _can_describe(current, clienti) else None
     try:
+        # (the photos sent with it said: "5 di questi" is clear - what it is comes from the photo)
+        n_photos = len(images) if images and jl.photo_materials_said(text) else len(photo_entry["photos"]) if photo_entry else 0
         parsed = await jl.interpret(text, speaker, team, known=known, user_id=current.user_id, channel=channel,
-                                    **({"photos": len(photo_entry["photos"])} if photo_entry else {}))
+                                    **({"photos": n_photos} if n_photos else {}))
     except Exception:
         logger.exception("job log interpretation failed, saving the text as is")
         parsed = {"kind": "nota", "date": jl.today_local().isoformat(), "text": text, "hours": [], "materials": [], "problems": [],
@@ -8030,6 +8038,22 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         return {"status": "unclear", "message": "Non ho salvato niente: la nota non è chiara. "
                 + (parsed.get("doubt") or "Mi dici cosa avete fatto e per quale cliente o commessa?")}
     parsed = jl.ground(parsed, text)
+    # "oggi ho usato 5 di questi" with the photo of the part or its box: what it is is read in the photo
+    pics = images or ([] if not photo_entry else await _photos_as_uris(photo_entry["id"]))
+    if pics and jl.photo_materials_said(text):
+        try:
+            seen = await jl.read_photo_materials(text, pics, user_id=current.user_id, channel=channel)
+        except Exception:
+            logger.exception("materials from the photo failed")
+            seen = []
+        if seen:
+            today = jl.today_local()
+            for m in seen:
+                m["status"] = jl.material_status(m, text)
+                m["for_date"] = jl.plan_date(m, text, today) if m["status"] == "da_prendere" else None
+                if m["status"] == "dubbio":
+                    m["status"] = "usato"
+            parsed["materials"] = [m for m in parsed.get("materials") or [] if not jl.deictic_name(m["name"])] + seen
 
     may_create = _is_org_admin(current) or bool(author)   # a collaborator writes only on the commesse enabled
     if not target and client_item_id:
@@ -8088,6 +8112,15 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if not author and not images and _is_org_admin(current) and (jl.plan_said(text) or jl.future_activity_said(text)):
         # "pianifica … il 12/11 con Gino", or "domani Avanzino deve sostituire il filtro della caldaia": a planned activity
         return await _plan_from_message(current, clienti, target, text, channel)
+    said_value = jl.value_said(text) if not author and not images and _is_org_admin(current) else None
+    if said_value:   # "il valore della commessa è 12.500 €" / "aggiungi 800 € al valore": the administrator's, in the diary
+        econ = await db.job_economics.find_one({"commessa_id": target["id"]}, {"_id": 0, "budget": 1}) or {}
+        old = econ.get("budget")
+        new = said_value["amount"] + (float(old or 0) if said_value["mode"] == "add" else 0)
+        await _set_commessa_value(current, clienti, target, old, new, "aggiunti " + jl._eur(said_value["amount"]) + " con un messaggio"
+                                  if said_value["mode"] == "add" else "scritto in un messaggio")
+        return {"status": "commessa_update", "commessa": target,
+                "message": f"💶 Valore di «{target['title']}»: {jl._eur(new)}" + (f" (era {jl._eur(old)})." if old else ".")}
     outcome = jl.quote_outcome_said(text) if not author and not images and _is_org_admin(current) else None
     if outcome and parsed.get("kind") != "descrizione":   # "il preventivo dei Rossi è stato accettato" (RF-PRE-03)
         if outcome["outcome"] == "perso" and not outcome["category"] and not outcome["reason"]:
@@ -8123,7 +8156,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         return {"status": "material_doubt", "materials": names, "commessa_id": target["id"], "commessa": target, "text": text,
                 "message": f"🧰 {', '.join(names)}: li avete usati oggi o sono da prendere?"}
     planned = [m for m in mats if m.get("status") == "da_prendere"] + list(parsed.get("tools") or [])   # (the tools to bring too)
-    parsed["materials"] = [{k: m.get(k) for k in ("name", "qty", "unit")} for m in mats if m.get("status") != "da_prendere"]
+    parsed["materials"] = [{k: m.get(k) for k in ("name", "qty", "unit", "from_photo") if k != "from_photo" or m.get(k)}
+                           for m in mats if m.get("status") != "da_prendere"]
     # "interruttore da 50 A, costo 50 €": the 50 € is that material's cost, not an expense too (counted once)
     parsed["materials"], parsed["expenses"] = jl.expenses_on_materials(parsed["materials"], parsed.get("expenses") or [])
     if planned:   # the entry's text keeps only what was done
@@ -9331,10 +9365,11 @@ async def _commessa_economics(clienti: dict, commessa_id: str, logs: Optional[li
     costs = clienti.get("costs") or {}
     econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0}) or {}
     if logs is None:
-        logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "hours": 1, "materials": 1, "problems": 1, "kind": 1, "date": 1,
-                                                                     "phase": 1, "section": 1, "created_at": 1}).to_list(20000)
+        logs = await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "id": 1, "author_name": 1, "hours": 1, "materials": 1, "problems": 1,
+                                                                     "kind": 1, "date": 1, "phase": 1, "section": 1, "created_at": 1}).to_list(20000)
         await _fill_phases(commessa_id, logs)
-    return jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), econ.get("extras"), econ.get("budget"))
+    return jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), econ.get("extras"), econ.get("budget"),
+                        commessa_prices=econ.get("prices"))
 
 
 async def _check_budget_alert(clienti: dict, commessa_id: str) -> None:
@@ -9824,6 +9859,7 @@ async def _quote_proposal(current: User, clienti: dict, sub: dict, view: dict, n
     return {"type": "quote", "quote": _quote_public(doc), "value": value, "current_budget": econ.get("budget"), "history_check": history,
             "plan_default": _plan_default(view, q), "plan_dates": {"start": st.isoformat() if st else None, "end": en.isoformat() if en else None},
             "current_description": view.get("descrizione") or "", "description_from_quote": _description_from_quote(sub),
+            "new_works": (await _quote_new_activities(view["id"], q, doc["id"]))[:12] if econ.get("budget") else [],
             "loss_feedback": feedback, "can_choose_value": _is_org_admin(current),
             "options": [{"name": o["name"], "title": o.get("title") or "", "value": o.get("taxable") or o.get("total")} for o in q.get("options") or []],
             "message": msg + ("\nSu quale soluzione lavoriamo? Puoi anche decidere più tardi, quando il cliente sceglie." if q.get("options") else "\nConfermi i dati?")}
@@ -9880,26 +9916,52 @@ async def _plan_from_quote(current: User, clienti: dict, view: dict, d: dict, mo
             " (senza date di inizio e fine non posso fare le milestone)") + ": li trovi in To Do.")
 
 
+async def _set_commessa_value(current: User, clienti: dict, view: dict, old: Optional[float], new: float, why: str) -> None:
+    """The commessa's value changed: kept, in its history and as a line of the diary (who, before -> after, why)."""
+    new = round(float(new), 2)
+    await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"commessa_id": view["id"], "budget": new}}, upsert=True)
+    await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (old, new)})
+    if old:
+        await _job_event(current, clienti, view, "valore", f"💶 Valore della commessa: {jl._eur(old)} → {jl._eur(new)} ({why}).")
+    await _check_budget_alert(clienti, view["id"])
+
+
+async def _quote_new_activities(commessa_id: str, d: dict, quote_id: Optional[str] = None) -> list:
+    """The works of this quote (its activities, else its items) that the commessa's last confirmed quote did not have."""
+    def works(x: dict) -> list:
+        return [str(a) for a in x.get("activities") or [] if a] or [str(i.get("description")) for i in x.get("items") or []
+                                                                  if isinstance(i, dict) and i.get("description")]
+    prev = [q for q in await _commessa_quotes(commessa_id) if q.get("id") != quote_id]
+    if not prev:
+        return []
+    old = works(prev[0].get("data") or {})
+    return [w for w in works(d) if not any(jl.grounded(w, o, 0.7) or jl.grounded(o, w, 0.7) for o in old)]
+
+
 async def _quote_value_set(current: User, clienti: dict, view: dict, quote_id: str, value: Optional[float], value_choice: Optional[str],
-                           upd: dict, lines: list) -> None:
-    """The quote's value on the commessa: set when empty; when different the administrator chooses."""
+                           upd: dict, lines: list, version: Optional[int] = None, new_works: Optional[list] = None) -> None:
+    """The quote's value on the commessa: set when empty; when different the administrator chooses - to replace it
+    (the same works, a new price) or, when the quote has new works, also to add it to the value there is."""
     econ = await db.job_economics.find_one({"commessa_id": view["id"]}, {"_id": 0, "budget": 1}) or {}
     budget = econ.get("budget")
+    v = f"preventivo v{version}" if version else "preventivo"
     if value and not budget:
-        await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"commessa_id": view["id"], "budget": value}}, upsert=True)
-        await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (None, value)})
+        await _set_commessa_value(current, clienti, view, None, value, v)
         lines.append(f"💶 Valore della commessa: {jl._eur(value)}.")
     elif value and abs(float(budget) - value) >= 0.01:
         if _is_org_admin(current) and value_choice == "new":
-            await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"budget": value}})
-            await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (budget, value)})
+            await _set_commessa_value(current, clienti, view, budget, value, f"{v}, sostituito")
             lines.append(f"💶 Valore aggiornato: {jl._eur(value)} (era {jl._eur(budget)}).")
+        elif _is_org_admin(current) and value_choice == "add":
+            await _set_commessa_value(current, clienti, view, budget, float(budget) + value, f"{v} aggiunto: {jl._eur(value)}")
+            lines.append(f"💶 Valore aggiornato: {jl._eur(float(budget) + value)} ({jl._eur(budget)} + {jl._eur(value)}).")
         elif _is_org_admin(current) and value_choice == "keep":
             lines.append(f"💶 Valore tenuto: {jl._eur(budget)}.")
         else:
             upd["value_pending"] = True
+            upd["new_works"] = list(new_works or [])[:12]   # (the app offers "aggiungi" too)
             lines.append(f"⚖️ Il preventivo dice {jl._eur(value)}, il valore della commessa è {jl._eur(budget)}: lo sceglie l'amministratore.")
-            await _ask_value_choice(clienti, view, quote_id, value, budget)
+            await _ask_value_choice(clienti, view, quote_id, value, budget, bool(new_works))
 
 
 def _description_from_quote(sub: dict) -> bool:
@@ -9948,7 +10010,8 @@ async def _confirm_quote(current: User, quote_id: str, value_choice: Optional[st
     # the value (of the solution chosen; none chosen: not yet)
     if d.get("chosen_option") is not None:
         lines.append(f"🔀 Soluzione: {d['chosen_option_name']}.")
-    await _quote_value_set(current, clienti, view, quote_id, _quote_value(q), value_choice, upd, lines)
+    await _quote_value_set(current, clienti, view, quote_id, _quote_value(q), value_choice, upd, lines, version,
+                           await _quote_new_activities(view["id"], d, quote_id))
     if upd["option_pending"]:
         lines.append(f"🔀 {len(d['options'])} soluzioni alternative: quando il cliente sceglie, indicala in Preventivo (o con i pulsanti su Telegram); "
                      "allora metto il valore, i materiali previsti e le attività di quella soluzione.")
@@ -10020,18 +10083,24 @@ async def _choose_quote_option(current: User, quote_id: str, option: int, value_
     return {"status": "option", "quote": _quote_public({**q, **upd}), "message": "\n".join(lines)}
 
 
-async def _ask_value_choice(clienti: dict, view: dict, quote_id: str, value: float, budget: float) -> None:
-    """The administrator chooses which value to keep (Telegram buttons; the app shows it too)."""
+async def _ask_value_choice(clienti: dict, view: dict, quote_id: str, value: float, budget: float, new_works: bool = False) -> None:
+    """The administrator chooses which value to keep (Telegram buttons; the app shows it too); a quote with new works
+    can also be added to the value there is."""
     owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
     if not owner or not owner.get("telegram_chat_id") or not tg.bot_token():
         return
     try:
         from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"Usa {jl._eur(value)}", callback_data=f"qv:{quote_id}:new"),
-                                    InlineKeyboardButton(f"Tieni {jl._eur(budget)}", callback_data=f"qv:{quote_id}:keep")]])
-        await Bot(token=tg.bot_token()).send_message(chat_id=owner["telegram_chat_id"], reply_markup=kb,
+        rows = [[InlineKeyboardButton(f"Sostituisci: {jl._eur(value)}", callback_data=f"qv:{quote_id}:new"),
+                 InlineKeyboardButton(f"Tieni {jl._eur(budget)}", callback_data=f"qv:{quote_id}:keep")]]
+        if new_works:
+            rows.append([InlineKeyboardButton(f"Aggiungi: {jl._eur(float(budget) + value)}", callback_data=f"qv:{quote_id}:add")])
+        await Bot(token=tg.bot_token()).send_message(chat_id=owner["telegram_chat_id"], reply_markup=InlineKeyboardMarkup(rows),
                                                      text=f"⚖️ Nuovo preventivo per «{view['title']}» — {view['client_name']}: {jl._eur(value)}. "
-                                                          f"Il valore della commessa è {jl._eur(budget)}: quale tengo?")
+                                                          f"Il valore della commessa è {jl._eur(budget)}. "
+                                                          + ("Ha lavori nuovi rispetto al preventivo di prima: lo sostituisco, lo aggiungo al valore "
+                                                             "o tengo quello che c'è?" if new_works else
+                                                             "Sono gli stessi lavori: sostituisco il valore o tengo quello che c'è?"))
     except Exception:
         logger.exception("value choice message failed")
 
@@ -10046,10 +10115,13 @@ async def _choose_quote_value(current: User, quote_id: str, choice: str) -> dict
     await _commessa_or_404(current, view["id"])
     value = _quote_value(q)
     budget = (await db.job_economics.find_one({"commessa_id": view["id"]}, {"_id": 0, "budget": 1}) or {}).get("budget")
+    v = f"preventivo v{q['version']}" if q.get("version") else "preventivo"
     if choice == "new" and value:
-        await db.job_economics.update_one({"commessa_id": view["id"]}, {"$set": {"commessa_id": view["id"], "budget": value}}, upsert=True)
-        await _track_commessa_changes(current, clienti, view["id"], {}, {}, extra={"Valore": (budget, value)})
+        await _set_commessa_value(current, clienti, view, budget, value, f"{v}, sostituito")
         msg = f"💶 Valore di «{view['title']}» aggiornato a {jl._eur(value)}."
+    elif choice == "add" and value:
+        await _set_commessa_value(current, clienti, view, budget, float(budget or 0) + value, f"{v} aggiunto: {jl._eur(value)}")
+        msg = f"💶 Valore di «{view['title']}» aggiornato a {jl._eur(float(budget or 0) + value)} ({jl._eur(budget)} + {jl._eur(value)})."
     else:
         msg = f"💶 Valore di «{view['title']}» tenuto a {jl._eur(budget)}."
     await db.job_quotes.update_one({"id": quote_id}, {"$set": {"value_pending": False}})
@@ -10250,7 +10322,7 @@ async def quote_from_chat(file: UploadFile = File(...), text: str = Form(""), co
 
 
 class QuoteConfirmPayload(BaseModel):
-    value_choice: Optional[Literal["new", "keep"]] = None
+    value_choice: Optional[Literal["new", "keep", "add"]] = None
     option: Optional[int] = None          # the solution chosen, when the quote has alternatives (none: chosen later)
     plan: Optional[Literal["milestone", "todo", "none"]] = None   # the quote's activities as milestones / To Do (none given: by the dates)
     description_text: Optional[str] = None
@@ -10284,7 +10356,7 @@ async def discard_quote(quote_id: str, current: User = Depends(get_current_user)
 
 
 class QuoteValuePayload(BaseModel):
-    choice: Literal["new", "keep"]
+    choice: Literal["new", "keep", "add"]
 
 
 @api_router.post("/jobs/quotes/{quote_id}/value")
@@ -10459,12 +10531,13 @@ async def _commessa_extra_works(commessa_id: str, clienti: dict, sees_costs: boo
     rows = await db.job_extra_works.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(1000)
     rows.sort(key=lambda x: (x.get("status") not in EXTRA_OPEN, x.get("date") or ""), reverse=False)
     costs = clienti.get("costs") or {}
+    own_prices = ((await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "prices": 1})) or {}).get("prices") if sees_costs else None
     out = []
     for x in rows:
         v = {**x, "status_label": EXTRA_STATUS_LABEL.get(x["status"], x["status"])}
         if sees_costs:   # what that note's hours and materials cost (a reference, never the price to the client)
             logs = await db.job_logs.find({"id": {"$in": x.get("log_ids") or []}}, {"_id": 0, "embedding": 0}).to_list(20)
-            e = jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"))
+            e = jl.economics(logs, costs.get("rates"), costs.get("default_rate"), costs.get("prices"), commessa_prices=own_prices)
             v["note_cost"] = e["cost_total"] if (e["labor"] or e["materials"]) else None
         else:
             v.pop("amount", None)
@@ -11636,8 +11709,42 @@ async def patch_commessa_economics(commessa_id: str, payload: EconomicsPatch, cu
     _require_org_admin(current, COSTS_ADMIN_ONLY)
     budget = None if payload.clear_budget else _num_or_none(payload.budget)
     old_budget = (await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}).get("budget")
+    if budget is not None and budget != old_budget:   # (the diary told, like a value from a quote or a message)
+        ctx = await _commessa_ctx(commessa_id)
+        await _set_commessa_value(current, clienti, ctx[3], old_budget, budget, "scritto in Costi")
+        return await get_commessa_economics(commessa_id, current)
     await _track_commessa_changes(current, clienti, commessa_id, {}, {}, extra={"Valore": (old_budget, budget)})
     await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"commessa_id": commessa_id, "budget": budget}}, upsert=True)
+    await _check_budget_alert(clienti, commessa_id)
+    return await get_commessa_economics(commessa_id, current)
+
+
+class CommessaPricesPayload(BaseModel):
+    prices: List[dict]                    # [{name, unit, price (null: back to the price list)}]
+    to_listino: bool = False              # also into the organization's price list
+
+
+@api_router.put("/jobs/commesse/{commessa_id}/prices")
+async def put_commessa_prices(commessa_id: str, payload: CommessaPricesPayload, current: User = Depends(get_current_user)):
+    """A material's price for this commessa (it wins on the organization's price list); with to_listino, the price list too."""
+    clienti, _, _ = await _commessa_or_404(current, commessa_id)
+    if not await _sees_costs(current):
+        raise HTTPException(status_code=403, detail=COSTS_ADMIN_ONLY)
+    econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "prices": 1}) or {}
+    prices = dict(econ.get("prices") or {})
+    for p in payload.prices:
+        name = " ".join(str(p.get("name") or "").split())[:120]
+        if not name:
+            continue
+        key = jl.price_key(name, p.get("unit") or "")
+        val = _num_or_none(p.get("price")) if p.get("price") is not None else None
+        if val is None:
+            prices.pop(key, None)
+        else:
+            prices[key] = {"name": name, "unit": (p.get("unit") or "")[:20], "price": val}
+    await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"commessa_id": commessa_id, "prices": prices}}, upsert=True)
+    if payload.to_listino:
+        return await patch_job_costs(CostsPatch(prices=[p for p in payload.prices if p.get("price") is not None]), commessa_id, current)
     await _check_budget_alert(clienti, commessa_id)
     return await get_commessa_economics(commessa_id, current)
 

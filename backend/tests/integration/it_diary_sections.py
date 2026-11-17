@@ -134,8 +134,11 @@ emb.embed_query = no_emb
 MODEL_SAYS, EXTRAS, EXTRA_CALLS = {}, {"extras": []}, []
 class _Resp:
     def __init__(s, content): s.choices = [type("C", (), {"message": type("M", (), {"content": content})()})()]; s.usage = None
+PHOTO_SAYS = {"materials": []}
 class _Completions:
     async def create(s, **kw):
+        if isinstance(kw["messages"][1]["content"], list):   # (a photo: what it shows)
+            return _Resp(_json.dumps(PHOTO_SAYS))
         if "PREVENTIVO" in kw["messages"][1]["content"]:
             EXTRA_CALLS.append(kw["messages"][0]["content"])   # (the works done: none; the work to do: EXTRAS)
             return _Resp(_json.dumps(EXTRAS if "LAVORI DA FARE" in kw["messages"][0]["content"] else {"extras": []}))
@@ -357,6 +360,72 @@ async def main():
                                     {"name": "cavo cat6", "qty": 20, "unit": "m"}, {"name": "cavo cat 6", "qty": 30, "unit": "m"},
                                     {"name": "Cavo Cat.6", "qty": 1, "unit": "m"}]}])
     assert [(m["name"], m["qty"]) for m in tot["materials"]] == [("cavo cat6", 51.0), ("guaina 25 nera", 15.0)], tot["materials"]
+
+    # 8) COSTI - the commessa's value said by the administrator in a message: set, then added; each change in the diary
+    db.job_economics.docs[:] = [x for x in db.job_economics.docs if x.get("commessa_id") != "s1"]
+    r = await server._save_job_log(me, "il valore della commessa è 12.500 €", commessa_id="s1")
+    assert r["status"] == "commessa_update" and "12.500" in r["message"], r
+    r = await server._save_job_log(me, "aggiungi 800 € al valore della commessa", commessa_id="s1")
+    assert next(x for x in db.job_economics.docs if x["commessa_id"] == "s1")["budget"] == 13300.0
+    ev = [lg["text"] for lg in db.job_logs.docs if lg.get("kind") == "valore"]
+    assert ev and "12.500" in ev[-1] and "13.300" in ev[-1] and "aggiunti" in ev[-1], ev
+    model(text="il valore della commessa è 20.000 €")
+    out = await server._save_job_log(MARCO, "il valore della commessa è 20.000 €", commessa_id="s1")   # a user: just a note
+    assert out["status"] != "commessa_update" and next(x for x in db.job_economics.docs if x["commessa_id"] == "s1")["budget"] == 13300.0
+
+    # 9) a new quote with a different value: the same works -> replace or keep; new works -> also add
+    db.job_quotes.docs.append({"id": "q1", "commessa_id": "s1", "status": "confirmed", "version": 1,
+                               "data": {"activities": ["Tracce elettriche", "Posa quadro"], "taxable": 13300.0}})
+    same = {"activities": ["Tracce elettriche", "Posa del quadro"], "taxable": 14000.0}
+    assert await server._quote_new_activities("s1", same, "q2") == []
+    more = {"activities": ["Tracce elettriche", "Posa quadro", "Impianto antintrusione"], "taxable": 2500.0}
+    assert await server._quote_new_activities("s1", more, "q3") == ["Impianto antintrusione"]
+    BOT_SENT.clear()
+    view = server._commessa_view(next(x for x in db.collection_sub_items.docs if x["id"] == "s1"), db.collection_items.docs[0], cl)
+    upd, lines = {}, []
+    await server._quote_value_set(me, cl, view, "q3", 2500.0, None, upd, lines, 3, ["Impianto antintrusione"])
+    assert upd["value_pending"] and upd["new_works"] == ["Impianto antintrusione"]
+    assert buttons(BOT_SENT[-1][2]) == ["qv:q3:new", "qv:q3:keep", "qv:q3:add"] and "lavori nuovi" in BOT_SENT[-1][1]
+    upd, lines = {}, []
+    await server._quote_value_set(me, cl, view, "q3", 2500.0, "add", upd, lines, 3, ["Impianto antintrusione"])
+    assert next(x for x in db.job_economics.docs if x["commessa_id"] == "s1")["budget"] == 15800.0
+    assert "preventivo v3 aggiunto" in [lg["text"] for lg in db.job_logs.docs if lg.get("kind") == "valore"][-1]
+    BOT_SENT.clear()
+    await server._quote_value_set(me, cl, view, "q2", 14000.0, None, {}, [], 2, [])
+    assert buttons(BOT_SENT[-1][2]) == ["qv:q2:new", "qv:q2:keep"] and "stessi lavori" in BOT_SENT[-1][1]
+
+    # 10) a material's price: this commessa's, else the organization's price list; each material with the notes it came from
+    db.job_logs.docs.append({"id": "lm1", "commessa_id": "s1", "date": today.isoformat(), "author_name": "Avanzino", "user_id": "u1",
+                             "materials": [{"name": "guaina 25 nera", "qty": 10, "unit": "m"}], "hours": [], "problems": []})
+    db.job_logs.docs.append({"id": "lm2", "commessa_id": "s1", "date": today.isoformat(), "author_name": "Luca", "user_id": "u1",
+                             "materials": [{"name": "Guaina nera 25", "qty": 5, "unit": "mt"}], "hours": [], "problems": []})
+    await server.patch_job_costs(server.CostsPatch(prices=[{"name": "guaina nera 25", "unit": "m", "price": 0.8}]), "s1", me)
+    e = await server.get_commessa_economics("s1", me)
+    g = next(m for m in e["materials"] if jl._mat_root(m["name"]) == jl._mat_root("guaina 25 nera"))
+    assert g["qty"] == 15.0 and g["price"] == 0.8 and g["price_source"] == "listino" and g["cost"] == 12.0, g
+    assert [(x["id"], x["author"]) for x in g["notes"]] == [("lm1", "Avanzino"), ("lm2", "Luca")]
+    e = await server.put_commessa_prices("s1", server.CommessaPricesPayload(prices=[{"name": g["name"], "unit": "m", "price": 1.0}]), me)
+    g = next(m for m in e["materials"] if m["key"] == g["key"])
+    assert g["price"] == 1.0 and g["price_source"] == "commessa" and g["listino_price"] == 0.8 and g["cost"] == 15.0
+    e = await server.put_commessa_prices("s1", server.CommessaPricesPayload(prices=[{"name": g["name"], "unit": "m", "price": 1.0}], to_listino=True), me)
+    g = next(m for m in e["materials"] if m["key"] == g["key"])
+    assert g["listino_price"] == 1.0
+    e = await server.put_commessa_prices("s1", server.CommessaPricesPayload(prices=[{"name": g["name"], "unit": "m", "price": None}]), me)
+    assert next(m for m in e["materials"] if m["key"] == g["key"])["price_source"] == "listino"
+
+    # 11) "oggi ho usato 5 di questi" with the photo of the box: what it is from the photo, how many from the words
+    import io, base64
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (40, 30), (200, 80, 80)).save(buf, "JPEG")
+    jpeg = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    PHOTO_SAYS["materials"] = [{"name": "interruttore magnetotermico", "brand": "Bticino", "code": "FN81", "qty": 5, "unit": "pz"},
+                               {"name": "morsetto", "brand": "", "code": "", "qty": 12, "unit": "pz"}]   # (12 not written: no quantity)
+    model(text="Oggi ho usato 5 di questi", materials=[{"name": "questi", "qty": 5, "unit": "pz", "status": "usato"}])
+    r = await server._save_job_log(me, "oggi ho usato 5 di questi", images=[jpeg], commessa_id="s1")
+    mats = r["log"]["materials"]
+    assert mats[0] == {"name": "Interruttore magnetotermico Bticino FN81", "qty": 5.0, "unit": "pz", "from_photo": True}, mats
+    assert mats[1]["name"] == "Morsetto" and mats[1]["qty"] is None and len(mats) == 2
+    assert "5 pz Interruttore magnetotermico Bticino FN81 (dalla foto)" in r["message"], r["message"]
     print("ALL OK")
 
 

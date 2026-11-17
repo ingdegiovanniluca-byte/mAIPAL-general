@@ -1179,9 +1179,15 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
       </div>
       {differs && proposal.can_choose_value && (
         <div className="mt-3 text-[13px] text-white/85" data-testid="quote-value-choice">
+          {(proposal.new_works || []).length > 0
+            ? <div className="mb-1.5 text-[12px] text-white/70">Ha lavori nuovi rispetto al preventivo di prima ({proposal.new_works.slice(0, 3).join(", ")}{proposal.new_works.length > 3 ? "…" : ""}): puoi sostituire il valore o aggiungerlo.</div>
+            : <div className="mb-1.5 text-[12px] text-white/70">Sono gli stessi lavori del preventivo di prima: sostituisci il valore o tieni quello che c'è.</div>}
           Valore della commessa:
-          <span className="ml-2 inline-flex rounded-full bg-white/10 p-0.5">
-            <button type="button" onClick={() => setValueChoice("new")} className={seg(valueChoice === "new")}>Usa {eur(value)}</button>
+          <span className="mt-1 flex flex-wrap rounded-full bg-white/10 p-0.5 w-fit">
+            <button type="button" onClick={() => setValueChoice("new")} className={seg(valueChoice === "new")}>Sostituisci: {eur(value)}</button>
+            {(proposal.new_works || []).length > 0 && (
+              <button type="button" onClick={() => setValueChoice("add")} data-testid="quote-value-add" className={seg(valueChoice === "add")}>Aggiungi: {eur((proposal.current_budget || 0) + value)}</button>
+            )}
             <button type="button" onClick={() => setValueChoice("keep")} className={seg(valueChoice === "keep")}>Tieni {eur(proposal.current_budget)}</button>
           </span>
         </div>
@@ -1800,6 +1806,7 @@ function QuoteView({ commessa, quotes, outcome, isAdmin, canWrite, onChanged, on
             <div className="mt-2 text-[12.5px] text-white/85" data-testid="quote-value-pending">
               Il valore del preventivo è diverso da quello della commessa:
               <button type="button" onClick={() => chooseValue("new")} className={`${btn} ml-2`}>Usa il nuovo</button>
+              {(last.new_works || []).length > 0 && <button type="button" onClick={() => chooseValue("add")} className={`${btn} ml-1`}>Aggiungi al valore</button>}
               <button type="button" onClick={() => chooseValue("keep")} className={`${btn} ml-1`}>Tieni l'attuale</button>
             </div>
           )}
@@ -1865,7 +1872,8 @@ function ForecastBlock({ f }) {
   );
 }
 
-function CostsView({ commessaId, onChanged }) {
+function CostsView({ commessaId, onChanged, onOpenLog }) {
+  const [matOpen, setMatOpen] = useState(null);   // the material whose notes are shown
   const [open, setOpen] = useState(readOpen);
   const toggle = (k) => setOpen((o) => {
     const n = { ...o, [k]: !o[k] };
@@ -1882,6 +1890,9 @@ function CostsView({ commessaId, onChanged }) {
   const fail = (err) => toast.error(err.response?.data?.detail || "Errore nel salvataggio");
   const setBudget = (n) => api.patch(`/jobs/commesse/${commessaId}/economics`, n === null ? { clear_budget: true } : { budget: n }).then(done).catch(fail);
   const costs = (body) => api.patch(`/jobs/costs`, body, { params: { commessa_id: commessaId } }).then(done).catch(fail);
+  // a material's price: this commessa's (it wins on the organization's price list); "nel listino": the list too
+  const setPrice = (m, n, toListino = false) => api.put(`/jobs/commesse/${commessaId}/prices`,
+    { prices: [{ name: m.name, unit: m.unit || "", price: n }], to_listino: toListino }).then((r) => { done(r); if (toListino) toast.success("Prezzo messo nel listino"); }).catch(fail);
   const addExtra = () => {
     const n = parseMoney(amount);
     if (!label.trim() || n === null || Number.isNaN(n)) { toast.error("Scrivi la voce e l'importo"); return; }
@@ -1973,17 +1984,34 @@ function CostsView({ commessaId, onChanged }) {
 
       {fold("materials", "materiali", e.materials_total, e.materials.length, "costs-materials-toggle")}
       {open.materials && e.materials.map((m) => (
-        <div key={m.key} className={row} data-testid="costs-material-row">
-          <span className="flex-1 min-w-0">
-            <span className="block text-[14px] text-white/90 truncate">{m.name}</span>
-            <span className="block text-[11.5px] text-white/50">
-              {m.qty !== null ? `${fmtNum(m.qty)} ${m.unit || ""}` : "quantità non indicata"}{m.cost !== null ? ` · ${eur(m.cost)}` : ""}
-              {m.paid != null ? ` (pagati ${eur(m.paid)}, dal diario)` : ""}
-            </span>
-          </span>
-          <MoneyInput value={m.price} unit={`€/${m.unit || "pz"}`} onSave={(n) => costs({ prices: [{ name: m.name, unit: m.unit || "", price: n }] })}
-            testid={`costs-price-${m.key}`} />
-        </div>
+        <React.Fragment key={m.key}>
+          <div className={row} data-testid="costs-material-row">
+            <button type="button" onClick={() => setMatOpen((k) => (k === m.key ? null : m.key))} className="flex-1 min-w-0 text-left" data-testid="costs-material-open">
+              <span className="block text-[14px] text-white/90 truncate">{capFirst(m.name)}</span>
+              <span className="block text-[11px] text-white/50">
+                {m.qty !== null ? `${fmtNum(m.qty)} ${m.unit || ""}` : "quantità non indicata"}{m.cost !== null ? ` · ${eur(m.cost)}` : ""}
+                {m.paid != null ? ` (pagati ${eur(m.paid)}, dal diario)` : ""}
+                <span data-testid="costs-price-source">{m.price_source === "commessa" ? " · prezzo della commessa" : m.price_source === "listino" ? " · dal listino" : m.price == null && m.paid == null ? " · senza prezzo" : ""}</span>
+              </span>
+            </button>
+            <MoneyInput value={m.price} unit={`€/${m.unit || "pz"}`} onSave={(n) => setPrice(m, n)} testid={`costs-price-${m.key}`} />
+          </div>
+          {matOpen === m.key && (
+            <div className="pl-3 pb-2.5 -mt-1 text-[12px] text-white/75" data-testid="costs-material-notes">
+              {(m.notes || []).map((x) => (
+                <button key={x.id} type="button" onClick={() => onOpenLog?.(x.id)} className="block w-full text-left py-1" data-testid="costs-material-note">
+                  {shortDay(x.date)} · {x.author || "—"}{x.qty != null ? ` · ${fmtNum(x.qty)} ${x.unit || ""}` : ""} <span className="text-white/50">· apri la nota</span>
+                </button>
+              ))}
+              {m.price_source === "commessa" && m.listino_price !== m.price && (
+                <button type="button" onClick={() => setPrice(m, m.price, true)} data-testid="costs-to-listino" className="mt-1 underline underline-offset-2 text-white/80">
+                  Metti {eur(m.price)} nel listino{m.listino_price != null ? ` (ora ${eur(m.listino_price)})` : ""}
+                </button>
+              )}
+              {m.price_source === "commessa" && <button type="button" onClick={() => setPrice(m, null)} className="ml-3 mt-1 underline underline-offset-2 text-white/60">usa il listino</button>}
+            </div>
+          )}
+        </React.Fragment>
       ))}
       {open.materials && e.materials.length === 0 && <div className="py-2.5 border-t border-white/[0.16] text-[13px] text-white/55">Nessun materiale registrato.</div>}
 
@@ -2971,7 +2999,7 @@ export default function JobDiaryPage() {
         </>
       ) : section === "costi" ? (
         <div className={ro ? "pointer-events-none" : ""} data-testid={ro ? "costs-read-only" : undefined}>
-          <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} />
+          <CostsView commessaId={c.id} onChanged={() => loadDetail(selectedId)} onOpenLog={(id) => setEditing({ id })} />
         </div>
       ) : section === "pianificazione" ? (
         <div data-testid="job-plan-section">

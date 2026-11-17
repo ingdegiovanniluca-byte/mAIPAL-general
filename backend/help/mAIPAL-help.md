@@ -338,12 +338,14 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 **Costi e margini**
 - Valore, costi e margine li vedono gli **amministratori**; gli utenti solo se l'organizzazione lo permette (Impostazioni → Organizzazione → regole), i collaboratori mai.
 - Nella sezione **Costi** della commessa:
-  - **Preventivo**: l'importo concordato con il cliente;
+  - **Preventivo**: il **valore della commessa**, l'importo concordato con il cliente. Viene dal preventivo caricato, lo scrivi qui oppure lo dice l'amministratore con un messaggio: «il valore della commessa è 12.500 €», «aggiungi 800 € al valore della commessa». Ogni cambio resta scritto nel **diario** («💶 Valore della commessa: € 12.500 → € 13.300 (…)») e nello storico delle modifiche;
+  - se carichi un **nuovo preventivo** con un importo diverso: se ha **gli stessi lavori** del preventivo di prima chiedo se **sostituire** il valore o tenerlo; se ha **lavori nuovi** chiedo se **sostituirlo**, **aggiungerlo** al valore che c'è (es. una variante) o tenerlo. Lo scegli nella scheda di conferma, in Preventivo o con i pulsanti su Telegram;
   - **Manodopera**: una **tariffa standard** (€/ora) e, se serve, una tariffa per ogni persona. Le ore sono quelle scritte nel diario. La tariffa standard si vede con le voci: tocca la freccia di **Manodopera** per aprirle o chiuderle;
-  - **Materiali**: il prezzo unitario di ogni materiale usato (per metro, pezzo, …);
+  - **Materiali**: il prezzo unitario di ogni materiale usato (per metro, pezzo, …). Il prezzo viene, nell'ordine: da quanto è scritto nella nota («costo 50 €»), dal **prezzo della commessa** (quello che scrivi qui, vale solo per questa commessa), dal **listino dell'organizzazione**. Accanto è indicato da dove viene («prezzo della commessa», «dal listino»). **Tocca il materiale** per vedere le note in cui è stato usato (chi, quando, quanto: tocca per aprire la nota), per mettere il prezzo della commessa **nel listino** o per tornare a quello del listino;
   - **Altre spese**: noleggi, trasferte, smaltimenti, con importo e descrizione (la riga per aggiungerle si vede con la sezione aperta).
   - Manodopera, Materiali e Altre spese si aprono e chiudono con la freccia; da chiuse mostrano il totale e quante voci ci sono.
-- Tariffe e prezzi valgono per **tutte le commesse** dei tuoi clienti: li scrivi una volta sola.
+- Le **tariffe** valgono per **tutte le commesse**. Il **listino** dei materiali vale per tutte le commesse dell'organizzazione; un prezzo diverso su una commessa vale solo lì.
+- **Materiali dalla foto**: scrivi o detta «oggi ho usato 5 di questi» e manda la **foto del componente o della confezione** (nell'app o su Telegram, anche subito dopo la foto): dalla foto leggo cos'è (nome, e marca e codice se leggibili), la quantità solo dalle tue parole. Nel diario il materiale è segnato «(dalla foto)»; se non è giusto, chi l'ha scritto (o l'amministratore) lo corregge aprendo la nota.
 - **Ore per fase della commessa**: ogni voce con ore ha la sua **fase**: Sopralluogo, Preventivo, Lavorazione, Dopo la consegna (assistenza, garanzia).
   - Di solito è lo **stato della commessa nel giorno del lavoro**: nuova o sopralluogo → Sopralluogo; preventivo inviato o persa → Preventivo; in lavorazione o sospesa → Lavorazione; completata → Dopo la consegna.
   - Se la nota lo dice («2 ore per preparare il preventivo», «fatto il sopralluogo») vale quello che dice.
