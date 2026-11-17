@@ -217,16 +217,24 @@ async def main():
     assert (await server.get_job_log(lid, MARCO))["mine"] is False
     msg = await deny(server.update_job_log(lid, server.JobLogPatch(text="Posati 30 m di cavo"), MARCO))
     assert "solo chi l'ha scritta" in msg
-    out = await server.update_job_log(lid, server.JobLogPatch(text="Posati 25 m di cavo", raw_text="posati 25 m di cavo"), me)
-    assert out["text"] == "Posati 25 m di cavo" and out["raw_text"] == "posati 25 m di cavo"
+    out = await server.update_job_log(lid, server.JobLogPatch(text="Posati 25 m di cavo"), me)
+    assert out["text"] == "Posati 25 m di cavo" and out["raw_text"] == "posati 20 m di cavo"
     e = out["edits"][-1]
-    assert e["by"] == "Luca" and e["before"] == {"text": "Posati 20 m di cavo", "raw_text": "posati 20 m di cavo"} and e["at"]
-    # the phase of its hours (a classification): an administrator may set it on someone else's note; content never
+    assert e["by"] == "Luca" and e["before"] == {"text": "Posati 20 m di cavo"} and e["at"]
+    # the message as it was sent: never changed, not even by who wrote it
+    assert "non si modifica" in await deny(server.update_job_log(lid, server.JobLogPatch(raw_text="altro"), me), 400)
+    # the phase and the hours worked: an administrator may correct them on someone else's note (the change written on it);
+    # the rest of the note never
     model(text="Marco 4 ore", hours=[{"who": "Marco", "hours": 4}])
     rm = await server._save_job_log(MARCO, "io 4 ore", commessa_id="s1")
     out = await server.update_job_log(rm["log"]["id"], server.JobLogPatch(phase="sopralluogo"), me)
     assert out["phase"] == "sopralluogo"
-    await deny(server.update_job_log(rm["log"]["id"], server.JobLogPatch(hours=[{"who": "Marco", "hours": 8}]), me))
+    out = await server.update_job_log(rm["log"]["id"], server.JobLogPatch(hours=[{"who": "Marco", "hours": 3.5}]), me)
+    c = out["hours_changes"][-1]
+    assert out["hours"] == [{"who": "Marco", "hours": 3.5}] and c["by"] == "Luca" and c["admin"] is True
+    assert c["before"] == [{"who": "Marco", "hours": 4.0}] and c["after"] == [{"who": "Marco", "hours": 3.5}]
+    await deny(server.update_job_log(rm["log"]["id"], server.JobLogPatch(text="x"), me))
+    await deny(server.update_job_log(lid, server.JobLogPatch(hours=[{"who": "Luca", "hours": 9}]), MARCO))   # (a user: not others' hours)
     # a collaborator's note: nobody changes it in the app
     model(text="Fatte le tracce")
     await say("fatte le tracce")
@@ -241,6 +249,16 @@ async def main():
                                 {"id": "ws1", "start_at": start.isoformat(), "start_m": 1200, "start_loc": {"lat": 45, "lon": 9}},
                                 datetime.now(timezone.utc), 480, 30, {"lat": 45, "lon": 9}, 40)
     assert "dal cantiere" not in plog["text"] and "⚠️" not in plog["text"] and plog["presence"]["start_m"] == 1200
+    # the presence's text is the app's: never changed; the administrator corrects the pause (the hours follow) and the hours
+    await db.job_logs.insert_one(plog)
+    assert plog["hours"][0]["hours"] == 7.5
+    assert "registrato l'app" in await deny(server.update_job_log(plog["id"], server.JobLogPatch(text="In cantiere tutto il giorno"), me), 400)
+    out = await server.update_job_log(plog["id"], server.JobLogPatch(pause_min=60), me)
+    c = out["hours_changes"][-1]
+    assert out["presence"]["pause_min"] == 60 and out["hours"][0]["hours"] == 7.0 and out["text"] == plog["text"]
+    assert (c["pause_before"], c["pause_after"], c["before"][0]["hours"], c["after"][0]["hours"]) == (30, 60, 7.5, 7.0)
+    assert out["edits"][-1]["before"]["pause_min"] == 30
+    await deny(server.update_job_log(plog["id"], server.JobLogPatch(pause_min=0), MARCO))
 
     # 3) problems: one that stays open (with its corrective action), one of that day only; read with the page
     P1 = "Non è stato possibile montare gli interruttori perché non è arrivata la fornitura del materiale"
@@ -282,17 +300,18 @@ async def main():
     assert jl.problems_maybe_resolved("è arrivato il materiale per procedere con l'installazione degli interruttori", [P1, "Manca la colla"]) == [0]
 
     # 5) tools apart from the materials; "tutto il team": every collaborator of the commessa and the team's users
-    tomorrow = (today + timedelta(days=1)).isoformat()
+    day = today + timedelta(days=3)   # (a day ahead: its reminders still to come, whatever the time the test runs)
+    tomorrow = day.isoformat()
     model(text="", materials=[{"name": "scatole 503", "qty": 10, "unit": "pz", "status": "da_prendere", "for_date": tomorrow}],
           tools=[{"name": "trapano a percussione", "for_date": tomorrow, "who": "tutto il team"}])
     TOLD.clear(); PUSHED.clear()
-    r = await server._save_job_log(me, "domani 10 scatole 503 e tutto il team porta il trapano a percussione", commessa_id="s1")
+    r = await server._save_job_log(me, f"il {day.day}/{day.month} 10 scatole 503 e tutto il team porta il trapano a percussione", commessa_id="s1")
     assert r["status"] == "planned", r
     tool = next(t for t in db.job_todos.docs if t.get("category") == "attrezzi")
     assert tool["text"] == "Da portare: trapano a percussione" and tool["who"] == "Tutto il team"
     assert tool["shared_with"] == [ava["id"]] and tool["assignee_user_ids"] == ["u2"], tool
     assert any(c == ava["id"] and "da portare" in t for c, t, _k in TOLD) and any(p[0] == "u2" for p in PUSHED)
-    assert "Da portare (attrezzi) domani" in r["message"] and "Lo ricordo a tutti" in r["message"], r["message"]
+    assert "Da portare (attrezzi) " in r["message"] and "Lo ricordo a tutti" in r["message"], r["message"]
     mat = next(t for t in db.job_todos.docs if t.get("kind") == "materiale" and t.get("category") == "materiali")
     assert mat["text"] == "Da prendere: 10 pz scatole 503"
     # reminders: the users of the group too
@@ -303,7 +322,7 @@ async def main():
 
     # 6) left behind: two days after its day, the people are asked (once): used, delete, move
     TOLD.clear(); BOT_SENT.clear()
-    later = datetime.combine(today + timedelta(days=3), datetime.min.time(), tzinfo=ROME).replace(hour=9, minute=30)
+    later = datetime.combine(day + timedelta(days=3), datetime.min.time(), tzinfo=ROME).replace(hour=9, minute=30)
     n = await server._material_expired(later.astimezone(timezone.utc))
     assert n >= 2, n
     told = [(t, kb) for c, t, kb in TOLD if c == ava["id"]]

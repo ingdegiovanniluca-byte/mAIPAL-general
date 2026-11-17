@@ -6681,7 +6681,8 @@ class JobTodoPatch(BaseModel):
 
 class JobLogPatch(BaseModel):
     text: Optional[str] = None
-    raw_text: Optional[str] = None            # the message as it was sent (only its author changes it, like the rest)
+    raw_text: Optional[str] = None            # the message as it was sent: never changed (refused)
+    pause_min: Optional[int] = None           # a presence's pause, in minutes (an administrator): the hours follow
     phase: Optional[Literal["sopralluogo", "preventivo", "lavorazione", "post", "auto"]] = None   # auto: from the commessa's state
     date: Optional[str] = None
     hours: Optional[List[dict]] = None
@@ -14256,16 +14257,27 @@ async def get_job_log(log_id: str, current: User = Depends(get_current_user)):
 
 @api_router.patch("/jobs/logs/{log_id}")
 async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
-    """A note changed - only by who wrote it; each change kept (who, when, what it was before). The phase of its hours,
-    a classification, also by an administrator."""
+    """A note changed - its text, day, materials, problems only by who wrote it; each change kept (who, when, what it
+    was before). Never the message as it was sent, nor the text the app registered (a presence). The hours worked (and
+    a presence's pause) also by an administrator: each change of the hours written apart, to be shown on the note."""
     log = await _job_log_or_404(current, log_id)
     if log.get("kind"):
         raise HTTPException(status_code=400, detail=("Un cambio di stato non si modifica: puoi solo eliminarlo" if log["kind"] == "stato"
                                                      else "Questa riga del diario non si modifica: puoi solo eliminarla"))
-    content = [payload.text, payload.raw_text, payload.date, payload.hours, payload.materials, payload.problems]
-    if any(x is not None for x in content) and not _log_author_is(current, log):
+    if payload.raw_text is not None:
+        raise HTTPException(status_code=400, detail="Il messaggio originale resta com'è stato mandato: non si modifica.")
+    if log.get("presence") and payload.text is not None and payload.text.strip() != (log.get("text") or ""):
+        raise HTTPException(status_code=400, detail="Questo testo l'ha registrato l'app con la presenza: non si modifica. "
+                                                    "L'amministratore può correggere le ore e la pausa.")
+    mine, admin = _log_author_is(current, log), _is_org_admin(current)
+    content = [payload.text, payload.date, payload.materials, payload.problems]
+    if any(x is not None for x in content) and not mine:
         raise HTTPException(status_code=403, detail=NOTE_NOT_YOURS)
-    if payload.phase is not None and not (_log_author_is(current, log) or _is_org_admin(current)):
+    if payload.hours is not None and not (admin or (mine and not log.get("presence"))):
+        raise HTTPException(status_code=403, detail="Le ore di questa nota le corregge l'amministratore.")
+    if payload.pause_min is not None and not (admin and log.get("presence")):
+        raise HTTPException(status_code=403, detail="La pausa di una presenza la corregge l'amministratore.")
+    if payload.phase is not None and not (mine or admin):
         raise HTTPException(status_code=403, detail=NOTE_NOT_YOURS)
     upd: dict = {}
     if payload.text is not None and payload.text.strip():
@@ -14276,6 +14288,12 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
         upd["date"] = jl.valid_day(payload.date, jl.today_local())
     if payload.hours is not None:
         upd["hours"] = jl.clean_hours(payload.hours, log.get("author_name") or "Io")
+    pres = log.get("presence") or {}
+    if payload.pause_min is not None and int(payload.pause_min) != int(pres.get("pause_min") or 0):
+        pause = max(0, min(int(payload.pause_min), int(pres.get("minutes") or 0)))
+        upd["presence"] = {**pres, "pause_min": pause, "pause_registered": True}
+        if payload.hours is None and len(log.get("hours") or []) == 1:   # the hours follow the pause
+            upd["hours"] = [{**log["hours"][0], "hours": sp.round_hours(int(pres.get("minutes") or 0) - pause)}]
     if payload.materials is not None:
         upd["materials"] = jl.clean_materials(payload.materials)
     if payload.problems is not None:
@@ -14287,10 +14305,19 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
             upd["problem_info"] = {str(j): old_info.get(str(keep[p])) or jl.problem_info([p], [], p)["0"] for j, p in enumerate(upd["problems"])}
     if payload.phase is not None:
         upd.update(phase=None, phase_set=None) if payload.phase == "auto" else upd.update(phase=payload.phase, phase_set="mano")
-    changed = {k: log.get(k) for k in ("text", "raw_text", "date", "hours", "materials", "problems", "phase") if k in upd and upd[k] != log.get(k)}
+    changed = {k: log.get(k) for k in ("text", "date", "hours", "materials", "problems", "phase") if k in upd and upd[k] != log.get(k)}
+    pause_changed = "presence" in upd and upd["presence"].get("pause_min") != pres.get("pause_min")
+    if pause_changed:
+        changed["pause_min"] = pres.get("pause_min") or 0
+    now_iso = datetime.now(timezone.utc).isoformat()
     if changed:   # what it was, who changed it, when
-        upd["edits"] = [*(log.get("edits") or []), {"at": datetime.now(timezone.utc).isoformat(), "by": _first_name(current.name),
+        upd["edits"] = [*(log.get("edits") or []), {"at": now_iso, "by": _first_name(current.name),
                                                     "by_user_id": current.user_id, "before": changed}][-30:]
+    if "hours" in changed or pause_changed:   # the hours corrected: written plainly on the note (before -> after, by whom)
+        upd["hours_changes"] = [*(log.get("hours_changes") or []), {
+            "at": now_iso, "by": _first_name(current.name), "admin": admin and not mine,
+            "before": log.get("hours") or [], "after": upd.get("hours", log.get("hours") or []),
+            **({"pause_before": pres.get("pause_min") or 0, "pause_after": upd["presence"]["pause_min"]} if pause_changed else {})}][-20:]
     if upd:
         upd["embedding"] = None
         await db.job_logs.update_one({"id": log_id}, {"$set": upd})

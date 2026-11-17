@@ -339,9 +339,13 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
           <span className="text-[11.5px] font-medium">{log.author_name}</span>
           {log.author_company && <span className="text-[10.5px] text-white/40">· {log.author_company}</span>}
           {log.channel === "telegram" && section !== "ore" && <span className="text-[10.5px] text-white/40">· Telegram</span>}
-          {section === "ore" && log.phase && <span className="text-[10.5px] text-[#F2C14E]/85" data-testid="job-entry-phase">· {PHASE_LABEL[log.phase]}</span>}
         </span>
-        {detail && <span className="block mt-[3px] text-[14px] font-medium leading-snug text-white">{detail}</span>}
+        {detail && (
+          <span className="block mt-[3px] text-[14px] font-medium leading-snug text-white">{detail}
+            {/* the phase the hours were worked in, beside them (same look as before) */}
+            {section === "ore" && log.phase && " "}{section === "ore" && log.phase && <span className="ml-1 text-[10.5px] font-normal text-[#F2C14E]/85" data-testid="job-entry-phase">{PHASE_LABEL[log.phase]}</span>}
+          </span>
+        )}
         {lines ? lines.map(([t, action], i) => (
           <span key={i} className="block mt-[3px]" data-testid="job-entry-line">
             <span className="block text-[14px] leading-snug text-white">{t}</span>
@@ -374,6 +378,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
         </a>
       )}
       {(full || section === "ore") && <PresenceRow log={log} />}
+      {(full || section === "ore") && <HoursChanges log={log} />}
       {full && log.photos?.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {log.photos.map((p) => (
@@ -476,6 +481,25 @@ const presenceText = (t) => (t || "").replace(/\s·\s⚠️.*$/, "");   // (olde
 const FIELD = "h-10 w-full min-w-0 rounded-xl bg-white/10 px-3 text-[16px] text-white placeholder:text-white/40 outline-none";
 const AREA = "w-full min-w-0 rounded-xl bg-white/10 px-3 py-2.5 text-[16px] leading-snug text-white placeholder:text-white/40 outline-none resize-y";
 
+// "Ore corrette da Luca il 17 nov: Avanzino 8,7 h → 8 h · pausa 30 → 60 min"
+const hoursOf = (rows) => (rows || []).map((h) => `${h.who} ${fmtNum(h.hours)} h`).join(", ") || "nessuna";
+const hoursChangeText = (c) => {
+  const b = c.before || [], a = c.after || [];
+  const same = b.length === 1 && a.length === 1 && b[0].who === a[0].who;   // one person: "Avanzino 9,2 h → 8,7 h"
+  const what = same ? `${a[0].who} ${fmtNum(b[0].hours)} h → ${fmtNum(a[0].hours)} h` : `${hoursOf(b)} → ${hoursOf(a)}`;
+  return `Ore corrette da ${c.by} il ${shortDay((c.at || "").slice(0, 10))}: ${what}`
+    + (c.pause_before !== undefined ? ` · pausa ${c.pause_before} → ${c.pause_after} min` : "");
+};
+function HoursChanges({ log }) {
+  const xs = log.hours_changes || [];
+  if (!xs.length) return null;
+  return (
+    <span className="mt-1 block text-[11px] text-white/60" data-testid="job-hours-changes">
+      {xs.map((c, i) => <span key={i} className="block">✎ {hoursChangeText(c)}</span>)}
+    </span>
+  );
+}
+
 function PresenceRow({ log }) {
   const p = log.presence;
   if (!p || !(p.start_loc || p.end_loc)) return null;
@@ -499,7 +523,7 @@ function PresenceRow({ log }) {
 function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhoto }) {
   const [log, setLog] = useState(initial || null);
   const [mine, setMine] = useState(false);
-  const [edit, setEdit] = useState(false);
+  const [edit, setEdit] = useState(null);   // "full" (who wrote it) | "hours" (an administrator: hours and pause)
   useEffect(() => {
     api.get(`/jobs/logs/${logId}`).then((r) => { setLog(r.data); setMine(!!r.data.mine); })
       .catch((e) => { if (!initial) { toast.error(e.response?.data?.detail || "Non trovo questa nota"); onClose(); } });
@@ -508,7 +532,7 @@ function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhot
   return (
     <GlassBottomSheet onClose={onClose} testid="job-note-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[560px] md:-translate-x-1/2 md:bottom-8">
       {!log ? <div className="py-8 flex justify-center"><Loader2 size={18} className="animate-spin text-white/70" /></div>
-        : edit ? <NoteEdit log={log} onCancel={() => setEdit(false)} onSaved={(l) => { setLog({ ...l, mine: true }); setEdit(false); onSaved(); }} />
+        : edit ? <NoteEdit log={log} mode={edit} onCancel={() => setEdit(null)} onSaved={(l) => { setLog((x) => ({ ...l, mine: x.mine })); setEdit(null); onSaved(); }} />
         : (
         <div className="min-w-0 break-words" data-testid="job-note-view">
           <div className="text-[12px] text-white/60">
@@ -518,6 +542,7 @@ function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhot
             {log.presence ? presenceText(log.text) : log.text}
           </div>
           <PresenceRow log={log} />
+          <HoursChanges log={log} />
           {(log.hours?.length > 0 || log.hours_pending?.length > 0) && (
             <div className="mt-4"><div className={kick}>ore{log.phase ? ` · ${PHASE_LABEL[log.phase]}` : ""}</div>
               <div className="mt-1 text-[14px] text-white/90">{hoursLineOf(log)}</div></div>
@@ -563,9 +588,13 @@ function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhot
                 <Trash2 size={14} /> Elimina
               </button>
             )}
-            {!mine && <span className="mr-auto text-[11px] text-white/55" data-testid="job-note-readonly">La modifica solo chi l'ha scritta.</span>}
-            {mine && !log.kind && (
-              <button type="button" onClick={() => setEdit(true)} data-testid="job-note-edit"
+            {!mine && !isAdmin && <span className="mr-auto text-[11px] text-white/55" data-testid="job-note-readonly">La modifica solo chi l'ha scritta.</span>}
+            {isAdmin && (!mine || log.presence) && (log.hours?.length > 0 || log.presence) && (
+              <button type="button" onClick={() => setEdit("hours")} data-testid="job-note-edit-hours"
+                className="h-10 px-4 rounded-full lg-glass text-[14px] text-white">Correggi le ore</button>
+            )}
+            {mine && !log.kind && !log.presence && (
+              <button type="button" onClick={() => setEdit("full")} data-testid="job-note-edit"
                 className="h-10 px-5 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold">Modifica</button>
             )}
           </div>
@@ -574,11 +603,13 @@ function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhot
     </GlassBottomSheet>
   );
 }
-const NOTE_FIELD = { text: "testo", raw_text: "messaggio originale", date: "giorno", hours: "ore", materials: "materiali", problems: "problemi", phase: "fase" };
+const NOTE_FIELD = { text: "testo", raw_text: "messaggio originale", date: "giorno", hours: "ore", materials: "materiali", problems: "problemi", phase: "fase",
+  pause_min: "pausa" };
 
-function NoteEdit({ log, onCancel, onSaved }) {
+function NoteEdit({ log, mode, onCancel, onSaved }) {
+  const full = mode === "full";
   const [text, setText] = useState(log.text || "");
-  const [raw, setRaw] = useState(log.raw_text || "");
+  const [pause, setPause] = useState(String(log.presence?.pause_min ?? 0));
   const [date, setDate] = useState(log.date || "");
   const [hours, setHours] = useState((log.hours || []).map((h) => ({ ...h, hours: fmtNum(h.hours) })));
   const [materials, setMaterials] = useState((log.materials || []).map((m, i) => ({ ...m, qty: fmtNum(m.qty), orig: i })));
@@ -596,14 +627,17 @@ function NoteEdit({ log, onCancel, onSaved }) {
   const save = async () => {
     setSaving(true);
     try {
+      const newHours = hours.filter((h) => h.who && num(h.hours)).map((h) => ({ who: h.who, hours: num(h.hours) }));
+      const hoursChanged = JSON.stringify(newHours) !== JSON.stringify((log.hours || []).map((h) => ({ who: h.who, hours: +h.hours })));
+      const pauseMin = Math.max(0, parseInt(pause, 10) || 0);
       const r = await api.patch(`/jobs/logs/${log.id}`, {
-        text, date, ...(raw.trim() && raw !== log.raw_text ? { raw_text: raw } : {}),
-        hours: hours.filter((h) => h.who && num(h.hours)).map((h) => ({ who: h.who, hours: num(h.hours) })),
-        materials: materials.filter((m) => m.name).map((m) => ({ name: m.name, qty: num(m.qty), unit: m.unit || "" })),
-        problems: problems.split("\n").map((p) => p.trim()).filter(Boolean),
+        ...(full ? { text, date, materials: materials.filter((m) => m.name).map((m) => ({ name: m.name, qty: num(m.qty), unit: m.unit || "" })),
+          problems: problems.split("\n").map((p) => p.trim()).filter(Boolean) } : {}),
+        ...(hoursChanged || full ? { hours: newHours } : {}),
+        ...(log.presence && pauseMin !== (log.presence.pause_min || 0) ? { pause_min: pauseMin } : {}),
         ...(phase && phase !== log.phase ? { phase } : {}),
       });
-      toast.success("Nota aggiornata");
+      toast.success(full ? "Nota aggiornata" : "Ore corrette: la modifica è scritta sulla nota");
       onSaved(r.data);
     } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
     finally { setSaving(false); }
@@ -612,12 +646,12 @@ function NoteEdit({ log, onCancel, onSaved }) {
   const del = "h-10 w-9 shrink-0 flex items-center justify-center text-white/60";
   return (
     <div className="min-w-0 space-y-4" data-testid="job-edit-dialog">
-      <div><div className={kick}>testo</div>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} className={AREA} data-testid="job-edit-text" /></div>
-      <div><div className={kick}>messaggio originale</div>
-        <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={3} className={AREA} data-testid="job-edit-raw" /></div>
-      <div><div className={kick}>giorno</div>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={FIELD} /></div>
+      {!full && <div className="text-[17px] font-semibold text-white">Correggi le ore</div>}
+      {!full && <div className="text-[12px] text-white/60 -mt-2">La correzione resta scritta sulla nota: chi, quando, prima e dopo. Il testo registrato non cambia.</div>}
+      {full && <div><div className={kick}>testo</div>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} className={AREA} data-testid="job-edit-text" /></div>}
+      {full && <div><div className={kick}>giorno</div>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={FIELD} /></div>}
       <div><div className={kick}>ore</div>
         {hours.map((h, i) => (
           <div key={i} className="flex gap-2 mb-1.5 min-w-0">
@@ -627,6 +661,12 @@ function NoteEdit({ log, onCancel, onSaved }) {
           </div>
         ))}
         <button type="button" onClick={() => setHours((xs) => [...xs, { who: "", hours: "" }])} className="text-[12px] text-white/75 inline-flex items-center gap-1"><Plus size={12} /> aggiungi</button>
+        {log.presence && !full && (
+          <div className="mt-3" data-testid="job-edit-pause"><div className={kick}>pausa (minuti)</div>
+            <input value={pause} onChange={(e) => setPause(e.target.value.replace(/\D/g, ""))} inputMode="numeric" className={`${FIELD} !w-[120px]`} />
+            <div className="mt-1 text-[11px] text-white/55">Cambiando la pausa le ore si ricalcolano da sole (se non le cambi tu).</div>
+          </div>
+        )}
         {hours.length > 0 && (
           <div className="mt-2.5 flex flex-wrap gap-1.5" data-testid="job-edit-phase">
             {PHASES.map(([k, label]) => (
@@ -636,7 +676,7 @@ function NoteEdit({ log, onCancel, onSaved }) {
           </div>
         )}
       </div>
-      <div><div className={kick}>materiali usati</div>
+      {full && <div><div className={kick}>materiali usati</div>
         {materials.map((m, i) => (
           <div key={i} className="mb-2 min-w-0">
             <div className="flex gap-2 min-w-0">
@@ -654,9 +694,9 @@ function NoteEdit({ log, onCancel, onSaved }) {
           </div>
         ))}
         <button type="button" onClick={() => setMaterials((xs) => [...xs, { qty: "", unit: "", name: "" }])} className="text-[12px] text-white/75 inline-flex items-center gap-1"><Plus size={12} /> aggiungi</button>
-      </div>
-      <div><div className={kick}>problemi (uno per riga)</div>
-        <textarea value={problems} onChange={(e) => setProblems(e.target.value)} rows={3} className={AREA} /></div>
+      </div>}
+      {full && <div><div className={kick}>problemi (uno per riga)</div>
+        <textarea value={problems} onChange={(e) => setProblems(e.target.value)} rows={3} className={AREA} /></div>}
       <div className="flex justify-end gap-2 pt-1">
         <button type="button" onClick={onCancel} className="h-10 px-4 rounded-full lg-glass text-[14px] text-white">Annulla</button>
         <button type="button" onClick={save} disabled={saving} data-testid="job-edit-save"
@@ -794,13 +834,14 @@ const NEXT_SEVERITY = { bassa: "media", media: "alta", alta: "bassa" };
 // fault); one of that day only (an absence, the weather) passes by itself and is just in the list below. A problem is
 // closed with its circle, or by a note that solves it once confirmed (the proposal shows here too).
 function ProblemsBlock({ problems, canEdit, onChanged, onOpen }) {
+  // (one of that day only - an absence, the weather - is not here at all: only in the days' list below, on its day)
   const open = problems.filter((p) => p.status === "aperta");
-  const closed = problems.filter((p) => p.status !== "aperta");
+  const closed = problems.filter((p) => p.status === "risolta");
   const patch = async (p, body) => {
     try { await api.patch(`/jobs/logs/${p.log_id}/problems/${p.idx}`, body); onChanged(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
-  if (!problems.length) return null;
+  if (!open.length && !closed.length) return null;
   const row = (p) => {
     const done = p.status === "risolta";
     return (
@@ -849,7 +890,7 @@ function ProblemsBlock({ problems, canEdit, onChanged, onOpen }) {
         </React.Fragment>
       ))}
       {!open.length && <div className="py-2 text-center text-[12px] text-white/60">Nessun problema da risolvere.</div>}
-      {closed.length > 0 && <details className="mt-1"><summary className="text-[12px] text-white/60 cursor-pointer py-1.5">Risolti o di un giorno solo ({closed.length})</summary>{closed.map(row)}</details>}
+      {closed.length > 0 && <details className="mt-1"><summary className="text-[12px] text-white/60 cursor-pointer py-1.5">Risolti ({closed.length})</summary>{closed.map(row)}</details>}
     </div>
   );
 }
