@@ -326,7 +326,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
   const detail = section === "ore" ? hoursLineOf(log) : "";
   // Problemi and Materiali: only what the agent cleaned up (the problems, the materials), one per line; the note itself
   // and the message as sent are in the window that opens on it
-  const lines = section === "problemi" ? (log.problems || []).map((p, i) => [p, log.problem_info?.[i]?.action])
+  const lines = section === "problemi" ? (log.problems || []).map((p, i) => [p, log.problem_info?.[i]?.action, log.problem_status?.[i]])
     : section === "materiali" ? (log.materials || []).map((m) => [matLabel(m)]) : null;
   return (
     <div data-testid={isReport ? "job-report-event" : isEvent ? "job-stato-event" : "job-entry"}>
@@ -346,10 +346,15 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
             {section === "ore" && log.phase && " "}{section === "ore" && log.phase && <span className="ml-1 text-[10.5px] font-normal text-[#F2C14E]/85" data-testid="job-entry-phase">{PHASE_LABEL[log.phase]}</span>}
           </span>
         )}
-        {lines ? lines.map(([t, action], i) => (
+        {lines ? lines.map(([t, action, st], i) => (
           <span key={i} className="block mt-[3px]" data-testid="job-entry-line">
             <span className="block text-[14px] leading-snug text-white">{t}</span>
             {action && <span className="block text-[12px] text-white/60">Azione: {action}</span>}
+            {st?.status === "risolta" && (
+              <span className="block text-[12px] text-[#8ED973]" data-testid="job-entry-solved">
+                ✓ Risolto{st.by ? ` da ${st.by}` : ""}{st.at ? ` il ${shortDay(st.at.slice(0, 10))}` : ""}
+              </span>
+            )}
           </span>
         )) : (
         <span className={`block mt-[3px] leading-[1.45] whitespace-pre-wrap ${isEvent ? "text-[13px] text-white/70"
@@ -378,7 +383,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
         </a>
       )}
       {(full || section === "ore") && <PresenceRow log={log} />}
-      {(full || section === "ore") && <HoursChanges log={log} />}
+      <HoursChanges log={log} />
       {full && log.photos?.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {log.photos.map((p) => (
@@ -490,12 +495,19 @@ const hoursChangeText = (c) => {
   return `Ore corrette da ${c.by} il ${shortDay((c.at || "").slice(0, 10))}: ${what}`
     + (c.pause_before !== undefined ? ` · pausa ${c.pause_before} → ${c.pause_after} min` : "");
 };
+const FIELD_FIXED = { materials: "i materiali", problems: "i problemi", date: "il giorno" };
+const fieldValue = (k, v) => (k === "materials" ? (v || []).map(matLabel).join(", ") || "nessuno"
+  : k === "problems" ? (v || []).join("; ") || "nessuno" : k === "date" ? shortDay(v) : String(v ?? ""));
+// "✎ Luca ha corretto i materiali il 17 nov: 3 pz scatole 503 → 2 pz scatole 503"
+const adminChangeText = (c) => `${c.by} ha corretto ${FIELD_FIXED[c.field] || c.field} il ${shortDay((c.at || "").slice(0, 10))}: `
+  + `${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`;
 function HoursChanges({ log }) {
-  const xs = log.hours_changes || [];
+  const xs = [...(log.hours_changes || []).map((c) => [c.at, hoursChangeText(c)]), ...(log.admin_changes || []).map((c) => [c.at, adminChangeText(c)])]
+    .sort((a, b) => (a[0] || "").localeCompare(b[0] || ""));
   if (!xs.length) return null;
   return (
     <span className="mt-1 block text-[11px] text-white/60" data-testid="job-hours-changes">
-      {xs.map((c, i) => <span key={i} className="block">✎ {hoursChangeText(c)}</span>)}
+      {xs.map(([, t], i) => <span key={i} className="block">✎ {t}</span>)}
     </span>
   );
 }
@@ -523,12 +535,19 @@ function PresenceRow({ log }) {
 function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhoto }) {
   const [log, setLog] = useState(initial || null);
   const [mine, setMine] = useState(false);
-  const [edit, setEdit] = useState(null);   // "full" (who wrote it) | "hours" (an administrator: hours and pause)
+  const [edit, setEdit] = useState(null);   // "full" (who wrote it: the text too) | "content" (an administrator: hours, pause, materials…)
   useEffect(() => {
     api.get(`/jobs/logs/${logId}`).then((r) => { setLog(r.data); setMine(!!r.data.mine); })
       .catch((e) => { if (!initial) { toast.error(e.response?.data?.detail || "Non trovo questa nota"); onClose(); } });
   }, [logId]); // eslint-disable-line react-hooks/exhaustive-deps
   const kick = "text-[10px] uppercase tracking-widest text-white/55";
+  const reopen = async (i) => {   // a problem solved by mistake: open again (back in the block on top)
+    try {
+      await api.patch(`/jobs/logs/${log.id}/problems/${i}`, { resolved: false });
+      setLog((l) => ({ ...l, problem_status: { ...(l.problem_status || {}), [i]: { status: "aperta" } } }));
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
   return (
     <GlassBottomSheet onClose={onClose} testid="job-note-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[560px] md:-translate-x-1/2 md:bottom-8">
       {!log ? <div className="py-8 flex justify-center"><Loader2 size={18} className="animate-spin text-white/70" /></div>
@@ -557,6 +576,14 @@ function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhot
                 <div key={i} className="mt-1">
                   <div className="text-[14px] text-white/90">{p}</div>
                   {log.problem_info?.[i]?.action && <div className="text-[12px] text-white/65">Azione: {log.problem_info[i].action}</div>}
+                  {log.problem_status?.[i]?.status === "risolta" && (
+                    <div className="text-[12px] text-[#8ED973]" data-testid="job-note-solved">
+                      ✓ Risolto{log.problem_status[i].by ? ` da ${log.problem_status[i].by}` : ""}
+                      {(mine || isAdmin) && (
+                        <button type="button" onClick={() => reopen(i)} data-testid="job-note-reopen" className="ml-2 text-white/70 underline underline-offset-2">Riapri</button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}</div>
           )}
@@ -589,9 +616,9 @@ function NoteSheet({ logId, initial, isAdmin, onClose, onSaved, onDelete, onPhot
               </button>
             )}
             {!mine && !isAdmin && <span className="mr-auto text-[11px] text-white/55" data-testid="job-note-readonly">La modifica solo chi l'ha scritta.</span>}
-            {isAdmin && (!mine || log.presence) && (log.hours?.length > 0 || log.presence) && (
-              <button type="button" onClick={() => setEdit("hours")} data-testid="job-note-edit-hours"
-                className="h-10 px-4 rounded-full lg-glass text-[14px] text-white">Correggi le ore</button>
+            {isAdmin && (!mine || log.presence) && (
+              <button type="button" onClick={() => setEdit("content")} data-testid="job-note-edit-hours"
+                className="h-10 px-4 rounded-full lg-glass text-[14px] text-white">Correggi</button>
             )}
             {mine && !log.kind && !log.presence && (
               <button type="button" onClick={() => setEdit("full")} data-testid="job-note-edit"
@@ -630,14 +657,19 @@ function NoteEdit({ log, mode, onCancel, onSaved }) {
       const newHours = hours.filter((h) => h.who && num(h.hours)).map((h) => ({ who: h.who, hours: num(h.hours) }));
       const hoursChanged = JSON.stringify(newHours) !== JSON.stringify((log.hours || []).map((h) => ({ who: h.who, hours: +h.hours })));
       const pauseMin = Math.max(0, parseInt(pause, 10) || 0);
+      const newMats = materials.filter((m) => m.name).map((m) => ({ name: m.name, qty: num(m.qty), unit: m.unit || "" }));
+      const newProblems = problems.split("\n").map((p) => p.trim()).filter(Boolean);
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       const r = await api.patch(`/jobs/logs/${log.id}`, {
-        ...(full ? { text, date, materials: materials.filter((m) => m.name).map((m) => ({ name: m.name, qty: num(m.qty), unit: m.unit || "" })),
-          problems: problems.split("\n").map((p) => p.trim()).filter(Boolean) } : {}),
-        ...(hoursChanged || full ? { hours: newHours } : {}),
+        ...(full ? { text } : {}),
+        ...(date !== log.date ? { date } : {}),
+        ...(!same(newMats, (log.materials || []).map((m) => ({ name: m.name, qty: m.qty ?? null, unit: m.unit || "" }))) ? { materials: newMats } : {}),
+        ...(!same(newProblems, log.problems || []) ? { problems: newProblems } : {}),
+        ...(hoursChanged ? { hours: newHours } : {}),
         ...(log.presence && pauseMin !== (log.presence.pause_min || 0) ? { pause_min: pauseMin } : {}),
         ...(phase && phase !== log.phase ? { phase } : {}),
       });
-      toast.success(full ? "Nota aggiornata" : "Ore corrette: la modifica è scritta sulla nota");
+      toast.success(full ? "Nota aggiornata" : "Corretta: la modifica è scritta sulla nota");
       onSaved(r.data);
     } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
     finally { setSaving(false); }
@@ -646,12 +678,12 @@ function NoteEdit({ log, mode, onCancel, onSaved }) {
   const del = "h-10 w-9 shrink-0 flex items-center justify-center text-white/60";
   return (
     <div className="min-w-0 space-y-4" data-testid="job-edit-dialog">
-      {!full && <div className="text-[17px] font-semibold text-white">Correggi le ore</div>}
-      {!full && <div className="text-[12px] text-white/60 -mt-2">La correzione resta scritta sulla nota: chi, quando, prima e dopo. Il testo registrato non cambia.</div>}
+      {!full && <div className="text-[17px] font-semibold text-white">Correggi la nota</div>}
+      {!full && <div className="text-[12px] text-white/60 -mt-2">Correggi ore, pausa, materiali o problemi: la correzione resta scritta sulla nota (chi, quando, prima e dopo). Il testo lo cambia solo chi l'ha scritta.</div>}
       {full && <div><div className={kick}>testo</div>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} className={AREA} data-testid="job-edit-text" /></div>}
-      {full && <div><div className={kick}>giorno</div>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={FIELD} /></div>}
+      <div><div className={kick}>giorno</div>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={FIELD} /></div>
       <div><div className={kick}>ore</div>
         {hours.map((h, i) => (
           <div key={i} className="flex gap-2 mb-1.5 min-w-0">
@@ -676,7 +708,7 @@ function NoteEdit({ log, mode, onCancel, onSaved }) {
           </div>
         )}
       </div>
-      {full && <div><div className={kick}>materiali usati</div>
+      {(full || !log.presence || materials.length > 0) && <div><div className={kick}>materiali usati</div>
         {materials.map((m, i) => (
           <div key={i} className="mb-2 min-w-0">
             <div className="flex gap-2 min-w-0">
@@ -695,7 +727,7 @@ function NoteEdit({ log, mode, onCancel, onSaved }) {
         ))}
         <button type="button" onClick={() => setMaterials((xs) => [...xs, { qty: "", unit: "", name: "" }])} className="text-[12px] text-white/75 inline-flex items-center gap-1"><Plus size={12} /> aggiungi</button>
       </div>}
-      {full && <div><div className={kick}>problemi (uno per riga)</div>
+      {(full || !log.presence || problems.trim()) && <div><div className={kick}>problemi (uno per riga)</div>
         <textarea value={problems} onChange={(e) => setProblems(e.target.value)} rows={3} className={AREA} /></div>}
       <div className="flex justify-end gap-2 pt-1">
         <button type="button" onClick={onCancel} className="h-10 px-4 rounded-full lg-glass text-[14px] text-white">Annulla</button>
@@ -835,13 +867,13 @@ const NEXT_SEVERITY = { bassa: "media", media: "alta", alta: "bassa" };
 // closed with its circle, or by a note that solves it once confirmed (the proposal shows here too).
 function ProblemsBlock({ problems, canEdit, onChanged, onOpen }) {
   // (one of that day only - an absence, the weather - is not here at all: only in the days' list below, on its day)
+  // (a solved one leaves this block: it is marked solved in the days' list below, on the day of its note)
   const open = problems.filter((p) => p.status === "aperta");
-  const closed = problems.filter((p) => p.status === "risolta");
   const patch = async (p, body) => {
     try { await api.patch(`/jobs/logs/${p.log_id}/problems/${p.idx}`, body); onChanged(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
-  if (!open.length && !closed.length) return null;
+  if (!problems.some((p) => p.status !== "del_giorno")) return null;
   const row = (p) => {
     const done = p.status === "risolta";
     return (
@@ -890,7 +922,6 @@ function ProblemsBlock({ problems, canEdit, onChanged, onOpen }) {
         </React.Fragment>
       ))}
       {!open.length && <div className="py-2 text-center text-[12px] text-white/60">Nessun problema da risolvere.</div>}
-      {closed.length > 0 && <details className="mt-1"><summary className="text-[12px] text-white/60 cursor-pointer py-1.5">Risolti ({closed.length})</summary>{closed.map(row)}</details>}
     </div>
   );
 }

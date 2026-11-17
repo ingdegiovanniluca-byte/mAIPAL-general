@@ -888,12 +888,20 @@ def planned_materials(d: dict) -> list:
 
 
 def _mat_root(name: str) -> str:
-    """"Scatole 503" and "scatola 503": the same (singular/plural, case); "tubo 16" and "tubo 20" not."""
-    return " ".join(w[:-1] if len(w) > 3 and w[-1] in "aeio" and not w.isdigit() else w for w in re.findall(r"[a-z0-9]+", _norm(name)))
+    """The same material written differently: "Scatole 503" / "scatola 503" (singular, plural, case), "guaina 25 nera" /
+    "guaina nera 25" (the order), "cavo cat6" / "cavo cat 6" / "cavo cat.6" (letters and numbers apart). "tubo 16" and
+    "tubo 20" stay two."""
+    words = re.findall(r"[a-z]+|\d+(?:[.,]\d+)?", _norm(name))
+    words = [w.replace(",", ".") if w[0].isdigit() else (w[:-1] if len(w) > 3 and w[-1] in "aeio" else w)
+             for w in words if w not in _MAT_FILLER]
+    return " ".join(sorted(words))
+
+
+_MAT_FILLER = {"di", "da", "del", "della", "dei", "delle", "per", "in", "con", "il", "lo", "la", "i", "gli", "le", "un", "una", "uno", "e"}
 
 
 def _same_material(a: str, b: str) -> bool:
-    return grounded(a, b, 0.6) or grounded(b, a, 0.6)
+    return _mat_root(a) == _mat_root(b) or grounded(a, b, 0.6) or grounded(b, a, 0.6)
 
 
 def compare_materials(planned: list, used: list) -> dict:
@@ -1249,7 +1257,7 @@ def totals(logs: list) -> dict:
         for m in lg.get("materials") or []:
             k = _mat_key(m)
             if k not in mats:   # the same material written a little differently ("scatola 503" / "scatole 503"), same unit: one line
-                k = next((x for x in mats if x[1] == k[1] and _mat_root(x[0]) == _mat_root(k[0])), k)
+                k = next((x for x in mats if unit_norm(x[1]) == unit_norm(k[1]) and _mat_root(x[0]) == _mat_root(k[0])), k)
             cur = mats.setdefault(k, {"name": m["name"], "unit": m.get("unit") or "", "qty": None})
             if m.get("qty") is not None:
                 cur["qty"] = round((cur["qty"] or 0) + float(m["qty"]), 3)
@@ -1434,20 +1442,24 @@ def economics(logs: list, rates: Optional[dict] = None, default_rate: Optional[f
         if cost is None:
             unpriced_hours += h
         labor.append({"who": who, "hours": h, "rate": rate, "own_rate": who.lower() in rates, "cost": cost})
+    # (the same material written differently - "interruttore 50 A" / "interruttore da 50 A" - is one: its root and unit)
+    same = lambda name, unit: (_mat_root(name), unit_norm(unit or ""))
     paid = {}   # what the notes say a material cost ("interruttore 50 A, 50 €"): that, not the price list
     for lg in logs:
         for m in lg.get("materials") or []:
             if m.get("paid") is not None:
-                k = price_key(m["name"], m.get("unit") or "")
+                k = same(m["name"], m.get("unit"))
                 q, a = paid.get(k, (0.0, 0.0))
                 paid[k] = (q + float(m.get("qty") or 0), a + float(m["paid"]))
+    by_root = {same(*(k.split("|", 1) + [""])[:2]): v for k, v in (prices or {}).items()}
     mats, unpriced_mats = [], []
     for m in tot["materials"]:
         key = price_key(m["name"], m.get("unit") or "")
-        p = (prices or {}).get(key)
+        rk = same(m["name"], m.get("unit"))
+        p = (prices or {}).get(key, by_root.get(rk))
         price = p.get("price") if isinstance(p, dict) else p
-        if key in paid:
-            pq, pa = paid[key]
+        if rk in paid:
+            pq, pa = paid[rk]
             rest = max(0.0, float(m.get("qty") or 0) - pq)
             cost = round(pa + (rest * float(price) if rest and price is not None else 0), 2)
             if rest and price is None:

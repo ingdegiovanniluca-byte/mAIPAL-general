@@ -239,7 +239,15 @@ async def main():
     model(text="Fatte le tracce")
     await say("fatte le tracce")
     clog = next(lg for lg in db.job_logs.docs if lg.get("collaborator_id") == ava["id"])
-    await deny(server.update_job_log(clog["id"], server.JobLogPatch(text="x"), me))
+    await deny(server.update_job_log(clog["id"], server.JobLogPatch(text="x"), me))       # its text: theirs alone
+    # its content: the administrator corrects it ("3 pezzi" -> "2"), written plainly on the note
+    next(lg for lg in db.job_logs.docs if lg["id"] == clog["id"])["materials"] = [{"name": "scatole 503", "qty": 3.0, "unit": "pz"}]
+    out = await server.update_job_log(clog["id"], server.JobLogPatch(materials=[{"name": "scatole 503", "qty": 2, "unit": "pz"}]), me)
+    c = out["admin_changes"][-1]
+    assert out["materials"][0]["qty"] == 2.0 and c["field"] == "materials" and c["by"] == "Luca"
+    assert c["before"] == [{"name": "scatole 503", "qty": 3.0, "unit": "pz"}] and c["after"][0]["qty"] == 2.0
+    assert out["edits"][-1]["before"]["materials"][0]["qty"] == 3.0
+    await deny(server.update_job_log(lid, server.JobLogPatch(materials=[]), MARCO))      # (a user: not the content of others' notes)
 
     # 2) the hours of a presence: the distance is not in the text (it is on the line under it); alert over 200 m
     assert sp.ON_SITE_METERS == 200 and sp.far(250) and not sp.far(150)
@@ -345,6 +353,10 @@ async def main():
     tot = jl.totals([{"materials": [{"name": "scatole 503", "qty": 10, "unit": "pz"}, {"name": "Scatola 503", "qty": 2, "unit": "pz"},
                                     {"name": "tubo 16", "qty": 1, "unit": "m"}, {"name": "tubo 20", "qty": 1, "unit": "m"}]}])
     assert [(m["name"], m["qty"]) for m in tot["materials"]] == [("scatole 503", 12.0), ("tubo 16", 1.0), ("tubo 20", 1.0)]
+    tot = jl.totals([{"materials": [{"name": "guaina 25 nera", "qty": 10, "unit": "m"}, {"name": "Guaina nera 25", "qty": 5, "unit": "mt"},
+                                    {"name": "cavo cat6", "qty": 20, "unit": "m"}, {"name": "cavo cat 6", "qty": 30, "unit": "m"},
+                                    {"name": "Cavo Cat.6", "qty": 1, "unit": "m"}]}])
+    assert [(m["name"], m["qty"]) for m in tot["materials"]] == [("cavo cat6", 51.0), ("guaina 25 nera", 15.0)], tot["materials"]
     print("ALL OK")
 
 

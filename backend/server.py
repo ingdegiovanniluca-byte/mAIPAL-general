@@ -14257,9 +14257,9 @@ async def get_job_log(log_id: str, current: User = Depends(get_current_user)):
 
 @api_router.patch("/jobs/logs/{log_id}")
 async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
-    """A note changed - its text, day, materials, problems only by who wrote it; each change kept (who, when, what it
-    was before). Never the message as it was sent, nor the text the app registered (a presence). The hours worked (and
-    a presence's pause) also by an administrator: each change of the hours written apart, to be shown on the note."""
+    """A note changed. Its text only by who wrote it; never the message as it was sent, nor the text the app registered
+    (a presence). Its content - hours (and a presence's pause), materials, problems, day, phase - also by an administrator
+    ("3 pezzi" -> "2"): each change kept (who, when, before), and an administrator's written plainly on the note."""
     log = await _job_log_or_404(current, log_id)
     if log.get("kind"):
         raise HTTPException(status_code=400, detail=("Un cambio di stato non si modifica: puoi solo eliminarlo" if log["kind"] == "stato"
@@ -14270,8 +14270,10 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
         raise HTTPException(status_code=400, detail="Questo testo l'ha registrato l'app con la presenza: non si modifica. "
                                                     "L'amministratore può correggere le ore e la pausa.")
     mine, admin = _log_author_is(current, log), _is_org_admin(current)
-    content = [payload.text, payload.date, payload.materials, payload.problems]
-    if any(x is not None for x in content) and not mine:
+    if payload.text is not None and payload.text.strip() != (log.get("text") or "") and not mine:
+        raise HTTPException(status_code=403, detail="Il testo della nota lo modifica solo chi l'ha scritta.")
+    content = [payload.date, payload.materials, payload.problems]
+    if any(x is not None for x in content) and not (mine or admin):
         raise HTTPException(status_code=403, detail=NOTE_NOT_YOURS)
     if payload.hours is not None and not (admin or (mine and not log.get("presence"))):
         raise HTTPException(status_code=403, detail="Le ore di questa nota le corregge l'amministratore.")
@@ -14313,6 +14315,11 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
     if changed:   # what it was, who changed it, when
         upd["edits"] = [*(log.get("edits") or []), {"at": now_iso, "by": _first_name(current.name),
                                                     "by_user_id": current.user_id, "before": changed}][-30:]
+    if not mine:   # an administrator's correction of someone else's note: written plainly on it (what, before -> after)
+        fixed = [k for k in ("date", "materials", "problems") if k in changed]
+        if fixed:
+            upd["admin_changes"] = [*(log.get("admin_changes") or []), *[{"at": now_iso, "by": _first_name(current.name), "field": k,
+                                                                          "before": log.get(k), "after": upd[k]} for k in fixed]][-30:]
     if "hours" in changed or pause_changed:   # the hours corrected: written plainly on the note (before -> after, by whom)
         upd["hours_changes"] = [*(log.get("hours_changes") or []), {
             "at": now_iso, "by": _first_name(current.name), "admin": admin and not mine,

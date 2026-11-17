@@ -434,7 +434,8 @@ async def main():
     txt, kb = to(77)[-1]
     assert "Materiale non previsto" in txt and "pagato" in txt and buttons(kb)[0] == f"xw:extra:{xw[0]['id']}"
     e = await server.get_commessa_economics("s1", current=me)
-    m = next(x for x in e["materials"] if x["name"] == "interruttore da 50 A")
+    # ("interruttore 50 A" of an earlier note and "interruttore da 50 A": the same material, one line)
+    m = next(x for x in e["materials"] if jl._mat_root(x["name"]) == jl._mat_root("interruttore da 50 A"))
     assert m["paid"] == 50.0 and m["cost"] == 50.0 and e["extras"] == [] and e["materials_total"] == 50.0, e
     assert "interruttore da 50 A" not in e["unpriced_materials"]
     # used again: said again, not flagged twice
