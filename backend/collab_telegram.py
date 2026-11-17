@@ -312,6 +312,9 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
             who = _collab_name(rec) + (f" ({rec['company']})" if rec.get("company") else "")
             await _notify_owner(owner, f"⚠️ {who} segnala su «{view['title']}» — {view['client_name']}:\n"
                                        + "\n".join(f"• {p}" for p in log["problems"]), kind="problems")
+        from server import _solve_kb, _solve_question
+        for p in log.get("problems_to_confirm") or []:   # it may solve an open problem: closed only if they say so
+            await _reply(update, _solve_question(p), reply_markup=_solve_kb(p["log_id"], p["idx"], "cpx"))
         return
     if res["status"] == "question":
         from server import _collab_level
@@ -574,6 +577,46 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         except Exception:
             pass
         await _reply(update, answer)
+        return
+    if data.startswith("cmx:"):   # a reminder of materials / tools left behind: used, delete, move
+        from server import _material_expired_answer, _collab_name
+        _, choice, tid = (data.split(":", 2) + ["", ""])[:3]
+        t = await db.job_todos.find_one({"id": tid}, {"_id": 0, "collaborator_id": 1, "shared_with": 1})
+        mine = next((r for r in active if t and r["id"] in [t.get("collaborator_id"), *(t.get("shared_with") or [])]), None)
+        if not mine:
+            await _reply(update, "Questo promemoria non è tuo o non c'è più.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await _reply(update, await _material_expired_answer(tid, choice, {"kind": "collab", "id": mine["id"],
+                                                                         "name": mine.get("first_name") or _collab_name(mine)}))
+        return
+    if data.startswith("cpx:"):   # "this note solves the problem …?" - yes closes it (the owner is told), no leaves it open
+        from server import _close_problem, _collab_name, _notify_owner, User
+        _, choice, log_id, idx = (data.split(":", 3) + ["", "", ""])[:4]
+        lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "commessa_id": 1, "problems": 1, "problem_status": 1})
+        mine = next((r for r in active if lg and lg["commessa_id"] in (r.get("commesse") or [])), None)
+        if not mine or not idx.isdigit() or int(idx) >= len(lg.get("problems") or []):
+            await _reply(update, "Non trovo più questo problema.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        text = lg["problems"][int(idx)]
+        if choice != "y":
+            st = dict(lg.get("problem_status") or {})
+            st[idx] = {"status": "aperta"}
+            await db.job_logs.update_one({"id": log_id}, {"$set": {"problem_status": st}})
+            await _reply(update, f"Ok, «{text}» resta aperto.")
+            return
+        await _close_problem(log_id, int(idx), _collab_name(mine))
+        owner = await db.users.find_one({"user_id": mine["owner_user_id"]}, {"_id": 0})
+        if owner:
+            await _notify_owner(User(**owner), f"✅ {_collab_name(mine)} ha chiuso il problema «{text}».", kind="problems")
+        await _reply(update, f"✅ Chiuso: «{text}».")
         return
     if data.startswith("cwt:"):   # a work they wrote was waiting for a go-ahead: how it went
         from server import _wait_answer, _collab_name

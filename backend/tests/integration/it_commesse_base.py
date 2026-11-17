@@ -286,7 +286,11 @@ async def main():
     assert t["problems"][0]["status"] == "aperta" and t["problems"][0]["severity"] == "media"
     jl.interpret = said2()
     r2 = await server._save_job_log(me, "risolto il problema del miscelatore, montato", commessa_id=sid)
-    assert "✅ Risolto: manca il miscelatore" in r2["message"]
+    # proposed, not closed: who wrote it confirms (button, or the tick in Problemi - read back from the page)
+    assert "❓ Questa nota risolve il problema" in r2["message"] and "«manca il miscelatore»" in r2["message"], r2["message"]
+    p = (await server.get_job_commessa(sid, current=me))["totals"]["problems"][0]
+    assert p["status"] == "aperta" and p["proposed"]["via_log"] == r2["log"]["id"] and p["proposed"]["by"] == "Luca"
+    await server._close_problem(r["log"]["id"], 0, "Luca")
     p = (await server.get_job_commessa(sid, current=me))["totals"]["problems"][0]
     assert p["status"] == "risolta" and p["resolved_by"] == "Luca"
     # by hand: open again, severity

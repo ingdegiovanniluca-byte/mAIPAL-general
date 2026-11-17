@@ -16,7 +16,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-ON_SITE_METERS = 300          # within this distance from the site: "in cantiere"
+ON_SITE_METERS = 200          # within this distance from the site: "in cantiere"; farther, an alert
 FORGOTTEN_HOURS = 14          # a start without an end after this long is not counted by itself
 PAUSES = [30, 60]             # minutes, offered at the end
 

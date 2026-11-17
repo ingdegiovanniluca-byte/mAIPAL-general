@@ -6681,6 +6681,7 @@ class JobTodoPatch(BaseModel):
 
 class JobLogPatch(BaseModel):
     text: Optional[str] = None
+    raw_text: Optional[str] = None            # the message as it was sent (only its author changes it, like the rest)
     phase: Optional[Literal["sopralluogo", "preventivo", "lavorazione", "post", "auto"]] = None   # auto: from the commessa's state
     date: Optional[str] = None
     hours: Optional[List[dict]] = None
@@ -7199,9 +7200,15 @@ async def _save_log_expenses(current: User, clienti: dict, target: dict, log: di
 async def _open_problems(commessa_id: str) -> list:
     """[(log, index, text)] of the commessa's problems still open."""
     out = []
-    for lg in await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "id": 1, "date": 1, "problems": 1, "problem_status": 1}).to_list(20000):
+    today = jl.today_local().isoformat()
+    for lg in await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "id": 1, "date": 1, "problems": 1, "problem_status": 1,
+                                                                    "problem_info": 1}).to_list(20000):
         for i, p in enumerate(lg.get("problems") or []):
-            if ((lg.get("problem_status") or {}).get(str(i)) or {}).get("status") != "risolta":
+            if ((lg.get("problem_status") or {}).get(str(i)) or {}).get("status") == "risolta":
+                continue
+            info = (lg.get("problem_info") or {}).get(str(i)) or {}
+            lasting = info.get("lasting") if isinstance(info.get("lasting"), bool) else jl.problem_lasting(p)
+            if lasting or (lg.get("date") or "") >= today:   # that day's only (an absence, the weather): open only that day
                 out.append((lg, i, p))
     return out
 
@@ -7214,17 +7221,51 @@ async def _set_problem_status(log_id: str, idx: int, resolved: bool, by: str, vi
     await db.job_logs.update_one({"id": log_id}, {"$set": {"problem_status": st}})
 
 
+async def _propose_problem_solved(log_id: str, idx: int, by: str, via_log: str) -> None:
+    """A note that may solve an open problem: kept on the problem, closed only when someone confirms."""
+    lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "problem_status": 1}) or {}
+    st = dict(lg.get("problem_status") or {})
+    cur = st.get(str(idx)) or {}
+    if cur.get("status") == "risolta":
+        return
+    st[str(idx)] = {**cur, "status": "aperta", "proposed": {"by": by, "via_log": via_log, "at": datetime.now(timezone.utc).isoformat()}}
+    await db.job_logs.update_one({"id": log_id}, {"$set": {"problem_status": st}})
+
+
 async def _solve_problems(current: User, target: dict, log: dict, text: str, author: Optional[dict]) -> list:
-    """A note that says an open problem is solved closes it (AUT-SVO-01). -> the problems closed."""
+    """A note that may say an open problem is solved ("è arrivato il materiale per gli interruttori"): proposed, not
+    closed - who wrote it (or anyone in Problemi) confirms with a tap. -> [{"log_id", "idx", "text", "date"}] proposed."""
     open_ = [x for x in await _open_problems(target["id"]) if x[0]["id"] != log["id"]]
     if not open_:
         return []
-    hit = jl.problems_resolved(text, [p for _lg, _i, p in open_])
+    hit = jl.problems_maybe_resolved(text, [p for _lg, _i, p in open_])
     by = (author or {}).get("first_name") or _first_name(current.name)
+    out = []
     for k in hit:
-        lg, i, _p = open_[k]
-        await _set_problem_status(lg["id"], i, True, by, via_log=log["id"])
-    return [open_[k][2] for k in hit]
+        lg, i, p = open_[k]
+        await _propose_problem_solved(lg["id"], i, by, log["id"])
+        out.append({"log_id": lg["id"], "idx": i, "text": p, "date": lg.get("date")})
+    return out
+
+
+async def _close_problem(log_id: str, idx: int, by: str, via_log: Optional[str] = None) -> Optional[dict]:
+    """A problem closed (from the button under a note, Telegram or Problemi); the diary's line. -> the log, or None."""
+    lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "commessa_id": 1, "problems": 1, "problem_status": 1})
+    if not lg or not 0 <= idx < len(lg.get("problems") or []):
+        return None
+    if (((lg.get("problem_status") or {}).get(str(idx))) or {}).get("status") != "risolta":
+        await _set_problem_status(log_id, idx, True, by, via_log=via_log or ((((lg.get("problem_status") or {}).get(str(idx))) or {}).get("proposed") or {}).get("via_log"))
+    return lg
+
+
+def _solve_kb(log_id: str, idx: int, prefix: str = "px"):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Sì, chiudilo", callback_data=f"{prefix}:y:{log_id}:{idx}"),
+                                  InlineKeyboardButton("No, è ancora aperto", callback_data=f"{prefix}:n:{log_id}:{idx}")]])
+
+
+def _solve_question(p: dict) -> str:
+    return f"❓ Questa nota risolve il problema del {_short_it_date(p['date'])}: «{p['text']}»?"
 
 
 class ProblemPatch(BaseModel):
@@ -7272,8 +7313,8 @@ def _job_log_message(log: dict, created: dict) -> str:
                      + (" — segnalato tra i possibili lavori extra (Preventivo)." if u.get("flagged") else "."))
     if log.get("problems"):
         lines.append("⚠️ Problemi: " + "; ".join(log["problems"]))
-    if log.get("problems_solved"):
-        lines.append("✅ Risolto: " + "; ".join(log["problems_solved"]))
+    for p in log.get("problems_to_confirm") or []:
+        lines.append(_solve_question(p) + " Confermalo con il pulsante o in Problemi.")
     if log.get("activities_done"):
         lines.append("✅ Attività svolta: " + "; ".join(log["activities_done"]))
     if log.get("expenses_saved"):
@@ -7454,14 +7495,24 @@ async def _plan_materials(current: User, target: dict, clienti: dict, planned: l
     groups: dict = {}
     for m in planned:
         due = m.get("for_date") or (jl.today_local() + timedelta(days=1)).isoformat()
-        person = _plan_person(m, raw, people)
-        groups.setdefault((due, (person or {}).get("kind"), (person or {}).get("id")), {"person": person, "ms": []})["ms"].append(m)
+        cat = m.get("category") or "materiali"
+        group = jl.group_said(m.get("who") or "") or jl.group_said(raw)   # "tutto il team", "tutti i collaboratori"
+        person = None if group else _plan_person(m, raw, people)
+        key = (due, cat, "group" if group else (person or {}).get("kind"), group or (person or {}).get("id"))
+        groups.setdefault(key, {"person": person, "group": group, "ms": []})["ms"].append(m)
     now = datetime.now(timezone.utc)
     out = []
-    for (due, _k, _i), g in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][2] or "")):
-        ms, person = g["ms"], g["person"]
+    for (due, cat, _k, _i), g in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][3] or "")):
+        ms, person, group = g["ms"], g["person"], g["group"]
         eve, morning = _mat_reminder_times(due)
-        if person and person["kind"] == "collab":
+        group_collabs, group_users = [], []
+        if group:   # everyone: the collaborators of the commessa on Telegram (and, for the team, the app's users too)
+            group_collabs = [c for c in await db.collaborators.find({"commesse": {"$in": [target["id"]]}, "status": "active"}, {"_id": 0}).to_list(200)
+                             if c.get("telegram_chat_id")]
+            group_users = [p["id"] for p in people if p["kind"] == "user"] if group == "team" else []
+            who, collab_id = ("Tutto il team" if group == "team" else "Tutti i collaboratori"), None
+            assignee = None if author else current.user_id
+        elif person and person["kind"] == "collab":
             collab_doc = await db.collaborators.find_one({"id": person["id"]}, {"_id": 0}) or {}
             on_tg = bool(collab_doc.get("telegram_chat_id")) and collab_doc.get("status") == "active"
             who, collab_id = person["name"], person["id"]
@@ -7474,16 +7525,19 @@ async def _plan_materials(current: User, target: dict, clienti: dict, planned: l
         doc = {"id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": target["id"], "collection_id": clienti["id"],
                "user_id": current.user_id, "org_id": current.org_id, "author_name": (author or {}).get("first_name") or _first_name(current.name),
                "created_by_user": None if author else current.user_id,   # put by this user (not by a collaborator)
-               "kind": "materiale", "text": "Da prendere: " + ", ".join(jl.mat_label(m) for m in ms),
+               "kind": "materiale", "category": cat,
+               "text": ("Da portare: " if cat == "attrezzi" else "Da prendere: ") + ", ".join(jl.mat_label(m) for m in ms),
                "materials": [{k: m.get(k) for k in ("name", "qty", "unit")} for m in ms],
                "who": who, "collaborator_id": collab_id,
                "assignee_user_id": assignee, "due_date": due, "done": False, "done_at": None,
                "from_log_id": from_log_id, "created_at": now.isoformat(),
                # a time already gone when it is written is not reminded (it was just said)
                "reminded": {**({"eve": due} if now >= eve else {}), **({"morning": due} if now >= morning else {})}}
-        mine = person is None or (person["kind"] == "collab" and person["id"] == (author or {}).get("id")) \
-            or (person["kind"] == "user" and not author and person["id"] == current.user_id)
-        shared = mates if mine else []   # (mates: only for a collaborator's own)
+        mine = not group and (person is None or (person["kind"] == "collab" and person["id"] == (author or {}).get("id"))
+                              or (person["kind"] == "user" and not author and person["id"] == current.user_id))
+        shared = mates if mine else [c for c in group_collabs if c["id"] != (author or {}).get("id")] if group else []
+        if group_users:
+            doc["assignee_user_ids"] = [u for u in group_users if u != doc["assignee_user_id"]]
         if shared:
             doc["shared_with"] = [c["id"] for c in shared]
         await db.job_todos.insert_one(doc)
@@ -7495,11 +7549,18 @@ async def _plan_materials(current: User, target: dict, clienti: dict, planned: l
         # given to a collaborator by someone else: told now (the writer was just answered)
         if collab_id and collab_id != (author or {}).get("id"):
             view_doc["notified"] = await _notify_assignee("todo", view_doc, target)
-        for c in shared:   # the colleagues of the same company: told now, like the writer was
+        for c in shared:   # the colleagues of the same company (or everyone): told now, like the writer was
             try:
-                await _tell_collaborator(c, _shared_material_text(view_doc, target, author), f"cldone:t:{doc['id']}")
+                await _tell_collaborator(c, _shared_material_text(view_doc, target, author or {"first_name": _first_name(current.name)}),
+                                         f"cldone:t:{doc['id']}")
             except Exception:
                 logger.exception("shared material notice failed")
+        for uid in doc.get("assignee_user_ids") or []:   # the team's users: in the app (and on Telegram, if they want it)
+            u = await db.users.find_one({"user_id": uid}, {"_id": 0, "telegram_chat_id": 1})
+            push.fire_and_forget(db, uid, f"📌 {'Da portare' if cat == 'attrezzi' else 'Da prendere'} · {target.get('title')}",
+                                 ", ".join(_mat_items(view_doc)), f"/dashboard/journal?commessa={target['id']}", f"mat-{doc['id']}-new", kind="materials")
+            if u and u.get("telegram_chat_id") and await nprefs.wants(db, uid, "materials", "telegram"):
+                await _send_telegram_text(u["telegram_chat_id"], _shared_material_text(view_doc, target, author or {"first_name": _first_name(current.name)}))
         _day_pin_touch(collab_id, *[c["id"] for c in shared])
         out.append(view_doc)
     return out
@@ -7525,7 +7586,7 @@ def _and_join(names: list) -> str:
 def _mat_items(todo: dict) -> list:
     """The materials of a To Do "Da prendere", one label each ("10 pz scatole 503")."""
     return [jl.mat_label(m) for m in todo.get("materials") or [] if m.get("name")] \
-        or [x.strip() for x in (todo.get("text") or "").removeprefix("Da prendere: ").split(", ") if x.strip()]
+        or [x.strip() for x in re.sub(r"^Da (?:prendere|portare): ", "", todo.get("text") or "").split(", ") if x.strip()]
 
 
 def _mat_bullets(todo: dict, mark: str = "•") -> str:
@@ -7537,9 +7598,13 @@ def _shared_material_text(todo: dict, target: dict, author: dict) -> str:
     today = jl.today_local()
     due = todo["due_date"]
     when = "domani" if due == (today + timedelta(days=1)).isoformat() else "oggi" if due == today.isoformat() else _short_it_date(due)
-    return (f"📌 {author.get('first_name') or author.get('name')} ha segnato da prendere {when} per «{target.get('title')}»"
+    verb = "da portare" if todo.get("category") == "attrezzi" else "da prendere"
+    everyone = todo.get("who") in ("Tutto il team", "Tutti i collaboratori")
+    return (f"📌 {author.get('first_name') or author.get('name')} ha segnato {verb} {when} per «{target.get('title')}»"
             + (f" — {target['client_name']}" if target.get("client_name") else "")
-            + f":\n{_mat_bullets(todo)}\nVale per tutta la ditta: quando qualcuno l'ha preso tocca ✅ Fatto.")
+            + (f" ({todo['who'].lower()})" if everyone else "")
+            + f":\n{_mat_bullets(todo)}\n" + ("Vale per tutti" if everyone else "Vale per tutta la ditta")
+            + ": quando qualcuno l'ha preso tocca ✅ Fatto.")
 
 
 def _plan_message(target: dict, todos: list, short: bool = False) -> str:
@@ -7547,8 +7612,11 @@ def _plan_message(target: dict, todos: list, short: bool = False) -> str:
     def when(due):
         d = date.fromisoformat(due)
         return "domani" if d == today + timedelta(days=1) else "oggi" if d == today else _short_it_date(due)
-    lines = [f"📌 Da prendere {when(t['due_date'])}" + (f" ({t['who']})" if t.get("for_other") else "") + f":\n{_mat_bullets(t)}"
-             + (f"\nLo vedono anche {_and_join(t['shared_names'])} (scrivi «solo per me» se è solo tuo)." if t.get("shared_names") else "")
+    group = lambda t: t.get("who") in ("Tutto il team", "Tutti i collaboratori")
+    lines = [f"📌 {'Da portare (attrezzi)' if t.get('category') == 'attrezzi' else 'Da prendere'} {when(t['due_date'])}"
+             + (f" ({t['who']})" if t.get("for_other") else "") + f":\n{_mat_bullets(t)}"
+             + ("\nLo ricordo a tutti; basta che uno tocchi ✅ Fatto." if group(t) else
+                f"\nLo vedono anche {_and_join(t['shared_names'])} (scrivi «solo per me» se è solo tuo)." if t.get("shared_names") else "")
              for t in todos]
     if short:
         return "\n".join(lines)
@@ -7587,7 +7655,8 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
         coll = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0})
         view = _commessa_view(sub, client, coll or {})
         what = ", ".join(_mat_items(t))   # (the phone's notification: one line)
-        head = "🧰 Domani da prendere" if kind == "eve" else "🧰 Oggi da prendere"
+        verb = "da portare" if t.get("category") == "attrezzi" else "da prendere"
+        head = f"🧰 Domani {verb}" if kind == "eve" else f"🧰 Oggi {verb}"
         text = f"{head} per «{view['title']}» — {view['client_name']}:\n{_mat_bullets(t)}"
         try:
             # the collaborator, and the colleagues of their company it is shared with
@@ -7599,16 +7668,113 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
                 if c and not pinned_today and t["commessa_id"] in (c.get("commesse") or []) \
                         and await _tell_collaborator(c, text + by + "\nQuando l'hai preso tocca ✅ Fatto.", f"cldone:t:{t['id']}"):
                     sent += 1
-            if t.get("assignee_user_id"):
-                u = await db.users.find_one({"user_id": t["assignee_user_id"]}, {"_id": 0, "telegram_chat_id": 1})
-                push.fire_and_forget(db, t["assignee_user_id"], head + f" · {view['title']}", what,
+            for uid in [x for x in [t.get("assignee_user_id"), *(t.get("assignee_user_ids") or [])] if x]:
+                u = await db.users.find_one({"user_id": uid}, {"_id": 0, "telegram_chat_id": 1})
+                push.fire_and_forget(db, uid, head + f" · {view['title']}", what,
                                      f"/dashboard/journal?commessa={view['id']}", f"mat-{t['id']}-{kind}", kind="materials")
-                if u and u.get("telegram_chat_id") and await nprefs.wants(db, t["assignee_user_id"], "materials", "telegram"):
+                if u and u.get("telegram_chat_id") and await nprefs.wants(db, uid, "materials", "telegram"):
                     await _send_telegram_text(u["telegram_chat_id"], text)
                 sent += 1
         except Exception:
             logger.exception("materials reminder failed")
     return sent
+
+
+# ---- a reminder "Da prendere / Da portare" left behind: two days after its day, if nobody ticked it, the people it was
+# for are asked what to do - used (the materials go in the diary as used), to delete, or moved to another day
+MAT_EXPIRED_DAYS = 2
+MAT_EXPIRED_AT = "09:00"
+
+
+def _mat_expired_kb(todo: dict, prefix: str = "mx"):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    b = lambda label, choice: InlineKeyboardButton(label, callback_data=f"{prefix}:{choice}:{todo['id']}")
+    tool = todo.get("category") == "attrezzi"
+    return InlineKeyboardMarkup([[b("✅ Portati" if tool else "✅ Usati", "usato"), b("🗑 Elimina", "elimina")],
+                                 [b("📅 Domani", "domani"), b("📅 Tra una settimana", "settimana")]])
+
+
+async def _material_expired(now_utc: Optional[datetime] = None) -> int:
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_local.strftime("%H:%M") < MAT_EXPIRED_AT:
+        return 0
+    limit = (now_local.date() - timedelta(days=MAT_EXPIRED_DAYS)).isoformat()
+    sent = 0
+    for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$lte": limit}, "reminders_off": {"$ne": True}},
+                                     {"_id": 0}).to_list(2000):
+        if t.get("expired_asked") == t["due_date"]:
+            continue
+        await db.job_todos.update_one({"id": t["id"]}, {"$set": {"expired_asked": t["due_date"]}})
+        ctx = await _commessa_ctx(t["commessa_id"])
+        if not ctx or vx.is_closed(ctx[3]["stato"]):
+            continue
+        view = ctx[3]
+        tool = t.get("category") == "attrezzi"
+        text = (f"⌛ Promemoria scaduto su «{view['title']}» — {view['client_name']}\n"
+                f"{'Da portare' if tool else 'Da prendere'} per il {_short_it_date(t['due_date'])}:\n{_mat_bullets(t)}\n"
+                + ("Li hai portati? Si può eliminare il promemoria o va spostato?" if tool else
+                   "Li avete usati? Si può eliminare il promemoria o va spostato? Se ne avete usata solo una parte scrivilo nel diario "
+                   "(es. «usate 5 scatole 503»)."))
+        try:
+            for cid in [x for x in [t.get("collaborator_id"), *(t.get("shared_with") or [])] if x]:
+                c = await db.collaborators.find_one({"id": cid}, {"_id": 0})
+                if c and t["commessa_id"] in (c.get("commesse") or []) and await _tell_collaborator(c, text, kb=_mat_expired_kb(t, "cmx")):
+                    sent += 1
+            for uid in [x for x in [t.get("assignee_user_id"), *(t.get("assignee_user_ids") or [])] if x]:
+                u = await db.users.find_one({"user_id": uid}, {"_id": 0, "telegram_chat_id": 1})
+                push.fire_and_forget(db, uid, f"⌛ Promemoria scaduto · {view['title']}", ", ".join(_mat_items(t)),
+                                     f"/dashboard/journal?commessa={view['id']}", f"matx-{t['id']}", kind="materials")
+                if u and u.get("telegram_chat_id") and await nprefs.wants(db, uid, "materials", "telegram"):
+                    await _tg_send(u["telegram_chat_id"], text, _mat_expired_kb(t))
+                sent += 1
+        except Exception:
+            logger.exception("expired material reminder failed")
+    return sent
+
+
+async def _material_expired_answer(todo_id: str, choice: str, by: dict) -> str:
+    """by: {"kind": collab|user, "id", "name"}. -> the answer."""
+    t = await db.job_todos.find_one({"id": todo_id}, {"_id": 0})
+    if not t:
+        return "Questo promemoria non c'è più."
+    if t.get("done"):
+        return "Era già segnato come fatto 👍"
+    if by["kind"] == "collab":
+        if by["id"] not in [t.get("collaborator_id"), *(t.get("shared_with") or [])]:
+            return "Questo promemoria non è tuo."
+    elif by["id"] not in [t.get("assignee_user_id"), *(t.get("assignee_user_ids") or [])] and by.get("id") != t.get("user_id"):
+        return "Questo promemoria non è tuo."
+    ctx = await _commessa_ctx(t["commessa_id"])
+    if not ctx:
+        return "Questa commessa non c'è più."
+    clienti, _sub, _client, view = ctx
+    now = datetime.now(timezone.utc).isoformat()
+    what = ", ".join(_mat_items(t))
+    _day_pin_touch(t.get("collaborator_id"), *(t.get("shared_with") or []))
+    if choice == "usato":
+        await db.job_todos.update_one({"id": todo_id}, {"$set": {"done": True, "done_at": now, "done_by": by["name"]}})
+        if t.get("category") == "attrezzi" or not t.get("materials"):
+            return f"✅ Segnato come fatto: {what}."
+        owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0}) or {}
+        log = {"id": f"jlog_{uuid.uuid4().hex[:12]}", "user_id": by["id"] if by["kind"] == "user" else clienti.get("user_id"),
+               "org_id": owner.get("org_id"), "author_name": by["name"], "collaborator_id": by["id"] if by["kind"] == "collab" else None,
+               "collection_id": clienti["id"], "collection_name": clienti.get("name"), "client_item_id": view["client_item_id"],
+               "client_name": view["client_name"], "commessa_id": view["id"], "commessa_title": view["title"],
+               "date": jl.today_local().isoformat(), "raw_text": f"Usati: {what}", "text": f"Usati i materiali del promemoria: {what}.",
+               "hours": [], "materials": [{k: m.get(k) for k in ("name", "qty", "unit")} for m in t["materials"]], "problems": [],
+               "photos": [], "channel": "telegram", "created_at": now, "embedding": None, "from_todo_id": todo_id}
+        await db.job_logs.insert_one(dict(log))
+        asyncio.create_task(_check_budget_alert(clienti, view["id"]))
+        return f"✅ Segnati come usati nel diario di «{view['title']}»: {what}."
+    if choice == "elimina":
+        await db.job_todos.delete_one({"id": todo_id})
+        return f"🗑 Promemoria eliminato: {what}."
+    if choice in ("domani", "settimana"):
+        today = jl.today_local()
+        due = (mtpl.add_workdays(today, 1) if choice == "domani" else today + timedelta(days=7)).isoformat()
+        await db.job_todos.update_one({"id": todo_id}, {"$set": {"due_date": due, "reminded": {}, "expired_asked": None}})
+        return f"📅 Spostato al {_short_it_date(due)}: te lo ricordo la sera prima e quella mattina."
+    return "Risposta non valida."
 
 
 def _public_log(log: dict) -> dict:
@@ -7955,7 +8121,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         names = [jl.mat_label(m) for m in doubtful]
         return {"status": "material_doubt", "materials": names, "commessa_id": target["id"], "commessa": target, "text": text,
                 "message": f"🧰 {', '.join(names)}: li avete usati oggi o sono da prendere?"}
-    planned = [m for m in mats if m.get("status") == "da_prendere"]
+    planned = [m for m in mats if m.get("status") == "da_prendere"] + list(parsed.get("tools") or [])   # (the tools to bring too)
     parsed["materials"] = [{k: m.get(k) for k in ("name", "qty", "unit")} for m in mats if m.get("status") != "da_prendere"]
     # "interruttore da 50 A, costo 50 €": the 50 € is that material's cost, not an expense too (counted once)
     parsed["materials"], parsed["expenses"] = jl.expenses_on_materials(parsed["materials"], parsed.get("expenses") or [])
@@ -7975,10 +8141,13 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     review_fields = {"hours_pending": claim["pending"], "hours_review": claim["review"]} if claim["review"] else {}
 
     now = datetime.now(timezone.utc).isoformat()
+    # each problem: does it stay open until someone acts, or was it that day's only (an absence)? the corrective action said
+    problem_info = jl.problem_info(parsed["problems"], parsed.get("problem_details") or [], text)
     if photo_entry and photo_entry["commessa_id"] == target["id"]:
         # the description goes into the photo's entry (what it was is kept, to undo it)
         upd = {"raw_text": text, "text": parsed["text"], "date": parsed["date"], "hours": parsed["hours"],
-               "materials": parsed["materials"], "problems": parsed["problems"], "described_at": now, "embedding": None, **review_fields,
+               "materials": parsed["materials"], "problems": parsed["problems"], "problem_info": problem_info,
+               "described_at": now, "embedding": None, **review_fields,
                "before_description": {k: photo_entry.get(k) for k in ("raw_text", "text", "date", "hours", "materials", "problems")}}
         await db.job_logs.update_one({"id": photo_entry["id"]}, {"$set": upd})
         log = {**photo_entry, **upd}
@@ -7988,7 +8157,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         await _hours_claim_done(current, claim, log, author, target)
         log["expenses_saved"] = await _save_log_expenses(current, clienti, target, log, parsed.get("expenses") or [], author)
         log["unplanned"] = await _unplanned_materials_check(target, log)
-        log["problems_solved"] = await _solve_problems(current, target, log, text, author)
+        log["problems_to_confirm"] = await _solve_problems(current, target, log, text, author)
         n = len(photo_entry.get("photos") or [])
         msg = _job_log_message(log, {}).replace("📒 Diario", f"📷 Descrizione aggiunta {'alla foto' if n == 1 else f'alle {n} foto'} nel diario", 1)
         todos = await _plan_materials(current, target, clienti, planned, author, from_log_id=log["id"], raw=text) if planned else []
@@ -8006,8 +8175,8 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
         "client_item_id": target["client_item_id"], "client_name": target["client_name"],
         "commessa_id": target["id"], "commessa_title": target["title"],
         "date": parsed["date"], "raw_text": text, "text": parsed["text"],
-        "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"], **review_fields,
-        "photos": [], "channel": channel, "conv_id": conv_id, "created_at": now, "embedding": None,
+        "hours": parsed["hours"], "materials": parsed["materials"], "problems": parsed["problems"], "problem_info": problem_info,
+        **review_fields, "photos": [], "channel": channel, "conv_id": conv_id, "created_at": now, "embedding": None,
         **({"phase": jl.phase_from_words(text), "phase_set": "nota"} if jl.phase_from_words(text) else {}),
     }
     survey = not author and _is_survey(target, text)   # the survey: the administrator and the users, never a collaborator
@@ -8018,7 +8187,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     await _hours_claim_done(current, claim, log, author, target)
     log["expenses_saved"] = await _save_log_expenses(current, clienti, target, log, parsed.get("expenses") or [], author)
     log["unplanned"] = [] if survey else await _unplanned_materials_check(target, log)
-    log["problems_solved"] = await _solve_problems(current, target, log, text, author)
+    log["problems_to_confirm"] = await _solve_problems(current, target, log, text, author)
     log["activities_done"] = await _activities_from_note(current, target, log, text, author)
     waits_said = await _waits_from_note(current, target, log, text, author)
     wait = await _waiting_from_log(current, clienti, target, log, parsed["waiting"], author) \
@@ -8214,6 +8383,7 @@ async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_
     clienti, sub, client = acc["clienti"], acc["sub"], acc["client"]
     light = await db.job_logs.find({"commessa_id": commessa_id},
                                    {"_id": 0, "id": 1, "date": 1, "kind": 1, "hours": 1, "materials": 1, "problems": 1, "photos": 1,
+                                    "problem_status": 1, "problem_severity": 1, "problem_info": 1, "channel": 1,
                                     "hours_pending": 1, "hours_review": 1, "author_name": 1, "phase": 1, "section": 1, "created_at": 1}).to_list(20000)
     q: dict = {"commessa_id": commessa_id}
     rng = {}
@@ -12514,11 +12684,9 @@ def _presence_log(collab: dict, owner: User, view: dict, s_: dict, end: datetime
     """The diary entry of a presence: the times, the hours (pauses out) and how far from the site."""
     start_l, end_l = _local(s_["start_at"]), end.astimezone(LOCAL_TZ)
     worked = max(0, minutes - pause)
-    warn = [f"inizio {sp.distance_text(s_.get('start_m'))}"] if sp.far(s_.get("start_m")) else []
-    if sp.far(end_m):
-        warn.append(f"fine {sp.distance_text(end_m)}")
+    # (how far from the site the start and the end were: on the line under it, with the position - not in the text)
     text = (f"In cantiere dalle {sp.hhmm(start_l)} alle {sp.hhmm(end_l)} ({sp.fmt_duration(worked)}"
-            + (f", pausa {sp.fmt_duration(pause)} esclusa" if pause else "") + ")" + (f" · ⚠️ {', '.join(warn)}" if warn else ""))
+            + (f", pausa {sp.fmt_duration(pause)} esclusa" if pause else "") + ")")
     return {
         "id": f"jlog_{uuid.uuid4().hex[:12]}", "user_id": collab.get("user_id") or owner.user_id, "org_id": owner.org_id,
         "author_name": collab.get("first_name") or _collab_name(collab), "collaborator_id": None if collab.get("is_user") else collab["id"],
@@ -13414,6 +13582,7 @@ async def _collab_reminder_loop():
                 await _collab_day_briefs()
                 await _todo_reminders()
                 await _material_reminders()
+                await _material_expired()
                 await _waiting_followups()
                 await _presence_forgotten()
                 await _presence_late_check()
@@ -14070,15 +14239,39 @@ async def plan_material_from_log(log_id: str, payload: PlanMaterialPayload, curr
     return {"log": _public_log({**log, "materials": mats}), "todo": todos[0]}
 
 
+def _log_author_is(current: User, log: dict) -> bool:
+    """The note is this user's: written by them in the app or the chat (a collaborator's is theirs alone, on Telegram)."""
+    return not log.get("collaborator_id") and current.user_id in (log.get("user_id"), log.get("author_user_id"))
+
+
+NOTE_NOT_YOURS = "Questa nota l'ha scritta un altro: solo chi l'ha scritta può modificarla."
+
+
+@api_router.get("/jobs/logs/{log_id}")
+async def get_job_log(log_id: str, current: User = Depends(get_current_user)):
+    """One note of the diary (the window that opens on it): whether this user may change it."""
+    log = await _job_log_or_404(current, log_id)
+    return {**_public_log(log), "mine": _log_author_is(current, log)}
+
+
 @api_router.patch("/jobs/logs/{log_id}")
 async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depends(get_current_user)):
+    """A note changed - only by who wrote it; each change kept (who, when, what it was before). The phase of its hours,
+    a classification, also by an administrator."""
     log = await _job_log_or_404(current, log_id)
     if log.get("kind"):
         raise HTTPException(status_code=400, detail=("Un cambio di stato non si modifica: puoi solo eliminarlo" if log["kind"] == "stato"
                                                      else "Questa riga del diario non si modifica: puoi solo eliminarla"))
+    content = [payload.text, payload.raw_text, payload.date, payload.hours, payload.materials, payload.problems]
+    if any(x is not None for x in content) and not _log_author_is(current, log):
+        raise HTTPException(status_code=403, detail=NOTE_NOT_YOURS)
+    if payload.phase is not None and not (_log_author_is(current, log) or _is_org_admin(current)):
+        raise HTTPException(status_code=403, detail=NOTE_NOT_YOURS)
     upd: dict = {}
     if payload.text is not None and payload.text.strip():
         upd["text"] = payload.text.strip()
+    if payload.raw_text is not None and payload.raw_text.strip():
+        upd["raw_text"] = payload.raw_text.strip()[:8000]
     if payload.date is not None:
         upd["date"] = jl.valid_day(payload.date, jl.today_local())
     if payload.hours is not None:
@@ -14087,8 +14280,17 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
         upd["materials"] = jl.clean_materials(payload.materials)
     if payload.problems is not None:
         upd["problems"] = jl.clean_problems(payload.problems)
+        if upd["problems"] != (log.get("problems") or []):   # (their state and reading follow their text)
+            keep = {p: i for i, p in enumerate(log.get("problems") or [])}
+            old_st, old_info = log.get("problem_status") or {}, log.get("problem_info") or {}
+            upd["problem_status"] = {str(j): old_st[str(keep[p])] for j, p in enumerate(upd["problems"]) if p in keep and str(keep[p]) in old_st}
+            upd["problem_info"] = {str(j): old_info.get(str(keep[p])) or jl.problem_info([p], [], p)["0"] for j, p in enumerate(upd["problems"])}
     if payload.phase is not None:
         upd.update(phase=None, phase_set=None) if payload.phase == "auto" else upd.update(phase=payload.phase, phase_set="mano")
+    changed = {k: log.get(k) for k in ("text", "raw_text", "date", "hours", "materials", "problems", "phase") if k in upd and upd[k] != log.get(k)}
+    if changed:   # what it was, who changed it, when
+        upd["edits"] = [*(log.get("edits") or []), {"at": datetime.now(timezone.utc).isoformat(), "by": _first_name(current.name),
+                                                    "by_user_id": current.user_id, "before": changed}][-30:]
     if upd:
         upd["embedding"] = None
         await db.job_logs.update_one({"id": log_id}, {"$set": upd})

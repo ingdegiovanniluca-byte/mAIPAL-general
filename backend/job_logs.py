@@ -420,7 +420,7 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "a testa (due righe). \"Dalle 8 alle 12\" = 4. Un collega senza nome: \"who\": \"collega\". Se le ore "
         "non sono dette: [] (MAI stimarle).\n"
         "4. \"materials\": materiali nominati, [{\"name\", \"qty\": numero o null, \"unit\": \"m|pz|kg|l|"
-        "sacchi|...\" o \"\", \"status\", \"for_date\"}]. Solo quelli detti, con le quantità dette; niente attrezzi. "
+        "sacchi|...\" o \"\", \"status\", \"for_date\"}]. Solo quelli detti, con le quantità dette; niente attrezzi (vanno in tools). "
         "\"status\": \"usato\" se è stato usato/posato/montato (già successo); \"da_prendere\" se va preso, portato, "
         "comprato o ordinato per dopo (\"domani porto\", \"serve\", \"da prendere\"); \"dubbio\" se non si capisce "
         "(es. solo un elenco di materiali senza verbo). \"for_date\": per i da_prendere il giorno in cui servono "
@@ -440,6 +440,13 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "trasporti: \"comprato nastro 8 €\" -> {\"description\": \"nastro\", \"amount\": 8, \"supplier\": \"\"}), con il fornitore se detto. "
         "Senza importo scritto non è una spesa. Se la spesa è il costo di un materiale usato (\"montato un interruttore da 50 A, costo 50 €\"), "
         "mettilo in \"materials\" E in \"expenses\" con lo stesso nome. Nessuna: [].\n"
+        "8b. \"tools\": gli ATTREZZI (trapano, flex, scala, ponteggio, avvitatore, generatore, furgone…) da PORTARE o prendere per dopo, "
+        "[{\"name\", \"for_date\": il giorno in cui servono YYYY-MM-DD o null, \"who\": chi li porta se è detto (anche \"tutto il team\", "
+        "\"tutti i collaboratori\"), altrimenti \"\"}]. Non gli attrezzi usati. Nessuno: [].\n"
+        "8c. \"problem_details\": per OGNI problema di \"problems\", nello stesso ordine: {\"text\": lo stesso testo, \"lasting\": true se resta "
+        "aperto finché qualcuno non fa qualcosa (materiale non arrivato, guasto, lavoro da rifare, in attesa di qualcuno), false se riguarda solo "
+        "quel giorno e passa da sé (un'assenza per malattia, il maltempo di oggi), \"action\": l'azione correttiva già fatta o decisa SE è scritta "
+        "(\"ho chiamato il fornitore, arriva giovedì\"), altrimenti \"\"}.\n"
         "9. \"waiting\": se la nota dice che un LAVORO DA FARE è IN ATTESA del via libera, dell'ok, di una conferma, di un'autorizzazione o "
         "di una decisione di qualcuno (proprietario, cliente, amministratore di condominio, direttore lavori: \"ventilatore danneggiato, si "
         "attende il via libera per la sostituzione dal proprietario\"), {\"work\": il lavoro in attesa, breve, con le parole della nota "
@@ -448,7 +455,7 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
         "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
         "\"hours\": [], \"materials\": [], \"problems\": [], \"expenses\": [], \"times\": {\"start\": null, \"end\": null}, "
-        "\"waiting\": null, \"client\": \"\", \"commessa\": \"\"}"
+        "\"tools\": [], \"problem_details\": [], \"waiting\": null, \"client\": \"\", \"commessa\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -467,7 +474,8 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
     for m in mats:
         m["status"] = material_status(m, text)
         m["for_date"] = plan_date(m, text, today) if m["status"] == "da_prendere" else None
-    only_plan = bool(mats) and all(m["status"] == "da_prendere" for m in mats) \
+    tools_said = bool(clean_tools(parsed.get("tools"), text, today))
+    only_plan = (bool(mats) or tools_said) and all(m["status"] == "da_prendere" for m in mats) \
         and not str(parsed.get("text") or "").strip() and not parsed.get("hours") and not parsed.get("problems")
     return {
         "kind": kind if kind in KINDS else "nota",
@@ -480,6 +488,8 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "times": clock_times(parsed.get("times"), text),
         "expenses": clean_expenses(parsed.get("expenses"), text),
         "waiting": clean_waiting(parsed.get("waiting"), text),
+        "tools": clean_tools(parsed.get("tools"), text, today),
+        "problem_details": [d for d in (parsed.get("problem_details") or []) if isinstance(d, dict)],
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),
     }
@@ -877,6 +887,11 @@ def planned_materials(d: dict) -> list:
     return out
 
 
+def _mat_root(name: str) -> str:
+    """"Scatole 503" and "scatola 503": the same (singular/plural, case); "tubo 16" and "tubo 20" not."""
+    return " ".join(w[:-1] if len(w) > 3 and w[-1] in "aeio" and not w.isdigit() else w for w in re.findall(r"[a-z0-9]+", _norm(name)))
+
+
 def _same_material(a: str, b: str) -> bool:
     return grounded(a, b, 0.6) or grounded(b, a, 0.6)
 
@@ -1233,14 +1248,21 @@ def totals(logs: list) -> dict:
                             "review": lg.get("hours_review") or {}})
         for m in lg.get("materials") or []:
             k = _mat_key(m)
+            if k not in mats:   # the same material written a little differently ("scatola 503" / "scatole 503"), same unit: one line
+                k = next((x for x in mats if x[1] == k[1] and _mat_root(x[0]) == _mat_root(k[0])), k)
             cur = mats.setdefault(k, {"name": m["name"], "unit": m.get("unit") or "", "qty": None})
             if m.get("qty") is not None:
                 cur["qty"] = round((cur["qty"] or 0) + float(m["qty"]), 3)
         for i, p in enumerate(lg.get("problems") or []):
             st = (lg.get("problem_status") or {}).get(str(i)) or {}
-            problems.append({"date": lg.get("date"), "text": p, "log_id": lg.get("id"), "idx": i,
-                             "status": st.get("status") or "aperta", "severity": (lg.get("problem_severity") or {}).get(str(i)) or "media",
-                             "resolved_at": st.get("at"), "resolved_by": st.get("by"), "author": lg.get("author_name")})
+            info = (lg.get("problem_info") or {}).get(str(i)) or {}
+            lasting = info.get("lasting") if isinstance(info.get("lasting"), bool) else problem_lasting(p)
+            status = st.get("status") or ("aperta" if lasting else "del_giorno")   # that day's only: passed by itself
+            problems.append({"date": lg.get("date"), "text": p, "log_id": lg.get("id"), "idx": i, "lasting": lasting,
+                             "status": status, "severity": (lg.get("problem_severity") or {}).get(str(i)) or "media",
+                             "action": info.get("action") or "", "proposed": st.get("proposed") if status == "aperta" else None,
+                             "resolved_at": st.get("at"), "resolved_by": st.get("by"), "author": lg.get("author_name"),
+                             "channel": "telegram" if lg.get("channel") == "telegram" else ""})
     pending_by = {}
     for x in pending:
         pending_by[x["who"]] = round(pending_by.get(x["who"], 0) + x["hours"], 2)
@@ -1495,7 +1517,95 @@ def clean_expenses(rows, raw: str) -> list:
 
 
 _SOLVED = re.compile(r"\b(?:risolt\w*|sistemat\w*|riparat\w*|aggiustat\w*|sbloccat\w*|ripres\w*|(?:è|e'|sono)\s+arrivat\w*|"
-                     r"arrivat\w*\s+(?:il|la|i|le|lo|gli)\b|consegnat\w*|non\s+(?:c'è|ce)\s+più|tutto\s+ok|a\s+posto|risolve)", re.I)
+                     r"arrivat\w*\s+(?:il|la|i|le|lo|gli|l')|consegnat\w*|non\s+(?:c'è|ce)\s+più|tutto\s+ok|a\s+posto|risolve|"
+                     r"sostituit\w*|cambiat\w*|rifatt\w*|funziona\w*|(?:possiamo|si\s+può|si\s+puo|posso)\s+procedere|ricevut\w*)", re.I)
+
+
+_PROBLEM_FILLER = {"manca", "mancano", "problema", "problemi", "non", "arrivato", "arrivata", "arrivati", "arrivate", "possibile", "stato",
+                   "stata", "perche", "potuto", "riusciti", "riuscito", "oggi", "ieri", "ancora"}
+
+
+def problems_maybe_resolved(text: str, open_problems: list) -> list:
+    """The open problems a note MAY solve ("è arrivato il materiale per montare gli interruttori" -> "non è stato possibile
+    montare gli interruttori perché non è arrivata la fornitura"): a word of solution and at least two of the problem's
+    words (or most of a short one). Only proposed - closed when someone confirms. -> indexes, the closest first."""
+    if not _SOLVED.search(text or ""):
+        return []
+    said = set(_words(text))
+    out = []
+    for i, p in enumerate(open_problems):
+        words = [w for w in dict.fromkeys(_words(p)) if w not in _PROBLEM_FILLER]
+        hit = sum(1 for w in words if _said(w, said))
+        if words and (hit >= 2 or (hit and hit / len(words) >= 0.5)):
+            out.append((hit / len(words), i))
+    return [i for _s, i in sorted(out, reverse=True)][:3]
+
+
+# a problem that passes by itself (that day only): an absence, the weather - unless something stays to be done
+_DAY_ONLY = re.compile(r"\b(?:malat\w*|febbre|influenza|stav[ao] male|sto male|stata? male|non (?:stava|stavo|sta|sto|stavano) bene|"
+                       r"non (?:e|sono|siamo|era|erano) (?:potut\w* |riuscit\w* )?(?:andat|venut|passat)\w*|"
+                       r"infortun\w*|ricoverat\w*|assent\w*|assenza|"
+                       r"motivi personali|maltempo|pioggia|piove\w*|pioveva|neve|nevica\w*|grandine|vento forte|temporale)\b")
+_LASTING = re.compile(r"\b(?:arrivat\w*|fornitur\w*|consegn\w*|rott\w*|guast\w*|danneggiat\w*|perdit\w*|manca|mancano|ritardo|"
+                      r"rifare|difett\w*|sostitu\w*|via libera|attesa|bloccat\w*|non funziona\w*|crepa\w*|infiltrazion\w*)\b")
+
+
+def problem_lasting(text: str) -> bool:
+    """True when the problem stays open until someone acts; False when it was that day's only (it passes by itself)."""
+    n = _norm(text or "")
+    return not (_DAY_ONLY.search(n) and not _LASTING.search(n))
+
+
+def problem_info(problems: list, details: list, raw: str) -> dict:
+    """{"0": {"lasting", "action"}} for the problems kept: the model's reading of each (matched by its text), the words'
+    when the model said nothing or something the words contradict; the corrective action only if written."""
+    out = {}
+    for i, p in enumerate(problems):
+        d = next((x for x in details if grounded(str(x.get("text") or ""), p, 0.7) or grounded(p, str(x.get("text") or ""), 0.7)), {})
+        n = _norm(p)
+        if _LASTING.search(n):        # "non è arrivata la fornitura": stays open, whatever the model said
+            lasting = True
+        elif _DAY_ONLY.search(n):     # "non è venuto perché non stava bene": that day's only, whatever the model said
+            lasting = False
+        else:
+            lasting = d.get("lasting") if isinstance(d.get("lasting"), bool) else True
+        action = " ".join(str(d.get("action") or "").split()).strip(" .")[:300]
+        out[str(i)] = {"lasting": bool(lasting), "action": (action[0].upper() + action[1:]) if action and grounded(action, raw, 0.6) else ""}
+    return out
+
+
+# ---- the tools to bring ("domani porto il trapano a percussione"): reminded like the materials, apart from them
+def clean_tools(rows, raw: str, day: date) -> list:
+    """[{name, qty, unit, status: da_prendere, for_date, who, category: attrezzi}] - only the ones in the message."""
+    said = set(_words(raw))
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict) or not str(r.get("name") or "").strip():
+            continue
+        name = " ".join(str(r["name"]).split())[:120]
+        if not any(_said(w, said) for w in _words(name)):
+            continue
+        t = {"name": name, "qty": None, "unit": "", "status": "da_prendere", "for_date": str(r.get("for_date") or "")[:10] or None,
+             "who": str(r.get("who") or "").strip()[:60], "category": "attrezzi"}
+        t["for_date"] = plan_date(t, raw, day)
+        out.append(t)
+    return out
+
+
+# "tutto il team", "tutti i collaboratori": a material or a tool to take that is for a group
+_ALL_COLLABS = re.compile(r"\btutti\s+i\s+collaborator\w*|\bogni\s+collaborator\w*")
+_ALL_TEAM = re.compile(r"\btutt[oa]\s+(?:il\s+|la\s+)?(?:team|squadra|gruppo|ditta)\b|\btutti\s+quanti\b|\btutti\s+noi\b|\bognuno\b"
+                       r"|\b(?:per|a)\s+tutti\b|\btutti\s+(?:devono|dobbiamo|portano|prendono|portiamo)\b")
+
+
+def group_said(text: str) -> Optional[str]:
+    """"collaboratori" | "team" | None."""
+    n = _norm(text or "")
+    if _ALL_COLLABS.search(n):
+        return "collaboratori"
+    if _ALL_TEAM.search(n):
+        return "team"
+    return None
 
 
 def problems_resolved(text: str, open_problems: list) -> list:

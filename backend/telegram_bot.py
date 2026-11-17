@@ -496,6 +496,9 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
                          job_commessa_id=res["log"]["commessa_id"], job_log_id=res["log"]["id"],
                          pending_job_context=None, last_user_message=content)
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
+        from server import _solve_kb, _solve_question
+        for p in res["log"].get("problems_to_confirm") or []:   # it may solve an open problem: closed only if confirmed
+            await ctx.bot.send_message(chat_id=chat_id, text=_solve_question(p), reply_markup=_solve_kb(p["log_id"], p["idx"]))
         return
     if res["status"] == "commessa_draft":   # a new commessa: the summary, confirmed with a button
         await _send_commessa_draft(ctx, chat_id, res)
@@ -1207,6 +1210,39 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
         except Exception as e:
             await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+    elif data.startswith("mx:"):   # a reminder of materials / tools left behind: used, delete, move
+        from server import _material_expired_answer, _first_name
+        _k, choice, tid = (data.split(":", 2) + ["", ""])[:3]
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await ctx.bot.send_message(chat_id=chat_id, text=await _material_expired_answer(
+            tid, choice, {"kind": "user", "id": user["user_id"], "name": _first_name(user.get("name"))}))
+    elif data.startswith("px:"):   # "this note solves the problem …?" - yes closes it, no leaves it open
+        from server import _close_problem, _commessa_or_404, _first_name
+        _k, choice, log_id, idx = (data.split(":", 3) + ["", "", ""])[:4]
+        lg = await db.job_logs.find_one({"id": log_id}, {"_id": 0, "commessa_id": 1, "problems": 1, "problem_status": 1})
+        try:
+            await _commessa_or_404(_to_user_pydantic(user), (lg or {}).get("commessa_id") or "")
+        except Exception:
+            lg = None
+        if not lg or not idx.isdigit() or int(idx) >= len(lg.get("problems") or []):
+            await ctx.bot.send_message(chat_id=chat_id, text="Non trovo più questo problema.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        text = lg["problems"][int(idx)]
+        if choice == "y":
+            await _close_problem(log_id, int(idx), _first_name(user.get("name")))
+            await ctx.bot.send_message(chat_id=chat_id, text=f"✅ Chiuso: «{text}».")
+        else:
+            st = dict(lg.get("problem_status") or {})
+            st[idx] = {"status": "aperta"}
+            await db.job_logs.update_one({"id": log_id}, {"$set": {"problem_status": st}})
+            await ctx.bot.send_message(chat_id=chat_id, text=f"Ok, «{text}» resta aperto.")
     elif data.startswith("wt:"):   # a work waiting for a go-ahead: how it went (the administrator, or who wrote the note)
         from server import _wait_answer, _wait_by_user
         _k, choice, wid = (data.split(":", 2) + ["", ""])[:3]
