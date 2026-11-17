@@ -479,13 +479,17 @@ const AREA = "w-full min-w-0 rounded-xl bg-white/10 px-3 py-2.5 text-[16px] lead
 function PresenceRow({ log }) {
   const p = log.presence;
   if (!p || !(p.start_loc || p.end_loc)) return null;
+  // one alert for the whole row: the start, the end or both far from the site
+  const far = [p.start_m, p.end_m].some((m) => m > ON_SITE_M);
   return (
     <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-white/60" data-testid="job-presence">
-      <MapPin size={11} className="shrink-0" />
+      <span className="inline-flex items-center gap-1 shrink-0">
+        <MapPin size={11} />{far && <span data-testid="job-presence-alert" aria-label="Lontano dal cantiere">⚠️</span>}
+      </span>
       {[["inizio", p.start_loc, p.start_m], ["fine", p.end_loc, p.end_m]].map(([k, loc, m]) => (loc ? (
         <a key={k} href={mapsAt(loc)} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline"
           data-far={m > ON_SITE_M ? "1" : "0"} style={m > ON_SITE_M ? { color: "#FFB199" } : undefined}>
-          {m > ON_SITE_M ? "⚠️ " : ""}{k} {m === null || m === undefined ? "(cantiere senza posizione)" : distText(m)}
+          {k} {m === null || m === undefined ? "(cantiere senza posizione)" : distText(m)}
         </a>
       ) : <span key={k}>{k} senza posizione</span>))}
     </span>
