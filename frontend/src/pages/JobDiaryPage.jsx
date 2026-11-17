@@ -338,7 +338,7 @@ function DiaryLine({ log, section, onOpen, onPhoto, me }) {
           {full && !isEvent && log.materials?.length > 0 && <Package size={11} strokeWidth={2} />}
           <span className="text-[11.5px] font-medium">{log.author_name}</span>
           {log.author_company && <span className="text-[10.5px] text-white/40">· {log.author_company}</span>}
-          {log.channel === "telegram" && <span className="text-[10.5px] text-white/40">· Telegram</span>}
+          {log.channel === "telegram" && section !== "ore" && <span className="text-[10.5px] text-white/40">· Telegram</span>}
           {section === "ore" && log.phase && <span className="text-[10.5px] text-[#F2C14E]/85" data-testid="job-entry-phase">· {PHASE_LABEL[log.phase]}</span>}
         </span>
         {detail && <span className="block mt-[3px] text-[14px] font-medium leading-snug text-white">{detail}</span>}
