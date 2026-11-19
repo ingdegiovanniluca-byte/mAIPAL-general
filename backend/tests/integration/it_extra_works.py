@@ -5,7 +5,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import server, scheduled_actions as sa, list_updates as lu, usage_tracking as ut, retrieval
 
 def _get(doc, k):
-    return doc.get(k)
+    for part in k.split("."):   # ("meta.log_id")
+        doc = doc.get(part) if isinstance(doc, dict) else None
+    return doc
 
 def _match(doc, q):
     for k, v in (q or {}).items():
@@ -285,10 +287,10 @@ def to(chat):
 
 import json as _json, types
 MODEL_EXTRAS = {"extras": []}
-CALLS = []
+CALLS, SYSTEMS = [], []
 class FakeCompletions:
     async def create(self, **k):
-        CALLS.append(k["messages"][1]["content"])
+        CALLS.append(k["messages"][1]["content"]); SYSTEMS.append(k["messages"][0]["content"])
         msg = types.SimpleNamespace(content=_json.dumps(MODEL_EXTRAS))
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)], usage=None, model="x", id="r1")
 class FakeOpenAI:
@@ -335,7 +337,7 @@ async def main():
     xid = xs[0]["id"]
     txt, kb = to(77)[-1]
     assert "Possibile lavoro extra" in txt and "«Spostato lo scarico della doccia di 40 cm»" in txt and "Nella stessa nota: 4 h · 2 m tubo multistrato" in txt
-    assert "preventivo v2" in txt and buttons(kb) == [f"xw:extra:{xid}", f"xw:compreso:{xid}", f"xw:scartato:{xid}"]
+    assert "preventivo v2" in txt and buttons(kb) == [f"xw:extra:{xid}", f"xw:assorbito:{xid}", f"xw:compreso:{xid}", f"xw:scartato:{xid}"]
     assert next(x for x in db.job_logs.docs if x["id"] == r["log"]["id"])["extras_checked"]
     # the same work said again: not proposed twice
     await server._save_job_log(me, "finito di spostare lo scarico della doccia di 40 cm, 2 ore", commessa_id="s1")
@@ -351,10 +353,10 @@ async def main():
     await deny(server.patch_extra_work(xid, server.ExtraWorkPatch(action="extra"), MARCO), (403, 404))
     BOT_SENT.clear()
     await tg._on_callback(Upd(77, data=f"xw:extra:{xid}"), Ctx())
-    assert next(x for x in db.job_extra_works.docs if x["id"] == xid)["status"] == "extra" and "da far approvare" in to(77)[-1][0]
+    assert next(x for x in db.job_extra_works.docs if x["id"] == xid)["status"] == "extra" and "Extra da quotare" in to(77)[-1][0]
     out = await server.patch_extra_work(xid, server.ExtraWorkPatch(action="update", amount=350), me)
     row = next(x for x in out["extra_works"] if x["id"] == xid)
-    assert row["amount"] == 350 and row["note_cost"] == 120.0 and row["status_label"] == "da far approvare"   # 4 h x 30 (the tube has no price)
+    assert row["amount"] == 350 and row["note_cost"] == 120.0 and row["status_label"] == "extra da quotare"   # 4 h x 30 (the tube has no price)
     d = await server.get_job_commessa("s1", current=me)
     assert [x["id"] for x in d["extra_works"]] == [xid]
 
@@ -364,7 +366,7 @@ async def main():
     rep = await server._job_weekly_summary(me, at(fri, 18, 0).astimezone(ROME))
     assert "💡 Lavori extra: 1 da far approvare (€ 350)" in rep, rep
     chk = await server._close_check("s1")
-    assert chk["extras"] == ["Spostato lo scarico della doccia di 40 cm (da far approvare)"]
+    assert chk["extras"] == ["Spostato lo scarico della doccia di 40 cm (extra da quotare)"]
 
     # 5) the variant for the client: a document with the signatures, only what is written, in Preventivi
     await server.add_extra_work("s1", server.ExtraWorkNew(work="Presa in più in bagno"), me)
@@ -399,6 +401,75 @@ async def main():
     assert out["found"] == 1 and any(x["work"] == "Rifatto il massetto del corridoio" for x in out["extra_works"]) and not to(77)
     assert (await server.scan_extra_works("s1", me))["found"] == 0                                      # checked once
     await deny(server.scan_extra_works("s2", me), 400)                                                   # nothing to compare with
+
+    # 8) an extra absorbed (done without charging it): in the diary, under the description with the approved ones, in the scope
+    ab = next(x for x in db.job_extra_works.docs if x["work"] == "Rifatto il massetto del corridoio")
+    out = await server.patch_extra_work(ab["id"], server.ExtraWorkPatch(action="assorbito"), me)
+    assert "Extra assorbito" in out["message"] and next(x for x in out["extra_works"] if x["id"] == ab["id"])["status_label"] == "extra assorbito"
+    assert any(lg.get("kind") == "extra" and "Extra assorbito nella commessa, senza costi in più: Rifatto il massetto del corridoio" in lg["text"] for lg in db.job_logs.docs)
+    d = await server.get_job_commessa("s1", current=me)
+    assert {(x["work"], x["status"]) for x in d["extras_in_scope"]} == {("Spostato lo scarico della doccia di 40 cm", "approvato"),
+                                                                       ("Rifatto il massetto del corridoio", "assorbito")}, d["extras_in_scope"]
+    scope, _v = await server._extras_scope("s1", next(x for x in db.collection_sub_items.docs if x["id"] == "s1"), cl)
+    assert "Rifatto il massetto del corridoio" in scope
+
+    # 9) "non è un lavoro": learnt - said to the model next time, and never proposed again (nor something like it)
+    db.job_logs.docs.append({"id": "old2", "commessa_id": "s1", "date": "2026-10-21", "text": "pulito il cantiere e portato via i calcinacci, 2 ore",
+                             "raw_text": "pulito il cantiere e portato via i calcinacci, 2 ore", "hours": [], "materials": [], "problems": []})
+    MODEL_EXTRAS["extras"] = [{"work": "pulito il cantiere e portato via i calcinacci", "why": "Non è nel preventivo."}]
+    await server.scan_extra_works("s1", me)
+    pc = next(x for x in db.job_extra_works.docs if x["work"].startswith("Pulito il cantiere"))
+    out = await server.patch_extra_work(pc["id"], server.ExtraWorkPatch(action="scartato"), me)
+    assert "nelle prossime ricerche" in out["message"] and db.extra_not_works.docs[-1]["work"] == pc["work"]
+    db.job_logs.docs.append({"id": "old3", "commessa_id": "s1", "date": "2026-10-22", "text": "a fine giornata pulito il cantiere e portato via i calcinacci",
+                             "raw_text": "a fine giornata pulito il cantiere e portato via i calcinacci", "hours": [], "materials": [], "problems": []})
+    SYSTEMS.clear()
+    n = len(db.job_extra_works.docs)
+    assert (await server.scan_extra_works("s1", me))["found"] == 0 and len(db.job_extra_works.docs) == n
+    assert "NON sono lavori" in SYSTEMS[-1] and "«Pulito il cantiere e portato via i calcinacci»" in SYSTEMS[-1]
+
+    # 10) every Monday: the week's diary checked by itself (an action of the administrator), the extras to decide sent
+    await server._ensure_weekly_jobs_action(me)
+    act = next(a for a in db.scheduled_actions.docs if a.get("system_key") == server.EXTRAS_WEEKLY_KEY)
+    assert act["kind"] == "extras_weekly" and act["title"] == "Lavori extra della settimana" and act["schedule"]["weekdays"] == [0]
+    await server._ensure_weekly_jobs_action(me)
+    assert len([a for a in db.scheduled_actions.docs if a.get("system_key") == server.EXTRAS_WEEKLY_KEY]) == 1     # once
+    db.job_logs.docs.append({"id": "old4", "commessa_id": "s1", "date": "2026-10-23", "text": "montato un sifone in più nel lavabo di servizio",
+                             "raw_text": "montato un sifone in più nel lavabo di servizio", "hours": [], "materials": [], "problems": []})
+    MODEL_EXTRAS["extras"] = [{"work": "montato un sifone in più nel lavabo di servizio", "why": "Il lavabo di servizio non è nel preventivo."}]
+    msg = await server._extras_weekly(me)
+    assert "Lavori extra della settimana" in msg and "*Bagno* — Mario Rossi" in msg and "• Montato un sifone in più nel lavabo di servizio" in msg, msg
+    MODEL_EXTRAS["extras"] = []
+    for x in db.job_extra_works.docs:
+        if x["status"] == "da_valutare":
+            x["status"] = "compreso"
+    assert "nessun possibile lavoro extra" in await server._extras_weekly(me)
+
+    # 11) useful links on the commessa: web addresses only; the commessa's chat knows them
+    await deny(server.add_commessa_link("s1", server.CommessaLinkPayload(url="manuale caldaia"), me), 400)
+    await deny(server.add_commessa_link("s1", server.CommessaLinkPayload(url="javascript:alert(1)"), me), 400)
+    r = await server.add_commessa_link("s1", server.CommessaLinkPayload(url="drive.google.com/drive/folders/abc"), me)
+    assert r["links"][-1]["url"] == "https://drive.google.com/drive/folders/abc" and r["links"][-1]["title"] == "Drive"
+    r = await server.add_commessa_link("s1", server.CommessaLinkPayload(url="https://www.vaillant.it/manuale.pdf", title="Manuale caldaia"), me)
+    d = await server.get_job_commessa("s1", current=me)
+    assert [l["title"] for l in d["links"]] == ["Drive", "Manuale caldaia"]
+    assert "Manuale caldaia: https://www.vaillant.it/manuale.pdf" in server.links_line(d["links"])
+    r = await server.delete_commessa_link("s1", d["links"][0]["id"], me)
+    assert [l["title"] for l in r["links"]] == ["Manuale caldaia"]
+    await deny(server.add_commessa_link("s1", server.CommessaLinkPayload(url="https://x.it/a"), MARCO), (403, 404))
+
+    # 12) a further quote added to the value: marked, its works shown under the description
+    db.job_quotes.docs.append({"id": "q9", "commessa_id": "s1", "status": "confirmed", "version": 3, "value_pending": True,
+                               "data": {"total": 1200.0, "activities": ["Rifacimento antibagno"]}})
+    await server._choose_quote_value(me, "q9", "add")
+    assert next(q for q in db.job_quotes.docs if q["id"] == "q9").get("added") is True
+
+    # 13) the survey's documents: their link (Drive) once the archive copy is saved
+    db.job_logs.docs.append({"id": "sv1", "commessa_id": "s1", "section": "sopralluogo", "date": "2026-10-01", "text": "📎 rilievo.pdf",
+                             "doc_name": "rilievo.pdf", "doc_archive": {"path": "x", "link": None, "status": "queued"}, "photos": []})
+    db.archive_files.docs.append({"id": "af1", "meta": {"log_id": "sv1"}, "link": "https://drive/rilievo", "status": "saved"})
+    d = await server.get_job_commessa("s1", current=me)
+    assert next(lg for lg in d["survey_logs"] if lg["id"] == "sv1")["doc_archive"]["link"] == "https://drive/rilievo"
     print("ALL OK")
 
 asyncio.run(main())

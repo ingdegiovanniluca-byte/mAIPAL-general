@@ -14,6 +14,7 @@ const KIND_META = {
   list_delete: { label: "Elimina lista", icon: Trash2 },
   news_delete: { label: "Pulizia news", icon: Newspaper },
   job_weekly: { label: "Report settimanale cantieri", icon: BarChart3 },
+  extras_weekly: { label: "Lavori extra della settimana", icon: BarChart3 },
 };
 
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
@@ -83,7 +84,7 @@ function ActionCard({ action, busy, onToggle, onRun, onDelete }) {
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/10 text-white/85"><KindIcon size={11} />{meta.label}</span>
-        {(action.kind === "report" || action.kind === "message" || action.kind === "job_weekly" || action.notify) && (
+        {(action.kind === "report" || action.kind === "message" || action.kind === "job_weekly" || action.kind === "extras_weekly" || action.notify) && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/10 text-white/85">
             {action.delivery === "telegram" || action.notify ? <><Send size={11} />Telegram</> : <><Smartphone size={11} />In app</>}
           </span>

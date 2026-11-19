@@ -1388,11 +1388,12 @@ def covered_by(work: str, scope: list) -> Optional[str]:
 
 
 async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[str] = None, channel: str = "web",
-                      to_do: bool = False) -> list:
+                      to_do: bool = False, not_works: Optional[list] = None) -> list:
     """The works DONE in a diary note that neither the quote's items and activities nor the
     commessa's description cover. Conservative (in doubt: not extra); each work in the note's
     own words (grounded), never one already in the scope. -> [{"work", "why"}]
-    `to_do`: the works still TO DO that the note says (one waiting for the owner's go-ahead)."""
+    `to_do`: the works still TO DO that the note says (one waiting for the owner's go-ahead).
+    `not_works`: what the administrator said is not a work (learnt): never proposed again, nor things like it."""
     if not extra_candidate(note) or not scope:
         return []
     which = ("- solo lavori ancora DA FARE (in attesa di un via libera o di una decisione), non quelli già fatti, non problemi, "
@@ -1408,6 +1409,10 @@ async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[
         "- nel dubbio NON è extra;\n- \"work\": il lavoro con le parole della nota, breve; \"why\": in una frase perché non rientra.\n"
         "Rispondi SOLO con JSON: {\"extras\": [{\"work\": \"...\", \"why\": \"...\"}]}"
     )
+    not_works = [w for w in (not_works or []) if w][:60]
+    if not_works:
+        system += ("\nL'amministratore ti ha già detto che queste cose NON sono lavori (non segnalarle, né cose dello stesso tipo): "
+                   + "; ".join(f"«{w}»" for w in not_works) + ".")
     user = "PREVENTIVO E DESCRIZIONE:\n" + "\n".join(f"- {x}" for x in scope[:120]) + f"\n\nNOTA DEL DIARIO:\n{note[:4000]}"
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -1425,6 +1430,8 @@ async def find_extras(note: str, scope: list, commessa: dict, user_id: Optional[
             continue
         work = " ".join(str(e.get("work") or "").split()).strip(" .-•")[:200]
         if not work or not grounded(work, note, 0.6) or covered_by(work, scope) or any(grounded(work, o["work"], 0.8) for o in out):
+            continue
+        if any(grounded(work, w, 0.75) or grounded(w, work, 0.75) for w in not_works):   # said "not a work" before
             continue
         out.append({"work": work[0].upper() + work[1:], "why": " ".join(str(e.get("why") or "").split())[:200]})
     return out[:5]
@@ -1883,6 +1890,7 @@ async def answer(commessa: dict, logs: list, reports: list, question: str, histo
         f"Economia: {commessa.get('economics_line')}" if commessa.get("economics_line") else "",
         f"Tappe (nel loro ordine): {commessa.get('milestones_line')}" if commessa.get("milestones_line") else "",
         f"Contatti utili: {commessa.get('contacts_line')}" if commessa.get("contacts_line") else "",
+        f"Link utili (manuali, cartelle, pagine web): {commessa.get('links_line')}" if commessa.get("links_line") else "",
         f"Attività da fare (To Do): {commessa.get('todos_line')}" if commessa.get("todos_line") else "",
     ] if x)
     pend = ", ".join(f"{k} {_fmt_num(v)} h" for k, v in tot["pending_by_person"].items())

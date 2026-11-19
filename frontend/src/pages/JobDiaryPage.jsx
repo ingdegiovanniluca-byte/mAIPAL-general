@@ -932,26 +932,104 @@ function descSource(info) {
   return [capFirst(what), info.by, when].filter(Boolean).join(" · ");
 }
 
-function DescriptionView({ commessa, canEdit, budget, onChanged }) {
+// ===== Documenti e link: the commessa's folder (Drive / OneDrive) and the useful links (a manual, a Drive folder, a web page)
+function DocsLinksSheet({ commessa, links, docs, canWrite, folderBusy, onFolder, onClose, onChanged }) {
+  const [list, setList] = useState(links);
+  const [adding, setAdding] = useState(false);
+  const [url, setUrl] = useState("");
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    if (!url.trim()) return;
+    setBusy(true);
+    try {
+      const r = await api.post(`/jobs/commesse/${commessa.id}/links`, { url, title });
+      setList(r.data.links); setUrl(""); setTitle(""); setAdding(false); onChanged();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(false); }
+  };
+  const del = async (l) => {
+    try { const r = await api.delete(`/jobs/commesse/${commessa.id}/links/${l.id}`); setList(r.data.links); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+  const field = "h-10 w-full rounded-xl bg-white/10 px-3 text-[16px] text-white placeholder:text-white/40 outline-none";
+  return (
+    <GlassBottomSheet onClose={onClose} testid="docs-links-sheet" className="max-h-[85vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-lg font-semibold text-white mb-3">Documenti e link · {commessa.title}</div>
+      <button type="button" onClick={onFolder} disabled={folderBusy} data-testid="docs-folder"
+        className="w-full flex items-center gap-3 py-2.5 border-t border-white/[0.13] text-left active:opacity-80 disabled:opacity-60">
+        <FileText size={16} className="text-white/75 shrink-0" />
+        <span className="flex-1 min-w-0">
+          <span className="block text-[14px] text-white">{folderBusy ? "Apro la cartella…" : "Cartella della commessa"}</span>
+          <span className="block text-[11.5px] text-white/55">{docs.photos || 0} foto e {docs.reports || 0} report · su Drive / OneDrive</span>
+        </span>
+        <ChevronRight size={15} className="text-white/50" />
+      </button>
+      <div className="mt-3 text-[10px] uppercase tracking-widest text-white/55">link utili</div>
+      {list.map((l) => (
+        <div key={l.id} className="flex items-center gap-2 py-2.5 border-t border-white/[0.13]" data-testid="docs-link">
+          <a href={l.url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0 active:opacity-80">
+            <span className="block text-[14px] text-white truncate">{l.title}</span>
+            <span className="block text-[11.5px] text-white/55 truncate">{host(l.url)}{l.by ? ` · ${l.by}` : ""}</span>
+          </a>
+          {canWrite && <button type="button" onClick={() => del(l)} aria-label="Togli il link" className="p-1.5 text-white/50 active:opacity-70"><Trash2 size={14} /></button>}
+        </div>
+      ))}
+      {!list.length && !adding && (
+        <div className="py-2 text-[12.5px] text-white/60 border-t border-white/[0.13]">Manuali, la cartella Drive dei disegni, la pagina di un prodotto: salvali qui e li trovi con la commessa (anche la chat della commessa li conosce).</div>
+      )}
+      {canWrite && (adding ? (
+        <div className="mt-2 space-y-2" data-testid="docs-link-form">
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Indirizzo, es. https://drive.google.com/…" autoFocus inputMode="url" className={field} data-testid="docs-link-url" />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Nome (facoltativo), es. Manuale caldaia" className={field} data-testid="docs-link-title" />
+          <div className="flex gap-2 justify-end">
+            <button type="button" onClick={() => setAdding(false)} className="h-9 px-4 rounded-full lg-glass text-[13px] text-white">Annulla</button>
+            <button type="button" onClick={add} disabled={busy || !url.trim()} data-testid="docs-link-save"
+              className="h-9 px-4 rounded-full bg-white text-[#403A3C] text-[13px] font-semibold disabled:opacity-50">Salva</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setAdding(true)} data-testid="docs-link-add" className="mt-2 text-[13px] text-white/85 inline-flex items-center gap-1 active:opacity-70">
+          <Plus size={14} /> Aggiungi un link
+        </button>
+      ))}
+    </GlassBottomSheet>
+  );
+}
+
+// The work to do, first thing in Preventivo: the description (tap it to change it), the works of the quotes added to the
+// commessa's value (a further quote), and the extras now part of the work - approved by the client or absorbed.
+function DescriptionView({ commessa, canEdit, budget, quotes = [], extras = [], onChanged }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const text = commessa.descrizione || "";
+  const added = (quotes || []).filter((q) => q.added && (q.data?.activities || []).length);
+  const approved = (extras || []).filter((x) => x.status === "approvato");
+  const absorbed = (extras || []).filter((x) => x.status === "assorbito");
   const saveText = async () => {
     setBusy(true);
     try { await api.put(`/jobs/commesse/${commessa.id}/description`, { text: draft }); setEditing(false); toast.success("Descrizione salvata"); onChanged(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
     finally { setBusy(false); }
   };
+  const edit = () => { if (canEdit) { setDraft(text); setEditing(true); } };
+  const kick = "text-[10px] uppercase tracking-widest text-white/55 mb-1";
+  const extraList = (rows, label, testid) => rows.length > 0 && (
+    <div className="mt-3" data-testid={testid}>
+      <div className={kick}>{label}</div>
+      {rows.map((x, i) => (
+        <div key={i} className="flex gap-2 text-[14px] text-white/90 leading-snug py-0.5">
+          <span className="flex-1 min-w-0 break-words">• {x.work}</span>
+          {x.amount ? <span className="shrink-0 text-[12.5px] text-white/70 tabular-nums">{eur(x.amount)}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
   return (
     <div data-testid="job-description">
-      <div className="mt-1.5 flex items-center justify-center gap-3">
-        <span className="text-[10px] uppercase tracking-widest text-white/55">descrizione del lavoro</span>
-        {canEdit && !editing && (
-          <button type="button" onClick={() => { setDraft(text); setEditing(true); }} data-testid="desc-edit"
-            className="text-[12px] text-white/80 underline-offset-2 active:opacity-70">{text ? "Modifica" : "Scrivi"}</button>
-        )}
-      </div>
+      <div className="mt-1.5 text-center text-[10px] uppercase tracking-widest text-white/55">il lavoro da fare</div>
       {editing ? (
         <div className="mt-3">
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} autoFocus data-testid="desc-textarea"
@@ -965,19 +1043,34 @@ function DescriptionView({ commessa, canEdit, budget, onChanged }) {
             </button>
           </div>
         </div>
-      ) : text ? (
-        <div className="mt-2 pt-3 border-t border-white/[0.16]">
-          <div className="text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap break-words" data-testid="desc-text">{text}</div>
-          <div className="mt-3 text-[11px] text-white/55 flex flex-wrap gap-x-3 gap-y-1">
-            {commessa.descrizione_info && <span data-testid="desc-source">{descSource(commessa.descrizione_info)}</span>}
-            {budget ? <span data-testid="desc-budget">Valore della commessa {eur(budget)}</span> : null}
-          </div>
-        </div>
       ) : (
-        <div className="mt-2 py-5 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="desc-empty">
-          {canEdit ? <>Nessuna descrizione del lavoro. Quando carichi il preventivo la compilo con le sue attività (la controlli prima di
-            confermare). Puoi anche scriverla qui o dettarla nella chat della commessa, es. «descrizione attività: rifacimento del bagno con…».</>
-            : "Nessuna descrizione del lavoro, per ora."}
+        <div className="mt-2 pt-3 border-t border-white/[0.16]">
+          {text ? (
+            <button type="button" onClick={edit} disabled={!canEdit} data-testid="desc-text"
+              className="w-full text-left text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap break-words active:opacity-80 disabled:active:opacity-100">
+              {text}
+            </button>
+          ) : (
+            <button type="button" onClick={edit} disabled={!canEdit} data-testid="desc-empty"
+              className="w-full text-left py-2 text-[13px] text-white/70 active:opacity-80">
+              {canEdit ? <>Nessuna descrizione del lavoro. Quando carichi il preventivo la compilo con i suoi lavori; puoi anche dettarla in chat
+                («descrizione attività: rifacimento del bagno con…») o <u>toccare qui per scriverla</u>.</> : "Nessuna descrizione del lavoro, per ora."}
+            </button>
+          )}
+          {added.map((q) => (
+            <div key={q.id} className="mt-3" data-testid="desc-added-quote">
+              <div className={kick}>lavori del preventivo v{q.version} (aggiunto)</div>
+              {q.data.activities.map((a, i) => <div key={i} className="text-[14px] text-white/90 leading-snug py-0.5">• {a}</div>)}
+            </div>
+          ))}
+          {extraList(approved, "extra approvati dal cliente", "desc-extra-approved")}
+          {extraList(absorbed, "extra assorbiti nella commessa (senza costi in più)", "desc-extra-absorbed")}
+          {(commessa.descrizione_info || budget) && (
+            <div className="mt-3 text-[11px] text-white/55 flex flex-wrap gap-x-3 gap-y-1">
+              {commessa.descrizione_info && <span data-testid="desc-source">{descSource(commessa.descrizione_info)}</span>}
+              {budget ? <span data-testid="desc-budget">Valore della commessa {eur(budget)}</span> : null}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1013,10 +1106,18 @@ function UploadAction({ commessaId, hint, label, onResult }) {
   );
 }
 
-function SurveyView({ commessa, survey, logs, canWrite, onChanged }) {
+// The survey as the agent organized it: who sent the notes, date and participants, the photos (small, on top, tap to open),
+// the documents, then the organized text. Tapping the text opens the notes as they were sent (each one opens like in the Diario).
+function SurveyView({ commessa, survey, logs, canWrite, onChanged, onOpenNote, onPhoto }) {
   const [quote, setQuote] = useState(null);
+  const [originals, setOriginals] = useState(false);
   const entries = (logs || []).filter((lg) => lg.section === "sopralluogo");
   const onResult = (r) => { if (r.type === "quote") setQuote(r); else { toast.success(r.message.split("\n")[0]); onChanged(); } };
+  const authors = [...new Set(entries.map((lg) => lg.author_name).filter(Boolean))];
+  const photos = entries.flatMap((lg) => (lg.photos || []).map((p) => ({ lg, p })));
+  const docs = entries.filter((lg) => lg.doc_name);
+  const parts = survey ? SURVEY_PARTS.filter(([k]) => k !== "date_participants" && survey[k]) : [];
+  const kick = "text-[10px] uppercase tracking-widest text-white/55 mb-0.5";
   return (
     <div data-testid="job-survey">
       {canWrite && (
@@ -1024,15 +1125,41 @@ function SurveyView({ commessa, survey, logs, canWrite, onChanged }) {
           <UploadAction commessaId={commessa.id} hint="sopralluogo" label="Carica appunti, foto o documenti" onResult={onResult} />
         </div>
       )}
-      {survey ? (
+      {entries.length ? (
         <div className="mt-3 pt-3 border-t border-white/[0.16]" data-testid="survey-summary">
-          {SURVEY_PARTS.filter(([k]) => survey[k]).map(([k, label]) => (
-            <div key={k} className="mb-3">
-              <div className="text-[10px] uppercase tracking-widest text-white/55 mb-0.5">{label}</div>
-              <div className="text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap">{survey[k]}</div>
+          <div className="text-[13px] font-semibold text-white" data-testid="survey-authors">Note di {authors.join(", ") || "—"}</div>
+          {survey?.date_participants && <div className="text-[12px] text-white/65 leading-snug" data-testid="survey-when">{survey.date_participants}</div>}
+          {photos.length > 0 && (
+            <div className="mt-3 -mx-1 px-1 flex gap-2 overflow-x-auto" data-testid="survey-photos">
+              {photos.map(({ lg, p }) => (
+                <button key={p.id} type="button" onClick={() => onPhoto(lg, p)} aria-label="Apri la foto"
+                  className="h-[72px] w-[72px] shrink-0 rounded-[12px] overflow-hidden bg-white/15 active:opacity-80">
+                  <img src={photoUrl(p.id)} alt="" loading="lazy" className="h-full w-full object-cover" />
+                </button>
+              ))}
             </div>
-          ))}
-          <div className="text-[11.5px] text-white/50">Riorganizzato da mAIPAL da {survey.entries} {survey.entries === 1 ? "nota" : "note"} · non aggiunge niente che non sia scritto</div>
+          )}
+          {docs.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5" data-testid="survey-docs">
+              {docs.map((lg) => (lg.doc_archive?.link
+                ? <a key={lg.id} href={lg.doc_archive.link} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1 max-w-full px-2.5 py-1 rounded-full bg-white/15 text-[12px] text-white/90 active:opacity-70">
+                    <FileText size={12} className="shrink-0" /><span className="truncate">{lg.doc_name}</span></a>
+                : <button key={lg.id} type="button" onClick={() => onOpenNote(lg)}
+                    className="inline-flex items-center gap-1 max-w-full px-2.5 py-1 rounded-full bg-white/15 text-[12px] text-white/90 active:opacity-70">
+                    <FileText size={12} className="shrink-0" /><span className="truncate">{lg.doc_name}</span></button>))}
+            </div>
+          )}
+          <button type="button" onClick={() => setOriginals(true)} data-testid="survey-text" className="mt-3 w-full text-left active:opacity-80">
+            {parts.length ? parts.map(([k, label]) => (
+              <div key={k} className="mb-3">
+                <div className={kick}>{label}</div>
+                <div className="text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap break-words">{survey[k]}</div>
+              </div>
+            )) : entries.slice().reverse().map((lg) => (
+              <div key={lg.id} className="mb-2 text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap break-words">{lg.text}</div>
+            ))}
+          </button>
         </div>
       ) : (
         <div className="mt-3 py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="survey-empty">
@@ -1040,21 +1167,19 @@ function SurveyView({ commessa, survey, logs, canWrite, onChanged }) {
           finché la commessa è nuova o in sopralluogo, o se scrivi «sopralluogo», finiscono qui e le riordino io.
         </div>
       )}
-      {entries.length > 0 && (
-        <div className="mt-2">
-          <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">note, foto e documenti</div>
+      {originals && (
+        <GlassBottomSheet onClose={() => setOriginals(false)} testid="survey-originals" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[560px] md:-translate-x-1/2 md:bottom-8">
+          <div className="text-lg font-semibold text-white mb-1">Note del sopralluogo</div>
+          <div className="text-[12px] text-white/55 mb-2">Come sono state mandate. Tocca una nota per aprirla.</div>
           {entries.map((lg) => (
-            <div key={lg.id} className="py-2.5 border-t border-white/[0.13]" data-testid="survey-entry">
-              <div className="text-[11.5px] text-white/50">{shortDay(lg.date)} · {lg.author_name}{(lg.photos || []).length ? ` · ${lg.photos.length} foto` : ""}</div>
-              <div className="text-[13.5px] text-white/90 whitespace-pre-wrap leading-snug">{lg.text}</div>
-              {(lg.ocr || []).map((o) => (
-                <details key={o.photo_id} className="mt-1"><summary className="text-[12px] text-white/60 cursor-pointer">Appunti trascritti</summary>
-                  <div className="text-[12.5px] text-white/80 whitespace-pre-wrap mt-1">{o.text}</div></details>
-              ))}
-              {lg.doc_archive?.link && <a href={lg.doc_archive.link} target="_blank" rel="noreferrer" className="text-[12px] text-white/70 underline">Apri il documento</a>}
-            </div>
+            <button key={lg.id} type="button" onClick={() => { setOriginals(false); onOpenNote(lg); }} data-testid="survey-entry"
+              className="w-full text-left py-2.5 border-t border-white/[0.13] active:opacity-80">
+              <div className="text-[11.5px] text-white/55">{[lg.author_name, shortDay(lg.date), (lg.photos || []).length ? `${lg.photos.length} foto` : ""].filter(Boolean).join(" · ")}</div>
+              <div className="text-[13.5px] text-white/90 whitespace-pre-wrap leading-snug break-words">{lg.raw_text || lg.text}</div>
+              {(lg.ocr || []).length > 0 && <div className="text-[11.5px] text-white/50 mt-0.5">con gli appunti trascritti dalle foto</div>}
+            </button>
           ))}
-        </div>
+        </GlassBottomSheet>
       )}
       {quote && <QuoteSheet commessa={commessa} proposal={quote} onClose={() => setQuote(null)} onSaved={() => { setQuote(null); onChanged(); }} />}
     </div>
@@ -1561,35 +1686,31 @@ function PlanList({ commessa, milestones, activities, todos, meId, isAdmin, canW
 }
 
 // ===== The quote from history: the similar commesse already closed, what they really cost, the value that keeps the margin
+// What similar works of yours cost: one line (the advised value, or why there is none); tap it for the details
 function HistoryEstimate({ commessa }) {
   const [est, setEst] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const load = (refresh = false) => {
-    setBusy(true);
-    api.get(`/jobs/commesse/${commessa.id}/estimate`, { params: refresh ? { refresh: true } : {} }).then((r) => setEst(r.data))
-      .catch((e) => setEst({ status: "error", message: e.response?.data?.detail || "Stima non disponibile" })).finally(() => setBusy(false));
-  };
-  useEffect(() => { load(); }, [commessa.id]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setEst(null);
+    api.get(`/jobs/commesse/${commessa.id}/estimate`).then((r) => setEst(r.data))
+      .catch((e) => setEst({ status: "error", message: e.response?.data?.detail || "Stima non disponibile" }));
+  }, [commessa.id]);
   const rng = (x, fmt) => (x?.median == null ? "—" : `${fmt(x.median)}${x.min !== x.max ? ` (${fmt(x.min)}–${fmt(x.max)})` : ""}`);
+  if (!est || est.status !== "ok") return null;   // nothing similar yet: nothing to show
+  const head = est.suggested_value ? `Valore consigliato ≈ ${eur(est.suggested_value)}` : `Costo atteso ${rng(est.cost, eur)}`;
   return (
     <div className="mt-4 pt-3 border-t border-white/[0.16]" data-testid="history-estimate">
-      <div className="flex items-center gap-2">
-        <div className="flex-1 text-[10px] uppercase tracking-widest text-white/55">stima dai tuoi lavori simili</div>
-        <button type="button" onClick={() => load(true)} disabled={busy} aria-label="Aggiorna la stima" data-testid="estimate-refresh" className="p-1 text-white/70 disabled:opacity-50">
-          {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-        </button>
-      </div>
-      {!est ? <div className="text-[12.5px] text-white/60 py-2">Cerco le commesse simili…</div> : est.status !== "ok" ? (
-        <div className="text-[12.5px] text-white/65 py-2" data-testid="estimate-empty">{est.message}
-          {(est.lost_for_price || []).length > 0 && ` Preventivi simili persi per il prezzo: ${est.lost_for_price.map((x) => x.value ? eur(x.value) : x.title).join(", ")}.`}</div>
-      ) : (
-        <div className="mt-1.5 text-[13.5px] text-white/90 space-y-1">
-          {est.suggested_value && (
-            <div className="text-[15px] font-semibold text-white" data-testid="estimate-value">
-              Valore consigliato ≈ {eur(est.suggested_value)}
-              <span className="block text-[12px] font-normal text-white/60">per tenere il margine dei simili ({Math.round(est.margin_pct_median)}%) sul costo atteso</span>
-            </div>
-          )}
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="w-full text-left flex items-start gap-2 active:opacity-80">
+        <span className="flex-1 min-w-0">
+          <span className="block text-[10px] uppercase tracking-widest text-white/55">quanto costano i tuoi lavori simili</span>
+          <span className="block text-[14px] font-semibold text-white mt-0.5" data-testid="estimate-value">{head}</span>
+          <span className="block text-[12px] text-white/60">da {est.n} {est.n === 1 ? "commessa simile" : "commesse simili"} · tocca per i dettagli</span>
+        </span>
+        <ChevronDown size={15} className={`mt-1 text-white/60 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-2 text-[13px] text-white/90 space-y-1">
+          {est.suggested_value && <div className="text-[12px] text-white/65">Per tenere il margine dei simili ({Math.round(est.margin_pct_median)}%) sul costo atteso.</div>}
           <div>💶 Costo atteso {rng(est.cost, eur)}</div>
           <div>⏱ Ore {rng(est.hours, (x) => `${fmtNum(x)} h`)}{est.days?.median ? ` · durata ${rng(est.days, (x) => `${fmtNum(x)} gg`)}` : ""}</div>
           {est.margin_pct_median != null && <div>📈 Margine medio {Math.round(est.margin_pct_median)}%</div>}
@@ -1597,13 +1718,11 @@ function HistoryEstimate({ commessa }) {
           {(est.lost_for_price || []).length > 0 && (
             <div className="text-[12.5px] text-[#F2C14E]">Persi per il prezzo: {est.lost_for_price.map((x) => `${x.title}${x.value ? ` (${eur(x.value)})` : ""}`).join(", ")}</div>
           )}
-          <details className="pt-0.5"><summary className="text-[12px] text-white/60 cursor-pointer">Su {est.n} {est.n === 1 ? "commessa" : "commesse"} simili</summary>
-            {est.similar.map((x) => (
-              <div key={x.id} className="text-[12.5px] text-white/75 py-0.5">{x.title} — {x.client_name}: {eur(x.cost)}{x.hours ? ` · ${fmtNum(x.hours)} h` : ""}
-                {x.margin_pct != null ? ` · margine ${Math.round(x.margin_pct)}%` : ""}{x.complete ? "" : " · costi incompleti"}</div>
-            ))}
-            <div className="text-[11.5px] text-white/50 pt-1">Numeri dal tuo diario e dai Costi: ore × tariffa, materiali × prezzo, altre spese. {est.method === "parole" ? "Simili per parole in comune." : "Simili scelte da mAIPAL tra le tue commesse."}</div>
-          </details>
+          {est.similar.map((x) => (
+            <div key={x.id} className="text-[12.5px] text-white/70 py-0.5">{x.title} — {x.client_name}: {eur(x.cost)}{x.hours ? ` · ${fmtNum(x.hours)} h` : ""}
+              {x.margin_pct != null ? ` · margine ${Math.round(x.margin_pct)}%` : ""}{x.complete ? "" : " · costi incompleti"}</div>
+          ))}
+          <div className="text-[11.5px] text-white/50 pt-1">Numeri dal tuo diario e dai Costi: ore × tariffa, materiali × prezzo, altre spese.</div>
         </div>
       )}
     </div>
@@ -1704,7 +1823,7 @@ function MaterialsPlan({ plan: initial, commessaId, canWrite }) {
 }
 
 // ===== Lavori extra: done on the site, not in the quote - found in the diary, approved by the client, billed
-const EXTRA_DONE = ["approvato", "rifiutato", "compreso", "scartato"];
+const EXTRA_DONE = ["approvato", "rifiutato", "assorbito", "compreso", "scartato"];
 function ExtraWorksView({ commessa, rows, onChanged }) {
   const [list, setList] = useState(rows || []);
   const [busy, setBusy] = useState("");
@@ -1750,8 +1869,9 @@ function ExtraWorksView({ commessa, rows, onChanged }) {
       )}
       {x.status === "da_valutare" && (
         <div className="mt-2 flex gap-1.5 flex-wrap">
-          <button type="button" disabled={!!busy} onClick={() => act(x, "extra")} className={btn} data-testid="extra-yes">💶 È un extra</button>
-          <button type="button" disabled={!!busy} onClick={() => act(x, "compreso")} className={btn} data-testid="extra-in-quote">✅ Nel preventivo</button>
+          <button type="button" disabled={!!busy} onClick={() => act(x, "extra")} className={btn} data-testid="extra-yes">💶 Extra da quotare</button>
+          <button type="button" disabled={!!busy} onClick={() => act(x, "assorbito")} className={btn} data-testid="extra-absorbed">🤝 Extra assorbito</button>
+          <button type="button" disabled={!!busy} onClick={() => act(x, "compreso")} className={btn} data-testid="extra-in-quote">✅ Previsto nel contratto</button>
           <button type="button" disabled={!!busy} onClick={() => act(x, "scartato")} className={btn} data-testid="extra-no">🗑 Non è un lavoro</button>
         </div>
       )}
@@ -1770,10 +1890,16 @@ function ExtraWorksView({ commessa, rows, onChanged }) {
     <div className="mt-4 pt-3 border-t border-white/[0.16]" data-testid="extra-works">
       <div className="flex items-center gap-2">
         <div className="flex-1 text-[10px] uppercase tracking-widest text-white/55">lavori extra</div>
-        <button type="button" onClick={scan} disabled={!!busy} data-testid="extra-scan" className="text-[12px] text-white/80 inline-flex items-center gap-1 active:opacity-70">
-          {busy === "scan" ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />} Controlla il diario
+        <button type="button" onClick={() => setAdding((v) => !v)} data-testid="extra-add" className="text-[12px] text-white/80 inline-flex items-center gap-1 active:opacity-70">
+          <Plus size={13} /> Aggiungi
         </button>
-        <button type="button" onClick={() => setAdding((v) => !v)} aria-label="Aggiungi un lavoro extra" data-testid="extra-add" className="p-1 text-white/70"><Plus size={14} /></button>
+      </div>
+      <div className="mt-1 text-[12px] text-white/60 leading-snug" data-testid="extra-how">
+        Ogni nota del diario la confronto con il preventivo e la descrizione, e ogni lunedì ricontrollo la settimana: i lavori che lì
+        non ci sono li trovi qui da decidere.{" "}
+        <button type="button" onClick={scan} disabled={!!busy} data-testid="extra-scan" className="underline underline-offset-2 text-white/80 disabled:opacity-50">
+          {busy === "scan" ? "Controllo…" : "Controlla adesso"}
+        </button>
       </div>
       {adding && (
         <div className="mt-2 flex gap-2">
@@ -1782,12 +1908,7 @@ function ExtraWorksView({ commessa, rows, onChanged }) {
           <button type="button" onClick={add} className="h-9 px-3 rounded-full bg-white text-[#403A3C] text-[13px] font-medium">Aggiungi</button>
         </div>
       )}
-      {!list.length && (
-        <div className="py-3 text-[12.5px] text-white/65" data-testid="extra-empty">
-          Confronto ogni nota del diario con il preventivo e la descrizione: se trovo un lavoro fatto che lì non c'è te lo segnalo qui e su Telegram,
-          così puoi farlo approvare al cliente e fatturarlo.
-        </div>
-      )}
+      {!list.length && <div className="py-2 text-[12.5px] text-white/55" data-testid="extra-empty">Nessun lavoro extra, per ora.</div>}
       {open.map(row)}
       {toApprove.length > 0 && (
         <button type="button" onClick={variant} disabled={!!busy} data-testid="extra-variant"
@@ -2670,6 +2791,7 @@ export default function JobDiaryPage() {
   const [todoEditing, setTodoEditing] = useState(null);   // {} = new activity
   const [msEditing, setMsEditing] = useState(null);       // {} = new milestone
   const [contactsOpen, setContactsOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [closeCheck, setCloseCheck] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -2980,8 +3102,9 @@ export default function JobDiaryPage() {
           note={msSum.late ? `${msSum.late} in ritardo` : msSum.next ? `prossima: ${msSum.next.title.slice(0, 18)}` : ""} />
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
-        <InfoCard icon={FileText} label="Documenti" value={folderBusy ? "apro…" : String(docs.total)} testid="glance-documenti" onClick={openFolder}
-          ariaLabel={`Apri la cartella della commessa su Drive (${docs.photos || 0} foto e ${docs.reports || 0} report)`} note="apri la cartella" />
+        <InfoCard icon={FileText} label="Documenti e link" value={folderBusy ? "apro…" : String(docs.total + (detail.links || []).length)} testid="glance-documenti"
+          onClick={() => setDocsOpen(true)} ariaLabel={`La cartella della commessa (${docs.photos || 0} foto e ${docs.reports || 0} report) e i link utili`}
+          note={(detail.links || []).length ? `${detail.links.length} link ${detail.links.length === 1 ? "utile" : "utili"}` : "cartella e link utili"} />
         <InfoCard icon={Contact} label="Contatti" value={String((detail.contacts || []).length)} testid="glance-contatti"
           ariaLabel="Contatti utili della commessa" onClick={() => setContactsOpen(true)}
           note={(detail.contacts || []).slice(0, 2).map((x) => x.role || x.name).join(", ")} />
@@ -3029,11 +3152,12 @@ export default function JobDiaryPage() {
 
       {/* Costi, Pianificazione, Sopralluogo and Preventivo (with the description of the work): their own content instead of the period and the days */}
       {section === "sopralluogo" ? (
-        <SurveyView commessa={c} survey={detail.survey} logs={detail.survey_logs || []} canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
+        <SurveyView commessa={c} survey={detail.survey} logs={detail.survey_logs || []} canWrite={!ro} onChanged={() => loadDetail(selectedId)}
+          onOpenNote={(lg) => setEditing(lg)} onPhoto={(log, photo) => setViewer({ log, photo })} />
       ) : section === "preventivo" ? (
         <>
           <DescriptionView commessa={c} canEdit={!ro && (access.is_owner || me?.role === "admin")} budget={detail.economics?.budget}
-            onChanged={() => loadDetail(selectedId)} />
+            quotes={detail.quotes || []} extras={detail.extras_in_scope || []} onChanged={() => loadDetail(selectedId)} />
           <div className="mt-7 text-[10px] uppercase tracking-widest text-white/55 text-center">preventivo</div>
           <QuoteView commessa={c} quotes={detail.quotes || []} outcome={detail.quote_outcome} isAdmin={!!detail.is_admin} canWrite={!ro}
             onChanged={() => loadDetail(selectedId)} onLost={() => setLostOpen(true)} />
@@ -3220,6 +3344,10 @@ export default function JobDiaryPage() {
       {closeCheck && <CloseCheckSheet check={closeCheck} onClose={() => setCloseCheck(null)} onConfirm={() => setStato("completata", true)} />}
       {lostOpen && c && <LostSheet commessa={c} onClose={() => setLostOpen(false)} onSaved={() => { setLostOpen(false); reload(); }} />}
       {historyOpen && c && <HistorySheet rows={detail?.history || []} onClose={() => setHistoryOpen(false)} />}
+      {docsOpen && c && (
+        <DocsLinksSheet commessa={c} links={detail?.links || []} docs={docs} canWrite={!ro} folderBusy={folderBusy} onFolder={openFolder}
+          onClose={() => setDocsOpen(false)} onChanged={() => loadDetail(selectedId)} />
+      )}
       {contactsOpen && c && (
         <GlassBottomSheet onClose={() => setContactsOpen(false)} testid="contacts-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
           <div className="text-lg font-semibold text-white mb-3">Contatti · {c.title}</div>

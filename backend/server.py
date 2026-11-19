@@ -8463,11 +8463,15 @@ async def _job_commessa_detail(commessa_id: str, date_from: Optional[str], date_
             "can_see_costs": sees_costs, "is_admin": _is_org_admin(current), "me_id": current.user_id,
             "activities": await P("pianificazione", _commessa_activities(commessa_id), []),
             "extra_works": await P("lavori extra", _commessa_extra_works(commessa_id, clienti, sees_costs), []) if _is_org_admin(current) else [],
-            "survey_logs": sorted(await P("sopralluogo", db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300), []),
+            # the extras now part of the work (approved by the client, or absorbed): under the description, for everyone who sees it
+            "extras_in_scope": [{"work": x["work"], "status": x["status"], **({"amount": x.get("amount")} if sees_costs else {})}
+                                for x in await P("extra nel lavoro", db.job_extra_works.find({"commessa_id": commessa_id, "status": {"$in": ["approvato", "assorbito"]}},
+                                                                                              {"_id": 0, "work": 1, "status": 1, "amount": 1}).to_list(200), [])],
+            "survey_logs": sorted(await P("sopralluogo", _survey_logs(commessa_id), []),
                                   key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True),
             "materials_plan": await P("materiali previsti", _materials_plan(commessa_id, light), None),
             "hours_plan": await P("ore previste", _hours_plan(commessa_id, light), None),
-            "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await P("preventivi", _commessa_quotes(commessa_id), [])],
+            "links": sub.get("links") or [], "survey": sub.get("survey"), "quotes": [q if sees_costs else _quote_without_money(q) for q in await P("preventivi", _commessa_quotes(commessa_id), [])],
             "quote_outcome": sub.get("quote_outcome"),
             "history": await P("modifiche", _commessa_history(commessa_id), []) if _is_org_admin(current) else [],
             "period_totals": jl.totals(logs), "docs": {"photos": photos, "reports": reports, "total": photos + reports},
@@ -9750,6 +9754,19 @@ def _is_survey(view: dict, text: str) -> bool:
     return vx.norm_stato(view.get("stato")) in SURVEY_STATES or jl.survey_said(text)
 
 
+async def _survey_logs(commessa_id: str) -> list:
+    """The survey's notes, photos and documents; a document's link (Drive / OneDrive) once its archive copy is saved."""
+    logs = await db.job_logs.find({"commessa_id": commessa_id, "section": "sopralluogo"}, {"_id": 0, "embedding": 0, "doc_text": 0}).to_list(300)
+    for lg in logs:
+        arc = lg.get("doc_archive") or {}
+        if lg.get("doc_name") and not arc.get("link"):
+            rec = await db.archive_files.find_one({"meta.log_id": lg["id"]}, {"_id": 0, "link": 1, "status": 1})
+            if rec and rec.get("link"):
+                lg["doc_archive"] = {**arc, "link": rec["link"], "status": rec.get("status")}
+                await db.job_logs.update_one({"id": lg["id"]}, {"$set": {"doc_archive": lg["doc_archive"]}})
+    return logs
+
+
 async def _survey_started(current: User, commessa_id: str) -> None:
     """The first survey content: nuova -> sopralluogo (AUT-SOP-04)."""
     ctx = await _commessa_ctx(commessa_id)
@@ -10047,6 +10064,7 @@ async def _quote_value_set(current: User, clienti: dict, view: dict, quote_id: s
             lines.append(f"💶 Valore aggiornato: {jl._eur(value)} (era {jl._eur(budget)}).")
         elif _is_org_admin(current) and value_choice == "add":
             await _set_commessa_value(current, clienti, view, budget, float(budget) + value, f"{v} aggiunto: {jl._eur(value)}")
+            upd["added"] = True
             lines.append(f"💶 Valore aggiornato: {jl._eur(float(budget) + value)} ({jl._eur(budget)} + {jl._eur(value)}).")
         elif _is_org_admin(current) and value_choice == "keep":
             lines.append(f"💶 Valore tenuto: {jl._eur(budget)}.")
@@ -10214,6 +10232,7 @@ async def _choose_quote_value(current: User, quote_id: str, choice: str) -> dict
         msg = f"💶 Valore di «{view['title']}» aggiornato a {jl._eur(value)}."
     elif choice == "add" and value:
         await _set_commessa_value(current, clienti, view, budget, float(budget or 0) + value, f"{v} aggiunto: {jl._eur(value)}")
+        await db.job_quotes.update_one({"id": quote_id}, {"$set": {"added": True}})
         msg = f"💶 Valore di «{view['title']}» aggiornato a {jl._eur(float(budget or 0) + value)} ({jl._eur(budget)} + {jl._eur(value)})."
     else:
         msg = f"💶 Valore di «{view['title']}» tenuto a {jl._eur(budget)}."
@@ -10481,8 +10500,9 @@ async def _commessa_quotes(commessa_id: str) -> list:
 # client, it is added to the commessa's value. Never shown to the collaborators.
 # ======================================================================================
 EXTRA_OPEN = ("da_valutare", "extra")
-EXTRA_STATUS_LABEL = {"da_valutare": "da valutare", "extra": "da far approvare", "approvato": "approvato dal cliente",
-                      "rifiutato": "rifiutato dal cliente", "compreso": "nel preventivo", "scartato": "non è un lavoro"}
+EXTRA_STATUS_LABEL = {"da_valutare": "da valutare", "extra": "extra da quotare", "approvato": "approvato dal cliente",
+                      "rifiutato": "rifiutato dal cliente", "assorbito": "extra assorbito", "compreso": "previsto nel contratto",
+                      "scartato": "non è un lavoro"}
 EXTRA_ADMIN_ONLY = "I lavori extra li gestisce l'amministratore."
 
 
@@ -10496,16 +10516,25 @@ async def _extras_scope(commessa_id: str, sub: dict, clienti: dict) -> tuple:
     scope += [x for x in d.get("activities") or [] if x]
     desc = _sysval(sub.get("data"), clienti.get("system_sub_map") or {}, "descrizione") or ""
     scope += [ln.strip(" -•\t") for ln in str(desc).splitlines() if len(ln.strip(" -•\t")) > 3]
-    scope += [x["work"] for x in await db.job_extra_works.find({"commessa_id": commessa_id, "status": {"$in": ["approvato", "compreso"]}},
+    scope += [x["work"] for x in await db.job_extra_works.find({"commessa_id": commessa_id, "status": {"$in": ["approvato", "assorbito", "compreso"]}},
                                                               {"_id": 0, "work": 1}).to_list(500)]
     return [x for x in dict.fromkeys(" ".join(str(x).split()) for x in scope) if x], (last or {}).get("version")
 
 
 def _extra_kb(xid: str):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    return InlineKeyboardMarkup([[InlineKeyboardButton("💶 Sì, è un extra", callback_data=f"xw:extra:{xid}")],
-                                 [InlineKeyboardButton("✅ È nel preventivo", callback_data=f"xw:compreso:{xid}"),
+    return InlineKeyboardMarkup([[InlineKeyboardButton("💶 Extra da quotare", callback_data=f"xw:extra:{xid}"),
+                                  InlineKeyboardButton("🤝 Extra assorbito", callback_data=f"xw:assorbito:{xid}")],
+                                 [InlineKeyboardButton("✅ Previsto nel contratto", callback_data=f"xw:compreso:{xid}"),
                                   InlineKeyboardButton("🗑 Non è un lavoro", callback_data=f"xw:scartato:{xid}")]])
+
+
+async def _not_works(collection_id: Optional[str]) -> list:
+    """What the administrator said is NOT a work (🗑): the next searches learn from it (the organization's Clienti list)."""
+    if not collection_id:
+        return []
+    rows = await db.extra_not_works.find({"collection_id": collection_id}, {"_id": 0, "work": 1}).to_list(500)
+    return list(dict.fromkeys(r["work"] for r in rows if r.get("work")))[-60:]
 
 
 def _extra_note_line(x: dict) -> str:
@@ -10531,7 +10560,8 @@ async def _extra_works_from_log(current: User, target: dict, log: dict, notify: 
         if not scope:
             return []
         note = log.get("raw_text") or log.get("text") or ""
-        found = await jl.find_extras(note, scope, view, user_id=clienti.get("user_id"), channel=log.get("channel") or "web")
+        found = await jl.find_extras(note, scope, view, user_id=clienti.get("user_id"), channel=log.get("channel") or "web",
+                                     not_works=await _not_works(clienti.get("id")))
         await db.job_logs.update_one({"id": log["id"]}, {"$set": {"extras_checked": True}})
         if not found:
             return []
@@ -10653,11 +10683,19 @@ async def _decide_extra_work(current: User, xid: str, action: str, amount: Optio
             raise HTTPException(status_code=400, detail="Importo non valido")
         upd["amount"] = round(float(amount), 2)
     msg = ""
-    if action in ("extra", "compreso", "scartato", "rifiutato"):
+    if action in ("extra", "assorbito", "compreso", "scartato", "rifiutato"):
         upd["status"] = action
-        msg = {"extra": "💶 Segnato come lavoro extra da far approvare al cliente. In Preventivo → Lavori extra metti l'importo e prepari la variante.",
-               "compreso": "✅ Ok, è nel preventivo: non te lo segnalo più.", "scartato": "🗑 Ok, tolto.",
+        msg = {"extra": "💶 Extra da quotare: in Preventivo → Lavori extra metti l'importo e prepari la variante per il cliente.",
+               "assorbito": "🤝 Extra assorbito: lo fate senza costi in più, resta nella descrizione del lavoro tra gli extra.",
+               "compreso": "✅ Ok, è previsto nel contratto: non te lo segnalo più.",
+               "scartato": "🗑 Ok, non è un lavoro: tolto, e nelle prossime ricerche non segnalo cose come questa.",
                "rifiutato": "Segnato come rifiutato dal cliente."}[action]
+        if action == "scartato":   # learnt: the next searches leave out things like it
+            await db.extra_not_works.insert_one({"collection_id": x.get("collection_id") or clienti["id"], "work": upd.get("work", x["work"]),
+                                                 "commessa_id": x["commessa_id"], "by": _first_name(current.name), "at": now})
+        if action == "assorbito" and x["status"] != "assorbito":
+            await _job_event(current, clienti, _commessa_view(sub, client, clienti), "extra",
+                             f"🤝 Extra assorbito nella commessa, senza costi in più: {upd.get('work', x['work'])}.")
     elif action == "approvato":   # the client said yes: its amount goes on the commessa's value
         amt = upd.get("amount", x.get("amount"))
         if not amt:
@@ -10681,7 +10719,7 @@ async def _decide_extra_work(current: User, xid: str, action: str, amount: Optio
 
 
 class ExtraWorkPatch(BaseModel):
-    action: Literal["extra", "compreso", "scartato", "approvato", "rifiutato", "update"]
+    action: Literal["extra", "assorbito", "compreso", "scartato", "approvato", "rifiutato", "update"]
     amount: Optional[float] = None
     work: Optional[str] = None
 
@@ -10722,17 +10760,50 @@ async def scan_extra_works(commessa_id: str, current: User = Depends(get_current
     scope, _v = await _extras_scope(commessa_id, sub, clienti)
     if not scope:
         raise HTTPException(status_code=400, detail="Per confrontare il diario serve il preventivo (o la descrizione dei lavori) della commessa.")
-    view = _commessa_view(sub, client, clienti)
-    logs = [lg for lg in await db.job_logs.find({"commessa_id": commessa_id}, {"_id": 0, "embedding": 0}).to_list(5000)
+    checked, found = await _scan_extras(current, _commessa_view(sub, client, clienti))
+    return {"checked": checked, "found": len(found),
+            "extra_works": await _commessa_extra_works(commessa_id, clienti, await _sees_costs(current))}
+
+
+async def _scan_extras(current: User, view: dict, limit: int = 60) -> tuple:
+    """The diary notes of a commessa not checked yet (the last `limit`), against the quote. -> (checked, the extras found)"""
+    logs = [lg for lg in await db.job_logs.find({"commessa_id": view["id"]}, {"_id": 0, "embedding": 0}).to_list(5000)
             if not lg.get("extras_checked") and not lg.get("kind") and not lg.get("presence") and lg.get("section") != "sopralluogo"]
     logs.sort(key=lambda lg: (lg.get("date") or "", lg.get("created_at") or ""), reverse=True)
     sem = asyncio.Semaphore(4)
     async def one(lg):
         async with sem:
             return await _extra_works_from_log(current, view, lg, notify=False)
-    found = [x for r in await asyncio.gather(*(one(lg) for lg in logs[:60])) for x in r]
-    return {"checked": min(len(logs), 60), "found": len(found),
-            "extra_works": await _commessa_extra_works(commessa_id, clienti, await _sees_costs(current))}
+    found = [x for r in await asyncio.gather(*(one(lg) for lg in logs[:limit])) for x in r]
+    return min(len(logs), limit), found
+
+
+async def _extras_weekly(user: User) -> str:
+    """The artigiano's weekly action: the week's diary of every commessa at work checked for extra works -> the message."""
+    clienti = await _clienti_list(user)
+    if not clienti:
+        return "Nessuna commessa da controllare."
+    commesse, _ = await _all_commesse(clienti)
+    lines, total, checked = [], 0, 0
+    for view in commesse:
+        if vx.norm_stato(view["stato"]) not in (vx.WORKING_STATO, "sospesa"):
+            continue
+        sub = await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0})
+        scope, _v = await _extras_scope(view["id"], sub or {}, clienti)
+        if not scope:
+            continue
+        n, found = await _scan_extras(user, view)
+        checked += n
+        open_ = await db.job_extra_works.find({"commessa_id": view["id"], "status": "da_valutare"}, {"_id": 0, "work": 1}).to_list(50)
+        if open_:
+            total += len(open_)
+            lines.append(f"\n*{view['title']}* — {view['client_name']}")
+            lines += [f"• {x['work']}" for x in open_[:8]]
+    if not total:
+        return f"🔎 *Lavori extra della settimana*\nHo controllato {checked} {'nota' if checked == 1 else 'note'} del diario: nessun possibile lavoro extra da decidere."
+    return (f"🔎 *Lavori extra della settimana*\n{total} {'possibile lavoro extra' if total == 1 else 'possibili lavori extra'} da decidere "
+            "(extra da quotare, extra assorbito, previsto nel contratto o non è un lavoro):" + "\n".join(lines)
+            + "\n\nDecidi in mAIPAL → Diario → commessa → Preventivo → Lavori extra.")
 
 
 class VariantPayload(BaseModel):
@@ -11244,7 +11315,7 @@ async def _waiting_extra(target: dict, log: dict, wait: dict, plain: bool = Fals
         if not scope or jl.covered_by(wait["work"], scope):
             return None
         found = await jl.find_extras(log.get("raw_text") or log.get("text") or "", scope, view, user_id=clienti.get("user_id"),
-                                     channel=log.get("channel") or "web", to_do=True)
+                                     channel=log.get("channel") or "web", to_do=True, not_works=await _not_works(clienti.get("id")))
         f = next((f for f in found if jl.grounded(f["work"], wait["work"], 0.5) or jl.grounded(wait["work"], f["work"], 0.5)), None)
         if not f:
             return None
@@ -11755,6 +11826,50 @@ async def _work_to_do_extra(target: dict, note: str, work: str, ref: dict) -> Op
     administrator (like a work waiting for a go-ahead)."""
     return await _waiting_extra(target, {"id": ref.get("log_id") or "", "raw_text": note, "channel": "web"},
                                 {"id": ref.get("activity_id") or ref.get("todo_id") or "", "work": work, "what": "", "from": "", **ref}, plain=True)
+
+
+# ---- the commessa's useful LINKS: a manual, the Drive folder of the drawings, a supplier's page - kept with the Documenti ----
+class CommessaLinkPayload(BaseModel):
+    url: str
+    title: Optional[str] = ""
+
+
+def links_line(links: Optional[list]) -> str:
+    return " | ".join(f"{x.get('title') or x['url']}: {x['url']}" for x in (links or [])[:30])
+
+
+def _link_title(url: str) -> str:
+    """A name when none is given: the site ("drive.google.com" -> "Drive", else the host)."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").removeprefix("www.")
+    return {"drive.google.com": "Drive", "docs.google.com": "Google Docs", "onedrive.live.com": "OneDrive",
+            "1drv.ms": "OneDrive", "dropbox.com": "Dropbox"}.get(host, host or url)
+
+
+@api_router.post("/jobs/commesse/{commessa_id}/links")
+async def add_commessa_link(commessa_id: str, payload: CommessaLinkPayload, current: User = Depends(get_current_user)):
+    """A useful link on the commessa (anyone who can write on it): only web addresses (http/https)."""
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)
+    url = (payload.url or "").strip()
+    if url and not re.match(r"^https?://", url, re.I) and re.match(r"^[\w.-]+\.[a-z]{2,}(/|$)", url, re.I):
+        url = "https://" + url
+    if not re.match(r"^https?://[^\s/]+\.[^\s]+$", url, re.I) or len(url) > 2000:
+        raise HTTPException(status_code=400, detail="Scrivi un indirizzo web valido, es. https://drive.google.com/…")
+    title = " ".join((payload.title or "").split())[:120] or _link_title(url)
+    link = {"id": f"lnk_{uuid.uuid4().hex[:10]}", "url": url, "title": title, "by": _first_name(current.name),
+            "at": datetime.now(timezone.utc).isoformat()}
+    links = [*(sub.get("links") or []), link][-100:]
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"links": links}})
+    await _job_event(current, clienti, _commessa_view(sub, client, clienti), "documento", f"🔗 Link utile aggiunto: {title}.")
+    return {"links": links}
+
+
+@api_router.delete("/jobs/commesse/{commessa_id}/links/{link_id}")
+async def delete_commessa_link(commessa_id: str, link_id: str, current: User = Depends(get_current_user)):
+    _clienti, sub, _client = await _commessa_or_404(current, commessa_id)
+    links = [x for x in sub.get("links") or [] if x.get("id") != link_id]
+    await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"links": links}})
+    return {"links": links}
 
 
 @api_router.get("/jobs/commesse/{commessa_id}/plan-people")
@@ -12555,7 +12670,8 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
     view = {**view, "milestones_line": milestones_line(await _commessa_milestones(view["id"])),
             "todos_line": " | ".join(f"«{t['text']}» ({t.get('who') or '-'})" + (f" entro {t['due_date']}" if t.get("due_date") else "")
                                      for t in _sort_job_todos(open_todos)),
-            "contacts_line": contacts_line(await _commessa_contacts(view["id"]))}   # the job's trades: useful to them too
+            "contacts_line": contacts_line(await _commessa_contacts(view["id"])),   # the job's trades: useful to them too
+            "links_line": links_line(((await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0, "links": 1})) or {}).get("links"))}
     await _fill_phases(view["id"], logs, view.get("stato"))
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
@@ -14620,6 +14736,7 @@ async def ask_job_commessa(commessa_id: str, payload: CommessaAskPayload, curren
         view["economics_line"] = jl.economics_line(await _commessa_economics(clienti, commessa_id, logs))
     view["milestones_line"] = milestones_line(await _commessa_milestones(commessa_id))
     view["contacts_line"] = contacts_line(await _commessa_contacts(commessa_id))
+    view["links_line"] = links_line(sub.get("links"))
     try:
         out = await jl.answer(view, logs, reports, question, payload.history[-8:], user_id=current.user_id)
     except Exception as e:
@@ -16923,6 +17040,13 @@ async def _execute_scheduled_action(a: dict, manual: bool = False, scheduled_for
             result = await _job_weekly_summary(user, started.astimezone(LOCAL_TZ))
             if chat_id:
                 delivered = await _send_telegram_text(chat_id, result)
+        elif kind == "extras_weekly":
+            result = await _extras_weekly(user)
+            if chat_id:
+                delivered = await _send_telegram_text(chat_id, result)
+            if "da decidere" in result:
+                push.fire_and_forget(db, user.user_id, "🔎 Lavori extra della settimana", result.split("\n")[1][:120], "/dashboard/journal",
+                                     f"xw-week-{started.date().isoformat()}", kind="extra")
         elif kind == "message":
             result = a.get("message_text") or a.get("title")
             if a.get("delivery") == "telegram" and chat_id:
@@ -17129,12 +17253,39 @@ async def _migrate_weekly_actions() -> int:
     return n
 
 
+EXTRAS_WEEKLY_KEY = "artigiano_extra_weekly"
+EXTRAS_WEEKLY_SCHEDULE = {"freq": "weekly", "weekdays": [0], "time": "08:10"}
+EXTRAS_WEEKLY_TEXT = "Ogni settimana cerca i lavori extra nel diario"
+EXTRAS_WEEKLY_DESC = ("Ogni lunedì confronto le note del diario delle commesse in lavorazione con il preventivo e la descrizione: "
+                      "i lavori che lì non ci sono te li mando su Telegram, da decidere in Preventivo → Lavori extra "
+                      "(extra da quotare, extra assorbito, previsto nel contratto, non è un lavoro).")
+
+
+async def _ensure_extras_weekly_action(user: User, udoc: dict) -> None:
+    """The weekly search of the extra works, as an action of the artigiano's administrator: once (paused or deleted, never again)."""
+    if EXTRAS_WEEKLY_KEY in (udoc.get("system_actions") or []):
+        return
+    await db.users.update_one({"user_id": user.user_id}, {"$addToSet": {"system_actions": EXTRAS_WEEKLY_KEY}})
+    schedule = sa.normalize_schedule(dict(EXTRAS_WEEKLY_SCHEDULE))
+    now = datetime.now(timezone.utc)
+    await db.scheduled_actions.insert_one({
+        "id": f"sched_{uuid.uuid4().hex[:12]}", "user_id": user.user_id, "org_id": user.org_id, "system_key": EXTRAS_WEEKLY_KEY,
+        "text": EXTRAS_WEEKLY_TEXT, "title": "Lavori extra della settimana", "description": EXTRAS_WEEKLY_DESC,
+        "kind": "extras_weekly", "schedule": schedule, "schedule_label": sa.schedule_label(schedule),
+        "delivery": "telegram", "notify": False, "enabled": True,
+        "next_run_at": _dt_iso(sa.next_run_after(schedule, now)), "last_run_at": None, "last_status": None,
+        "last_result": None, "run_count": 0, "runs": [], "created_at": now.isoformat(),
+    })
+
+
 async def _ensure_weekly_jobs_action(user: User) -> None:
     """The artigiano's administrator gets the weekly report of the job sites as an action, once:
-    paused or deleted, it is never created again. Day and time: the organization's (Friday 18:00)."""
+    paused or deleted, it is never created again. Day and time: the organization's (Friday 18:00).
+    (And the weekly search of the extra works, the same way.)"""
     if user.business_vertical != "artigiano" or not _is_org_admin(user):
         return
     udoc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0, "system_actions": 1}) or {}
+    await _ensure_extras_weekly_action(user, udoc)
     if WEEKLY_JOBS_KEY in (udoc.get("system_actions") or []):
         return
     await db.users.update_one({"user_id": user.user_id}, {"$addToSet": {"system_actions": WEEKLY_JOBS_KEY}})

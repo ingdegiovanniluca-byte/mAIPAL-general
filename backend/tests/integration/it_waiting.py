@@ -250,7 +250,7 @@ async def main():
     assert any("DA FARE" in c for c in EXTRA_CALLS) and next(x for x in db.job_waits.docs)["extra_id"] == xs[0]["id"]
     sent = [(t, kb) for c, t, kb in BOT_SENT if c == 77]
     assert any("Possibile lavoro extra da fare" in t and "fallo approvare al cliente insieme al via libera" in t
-               and buttons(kb) == [f"xw:extra:{xs[0]['id']}", f"xw:compreso:{xs[0]['id']}", f"xw:scartato:{xs[0]['id']}"] for t, kb in sent), sent
+               and buttons(kb) == [f"xw:extra:{xs[0]['id']}", f"xw:assorbito:{xs[0]['id']}", f"xw:compreso:{xs[0]['id']}", f"xw:scartato:{xs[0]['id']}"] for t, kb in sent), sent
     # the same wait written again: not twice
     await say(NOTE)
     await settle()
