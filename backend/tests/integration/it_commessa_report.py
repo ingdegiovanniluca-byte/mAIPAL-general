@@ -219,7 +219,7 @@ async def main():
     assert r["commessa_id"] == "s_bagno" and r["include"] == ["materiali", "milestone", "costi"] and len(ASKED) == n
     assert r["period_label"] == "dal 01/09/2026 al 24/10/2026"
     sec = {s["title"]: s["fields"] for s in r["sections"]}
-    assert sec["Materiali"]["Materiali impiegati"] == "- 20 m corrugato 25" and sec["Milestone"]["Milestone"] == "- Impianti: completata il 02/10/2026"
+    assert sec["Materiali"]["Materiali impiegati"] == "- 20 m corrugato 25" and sec["Tappe"]["Tappe"] == "- Impianti: conclusa il 02/10/2026"
     assert sec["Costi"]["Manodopera"] == "€ 540" and sec["Costi"]["Totale costi"] == "€ 790" and sec["Costi"]["Preventivo"] == "€ 5.000"
     assert sec["Costi"]["Non conteggiati"] == "1 materiali senza prezzo"
 

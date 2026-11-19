@@ -374,7 +374,10 @@ async def main():
     assert a["date"] == (today + timedelta(days=1)).isoformat() and [p["name"] for p in a["assignees"]] == ["Marco Bianchi"], a
     SAYS.update(description="Smontaggio caldaia", date="")
     r = await server._save_job_log(me, "pianifica smontaggio caldaia con Marco", commessa_id="s_bagno")
-    assert r["status"] == "unclear" and r["message"].startswith("Per pianificarla mi manca il giorno"), r
+    # no day: kept as an activity to do, and the date is asked
+    assert r["status"] == "commessa_update" and r.get("ask_date") and "📅 C'è una data prevista?" in r["message"], r
+    t = next(x for x in db.job_todos.docs if x["id"] == r["ask_date"]["todo_id"])
+    assert t["text"] == "Smontaggio caldaia" and t["who"] == "Marco Bianchi" and not t.get("due_date"), t
     assert jl.person_named("Mario", ["Marco Bianchi"]) is None and jl.person_named("avanzion", ["Avanzino Neri"]) == "Avanzino Neri"
     print("ALL OK")
 

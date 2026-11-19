@@ -112,7 +112,7 @@ async def fake_send(chat_id, text):
     NOTICES.append((chat_id, text)); return True
 server._send_telegram_text = fake_send
 TOLD = []
-async def fake_tell(c, text, done_data=None):   # a collaborator's message (with the "Fatto" button)
+async def fake_tell(c, text, done_data=None, kb=None):   # a collaborator's message (with the "Fatto" button)
     if c.get("status") != "active" or not c.get("telegram_chat_id"):
         return False
     NOTICES.append((c["telegram_chat_id"], text)); TOLD.append((c["id"], text, done_data)); return True
@@ -199,7 +199,7 @@ async def main():
     print(text)
     assert op == "send" and chat == 900 and len(PINS) == 1
     assert "📋 <b>Oggi," in text and "🏗️ <b>Bagno</b> — Mario Rossi" in text and "maps/search/?api=1&amp;query=Via%20Roma%205%2C%20Torino" in text
-    assert "• Montare i sanitari" in text and "• 🧰 Da portare:\n   ◦ 10 pz scatole 503" in text and "🏗️ <b>Tetto</b>" in text and "• 🚩 Guaina posata (milestone)" in text
+    assert "• Montare i sanitari" in text and "• 🧰 Da portare:\n   ◦ 10 pz scatole 503" in text and "🏗️ <b>Tetto</b>" in text and "• 🚩 Guaina posata (tappa)" in text
     assert "Tracce cucina" not in text   # tomorrow's
     assert text.index("Montare i sanitari") < text.index("Da portare")
     assert buttons(kb) == [f"cldone:t:{t1['id']}", "cldone:t:jtm1", f"cldone:m:{m1['id']}"]

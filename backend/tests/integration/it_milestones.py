@@ -112,7 +112,7 @@ async def fake_send(chat_id, text):
     NOTICES.append((chat_id, text)); return True
 server._send_telegram_text = fake_send
 TOLD = []
-async def fake_tell(c, text, done_data=None):   # a collaborator's message (with the "Fatto" button)
+async def fake_tell(c, text, done_data=None, kb=None):   # a collaborator's message (with the "Fatto" button)
     if c.get("status") != "active" or not c.get("telegram_chat_id"):
         return False
     NOTICES.append((c["telegram_chat_id"], text)); TOLD.append((c["id"], text, done_data)); return True
@@ -166,8 +166,8 @@ async def main():
     got = NOTICES[n:]
     print("\n---\n".join(f"{c_}: {t}" for c_, t in got))
     assert sent == 4 and {c_ for c_, _ in got} == {77, 900}
-    assert any("Domani scade la milestone *Impianto elettrico*" in t for _, t in got)
-    assert any("ritardo di 3 giorni: *Demolizioni*" in t and "azione correttiva" in t for _, t in got)
+    assert any("Domani è prevista la tappa *Impianto elettrico*" in t for _, t in got)
+    assert any("ritardo di 3 giorni: *Demolizioni*" in t and "nuova data" in t for _, t in got)
     assert await server._milestone_reminders(at9) == 0                          # not twice
     assert await server._milestone_reminders(at9.replace(hour=4)) == 0          # never before 8
 
@@ -176,7 +176,7 @@ async def main():
     assert c["due_date"] == d(2) and c["original_due_date"] == d(-3) and c["slip_days"] == 5 and c["status"] == "soon"
     assert c["corrective_actions"][0]["old_due_date"] == d(-3) and c["delay_days"] == 5
     ev = [x for x in db.job_logs.docs if x.get("kind") == "milestone"]
-    assert "azione correttiva — Squadra in più da lunedì" in ev[-1]["text"] and "Nuova scadenza" in ev[-1]["text"]
+    assert "azione correttiva — Squadra in più da lunedì" in ev[-1]["text"] and "Nuova data" in ev[-1]["text"]
     # a later move is a slip too (after an action)
     c = await server.update_milestone(c["id"], server.MilestonePatch(due_date=d(4)), me)
     assert c["original_due_date"] == d(-3) and c["slip_days"] == 7
@@ -184,7 +184,7 @@ async def main():
     # 4) done: the execution date, the delay against the first plan, a line in the diary
     a = await server.update_milestone(a["id"], server.MilestonePatch(done=True, done_date=d(3)), me)
     assert a["status"] == "done" and a["done_date"] == d(3) and a["delay_days"] == 2
-    assert "completata" in [x for x in db.job_logs.docs if x.get("kind") == "milestone"][-1]["text"] and "2 giorni di ritardo" in db.job_logs.docs[-1]["text"]
+    assert "conclusa" in [x for x in db.job_logs.docs if x.get("kind") == "milestone"][-1]["text"] and "2 giorni di ritardo" in db.job_logs.docs[-1]["text"]
     try:
         await server.update_job_log(db.job_logs.docs[-1]["id"], server.JobLogPatch(text="x"), me); assert False
     except server.HTTPException as e:
@@ -197,8 +197,8 @@ async def main():
     # 5) the diary: list and summary; events are not entries
     det = await server.get_job_commessa("s_bagno", current=me)
     ms, sm = det["milestones"], det["milestones_summary"]
-    assert [m["title"] for m in ms] == ["Impianto elettrico", "Demolizioni", "Massetto"]
-    assert sm["total"] == 3 and sm["done"] == 1 and sm["late"] == 0 and sm["avg_delay"] == 2 and sm["next"]["title"] == "Demolizioni"
+    assert [m["title"] for m in ms] == ["Impianto elettrico", "Massetto", "Demolizioni"]   # the logical order (as made), not by date
+    assert sm["total"] == 3 and sm["done"] == 1 and sm["late"] == 0 and sm["avg_delay"] == 2 and sm["next"]["title"] == "Massetto"   # the next in order
     assert det["totals"]["entries"] == 0
     # the commessa's chat knows them
     ANS = []
@@ -212,7 +212,7 @@ async def main():
     # 6) the Monday summary: late ones and this week's
     late = await server.create_milestone("s_bagno", server.MilestonePayload(title="Collaudo", who="Luca", due_date=d(-1)), me)
     text = await server._job_weekly_summary(me, datetime.now(ZoneInfo("Europe/Rome")))
-    assert "🔴 Milestone in ritardo:" in text and "Collaudo" in text and "🚩 Milestone di questa settimana:" in text and "Demolizioni" in text, text
+    assert "🔴 Tappe in ritardo:" in text and "Collaudo" in text and "🚩 Tappe di questa settimana:" in text and "Demolizioni" in text, text
 
     # 7) deleted with the commessa
     await server.delete_milestone(late["id"], me)

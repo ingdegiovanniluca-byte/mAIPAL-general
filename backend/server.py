@@ -6288,7 +6288,7 @@ async def _fill_report_from_diary(sections: list, report_type: str, cid: str, da
         work_reports.set_field(sections, "Materiali impiegati", "\n".join(f"- {m}" for m in jl.materials_line(tot["materials"]).split(", ") if m), overwrite=False)
         work_reports.set_field(sections, "Problemi riscontrati", "\n".join(f"- {p['text']}" for p in tot["problems"][:15]), overwrite=False)
         ms = await _commessa_milestones(cid)
-        work_reports.set_field(sections, "Milestone", "\n".join(_ms_report_line(v) for v in ms[:15]), overwrite=False)
+        work_reports.set_field(sections, "Milestone", "\n".join(_ms_report_line(v) for v in ms[:15]), overwrite=False)   # (the template's field)
     else:
         start = (data_inizio or "")[:10] or (days[0] if days else None)
         if start:
@@ -6299,8 +6299,9 @@ async def _fill_report_from_diary(sections: list, report_type: str, cid: str, da
 
 def _ms_report_line(v: dict) -> str:
     fmt = lambda iso: datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
-    return (f"- {v['title']}: " + (f"completata il {fmt(v['done_date'])}" if v["status"] == "done" else
-            f"in ritardo (prevista il {fmt(v['due_date'])})" if v["status"] == "late" else f"prevista entro il {fmt(v['due_date'])}"))
+    return (f"- {v['title']}: " + (f"conclusa il {fmt(v['done_date'])}" if v["status"] == "done" else
+            f"in ritardo (prevista il {fmt(v['due_date'])})" if v["status"] == "late" else
+            f"prevista entro il {fmt(v['due_date'])}" if v.get("due_date") else "da fare"))
 
 
 def _report_period(payload: "CommessaReportPayload", today: date) -> Optional[tuple]:
@@ -6393,7 +6394,7 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
         facts = "; ".join(x for x in (
             hours and f"ore lavorate {hours}",
             tot["hours_pending_total"] and f"ore da approvare (non conteggiate) {jl._fmt_num(tot['hours_pending_total'])} h", tot["problems"] and f"{len(tot['problems'])} problemi registrati",
-            milestones and "milestone: " + milestones_line(milestones)) if x)
+            milestones and "tappe: " + milestones_line(milestones)) if x)
         diary = "\n".join(jl._ctx_line(lg) for lg in logs)[-14000:]
         try:
             written = await work_reports.commessa_summary(view, plabel, diary, facts, wants, request=text,
@@ -6438,7 +6439,7 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
         elif key == "materiali":
             fields = {"Materiali impiegati": materials or none}
         elif key == "milestone":
-            fields = {"Milestone": "\n".join(_ms_report_line(v) for v in milestones[:20]) or "Nessuna milestone sulla commessa"}
+            fields = {"Tappe": "\n".join(_ms_report_line(v) for v in milestones[:20]) or "Nessuna tappa sulla commessa"}
         else:   # costi: the period's hours and materials at the list's rates, the other costs of those days
             econ = await db.job_economics.find_one({"commessa_id": cid}, {"_id": 0}) or {}
             extras = [x for x in econ.get("extras") or [] if not period or start.isoformat() <= (x.get("date") or "")[:10] <= end.isoformat()]
@@ -6669,6 +6670,7 @@ class JobTodoPayload(BaseModel):
     who: Optional[str] = ""                   # who takes care of it
     due_date: Optional[str] = None            # by when (YYYY-MM-DD), optional
     collaborator_id: Optional[str] = None     # assigned to an external collaborator: told on Telegram
+    milestone_id: Optional[str] = None        # the tappa it belongs to (none: "altre attività")
 
 
 class JobTodoPatch(BaseModel):
@@ -6677,6 +6679,7 @@ class JobTodoPatch(BaseModel):
     due_date: Optional[str] = None            # "" clears it
     done: Optional[bool] = None
     collaborator_id: Optional[str] = None     # "" = no longer a collaborator's
+    milestone_id: Optional[str] = None        # "" = in no tappa
 
 
 class JobLogPatch(BaseModel):
@@ -8109,9 +8112,10 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
         await _commessa_or_404(current, target["id"])
 
-    if not author and not images and _is_org_admin(current) and (jl.plan_said(text) or jl.future_activity_said(text)):
-        # "pianifica … il 12/11 con Gino", or "domani Avanzino deve sostituire il filtro della caldaia": a planned activity
-        return await _plan_from_message(current, clienti, target, text, channel)
+    if not images and (jl.plan_said(text) or jl.future_activity_said(text)):
+        # "pianifica … il 12/11 con Gino", or "domani Avanzino deve sostituire il filtro della caldaia": an activity, by anyone
+        # (a collaborator for themselves or the colleagues of their company)
+        return await _plan_from_message(current, clienti, target, text, channel, author)
     said_value = jl.value_said(text) if not author and not images and _is_org_admin(current) else None
     if said_value:   # "il valore della commessa è 12.500 €" / "aggiungi 800 € al valore": the administrator's, in the diary
         econ = await db.job_economics.find_one({"commessa_id": target["id"]}, {"_id": 0, "budget": 1}) or {}
@@ -8600,12 +8604,12 @@ def _assignment_text(kind: str, item: dict, view: dict, change: str, old_due: Op
     where = f"«{view.get('title')}» — {view.get('client_name')}"
     due = item.get("due_date")
     if change == "date":
-        head = f"📅 Nuova scadenza per {'l’attività' if kind == 'todo' else 'la milestone'} *{what}*"
+        head = f"📅 Nuova data per {'l’attività' if kind == 'todo' else 'la tappa'} *{what}*"
         return f"{head}\n{where} · {'entro ' + _short_it_date(due) if due else 'senza data'}" + (f" (era {_short_it_date(old_due)})" if old_due else "")
     if kind == "todo" and item.get("kind") == "materiale":   # materials to take: one per line
         return (f"📌 Da prendere per te{' entro ' + _short_it_date(due) if due else ''}:\n{_mat_bullets(item)}\n{where}"
                 "\nQuando l'hai preso tocca ✅ Fatto.")
-    head = f"📌 Nuova attività per te: *{what}*" if kind == "todo" else f"🚩 Milestone affidata a te: *{what}*"
+    head = f"📌 Nuova attività per te: *{what}*" if kind == "todo" else f"🚩 Tappa affidata a te: *{what}*"
     return (f"{head}\n{where}" + (f" · {'entro' if kind == 'todo' else 'scadenza'} {_short_it_date(due)}" if due else "")
             + "\nQuando è fatta tocca ✅ Fatto.")
 
@@ -8648,6 +8652,7 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
     today = jl.today_local().isoformat()
     if kind == "t":
         await coll.update_one({"id": item_id}, {"$set": {"done": True, "done_at": datetime.now(timezone.utc).isoformat(), "done_by": _collab_name(collab)}})
+        await _tappa_check(item.get("milestone_id"))
     else:
         await coll.update_one({"id": item_id}, {"$set": {"done": True, "done_date": today, "done_by": _collab_name(collab)}})
     owner_doc = await db.users.find_one({"user_id": collab["owner_user_id"]}, {"_id": 0})
@@ -8664,22 +8669,23 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
     else:
         m = _milestone_view({**item, "done": True, "done_date": today}, today)
         late = f", {m['delay_days']} {'giorno' if m['delay_days'] == 1 else 'giorni'} di ritardo" if m["delay_days"] else ", in tempo"
-        line = f"Milestone «{what}» completata il {_short_it_date(today)}{late} (segnata da {who} su Telegram)."
+        line = f"Tappa «{what}» conclusa il {_short_it_date(today)}{late} (segnata da {who} su Telegram)."
     await _log_commessa_event(owner, view, "todo" if kind == "t" else "milestone", line,
                               {"todo_id" if kind == "t" else "milestone_id": item_id}, author_name=collab.get("first_name") or _collab_name(collab))
     _day_pin_touch(collab["id"], item.get("collaborator_id"), *(item.get("shared_with") or []))
     push.fire_and_forget(db, owner.user_id, f"✅ {_collab_name(collab)} · {view.get('title')}", f"Fatta: «{what}»",
                          f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}", kind="done")
     try:
-        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la milestone'} «{what}» su «{view['title']}» — {view['client_name']}.", kind="done")
+        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la tappa'} «{what}» su «{view['title']}» — {view['client_name']}.", kind="done")
     except Exception:
         logger.exception("owner notice failed")
     return f"✅ Fatto! «{what}» è segnata come fatta, {owner.name.split(' ')[0] if owner.name else 'il titolare'} lo vede nel diario."
 
 
 async def _todo_reminders(now_utc: Optional[datetime] = None) -> int:
-    """To Do given to a collaborator, with a date: from 8:00 the day before, the day itself and
-    the first day late, once each (like the milestones). -> how many sent."""
+    """To Do (activities without a day on site) with a date, to a collaborator (Telegram) or a user of the app (app and
+    Telegram): from 8:00 the day before, the day itself, and the first day late - then asking whether it was done
+    (✅ Fatta / 📅 Domani / 🗑 Non serve più). Once each. -> how many sent."""
     now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
     if now_local.strftime("%H:%M") < "08:00":
         return 0
@@ -8687,24 +8693,36 @@ async def _todo_reminders(now_utc: Optional[datetime] = None) -> int:
     tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
     sent = 0
     for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(5000):
-        if not t.get("collaborator_id") or not t.get("due_date") or t.get("kind") == "materiale":
+        if not (t.get("collaborator_id") or t.get("assignee_user_id")) or not t.get("due_date") or t.get("kind") in ("materiale", "attesa"):
             continue
         kind = "before" if t["due_date"] == tomorrow else "due" if t["due_date"] == today else "late"
         if (t.get("reminded") or {}).get(kind) == t["due_date"]:
             continue
         await db.job_todos.update_one({"id": t["id"]}, {"$set": {"reminded": {**(t.get("reminded") or {}), kind: t["due_date"]}}})
-        c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
         sub = await db.collection_sub_items.find_one({"id": t["commessa_id"]}, {"_id": 0})
-        if not c or not sub or t["commessa_id"] not in (c.get("commesse") or []):
+        if not sub:
             continue
         client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
         coll = await db.collections.find_one({"id": sub.get("collection_id")}, {"_id": 0})
         view = _commessa_view(sub, client, coll or {})
+        late = kind == "late"
         head = ("⏰ Domani va fatta" if kind == "before" else "⏰ Oggi va fatta" if kind == "due"
-                else f"🔴 In ritardo di {_days(today, t['due_date'])} giorni")
-        text = f"{head}: *{t['text']}*\n«{view['title']}» — {view['client_name']} · entro {_short_it_date(t['due_date'])}\nQuando è fatta tocca ✅ Fatto."
+                else f"🔴 Era da fare entro il {_short_it_date(t['due_date'])}")
+        text = (f"{head}: *{t['text']}*\n«{view['title']}» — {view['client_name']}"
+                + ("\nÈ stata fatta?" if late else f" · entro {_short_it_date(t['due_date'])}\nQuando è fatta tocca ✅ Fatto."))
         try:
-            if await _tell_collaborator(c, text, f"cldone:t:{t['id']}"):
+            if t.get("collaborator_id"):
+                c = await db.collaborators.find_one({"id": t["collaborator_id"]}, {"_id": 0})
+                if c and t["commessa_id"] in (c.get("commesse") or []) and \
+                        await _tell_collaborator(c, text, None if late else f"cldone:t:{t['id']}", kb=_plan_kb("t", t["id"], "cpl") if late else None):
+                    sent += 1
+            elif t.get("assignee_user_id"):
+                uid = t["assignee_user_id"]
+                push.fire_and_forget(db, uid, head.split(":")[0] + f" · {view['title']}", t["text"], f"/dashboard/journal?commessa={view['id']}",
+                                     f"todo-{t['id']}-{kind}", kind="task_reminder")
+                u = await db.users.find_one({"user_id": uid}, {"_id": 0, "telegram_chat_id": 1})
+                if u and u.get("telegram_chat_id") and await nprefs.wants(db, uid, "task_reminder", "telegram"):
+                    await _tg_send(u["telegram_chat_id"], text.replace("\nQuando è fatta tocca ✅ Fatto.", ""), _plan_kb("t", t["id"]) if late else None)
                 sent += 1
         except Exception:
             logger.exception("to do reminder failed")
@@ -8726,19 +8744,37 @@ async def create_job_todo(commessa_id: str, payload: JobTodoPayload, current: Us
     if not text:
         raise HTTPException(status_code=400, detail="Scrivi l'attività da fare")
     who, collab_id = await _resolve_assignee(current, commessa_id, (payload.who or "").strip()[:60], payload.collaborator_id)
+    who = who or _first_name(current.name)
+    view = _commessa_view(sub, client, clienti)
     doc = {
         "id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
         "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
-        "text": text[:500], "who": who or _first_name(current.name), "collaborator_id": collab_id,
+        "created_by_name": _first_name(current.name), "created_by_user": current.user_id,
+        "text": text[:500], "who": who, "collaborator_id": collab_id,
+        "assignee_user_id": None if collab_id else await _user_named(clienti, commessa_id, who, current),
         "due_date": _valid_due(payload.due_date), "done": False, "done_at": None, "reminded": {},
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "milestone_id": await _valid_tappa(commessa_id, payload.milestone_id), "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.job_todos.insert_one(doc)
     doc.pop("_id", None)
     doc.pop("reminded", None)
-    doc["notified"] = await _notify_assignee("todo", doc, _commessa_view(sub, client, clienti))
+    await _job_event(current, clienti, view, "todo", f"📌 Attività: {doc['text']}" + (f" entro il {_short_it_date(doc['due_date'])}" if doc["due_date"] else "")
+                     + _for_whom(doc["created_by_name"], [_first_name(who)]) + ".")
+    doc["notified"] = await _notify_assignee("todo", doc, view)
+    if doc["assignee_user_id"] and doc["assignee_user_id"] != current.user_id:
+        await _tell_user_todo(doc, view)
     _day_pin_touch(collab_id)
     return doc
+
+
+async def _user_named(clienti: dict, commessa_id: str, who: str, current: User) -> Optional[str]:
+    """The app's user a To Do is for, from the name chosen (the first name, if only one has it)."""
+    n = (who or "").strip().lower()
+    if not n or n == _first_name(current.name).lower() or n == (current.name or "").lower():
+        return current.user_id
+    users = [p for p in await _activity_people(clienti, commessa_id) if p["type"] == "user"]
+    hit = [p for p in users if p["name"].lower() == n] or [p for p in users if _first_name(p["name"]).lower() == n.split(" ")[0]]
+    return hit[0]["id"] if len(hit) == 1 else None
 
 
 @api_router.patch("/jobs/todos/{todo_id}")
@@ -8763,8 +8799,12 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
     if payload.done is not None:
         upd["done"] = payload.done
         upd["done_at"] = datetime.now(timezone.utc).isoformat() if payload.done else None
+    if payload.milestone_id is not None:
+        upd["milestone_id"] = await _valid_tappa(todo["commessa_id"], payload.milestone_id or None)
     if upd:
         await db.job_todos.update_one({"id": todo_id}, {"$set": upd})
+        if upd.get("done"):
+            await _tappa_check(upd.get("milestone_id", todo.get("milestone_id")))
     out = {k: v for k, v in {**todo, **upd}.items() if k != "reminded"}
     _day_pin_touch(todo.get("collaborator_id"), out.get("collaborator_id"), *(todo.get("shared_with") or []))
     new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != todo.get("collaborator_id")
@@ -8774,6 +8814,18 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
         out["notified"] = await _notify_assignee("todo", out, _commessa_view(sub, client, clienti),
                                                  "new" if new_collab else "date", todo.get("due_date"))
     return out
+
+
+class PlanWhenPayload(BaseModel):
+    choice: Literal["oggi", "domani", "dopodomani", "lunedi", "nessuna"]
+
+
+@api_router.post("/jobs/todos/{todo_id}/when")
+async def set_todo_when(todo_id: str, payload: PlanWhenPayload, current: User = Depends(get_current_user)):
+    """The answer to "C'è una data prevista?" from the app."""
+    todo = await _job_todo_or_404(current, todo_id)
+    msg = await _plan_answer("d", payload.choice, todo_id, {"kind": "user", "id": current.user_id, "name": _first_name(current.name)})
+    return {"message": msg, "todo": await db.job_todos.find_one({"id": todo["id"]}, {"_id": 0, "reminded": 0})}
 
 
 @api_router.delete("/jobs/todos/{todo_id}")
@@ -8792,17 +8844,18 @@ async def delete_job_todo(todo_id: str, current: User = Depends(get_current_user
 class MilestonePayload(BaseModel):
     title: str
     who: Optional[str] = ""
-    due_date: str                             # scadenza, YYYY-MM-DD
+    due_date: Optional[str] = None            # the tappa's date, YYYY-MM-DD - optional ("montare la caldaia" has none)
     collaborator_id: Optional[str] = None
 
 
 class MilestonePatch(BaseModel):
     title: Optional[str] = None
     who: Optional[str] = None
-    due_date: Optional[str] = None
+    due_date: Optional[str] = None            # "" = no date any more
     done: Optional[bool] = None
     done_date: Optional[str] = None           # the day it was done (default today)
     collaborator_id: Optional[str] = None     # "" = no longer a collaborator's
+    close_proposal: Optional[bool] = None     # False: "not yet" to "all its activities are done: is it finished?"
 
 
 class MilestoneActionPayload(BaseModel):
@@ -8818,11 +8871,13 @@ def _milestone_view(m: dict, today: Optional[str] = None) -> dict:
     """The milestone with its state: done (and how late against the first plan), late (days past
     the current date), soon (within 3 days), planned; slip = how far the date was moved."""
     today = today or jl.today_local().isoformat()
-    due, orig = m["due_date"], m.get("original_due_date") or m["due_date"]
-    out = {**m, "slip_days": _days(due, orig)}
+    due, orig = m.get("due_date"), m.get("original_due_date") or m.get("due_date")
+    out = {**m, "slip_days": _days(due, orig) if due and orig else 0}
     if m.get("done"):
         done = m.get("done_date") or today
-        out.update({"status": "done", "delay_days": max(0, _days(done, orig)), "late_days": 0})
+        out.update({"status": "done", "delay_days": max(0, _days(done, orig)) if orig else 0, "late_days": 0})
+    elif not due:   # a tappa without a date: to do, never late
+        out.update({"status": "planned", "late_days": 0, "delay_days": 0})
     elif due < today:
         out.update({"status": "late", "late_days": _days(today, due), "delay_days": _days(today, orig)})
     else:
@@ -8840,27 +8895,35 @@ def _milestones_summary(views: list) -> dict:
 
 
 async def _commessa_milestones(commessa_id: str) -> list:
+    """The tappe in their order (the logical one of the works); the ones without an order yet take it from their date."""
     ms = await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0, "reminded": 0}).to_list(500)
+    if any(m.get("order") is None for m in ms):
+        ms.sort(key=lambda x: (x.get("order") if x.get("order") is not None else 10**6, x.get("due_date") or "9999", x.get("created_at") or ""))
+        for i, m in enumerate(ms):
+            if m.get("order") != i:
+                m["order"] = i
+                await db.job_milestones.update_one({"id": m["id"]}, {"$set": {"order": i}})
     today = jl.today_local().isoformat()
-    return [_milestone_view(m, today) for m in sorted(ms, key=lambda x: (x["due_date"], x.get("created_at") or ""))]
+    return [_milestone_view(m, today) for m in sorted(ms, key=lambda x: x["order"])]
 
 
 def milestones_line(views: list) -> str:
-    """For the commessa's chat: every milestone with its state."""
+    """For the commessa's chat: every tappa, in order, with its state."""
     if not views:
         return ""
     def one(v):
         st = (f"fatta il {v.get('done_date')}" + (f", {v['delay_days']} giorni di ritardo" if v["delay_days"] else ", in tempo")
               if v["status"] == "done" else f"in ritardo di {v['late_days']} giorni" if v["status"] == "late" else "da fare")
         acts = "; ".join(a["text"] for a in v.get("corrective_actions") or [])
-        return f"«{v['title']}» ({v.get('who') or '-'}) scadenza {v['due_date']}: {st}" + (f" [azioni correttive: {acts}]" if acts else "")
+        return (f"{v.get('order', 0) + 1}. «{v['title']}» ({v.get('who') or '-'}) " + (f"entro {v['due_date']}" if v.get("due_date") else "senza data")
+                + f": {st}" + (f" [azioni correttive: {acts}]" if acts else ""))
     return " | ".join(one(v) for v in views)
 
 
 async def _milestone_or_404(current: User, ms_id: str) -> tuple:
     m = await db.job_milestones.find_one({"id": ms_id}, {"_id": 0})
     if not m:
-        raise HTTPException(status_code=404, detail="Milestone non trovata")
+        raise HTTPException(status_code=404, detail="Tappa non trovata")
     clienti, sub, client = await _commessa_or_404(current, m["commessa_id"])
     return m, _commessa_view(sub, client, clienti)
 
@@ -8889,16 +8952,15 @@ async def create_milestone(commessa_id: str, payload: MilestonePayload, current:
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
     title = " ".join((payload.title or "").split())
     if not title:
-        raise HTTPException(status_code=400, detail="Scrivi la milestone")
-    due = _valid_due(payload.due_date)
-    if not due:
-        raise HTTPException(status_code=400, detail="Indica la scadenza")
+        raise HTTPException(status_code=400, detail="Scrivi la tappa")
+    due = _valid_due(payload.due_date) if payload.due_date else None
     who, collab_id = await _resolve_assignee(current, commessa_id, (payload.who or "").strip()[:60], payload.collaborator_id)
     doc = {"id": f"jms_{uuid.uuid4().hex[:12]}", "commessa_id": commessa_id, "collection_id": clienti["id"],
            "user_id": current.user_id, "org_id": current.org_id, "author_name": _first_name(current.name),
            "title": title[:200], "who": who or _first_name(current.name), "collaborator_id": collab_id,
            "due_date": due, "original_due_date": due, "done": False, "done_date": None, "corrective_actions": [],
-           "reminded": {}, "created_at": datetime.now(timezone.utc).isoformat()}
+           "reminded": {}, "created_at": datetime.now(timezone.utc).isoformat(),
+           "order": len(await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0, "id": 1}).to_list(1000))}   # (last)
     await db.job_milestones.insert_one(doc)
     doc.pop("_id", None)
     doc.pop("reminded", None)
@@ -8915,7 +8977,7 @@ async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = 
     if payload.title is not None:
         title = " ".join(payload.title.split())
         if not title:
-            raise HTTPException(status_code=400, detail="Scrivi la milestone")
+            raise HTTPException(status_code=400, detail="Scrivi la tappa")
         upd["title"] = title[:200]
     if payload.who is not None or payload.collaborator_id is not None:
         who, collab_id = await _resolve_assignee(current, m["commessa_id"], payload.who.strip()[:60] if payload.who is not None else None,
@@ -8924,14 +8986,16 @@ async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = 
             upd["who"] = who or m.get("who")
         upd["collaborator_id"] = collab_id
     if payload.due_date is not None:
-        due = _valid_due(payload.due_date)
-        if not due:
-            raise HTTPException(status_code=400, detail="Indica la scadenza")
+        due = _valid_due(payload.due_date) if payload.due_date else None
+        if payload.due_date and not due:
+            raise HTTPException(status_code=400, detail="Data non valida")
         upd["due_date"] = due
-        # a new plan before anything slipped is not a delay: the first date moves too
-        if not m.get("done") and not m.get("corrective_actions") and m["due_date"] >= today:
+        # a new plan before anything slipped is not a delay: the first date moves too (and a first date is the plan)
+        if not m.get("done") and not m.get("corrective_actions") and (not m.get("due_date") or m["due_date"] >= today):
             upd["original_due_date"] = due
         upd["reminded"] = {}
+    if payload.close_proposal is False:
+        upd["close_proposed"] = None
     if payload.done is not None and payload.done != bool(m.get("done")):
         upd["done"] = payload.done
         upd["done_date"] = (_valid_due(payload.done_date) or today) if payload.done else None
@@ -8942,12 +9006,14 @@ async def update_milestone(ms_id: str, payload: MilestonePatch, current: User = 
     out = _milestone_view({k: v for k, v in {**m, **upd}.items() if k != "reminded"}, today)
     _day_pin_touch(await _ms_collab_id(m), await _ms_collab_id(out))
     new_collab = upd.get("collaborator_id") and upd["collaborator_id"] != m.get("collaborator_id")
-    moved = upd.get("due_date") and upd["due_date"] != m["due_date"] and out.get("collaborator_id") and not new_collab
+    moved = upd.get("due_date") and upd["due_date"] != m.get("due_date") and out.get("collaborator_id") and not new_collab
     if new_collab or moved:
-        out["notified"] = await _notify_assignee("milestone", out, view, "new" if new_collab else "date", m["due_date"])
+        out["notified"] = await _notify_assignee("milestone", out, view, "new" if new_collab else "date", m.get("due_date"))
     if upd.get("done"):
-        late = f", {out['delay_days']} {'giorno' if out['delay_days'] == 1 else 'giorni'} di ritardo" if out["delay_days"] else ", in tempo"
-        await _log_commessa_event(current, view, "milestone", f"Milestone «{out['title']}» completata il {_short_it_date(out['done_date'])}{late}.",
+        await db.job_milestones.update_one({"id": ms_id}, {"$set": {"close_proposed": None}})
+        late = (f", {out['delay_days']} {'giorno' if out['delay_days'] == 1 else 'giorni'} di ritardo" if out["delay_days"] else ", in tempo") \
+            if out.get("original_due_date") else ""
+        await _log_commessa_event(current, view, "milestone", f"Tappa «{out['title']}» conclusa il {_short_it_date(out['done_date'])}{late}.",
                                   {"milestone_id": ms_id})
     return out
 
@@ -8961,20 +9027,38 @@ async def add_milestone_action(ms_id: str, payload: MilestoneActionPayload, curr
     if not text:
         raise HTTPException(status_code=400, detail="Scrivi l'azione correttiva")
     new_due = _valid_due(payload.new_due_date)
-    act = {"id": f"act_{uuid.uuid4().hex[:8]}", "text": text[:500], "new_due_date": new_due, "old_due_date": m["due_date"],
+    act = {"id": f"act_{uuid.uuid4().hex[:8]}", "text": text[:500], "new_due_date": new_due, "old_due_date": m.get("due_date"),
            "by": _first_name(current.name), "at": datetime.now(timezone.utc).isoformat()}
     upd = {"corrective_actions": (m.get("corrective_actions") or []) + [act]}
     if new_due:
         upd.update({"due_date": new_due, "reminded": {}})
     await db.job_milestones.update_one({"id": ms_id}, {"$set": upd})
-    if new_due and new_due != m["due_date"]:
-        await _notify_assignee("milestone", {**m, **upd}, view, "date", m["due_date"])
+    if new_due and new_due != m.get("due_date"):
+        await _notify_assignee("milestone", {**m, **upd}, view, "date", m.get("due_date"))
         _day_pin_touch(await _ms_collab_id(m))
     await _log_commessa_event(current, view, "milestone",
-                              f"Milestone «{m['title']}»: azione correttiva — {text}"
-                              + (f" Nuova scadenza {_short_it_date(new_due)} (era {_short_it_date(m['due_date'])})." if new_due else ""),
+                              f"Tappa «{m['title']}»: azione correttiva — {text}"
+                              + (f" Nuova data {_short_it_date(new_due)}" + (f" (era {_short_it_date(m['due_date'])})" if m.get("due_date") else "") + "." if new_due else ""),
                               {"milestone_id": ms_id})
     return _milestone_view({k: v for k, v in {**m, **upd}.items() if k != "reminded"})
+
+
+class MilestoneMovePayload(BaseModel):
+    direction: Literal["up", "down"]
+
+
+@api_router.post("/jobs/milestones/{ms_id}/move")
+async def move_milestone(ms_id: str, payload: MilestoneMovePayload, current: User = Depends(get_current_user)):
+    """A tappa one place earlier or later in the order of the works. -> the tappe in their order."""
+    m, _view = await _milestone_or_404(current, ms_id)
+    views = await _commessa_milestones(m["commessa_id"])
+    i = next(k for k, v in enumerate(views) if v["id"] == ms_id)
+    j = i - 1 if payload.direction == "up" else i + 1
+    if 0 <= j < len(views):
+        await db.job_milestones.update_one({"id": views[i]["id"]}, {"$set": {"order": views[j]["order"]}})
+        await db.job_milestones.update_one({"id": views[j]["id"]}, {"$set": {"order": views[i]["order"]}})
+    views = await _commessa_milestones(m["commessa_id"])
+    return {"milestones": views, "summary": _milestones_summary(views)}
 
 
 @api_router.delete("/jobs/milestones/{ms_id}")
@@ -9019,7 +9103,7 @@ async def _new_milestone_template(current: User, name: str, steps: list, source:
     if not name:
         raise HTTPException(status_code=400, detail="Scrivi il nome del modello")
     if not steps:
-        raise HTTPException(status_code=400, detail="Il modello non ha milestone")
+        raise HTTPException(status_code=400, detail="Il modello non ha tappe")
     doc = {"id": f"mtpl_{uuid.uuid4().hex[:12]}", "owner_key": _tpl_owner(current), "name": name, "steps": steps,
            "source": source, "created_by": current.user_id, "created_at": datetime.now(timezone.utc).isoformat()}
     await db.milestone_templates.insert_one(doc)
@@ -9046,7 +9130,7 @@ async def save_milestone_template(commessa_id: str, payload: SaveMilestoneTempla
     clienti, sub, client = await _commessa_or_404(current, commessa_id, write=False)
     ms = await db.job_milestones.find({"commessa_id": commessa_id}, {"_id": 0}).to_list(500)
     if not ms:
-        raise HTTPException(status_code=400, detail="La commessa non ha milestone da salvare")
+        raise HTTPException(status_code=400, detail="La commessa non ha tappe da salvare")
     first = min(date.fromisoformat((m.get("original_due_date") or m["due_date"])[:10]) for m in ms)
     begin = _commessa_view(sub, client, clienti).get("data_inizio")
     try:
@@ -9067,7 +9151,7 @@ async def update_milestone_template(tpl_id: str, payload: MilestoneTemplatePaylo
     if payload.steps is not None:
         upd["steps"] = mtpl.clean_steps(payload.steps)
         if not upd["steps"]:
-            raise HTTPException(status_code=400, detail="Il modello non ha milestone")
+            raise HTTPException(status_code=400, detail="Il modello non ha tappe")
     if upd:
         await db.milestone_templates.update_one({"id": tpl_id}, {"$set": upd})
     return {**t, **upd}
@@ -9157,12 +9241,12 @@ async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
         client = await db.collection_items.find_one({"id": sub.get("item_id")}, {"_id": 0, "embedding": 0})
         view = _commessa_view(sub, client, coll)
         where = f"«{view['title']}» — {view['client_name']}"
-        head = (f"🚩 Domani scade la milestone *{m['title']}*" if kind == "before" else
-                f"🚩 Oggi scade la milestone *{m['title']}*" if kind == "due" else
-                f"🔴 Milestone in ritardo di {_days(today, m['due_date'])} giorni: *{m['title']}*")
-        text = (f"{head}\n{where} · {m.get('who') or ''} · scadenza {_short_it_date(m['due_date'])}"
-                + ("\nSe è fatta segnala come fatta; se no scrivi un'azione correttiva con la nuova data "
-                   "(diario della commessa → Milestone)." if kind == "late" else ""))
+        head = (f"🚩 Domani è prevista la tappa *{m['title']}*" if kind == "before" else
+                f"🚩 Oggi è prevista la tappa *{m['title']}*" if kind == "due" else
+                f"🔴 Tappa in ritardo di {_days(today, m['due_date'])} giorni: *{m['title']}*")
+        text = (f"{head}\n{where} · {m.get('who') or ''} · entro {_short_it_date(m['due_date'])}"
+                + ("\nSe è conclusa segnala come fatta; se no scrivi la nuova data "
+                   "(diario della commessa → Pianificazione)." if kind == "late" else ""))
         for chat in await _milestone_recipients(m):
             try:
                 if await _send_telegram_text(chat, text):
@@ -9172,8 +9256,8 @@ async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
         c = await _milestone_collaborator(m)
         if c:
             try:
-                ctext = text.replace("\nSe è fatta segnala come fatta; se no scrivi un'azione correttiva con la nuova data "
-                                     "(diario della commessa → Milestone).", "") + "\nQuando è fatta tocca ✅ Fatto."
+                ctext = text.replace("\nSe è conclusa segnala come fatta; se no scrivi la nuova data "
+                                     "(diario della commessa → Pianificazione).", "") + "\nQuando è fatta tocca ✅ Fatto."
                 if await _tell_collaborator(c, ctext, f"cldone:m:{m['id']}"):
                     sent += 1
             except Exception:
@@ -9561,7 +9645,7 @@ async def _margin_forecast(clienti: dict, sub: dict, view: dict, e: dict) -> Opt
     if len(acts) >= 2:
         progress, source = sum(1 for a in acts if a["status"] == "svolta") / len(acts), "attività pianificate svolte"
     elif len(ms) >= 2:
-        progress, source = sum(1 for m in ms if m.get("done")) / len(ms), "milestone fatte"
+        progress, source = sum(1 for m in ms if m.get("done")) / len(ms), "tappe concluse"
     elif start and end and end > start and start <= today:
         progress, source = min(1.0, (today - start).days / (end - start).days), "tempo trascorso"
     est = sub.get("history_estimate") or {}
@@ -9877,15 +9961,14 @@ def _quote_dates(view: dict, d: dict) -> tuple:
 
 
 def _plan_default(view: dict, d: dict) -> str:
-    if not d.get("activities"):
-        return "none"
-    return "milestone" if _quote_dates(view, d)[1] else "todo"
+    """The quote's works become the commessa's tappe (with dates when the quote has start and end)."""
+    return "milestone" if d.get("activities") else "none"
 
 
 async def _plan_from_quote(current: User, clienti: dict, view: dict, d: dict, mode: str) -> str:
-    """The quote's activities as the commessa's structure: milestones with due dates spread over the
-    working days from start to end (in order), or To Do. Those already there (same name) are skipped.
-    -> the line for the answer ("" when nothing made)"""
+    """The quote's works as the commessa's tappe, in the quote's order (the order of the works): with dates spread over
+    the working days from start to end when there are, else without a date; or as activities. Those already there
+    (same name) are skipped. -> the line for the answer ("" when nothing made)"""
     acts = [a for a in d.get("activities") or [] if a.strip()]
     if mode not in ("milestone", "todo") or not acts:
         return ""
@@ -9898,22 +9981,25 @@ async def _plan_from_quote(current: User, clienti: dict, view: dict, d: dict, mo
     now = datetime.now(timezone.utc).isoformat()
     who = _first_name(current.name)
     start, end = _quote_dates(view, d)
-    if mode == "milestone" and end:
-        dues = jl.spread_due_dates(len(acts), start, end, mtpl.add_workdays, mtpl.workdays_between)
-        for a, due in zip(acts, dues):
+    if mode == "milestone":
+        dues = jl.spread_due_dates(len(acts), start, end, mtpl.add_workdays, mtpl.workdays_between) if end else [None] * len(acts)
+        first = len(await db.job_milestones.find({"commessa_id": view["id"]}, {"_id": 0, "id": 1}).to_list(1000))
+        for k, (a, due) in enumerate(zip(acts, dues)):
+            d_iso = due.isoformat() if due else None
             await db.job_milestones.insert_one({"id": f"jms_{uuid.uuid4().hex[:12]}", "commessa_id": view["id"], "collection_id": clienti["id"],
                                                 "user_id": current.user_id, "org_id": current.org_id, "author_name": who, "title": a[:200], "who": who,
-                                                "collaborator_id": None, "due_date": due.isoformat(), "original_due_date": due.isoformat(), "done": False,
-                                                "done_date": None, "corrective_actions": [], "reminded": {}, "created_at": now, "from_quote": True})
-        return (f"🚩 Ho creato {len(acts)} milestone dalle attività del preventivo, dal {_short_it_date(dues[0].isoformat())} al "
-                f"{_short_it_date(dues[-1].isoformat())}: le trovi in Milestone, dove puoi cambiare date e chi le fa.")
+                                                "collaborator_id": None, "due_date": d_iso, "original_due_date": d_iso, "done": False,
+                                                "done_date": None, "corrective_actions": [], "reminded": {}, "created_at": now, "from_quote": True,
+                                                "order": first + k})
+        return (f"🚩 Ho creato {len(acts)} tappe dai lavori del preventivo, nel loro ordine"
+                + (f", dal {_short_it_date(dues[0].isoformat())} al {_short_it_date(dues[-1].isoformat())}" if end else ", senza date")
+                + ": le trovi in Pianificazione, dove puoi cambiare ordine, date e chi le fa.")
     for a in acts:
         await db.job_todos.insert_one({"id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": view["id"], "collection_id": clienti["id"],
                                        "user_id": current.user_id, "org_id": current.org_id, "author_name": who, "text": a[:500], "who": who,
                                        "collaborator_id": None, "due_date": None, "done": False, "done_at": None, "reminded": {},
                                        "created_at": now, "from_quote": True})
-    return (f"📌 Ho creato {len(acts)} To Do dalle attività del preventivo" + ("" if mode == "todo" and end else
-            " (senza date di inizio e fine non posso fare le milestone)") + ": li trovi in To Do.")
+    return f"📌 Ho creato {len(acts)} attività dai lavori del preventivo: le trovi in Pianificazione."
 
 
 async def _set_commessa_value(current: User, clienti: dict, view: dict, old: Optional[float], new: float, why: str) -> None:
@@ -10782,6 +10868,7 @@ class ActivityPayload(BaseModel):
     items: List[ActivityItem] = []
     info: Optional[str] = None
     origin: Literal["admin", "preventivo", "messaggio"] = "admin"
+    milestone_id: Optional[str] = None        # the tappa it belongs to
 
 
 class ActivityPatch(BaseModel):
@@ -10792,10 +10879,13 @@ class ActivityPatch(BaseModel):
     assignees: Optional[List[ActivityAssignee]] = None
     info: Optional[str] = None
     status: Optional[Literal["pianificata", "annullata"]] = None
+    milestone_id: Optional[str] = None        # "" = in no tappa
 
 
 async def _new_activity(current: User, clienti: dict, view: dict, description: str, day: str, start: Optional[str], end: Optional[str],
-                        assignees: list, items: list, info: str, origin: str) -> dict:
+                        assignees: list, items: list, info: str, origin: str, milestone_id: Optional[str] = None,
+                        creator: Optional[dict] = None) -> dict:
+    """creator: {"name", "collab_id"} when a collaborator made it (from Telegram)."""
     if not view.get("address"):
         raise HTTPException(status_code=400, detail="Prima di pianificare indica l'indirizzo del cantiere: serve per il meteo e i promemoria.")
     description = " ".join((description or "").split())[:200]
@@ -10818,12 +10908,13 @@ async def _new_activity(current: User, clienti: dict, view: dict, description: s
            "items": [{"id": f"ai_{uuid.uuid4().hex[:8]}", "category": i.get("category") or jl.item_category(i["text"]), "text": i["text"].strip()[:160],
                       "added_by": _first_name(current.name), "at": now} for i in items if (i.get("text") or "").strip()],
            "info": " ".join((info or "").split())[:500], "status": "pianificata", "origin": origin, "created_by": current.user_id,
-           "created_at": now, "updated_at": now, "reminders": {}}
+           "created_by_name": (creator or {}).get("name") or _first_name(current.name), "created_by_collab": (creator or {}).get("collab_id"),
+           "milestone_id": await _valid_tappa(view["id"], milestone_id), "created_at": now, "updated_at": now, "reminders": {}}
     await db.job_activities.insert_one(doc)
     doc.pop("_id", None)
-    await _job_event(current, clienti, view, "attivita", f"🗓 Attività pianificata per il {_short_it_date(day)}"
+    await _job_event(current, clienti, view, "attivita", f"🗓 Attività per il {_short_it_date(day)}"
                      + (f" alle {doc['start_time']}" if doc["start_time"] else "") + f": {description}"
-                     + (f" — {', '.join(_first_name(a['name']) for a in chosen)}" if chosen else "") + ".")
+                     + _for_whom(doc["created_by_name"], [_first_name(a["name"]) for a in chosen]) + ".")
     for a in chosen:   # each assignee told at once (the reminder comes the day before)
         await _tell_assignee(a, f"🗓 Nuova attività per te: *{description}* su «{view['title']}» — {view['client_name']}, "
                                 f"{_short_it_date(day)}" + (f" alle {doc['start_time']}" if doc["start_time"] else "") + f".\n📍 {view['address']}")
@@ -10846,11 +10937,11 @@ async def _tell_assignee(a: dict, text: str, kb=None) -> bool:
 
 @api_router.post("/jobs/commesse/{commessa_id}/activities")
 async def create_activity(commessa_id: str, payload: ActivityPayload, current: User = Depends(get_current_user)):
-    clienti, sub, client = await _commessa_or_404(current, commessa_id)
-    _require_org_admin(current, PLAN_ADMIN_ONLY)
+    clienti, sub, client = await _commessa_or_404(current, commessa_id)   # (the users plan too, not only the administrator)
     view = _commessa_view(sub, client, clienti)
     return await _new_activity(current, clienti, view, payload.description, payload.date, payload.start_time, payload.end_time,
-                               [a.model_dump() for a in payload.assignees], [i.model_dump() for i in payload.items], payload.info or "", payload.origin)
+                               [a.model_dump() for a in payload.assignees], [i.model_dump() for i in payload.items], payload.info or "", payload.origin,
+                               payload.milestone_id)
 
 
 async def _activity_or_404(current: User, activity_id: str, write: bool = True) -> tuple:
@@ -10873,8 +10964,11 @@ def _is_assignee(a: dict, current: User) -> bool:
 @api_router.patch("/jobs/activities/{activity_id}")
 async def patch_activity(activity_id: str, payload: ActivityPatch, current: User = Depends(get_current_user)):
     a, clienti, view = await _activity_or_404(current, activity_id)
-    _require_org_admin(current, PLAN_ADMIN_ONLY)
+    if not (_is_org_admin(current) or a.get("created_by") == current.user_id and not a.get("created_by_collab")):
+        raise HTTPException(status_code=403, detail="La modifica chi l'ha creata o l'amministratore.")
     upd = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if payload.milestone_id is not None:
+        upd["milestone_id"] = await _valid_tappa(a["commessa_id"], payload.milestone_id or None)
     if payload.description is not None and payload.description.strip():
         upd["description"] = " ".join(payload.description.split())[:200]
     moved = False
@@ -11002,6 +11096,7 @@ async def _activity_done(activity_id: str, by: str, log_id: Optional[str] = None
     upd = {"status": "svolta", "done_at": datetime.now(timezone.utc).isoformat(), "done_by": by, "done_log_id": log_id}
     await db.job_activities.update_one({"id": activity_id}, {"$set": upd})
     _activity_touch(a)
+    await _tappa_check(a.get("milestone_id"))
     return {**a, **upd}
 
 
@@ -11129,9 +11224,10 @@ def _waiting_line(wv: dict) -> str:
     return line + f" Il {_short_it_date(wv['admin_due'])} ti ricordo: «{wv['ask_text']}»."
 
 
-async def _waiting_extra(target: dict, log: dict, wait: dict) -> Optional[dict]:
+async def _waiting_extra(target: dict, log: dict, wait: dict, plain: bool = False) -> Optional[dict]:
     """The work waited for, checked against the quote and the description: not in them -> a possible extra (to do) for
-    the administrator, to have approved by the client together with the go-ahead."""
+    the administrator, to have approved by the client together with the go-ahead. plain: a work to do planned from a
+    message (an activity), with no go-ahead to wait for."""
     try:
         ctx = await _commessa_ctx(target["id"])
         if not ctx or vx.norm_stato(ctx[3]["stato"]) not in (vx.WORKING_STATO, "sospesa"):
@@ -11150,16 +11246,18 @@ async def _waiting_extra(target: dict, log: dict, wait: dict) -> Optional[dict]:
             return None
         x = {"id": f"xw_{uuid.uuid4().hex[:10]}", "commessa_id": target["id"], "collection_id": clienti["id"], "work": wait["work"],
              "why": f["why"], "log_ids": [log["id"]], "date": log.get("date"), "author": log.get("author_name") or "", "hours": 0,
-             "materials": [], "quote_version": version, "status": "da_valutare", "to_do": True, "wait_id": wait["id"], "amount": None,
+             "materials": [], "quote_version": version, "status": "da_valutare", "to_do": True, "amount": None,
+             **({k: wait[k] for k in ("activity_id", "todo_id") if wait.get(k)} if plain else {"wait_id": wait["id"]}),
              "created_at": datetime.now(timezone.utc).isoformat()}
         await db.job_extra_works.insert_one(dict(x))
-        await db.job_waits.update_one({"id": wait["id"]}, {"$set": {"extra_id": x["id"]}})
+        if not plain:
+            await db.job_waits.update_one({"id": wait["id"]}, {"$set": {"extra_id": x["id"]}})
         owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
         if owner:
-            text = (f"💡 *Possibile lavoro extra da fare* su {_wait_where(view)}\n«{x['work']}» ({jl.waiting_label(wait)})"
+            text = (f"💡 *Possibile lavoro extra da fare* su {_wait_where(view)}\n«{x['work']}»" + ("" if plain else f" ({jl.waiting_label(wait)})")
                     + (f"\n{x['why']}" if x["why"] else "")
                     + f"\nNon lo trovo nel preventivo{f' v{version}' if version else ''} né nella descrizione. "
-                      "Se è un extra, fallo approvare al cliente insieme al via libera.")
+                    + ("È un extra da far approvare al cliente?" if plain else "Se è un extra, fallo approvare al cliente insieme al via libera."))
             if await nprefs.wants(db, owner["user_id"], "extra", "telegram"):
                 await _tg_send(owner.get("telegram_chat_id"), text, _extra_kb(x["id"]))
             push.fire_and_forget(db, owner["user_id"], "💡 Possibile lavoro extra da fare", f"«{x['work']}» · {view['title']}",
@@ -11381,25 +11479,275 @@ async def _activities_started(worker_id: str, commessa_id: str, at: datetime) ->
             await db.job_activities.update_one({"id": a["id"]}, {"$set": {"status": "in_corso"}})
 
 
-async def _plan_from_message(current: User, clienti: dict, target: dict, text: str, channel: str) -> dict:
-    """"Pianifica smontaggio sanitari il 12/11 alle 8 con Gino e Marco, portare i flessibili" (RF-SVO-01 from the chat)."""
+async def _plan_from_message(current: User, clienti: dict, target: dict, text: str, channel: str, author: Optional[dict] = None) -> dict:
+    """"Pianifica smontaggio sanitari il 12/11 alle 8 con Gino e Marco, portare i flessibili", "domani Avanzino deve sostituire il
+    ventilatore": an activity, in the tappa it belongs to. The administrator and the users plan for anyone; a collaborator (author,
+    from Telegram) for themselves or the colleagues of their company only. Nobody named: for who wrote it (the administrator's
+    stays unassigned). Without a day: made all the same and the day asked (buttons)."""
     people = await _activity_people(clienti, target["id"])
-    names = [p["name"] for p in people]
-    f = await jl.read_activity(text, names, current.user_id, channel)
-    if not f["description"] or not f["date"]:   # what is missing, said
-        missing = " e ".join(x for x, ok in (("cosa va fatto", f["description"]), ("il giorno", f["date"])) if not ok)
-        return {"status": "unclear", "commessa": target, "message": f"Per pianificarla mi manca {missing}: riscrivimela con "
-                                                                    f"{'il giorno' if f['description'] else 'cosa va fatto'}, es. «domani Gino "
-                                                                    "smonta i sanitari alle 8» o «pianifica smontaggio sanitari il 12/11 con Gino»."}
+    f = await jl.read_activity(text, [p["name"] for p in people], current.user_id, channel)
+    if not f["description"]:
+        return {"status": "unclear", "commessa": target, "message": "Per pianificarla mi manca cosa va fatto: riscrivimela, es. «domani Gino "
+                                                                    "smonta i sanitari alle 8»."}
     by_name = {p["name"]: p for p in people}
-    chosen = [{"type": by_name[n]["type"], "id": by_name[n]["id"]} for n in f["assignees"] if n in by_name]
-    a = await _new_activity(current, clienti, target, f["description"], f["date"], f["start"], f["end"], chosen,
-                            [{"text": t} for t in f["items"]], f["info"], "messaggio")
-    lines = [f"🗓 Pianificata su «{target['title']}»: *{a['description']}* il {_short_it_date(a['date'])}" + (f" alle {a['start_time']}" if a.get("start_time") else "") + "."]
-    lines.append("👷 " + (", ".join(p["name"] for p in a["assignees"]) if a["assignees"] else "nessuno assegnato: aggiungili dalla sezione Pianificazione"))
-    for label, rows in _items_by_category(a["items"]):
-        lines.append(f"{label}: " + "; ".join(rows))
-    return {"status": "commessa_update", "commessa": target, "message": "\n".join(lines), "activity": a}
+    chosen = [by_name[n] for n in f["assignees"] if n in by_name]
+    if author:   # a collaborator: only themselves and the colleagues of their own company
+        mine = (author.get("company") or "").strip().lower()
+        allowed = [p for p in people if p["type"] == "collab" and (p["id"] == author["id"] or (mine and (p.get("company") or "").strip().lower() == mine))]
+        if any(p not in allowed for p in chosen):
+            names = ", ".join(_first_name(p["name"]) for p in allowed if p["id"] != author["id"])
+            return {"status": "unclear", "commessa": target, "message": "Posso segnare attività solo per te"
+                    + (f" o per i colleghi della tua azienda ({names})" if names else "") + ". Per gli altri chiedi a chi ti ha invitato."}
+        chosen = chosen or [p for p in allowed if p["id"] == author["id"]]
+    elif not chosen and not _is_org_admin(current):
+        chosen = [p for p in people if p["type"] == "user" and p["id"] == current.user_id]
+    creator = {"name": (author or {}).get("first_name") or _first_name(current.name), "collab_id": (author or {}).get("id")}
+    tappa = await _tappa_for(target["id"], f["description"])
+    ctx = await _commessa_ctx(target["id"])
+    if f["date"] and target.get("address"):
+        a = await _new_activity(current, clienti, target, f["description"], f["date"], f["start"], f["end"],
+                                [{"type": p["type"], "id": p["id"]} for p in chosen], [{"text": t} for t in f["items"]], f["info"], "messaggio",
+                                tappa and tappa["id"], creator)
+        lines = [f"🗓 Pianificata su «{target['title']}»: *{a['description']}* il {_short_it_date(a['date'])}"
+                 + (f" alle {a['start_time']}" if a.get("start_time") else "") + "."]
+        lines.append("👷 " + (", ".join(p["name"] for p in a["assignees"]) if a["assignees"] else "nessuno assegnato: aggiungili dalla sezione Pianificazione"))
+        for label, rows in _items_by_category(a["items"]):
+            lines.append(f"{label}: " + "; ".join(rows))
+        if tappa:
+            lines.append(f"🚩 Nella tappa «{tappa['title']}».")
+        if ctx:
+            _bg(_work_to_do_extra(target, text, a["description"], {"activity_id": a["id"]}))
+        return {"status": "commessa_update", "commessa": target, "message": "\n".join(lines), "activity": a}
+    # no day (or no site address yet): an activity all the same, its day asked
+    t = await _new_plan_todo(current, clienti, target, f["description"], f["date"] or None, chosen, creator, tappa and tappa["id"])
+    lines = [f"📌 Attività su «{target['title']}»: *{t['text']}*" + (f" il {_short_it_date(t['due_date'])}" if t.get("due_date") else "")
+             + _for_whom(creator["name"], [t["who"] and _first_name(t["who"])]) + "."]
+    if tappa:
+        lines.append(f"🚩 Nella tappa «{tappa['title']}».")
+    if not t.get("due_date"):
+        lines.append("📅 C'è una data prevista?")
+    if ctx:
+        _bg(_work_to_do_extra(target, text, t["text"], {"todo_id": t["id"]}))
+    return {"status": "commessa_update", "commessa": target, "message": "\n".join(lines), "todo": t,
+            **({"ask_date": {"todo_id": t["id"]}} if not t.get("due_date") else {})}
+
+
+def _for_whom(creator: str, assignees: list) -> str:
+    """" — per Avanzino (da Luca)": who it is for and, when different, who made it (the diary shows both)."""
+    names = [n for n in assignees if n]
+    if not names:
+        return f" (da {creator})"
+    return f" — per {_and_join(names)}" + (f" (da {creator})" if names != [creator] else "")
+
+
+async def _valid_tappa(commessa_id: str, milestone_id: Optional[str]) -> Optional[str]:
+    if not milestone_id:
+        return None
+    m = await db.job_milestones.find_one({"id": milestone_id, "commessa_id": commessa_id}, {"_id": 0, "id": 1})
+    if not m:
+        raise HTTPException(status_code=400, detail="Tappa non trovata su questa commessa")
+    return m["id"]
+
+
+async def _tappa_for(commessa_id: str, text: str) -> Optional[dict]:
+    """The tappa (not concluded) an activity belongs to, from its words ("smontare la caldaia" -> "Smontaggio vecchio impianto
+    termico" no; -> "Smontaggio caldaia" yes): most of the tappa's words in it, the closest; none when unsure."""
+    best, score = None, 0.0
+    said = set(jl._words(text))
+    for m in await db.job_milestones.find({"commessa_id": commessa_id, "done": {"$ne": True}}, {"_id": 0}).to_list(500):
+        words = [w for w in jl._words(m.get("title") or "") if w not in {"lavori", "lavoro", "opere", "fornitura", "posa"}] or jl._words(m.get("title") or "")
+        if not words:
+            continue
+        sc = sum(1 for w in words if jl._said(w, said)) / len(words)
+        if sc > score:
+            best, score = m, sc
+    return best if score >= 0.5 else None
+
+
+async def _new_plan_todo(current: User, clienti: dict, view: dict, text: str, due: Optional[str], people: list, creator: dict,
+                         milestone_id: Optional[str]) -> dict:
+    """An activity without a day on site (or a site without address): a To Do of the commessa for its person."""
+    p = people[0] if people else None
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {"id": f"jtodo_{uuid.uuid4().hex[:12]}", "commessa_id": view["id"], "collection_id": clienti["id"],
+           "user_id": current.user_id, "org_id": current.org_id, "author_name": creator["name"], "created_by_name": creator["name"],
+           "created_by_collab": creator.get("collab_id"), "created_by_user": None if creator.get("collab_id") else current.user_id,
+           "text": " ".join(text.split())[:500], "who": p["name"] if p else "",
+           "collaborator_id": p["id"] if p and p["type"] == "collab" else None, "assignee_user_id": p["id"] if p and p["type"] == "user" else None,
+           "due_date": due, "done": False, "done_at": None, "reminded": {}, "milestone_id": await _valid_tappa(view["id"], milestone_id),
+           "created_at": now}
+    await db.job_todos.insert_one(dict(doc))
+    await _job_event(current, clienti, view, "todo", f"📌 Attività: {doc['text']}" + (f" entro il {_short_it_date(due)}" if due else "")
+                     + _for_whom(creator["name"], [doc["who"] and _first_name(doc["who"])]) + ".")
+    if p and p["id"] != (creator.get("collab_id") or (None if creator.get("collab_id") else current.user_id)):
+        await _notify_assignee("todo", doc, view) if doc["collaborator_id"] else await _tell_user_todo(doc, view)
+    _day_pin_touch(doc["collaborator_id"])
+    return doc
+
+
+async def _tell_user_todo(t: dict, view: dict) -> None:
+    """A To Do given to a user of the app: in the app (and on Telegram, if they want it)."""
+    uid = t.get("assignee_user_id")
+    if not uid:
+        return
+    push.fire_and_forget(db, uid, f"📌 Attività per te · {view.get('title')}", t["text"], f"/dashboard/journal?commessa={view['id']}",
+                         f"todo-{t['id']}", kind="shares")
+    u = await db.users.find_one({"user_id": uid}, {"_id": 0, "telegram_chat_id": 1})
+    if u and u.get("telegram_chat_id") and await nprefs.wants(db, uid, "shares", "telegram"):
+        await _tg_send(u["telegram_chat_id"], _assignment_text("todo", t, view, "new"))
+
+
+# ---- the day of an activity, asked ("C'è una data prevista?"), its follow-up when its day is gone and nobody ticked it, and the
+# closing of a tappa once all its activities are done (asked, never by itself)
+PLAN_WHEN = {"oggi": 0, "domani": 1, "dopodomani": 2}
+
+
+def _plan_kb(kind: str, item_id: str, prefix: str = "pl"):
+    """The buttons: "d" a day for an activity without one; "t" / "a" a To Do / an activity whose day is gone."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    b = lambda label, choice: InlineKeyboardButton(label, callback_data=f"{prefix}:{kind}:{choice}:{item_id}")
+    if kind == "d":
+        return InlineKeyboardMarkup([[b("Oggi", "oggi"), b("Domani", "domani"), b("Dopodomani", "dopodomani")],
+                                     [b("Lunedì", "lunedi"), b("Nessuna data", "nessuna")]])
+    return InlineKeyboardMarkup([[b("✅ Fatta", "fatta"), b("📅 Domani", "domani")], [b("🗑 Non serve più", "no")]])
+
+
+async def _plan_answer(kind: str, choice: str, item_id: str, by: dict) -> str:
+    """by: {"kind": user|collab, "id", "name"}. -> the answer."""
+    coll = db.job_activities if kind == "a" else db.job_todos
+    x = await coll.find_one({"id": item_id}, {"_id": 0})
+    if not x:
+        return "Questa attività non c'è più."
+    mine = (by["id"] in [p["id"] for p in x.get("assignees") or []]) if kind == "a" else \
+        (by["id"] in [x.get("collaborator_id"), *(x.get("shared_with") or []), x.get("created_by_collab")] if by["kind"] == "collab"
+         else by["id"] in [x.get("assignee_user_id"), x.get("created_by_user"), x.get("user_id")])
+    if not mine and by["kind"] == "user":
+        u = await db.users.find_one({"user_id": by["id"]}, {"_id": 0})
+        try:
+            mine = bool(u) and bool(await _commessa_or_404(User(**u), x["commessa_id"]))
+        except HTTPException:
+            mine = False
+    if not mine:
+        return "Questa attività non è tua."
+    ctx = await _commessa_ctx(x["commessa_id"])
+    if not ctx:
+        return "Questa commessa non c'è più."
+    view = ctx[3]
+    today = jl.today_local()
+    what = x.get("description") or x.get("text")
+    if kind == "d":
+        if choice == "nessuna":
+            return f"Ok, «{what}» resta senza data: la trovi in Pianificazione."
+        due = (today + timedelta(days=PLAN_WHEN[choice])) if choice in PLAN_WHEN else \
+            (today + timedelta(days=(7 - today.weekday()) % 7 or 7)) if choice == "lunedi" else None
+        if not due:
+            return "Scelta non valida."
+        await db.job_todos.update_one({"id": item_id}, {"$set": {"due_date": due.isoformat(), "reminded": {}}})
+        _day_pin_touch(x.get("collaborator_id"))
+        return f"📅 «{what}»: il {_short_it_date(due.isoformat())}. Te lo ricordo il giorno prima."
+    if choice == "fatta":
+        if kind == "a":
+            await _activity_done(item_id, by["name"])
+        else:
+            await db.job_todos.update_one({"id": item_id}, {"$set": {"done": True, "done_at": datetime.now(timezone.utc).isoformat(), "done_by": by["name"]}})
+            await _tappa_check(x.get("milestone_id"))
+        return f"✅ «{what}» segnata come fatta."
+    if choice == "domani":
+        nxt = mtpl.add_workdays(today, 1).isoformat()
+        if kind == "a":
+            await db.job_activities.update_one({"id": item_id}, {"$set": {"date": nxt, "status": "pianificata", "reminders": {}, "followup": None}})
+            _activity_touch(x)
+        else:
+            await db.job_todos.update_one({"id": item_id}, {"$set": {"due_date": nxt, "reminded": {}}})
+        return f"📅 «{what}» spostata al {_short_it_date(nxt)}."
+    if choice == "no":
+        if kind == "a":
+            await db.job_activities.update_one({"id": item_id}, {"$set": {"status": "annullata", "cancelled_reason": f"non serve più ({by['name']})"}})
+            _activity_touch(x)
+        else:
+            await db.job_todos.delete_one({"id": item_id})
+        owner = await db.users.find_one({"user_id": ctx[0].get("user_id")}, {"_id": 0})
+        if owner:
+            await _log_commessa_event(User(**owner), view, "todo", f"🗑 Attività tolta: {what} (non serve più, segnato da {by['name']}).",
+                                      author_name=by["name"])
+        await _tappa_check(x.get("milestone_id"))
+        return f"🗑 «{what}» tolta: non serve più."
+    return "Scelta non valida."
+
+
+async def _plan_followups(now_utc: Optional[datetime] = None) -> int:
+    """From 9:00: the activities on site of a day gone and not marked done - their people are asked (once) whether it was done,
+    with ✅ Fatta / 📅 Domani / 🗑 Non serve più. (A To Do's day gone: asked in its reminder of the first day late.)"""
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    if now_local.strftime("%H:%M") < "09:00":
+        return 0
+    today = now_local.date().isoformat()
+    sent = 0
+    for a in await db.job_activities.find({"status": {"$in": ["pianificata", "confermata", "in_corso"]}, "date": {"$lt": today}}, {"_id": 0}).to_list(2000):
+        if (a.get("followup") or {}).get("date") == a["date"]:
+            continue
+        await db.job_activities.update_one({"id": a["id"]}, {"$set": {"followup": {"date": a["date"], "at": datetime.now(timezone.utc).isoformat()}}})
+        ctx = await _commessa_ctx(a["commessa_id"])
+        if not ctx or vx.is_closed(ctx[3]["stato"]):
+            continue
+        view = ctx[3]
+        text = (f"🗓 Il {_short_it_date(a['date'])} era prevista *{a['description']}* su «{view['title']}» — {view['client_name']}.\n"
+                "È stata fatta?")
+        people = a.get("assignees") or []
+        if not people:   # nobody on it: who made it (or the administrator) is asked
+            people = [{"type": "user", "id": a.get("created_by") or ctx[0].get("user_id")}]
+        for p in people:
+            try:
+                if p["type"] == "collab":
+                    c = await db.collaborators.find_one({"id": p["id"]}, {"_id": 0})
+                    if c and await _tell_collaborator(c, text, kb=_plan_kb("a", a["id"], "cpl")):
+                        sent += 1
+                else:
+                    push.fire_and_forget(db, p["id"], "🗓 È stata fatta?", a["description"], f"/dashboard/journal?commessa={view['id']}",
+                                         f"afu-{a['id']}", kind="task_reminder")
+                    u = await db.users.find_one({"user_id": p["id"]}, {"_id": 0, "telegram_chat_id": 1})
+                    if u and u.get("telegram_chat_id") and await nprefs.wants(db, p["id"], "task_reminder", "telegram"):
+                        await _tg_send(u["telegram_chat_id"], text, _plan_kb("a", a["id"]))
+                    sent += 1
+            except Exception:
+                logger.exception("activity follow-up failed")
+    return sent
+
+
+async def _tappa_check(milestone_id: Optional[str]) -> None:
+    """All the activities of a tappa done: whether it is concluded is asked (the administrator, on Telegram and in the app)."""
+    if not milestone_id:
+        return
+    try:
+        m = await db.job_milestones.find_one({"id": milestone_id}, {"_id": 0})
+        if not m or m.get("done") or m.get("close_proposed"):
+            return
+        acts = [a for a in await db.job_activities.find({"milestone_id": milestone_id}, {"_id": 0, "status": 1}).to_list(500) if a.get("status") != "annullata"]
+        todos = await db.job_todos.find({"milestone_id": milestone_id}, {"_id": 0, "done": 1}).to_list(500)
+        if not (acts or todos) or any(a["status"] != "svolta" for a in acts) or any(not t.get("done") for t in todos):
+            return
+        await db.job_milestones.update_one({"id": milestone_id}, {"$set": {"close_proposed": {"at": datetime.now(timezone.utc).isoformat()}}})
+        ctx = await _commessa_ctx(m["commessa_id"])
+        owner = await db.users.find_one({"user_id": (ctx[0] if ctx else {}).get("user_id")}, {"_id": 0}) if ctx else None
+        if not owner:
+            return
+        view = ctx[3]
+        text = f"🚩 Le attività della tappa *{m['title']}* su «{view['title']}» — {view['client_name']} sono tutte fatte. La tappa è conclusa?"
+        push.fire_and_forget(db, owner["user_id"], f"🚩 Tappa da chiudere · {view['title']}", m["title"], f"/dashboard/journal?commessa={view['id']}",
+                             f"tpc-{milestone_id}", kind="done")
+        if owner.get("telegram_chat_id") and await nprefs.wants(db, owner["user_id"], "done", "telegram"):
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            await _tg_send(owner["telegram_chat_id"], text, InlineKeyboardMarkup([[InlineKeyboardButton("✅ Sì, conclusa", callback_data=f"tpc:y:{milestone_id}"),
+                                                                                    InlineKeyboardButton("Non ancora", callback_data=f"tpc:n:{milestone_id}")]]))
+    except Exception:
+        logger.exception("tappa check failed")
+
+
+async def _work_to_do_extra(target: dict, note: str, work: str, ref: dict) -> Optional[dict]:
+    """A work to do said in a message, checked against the contract (quote, description): not in it -> a possible extra for the
+    administrator (like a work waiting for a go-ahead)."""
+    return await _waiting_extra(target, {"id": ref.get("log_id") or "", "raw_text": note, "channel": "web"},
+                                {"id": ref.get("activity_id") or ref.get("todo_id") or "", "work": work, "what": "", "from": "", **ref}, plain=True)
 
 
 @api_router.get("/jobs/commesse/{commessa_id}/plan-people")
@@ -13468,7 +13816,7 @@ async def _collab_day_items(collab: dict, day: str) -> list:
         for m in await db.job_milestones.find({"commessa_id": view["id"], "due_date": day}, {"_id": 0}).to_list(100):
             c = await _milestone_collaborator(m)
             if c and c["id"] == collab["id"]:
-                rows.append((1, "m", m["id"], f"🚩 {m['title']} (milestone)", bool(m.get("done"))))
+                rows.append((1, "m", m["id"], f"🚩 {m['title']} (tappa)", bool(m.get("done"))))
         rows += [(-1, *r) for r in await _activity_day_rows(view, collab["id"], day)]
         if rows:
             out.append((view, [r[1:] for r in sorted(rows, key=lambda r: r[0])]))
@@ -13692,6 +14040,7 @@ async def _collab_reminder_loop():
                 await _material_reminders()
                 await _material_expired()
                 await _waiting_followups()
+                await _plan_followups()
                 await _presence_forgotten()
                 await _presence_late_check()
                 await _presence_day_note()
@@ -16718,14 +17067,15 @@ async def _job_weekly_summary(user: User, now_local: datetime) -> str:
                       key=lambda t: t["due_date"])
     # the milestones: late ones, and the ones due this week
     ms = await db.job_milestones.find({"commessa_id": {"$in": [c["id"] for c in open_c]}, "done": False}, {"_id": 0}).to_list(2000) if open_c else []
+    ms = [m for m in ms if m.get("due_date")]   # (a tappa without a date is never late nor due this week)
     ms_late = sorted([m for m in ms if m["due_date"] < today.isoformat()], key=lambda m: m["due_date"])
     ms_week = sorted([m for m in ms if today.isoformat() <= m["due_date"] <= (today + timedelta(days=6)).isoformat()], key=lambda m: m["due_date"])
     if ms_late:
-        lines.append("\n🔴 Milestone in ritardo:")
+        lines.append("\n🔴 Tappe in ritardo:")
         lines += [f"• {m['title']} — {m.get('who') or ''}, scadenza {_short_it_date(m['due_date'])} "
                   f"({_days(today.isoformat(), m['due_date'])} g) · «{titles.get(m['commessa_id'], '')}»" for m in ms_late[:15]]
     if ms_week:
-        lines.append("\n🚩 Milestone di questa settimana:")
+        lines.append("\n🚩 Tappe di questa settimana:")
         lines += [f"• {m['title']} — {m.get('who') or ''} entro {_short_it_date(m['due_date'])} · «{titles.get(m['commessa_id'], '')}»"
                   for m in ms_week[:15]]
     if week_due:

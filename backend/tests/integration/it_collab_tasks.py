@@ -112,7 +112,7 @@ async def fake_send(chat_id, text):
     NOTICES.append((chat_id, text)); return True
 server._send_telegram_text = fake_send
 TOLD = []
-async def fake_tell(c, text, done_data=None):   # a collaborator's message (with the "Fatto" button)
+async def fake_tell(c, text, done_data=None, kb=None):   # a collaborator's message (with the "Fatto" button)
     if c.get("status") != "active" or not c.get("telegram_chat_id"):
         return False
     NOTICES.append((c["telegram_chat_id"], text)); TOLD.append((c["id"], text, done_data)); return True
@@ -191,7 +191,7 @@ async def main():
 
     # 3) its date moves: told; given back to the team: no more his
     t = await server.update_job_todo(t["id"], server.JobTodoPatch(due_date=d(2)), me)
-    assert "📅 Nuova scadenza" in TOLD[-1][1] and "era" in TOLD[-1][1]
+    assert "📅 Nuova data" in TOLD[-1][1] and "era" in TOLD[-1][1]
     n = len(TOLD)
     x = await server.update_job_todo(p["id"], server.JobTodoPatch(who="Luca", collaborator_id=""), me)
     assert x["collaborator_id"] is None and x["who"] == "Luca" and len(TOLD) == n
@@ -210,9 +210,9 @@ async def main():
 
     # 5) a milestone given to him
     m = await server.create_milestone("s_bagno", server.MilestonePayload(title="Impianto idraulico", collaborator_id="k1", due_date=d(5)), me)
-    assert m["notified"] and m["who"] == "Gino Neri" and "🚩 Milestone affidata a te: *Impianto idraulico*" in TOLD[-1][1] and TOLD[-1][2] == f"cldone:m:{m['id']}"
+    assert m["notified"] and m["who"] == "Gino Neri" and "🚩 Tappa affidata a te: *Impianto idraulico*" in TOLD[-1][1] and TOLD[-1][2] == f"cldone:m:{m['id']}"
     await server.add_milestone_action(m["id"], server.MilestoneActionPayload(text="Manca il materiale", new_due_date=d(7)), me)
-    assert "📅 Nuova scadenza per la milestone *Impianto idraulico*" in TOLD[-1][1]
+    assert "📅 Nuova data per la tappa *Impianto idraulico*" in TOLD[-1][1]
 
     # 6) he taps ✅ Fatto: done, in the diary with his name, the owner told
     n_owner = len([1 for c_, _ in NOTICES if c_ == 77])
@@ -233,7 +233,7 @@ async def main():
     q = await press(["k1"], f"cldone:m:{m['id']}")
     ms = next(x for x in db.job_milestones.docs if x["id"] == m["id"])
     assert ms["done"] and ms["done_date"] == today.isoformat()
-    assert "Milestone «Impianto idraulico» completata" in [x for x in db.job_logs.docs if x.get("kind") == "milestone"][-1]["text"]
+    assert "Tappa «Impianto idraulico» conclusa" in [x for x in db.job_logs.docs if x.get("kind") == "milestone"][-1]["text"]
     # done ones are not reminded
     n = len(TOLD)
     await server._milestone_reminders(at9 + timedelta(days=7))

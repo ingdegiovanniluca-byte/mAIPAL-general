@@ -42,7 +42,7 @@ HELP = ("Qui puoi fare due cose, sulle commesse che ti sono state abilitate:\n"
         "📒 scrivere cosa avete fatto (ore, materiali, problemi), anche a voce o con le foto;\n"
         "🔎 chiedere informazioni sulla commessa (es. «cosa manca da fare?», «quante ore abbiamo fatto?»).\n"
         "Se lavori su più commesse, nomina il cliente o i lavori, oppure scegli la commessa dai pulsanti.\n"
-        "📌 Qui ti arrivano anche le attività e le milestone affidate a te, con i promemoria: quando sono fatte tocca ✅ Fatto.\n"
+        "📌 Qui ti arrivano anche le attività e le tappe affidate a te, con i promemoria: quando sono fatte tocca ✅ Fatto.\n"
         "⏱️ Quando arrivi in cantiere tocca 📍 Sono arrivato, quando hai finito 📍 Ho finito: le ore vanno nel diario da sole "
         "(oppure scrivi «sono arrivato» / «ho finito alle 17:30»).\n"
         "⏸️ Quando ti fermi tocca ⏸️ Pausa e poi ▶️ Riprendo (o scrivi «sono in pausa» / «riprendo», oppure «ho fatto mezz'ora di pausa»): "
@@ -332,6 +332,11 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_history": history}})
         await _reply(update, f"🔎 «{view['title']}» — {view['client_name']}\n{answer}", reply_markup=await _keyboard_for(everyone))
         return
+    if res["status"] == "commessa_update":   # an activity they planned (for themselves or a colleague of their company)
+        from server import _plan_kb
+        kb = _plan_kb("d", res["ask_date"]["todo_id"], "cpl") if res.get("ask_date") else await _keyboard_for(everyone)
+        await _reply(update, res["message"], reply_markup=kb)
+        return
     if res["status"] == "unclear":   # kept a few minutes: the answer to the question completes it
         await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"unclear": {"text": content, "commessa_id": view["id"], "at": _now().isoformat()}}})
     await _reply(update, "📒 " + (res.get("message") or "Non l'ho salvato: riscrivilo, per favore."), reply_markup=await _keyboard_for(everyone))
@@ -577,6 +582,24 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         except Exception:
             pass
         await _reply(update, answer)
+        return
+    if data.startswith("cpl:"):   # an activity: its day, or its day gone: done / tomorrow / not needed
+        from server import _plan_answer, _collab_name
+        _, kind, choice, item_id = (data.split(":", 3) + ["", "", ""])[:4]
+        coll = db.job_activities if kind == "a" else db.job_todos
+        x = await coll.find_one({"id": item_id}, {"_id": 0})
+        ids = ([p["id"] for p in (x or {}).get("assignees") or []] if kind == "a"
+               else [(x or {}).get("collaborator_id"), *((x or {}).get("shared_with") or []), (x or {}).get("created_by_collab")])
+        mine = next((r for r in active if r["id"] in ids), None)
+        if not mine:
+            await _reply(update, "Questa attività non è tua o non c'è più.")
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await _reply(update, await _plan_answer(kind, choice, item_id, {"kind": "collab", "id": mine["id"],
+                                                                        "name": mine.get("first_name") or _collab_name(mine)}))
         return
     if data.startswith("cmx:"):   # a reminder of materials / tools left behind: used, delete, move
         from server import _material_expired_answer, _collab_name

@@ -114,7 +114,7 @@ async def fake_send(chat_id, text):
     NOTICES.append((chat_id, text)); return True
 server._send_telegram_text = fake_send
 TOLD = []
-async def fake_tell(c, text, done_data=None):   # a collaborator's message (with the "Fatto" button)
+async def fake_tell(c, text, done_data=None, kb=None):   # a collaborator's message (with the "Fatto" button)
     if c.get("status") != "active" or not c.get("telegram_chat_id"):
         return False
     NOTICES.append((c["telegram_chat_id"], text)); TOLD.append((c["id"], text, done_data)); return True

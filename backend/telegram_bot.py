@@ -506,6 +506,10 @@ async def _run_job_log_flow(update_or_query, ctx, db, user, content, images=None
     if res["status"] in ("planned", "description", "commessa_update"):   # materials to take / the description / a quote's outcome: no entry
         await _set_state(db, chat_id, user["user_id"], current_action="journal", job_commessa_id=res["commessa"]["id"],
                          pending_job_context=None)
+        if res.get("ask_date"):   # an activity without a day: "C'è una data prevista?"
+            from server import _plan_kb
+            await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_plan_kb("d", res["ask_date"]["todo_id"]))
+            return
         await ctx.bot.send_message(chat_id=chat_id, text=res["message"], reply_markup=_reply_keyboard("journal"))
         return
     if res["status"] == "material_doubt":   # used today or to take? asked, the entry waits
@@ -1208,6 +1212,27 @@ async def _on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
             await ctx.bot.send_message(chat_id=chat_id, text=out["message"])
+        except Exception as e:
+            await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
+    elif data.startswith("pl:"):   # an activity: its day ("C'è una data prevista?"), or its day gone: done / tomorrow / not needed
+        from server import _plan_answer, _first_name
+        _k, kind, choice, item_id = (data.split(":", 3) + ["", "", ""])[:4]
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await ctx.bot.send_message(chat_id=chat_id, text=await _plan_answer(kind, choice, item_id,
+                                                                           {"kind": "user", "id": user["user_id"], "name": _first_name(user.get("name"))}))
+    elif data.startswith("tpc:"):   # "all the activities of the tappa are done: is it concluded?"
+        from server import update_milestone, MilestonePatch
+        _k, choice, ms_id = (data.split(":", 2) + ["", ""])[:3]
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        try:
+            out = await update_milestone(ms_id, MilestonePatch(done=True) if choice == "y" else MilestonePatch(close_proposal=False), _to_user_pydantic(user))
+            await ctx.bot.send_message(chat_id=chat_id, text=f"🚩 Tappa «{out['title']}» conclusa." if choice == "y" else f"Ok, «{out['title']}» resta aperta.")
         except Exception as e:
             await ctx.bot.send_message(chat_id=chat_id, text=f"⚠️ {str(getattr(e, 'detail', e))[:200]}")
     elif data.startswith("mx:"):   # a reminder of materials / tools left behind: used, delete, move

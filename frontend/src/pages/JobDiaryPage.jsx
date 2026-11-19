@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks, LayoutTemplate, BookmarkPlus, Copy, Users, Upload, ScrollText } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload, ScrollText } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -32,13 +32,6 @@ import { stateColor, STATO_ORDER, isClosed, LOST_CATEGORIES } from "@/lib/commes
 // floating on the side and sits at the bottom, like the one in the Chat section.
 
 const IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
-const IT_WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
-const dayLabel = (iso) => {
-  if (!iso) return "";
-  const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  return `${IT_WEEKDAYS[dt.getDay()]} ${d} ${IT_MONTHS[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ""}`;
-};
 const shortDay = (iso) => {
   if (!iso) return "";
   const [, m, d] = iso.split("-").map(Number);
@@ -144,7 +137,7 @@ function MilestoneTemplatesSheet({ commessa, onClose, onApplied }) {
   const row = (t) => (
     <button key={t.id} type="button" onClick={() => setOpen(t)} data-testid="ms-tpl-row" className="w-full text-left py-2.5 border-b border-white/[0.08] last:border-b-0">
       <div className="text-sm text-white font-medium">{t.name}</div>
-      <div className="text-[11.5px] text-white/55">{t.steps.length} milestone · circa {tplSpan(t)} giorni lavorativi</div>
+      <div className="text-[11.5px] text-white/55">{t.steps.length} tappe · circa {tplSpan(t)} giorni lavorativi</div>
     </button>
   );
   return (
@@ -154,8 +147,8 @@ function MilestoneTemplatesSheet({ commessa, onClose, onApplied }) {
           onChanged={async (keepId) => { const l = await load(); setOpen(keepId && l ? [...l.custom].find((x) => x.id === keepId) || null : null); }} />
       ) : (
         <>
-          <div className="text-lg font-semibold text-white mb-1">Milestone da modello</div>
-          <div className="text-xs text-white/55 mb-3">Scegli un modello: le milestone partono dal giorno di inizio che indichi, in giorni lavorativi.</div>
+          <div className="text-lg font-semibold text-white mb-1">Tappe da modello</div>
+          <div className="text-xs text-white/55 mb-3">Scegli un modello: le tappe partono dal giorno di inizio che indichi, in giorni lavorativi.</div>
           {lists === null ? <div className="kicker py-2">caricamento…</div> : (
             <>
               {lists.custom.length > 0 && (<><div className="text-[10px] uppercase tracking-widest text-white/50 mt-1">i tuoi modelli</div>{lists.custom.map(row)}</>)}
@@ -182,7 +175,7 @@ function TemplateDetail({ t, commessa, onBack, onApplied, onChanged }) {
     setBusy(true);
     try {
       const r = await api.post(`/jobs/commesse/${commessa.id}/milestones/from-template`, { template_id: t.id, start_date: start });
-      toast.success(`${r.data.created} milestone aggiunte${r.data.skipped.length ? ` (${r.data.skipped.length} c'erano già)` : ""}`);
+      toast.success(`${r.data.created} tappe aggiunte${r.data.skipped.length ? ` (${r.data.skipped.length} c'erano già)` : ""}`);
       onApplied();
     } catch (e) { fail(e); } finally { setBusy(false); }
   };
@@ -258,7 +251,7 @@ function SaveTemplateSheet({ commessa, onClose }) {
   return (
     <GlassBottomSheet onClose={onClose} testid="ms-tpl-save-sheet" className="max-h-[60vh] md:left-1/2 md:right-auto md:w-[440px] md:-translate-x-1/2 md:bottom-8">
       <div className="text-lg font-semibold text-white mb-1">Salva come modello</div>
-      <div className="text-xs text-white/55 mb-3">Le milestone di questa commessa diventano un modello da riusare: le scadenze diventano giorni lavorativi dall'inizio.</div>
+      <div className="text-xs text-white/55 mb-3">Le tappe di questa commessa diventano un modello da riusare: le date diventano giorni lavorativi dall'inizio.</div>
       <input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="Nome (es. Bagno chiavi in mano)" data-testid="ms-tpl-save-name"
         className="h-10 w-full rounded-xl bg-white/10 px-3 text-sm text-white placeholder:text-white/40 outline-none" />
       <div className="flex justify-end gap-2 mt-4">
@@ -1126,7 +1119,7 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
   const [plan, setPlan] = useState(proposal.plan_default || "none");
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (differs && !valueChoice) setValueChoice("new"); }, [differs, valueChoice]);
-  useEffect(() => { if (options.length && opt !== null && plan === "none" && (d.activities || []).length) setPlan(proposal.plan_dates?.end ? "milestone" : "todo"); },
+  useEffect(() => { if (options.length && opt !== null && plan === "none" && (d.activities || []).length) setPlan("milestone"); },
     [opt]); // eslint-disable-line react-hooks/exhaustive-deps
   const seg = (on) => `px-3 py-1 rounded-full text-[12px] transition-colors ${on ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`;
   const confirm = async () => {
@@ -1195,17 +1188,18 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
       {!proposal.current_budget && value ? <div className="mt-2 text-[12px] text-white/60">Il valore della commessa diventa {eur(value)}.</div> : null}
       {(d.activities || []).length > 0 && !(options.length && opt === null) && (
         <div className="mt-3 text-[13px] text-white/85" data-testid="quote-plan">
-          Le {d.activities.length} attività del preventivo:
+          I {d.activities.length} lavori del preventivo:
           <span className="ml-2 inline-flex rounded-full bg-white/10 p-0.5">
-            <button type="button" onClick={() => proposal.plan_dates?.end && setPlan("milestone")} disabled={!proposal.plan_dates?.end}
-              className={`${seg(plan === "milestone")} disabled:opacity-40`} data-testid="quote-plan-milestone">Milestone</button>
-            <button type="button" onClick={() => setPlan("todo")} className={seg(plan === "todo")} data-testid="quote-plan-todo">To Do</button>
+            <button type="button" onClick={() => setPlan("milestone")} className={seg(plan === "milestone")} data-testid="quote-plan-milestone">Tappe</button>
+            <button type="button" onClick={() => setPlan("todo")} className={seg(plan === "todo")} data-testid="quote-plan-todo">Attività</button>
             <button type="button" onClick={() => setPlan("none")} className={seg(plan === "none")}>Niente</button>
           </span>
           <div className="text-[11.5px] text-white/55 mt-1">
-            {plan === "milestone" ? `Scadenze distribuite nei giorni lavorativi dal ${shortDay(proposal.plan_dates.start)} al ${shortDay(proposal.plan_dates.end)}, nell'ordine del preventivo: poi le cambi tu.`
-              : plan === "todo" ? (proposal.plan_dates?.end ? "Un To Do per attività, senza scadenza." : "Senza date di inizio e fine lavori le milestone non si possono fare: un To Do per attività.")
-              : "Non creo né milestone né To Do (le attività restano da pianificare)."}
+            {plan === "milestone" ? (proposal.plan_dates?.end
+              ? `Le tappe del lavoro, nell'ordine del preventivo, con le date distribuite dal ${shortDay(proposal.plan_dates.start)} al ${shortDay(proposal.plan_dates.end)}: poi le cambi tu.`
+              : "Le tappe del lavoro, nell'ordine del preventivo, senza date: le aggiungi tu se servono.")
+              : plan === "todo" ? "Un'attività per lavoro, senza data."
+              : "Non creo né tappe né attività."}
           </div>
         </div>
       )}
@@ -1250,9 +1244,26 @@ const ACT_STATUS = { pianificata: ["Pianificata", "#F2C14E"], confermata: ["Conf
   svolta: ["Svolta", "rgba(255,255,255,0.55)"], annullata: ["Annullata", "rgba(255,255,255,0.35)"] };
 const CONFIRM_MARK = { confermato: "✓", rifiutato: "✗", in_attesa: "…" };
 const actWhen = (a) => [shortDay(a.date), a.start_time && (a.end_time ? `${a.start_time}–${a.end_time}` : `ore ${a.start_time}`)].filter(Boolean).join(" · ");
-const normDesc = (x) => (x || "").toLowerCase().replace(/[^a-z0-9àèéìòù]+/g, " ").trim();
 
-function ActivitySheet({ commessa, activity, prefill, onClose, onSaved }) {
+// which tappa an activity belongs to (none: "altre attività")
+function TappaPicker({ milestones, value, onChange }) {
+  if (!(milestones || []).length) return null;
+  const chip = (on) => `shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-[12px] ${on ? "bg-white text-[#403A3C] font-semibold" : "bg-white/10 text-white/80"}`;
+  return (
+    <div className="min-w-0" data-testid="tappa-picker">
+      <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">tappa</div>
+      <div className="flex gap-1.5 flex-wrap">
+        {milestones.filter((m) => m.status !== "done" || m.id === value).map((m) => (
+          <button key={m.id} type="button" onClick={() => onChange(m.id === value ? "" : m.id)} className={chip(m.id === value)}>{(m.order ?? 0) + 1}. {m.title}</button>
+        ))}
+        <button type="button" onClick={() => onChange("")} className={chip(!value)}>Nessuna</button>
+      </div>
+    </div>
+  );
+}
+
+function ActivitySheet({ commessa, activity, prefill, milestones = [], onClose, onSaved }) {
+  const [tappa, setTappa] = useState(activity?.milestone_id || "");
   const isNew = !activity;
   const [people, setPeople] = useState([]);
   const [desc, setDesc] = useState(activity?.description || prefill || "");
@@ -1291,10 +1302,12 @@ function ActivitySheet({ commessa, activity, prefill, onClose, onSaved }) {
     try {
       if (isNew) {
         await api.post(`/jobs/commesse/${commessa.id}/activities`, { description: desc, date: day, start_time: start || null, end_time: end || null,
-          assignees: assignees(), items: items.map(({ category, text }) => ({ category, text })), info: info || null, origin: prefill ? "preventivo" : "admin" });
+          assignees: assignees(), items: items.map(({ category, text }) => ({ category, text })), info: info || null, origin: prefill ? "preventivo" : "admin",
+          milestone_id: tappa || null });
         toast.success(chosen.length ? "Pianificata: l'ho mandata a chi la svolge" : "Pianificata");
       } else {
-        await api.patch(`/jobs/activities/${activity.id}`, { description: desc, date: day, start_time: start || "", end_time: end || "", assignees: assignees(), info });
+        await api.patch(`/jobs/activities/${activity.id}`, { description: desc, date: day, start_time: start || "", end_time: end || "", assignees: assignees(), info,
+          milestone_id: tappa });
         toast.success("Attività aggiornata");
       }
       onSaved();
@@ -1309,7 +1322,7 @@ function ActivitySheet({ commessa, activity, prefill, onClose, onSaved }) {
   const chip = (on) => `shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs ${on ? "lg-bubble text-white font-medium" : "bg-white/10 text-white/75"}`;
   return (
     <GlassBottomSheet onClose={onClose} testid="activity-sheet" className="max-h-[92vh] md:left-1/2 md:right-auto md:w-[580px] md:-translate-x-1/2 md:bottom-8">
-      <div className="kicker">· {isNew ? "pianifica un'attività" : "modifica l'attività"}</div>
+      <div className="kicker">· {isNew ? "attività in cantiere" : "modifica l'attività"}</div>
       <div className="mt-2 space-y-3.5">
         <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={2} autoFocus={isNew && !prefill} placeholder="Es. Smontaggio sanitari"
           data-testid="activity-desc" className="w-full rounded-2xl bg-white/10 px-3.5 py-3 text-[14px] text-white placeholder:text-white/40 outline-none resize-none" />
@@ -1320,7 +1333,8 @@ function ActivitySheet({ commessa, activity, prefill, onClose, onSaved }) {
           <label className="text-[11px] text-white/60">Fine (facoltativa)
             <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} data-testid="activity-end" className={`${field} w-full mt-0.5`} /></label>
         </div>
-        <div className="text-[11.5px] text-white/55 -mt-2">Senza ora d'inizio vale quella dell'organizzazione.</div>
+        <div className="text-[11px] text-white/55 -mt-2">Senza ora d'inizio vale quella dell'organizzazione.</div>
+        <TappaPicker milestones={milestones} value={tappa} onChange={setTappa} />
         <div>
           <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">chi la svolge</div>
           <div className="flex gap-1.5 flex-wrap" data-testid="activity-people">
@@ -1443,47 +1457,104 @@ function ActivityCard({ a, meId, isAdmin, canWrite, onEdit, onChanged }) {
   );
 }
 
-function PlanView({ commessa, activities, quotes, meId, isAdmin, canWrite, onChanged }) {
-  const [sheet, setSheet] = useState(null);   // {activity} | {prefill}
-  const [showPast, setShowPast] = useState(false);
-  const acts = activities || [];
-  const open = acts.filter((a) => ["pianificata", "confermata", "in_corso"].includes(a.status));
-  const past = acts.filter((a) => !["pianificata", "confermata", "in_corso"].includes(a.status)).reverse();
-  const planned = new Set(acts.map((a) => normDesc(a.description)));
-  const fromQuote = isAdmin ? ((quotes || [])[0]?.data?.activities || []).filter((x) => !planned.has(normDesc(x))) : [];
-  const card = (a) => <ActivityCard key={a.id} a={a} meId={meId} isAdmin={isAdmin} canWrite={canWrite} onEdit={(x) => setSheet({ activity: x })} onChanged={onChanged} />;
+// ===== Pianificazione: the TAPPE of the work (the main works, from the contract), in the order they are done, each with its
+// ACTIVITIES (smaller things to do: works, materials to take, a call), then the activities of no tappa. "Da fare" hides
+// what is done. Anyone writing on the commessa adds activities; the tappe are the administrator's.
+function PlanList({ commessa, milestones, activities, todos, meId, isAdmin, canWrite, onChanged, onEditTappa, onEditTodo, onTemplate }) {
+  const [all, setAll] = useState(false);
+  const [sheet, setSheet] = useState(null);   // an activity on site: {activity} | {} new
+  const acts = (activities || []).filter((a) => a.status !== "annullata");
+  const tds = todos || [];
+  const openAct = (a) => ["pianificata", "confermata", "in_corso"].includes(a.status);
+  const shown = (done) => all || !done;
+  const itemsOf = (msId) => [
+    ...acts.filter((a) => (a.milestone_id || null) === msId && shown(!openAct(a))).map((a) => ({ k: "a", x: a, day: a.date })),
+    ...tds.filter((t) => (t.milestone_id || null) === msId && shown(t.done)).map((t) => ({ k: "t", x: t, day: t.due_date })),
+  ].sort((p, q) => (p.day || "9999").localeCompare(q.day || "9999"));
+  const counts = (msId) => {
+    const a = acts.filter((x) => x.milestone_id === msId), t = tds.filter((x) => x.milestone_id === msId);
+    return { done: a.filter((x) => x.status === "svolta").length + t.filter((x) => x.done).length, total: a.length + t.length };
+  };
+  const answer = async (m, yes) => {
+    try { await api.patch(`/jobs/milestones/${m.id}`, yes ? { done: true } : { close_proposal: false }); onChanged(); toast.success(yes ? "Tappa conclusa" : "Resta aperta"); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const tickTodo = async (t) => {
+    try { await api.patch(`/jobs/todos/${t.id}`, { done: !t.done }); onChanged(); } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const item = ({ k, x }) => (k === "a"
+    ? <div key={x.id} className="pl-6"><ActivityCard a={x} meId={meId} isAdmin={isAdmin} canWrite={canWrite} onEdit={(y) => setSheet({ activity: y })} onChanged={onChanged} /></div>
+    : <div key={x.id} className="pl-6"><TodoRow todo={x} onToggle={canWrite ? tickTodo : () => {}} onOpen={canWrite ? onEditTodo : () => {}} /></div>);
+  const loose = itemsOf(null);
+  const tappe = (milestones || []).filter((m) => all || m.status !== "done" || itemsOf(m.id).length);
+  const sw = (on) => `px-3 py-1 rounded-full text-[12px] transition-colors ${on ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`;
   return (
-    <div data-testid="job-plan">
-      {isAdmin && canWrite && (
-        <div className="mt-1.5 flex items-center justify-center text-[12px] text-white/80">
-          <button type="button" onClick={() => setSheet({})} data-testid="activity-new" className="inline-flex items-center gap-1.5 active:opacity-70"><Plus size={13} /> Pianifica un'attività</button>
-        </div>
-      )}
-      {fromQuote.length > 0 && canWrite && (
-        <div className="mt-3 pt-3 border-t border-white/[0.16]" data-testid="plan-from-quote">
-          <div className="text-[10px] uppercase tracking-widest text-white/55 mb-1">da pianificare (dal preventivo)</div>
-          {fromQuote.map((x, i) => (
-            <button key={i} type="button" onClick={() => setSheet({ prefill: x })} className="w-full text-left flex items-center gap-2 py-1.5 text-[13.5px] text-white/85 active:opacity-70">
-              <CalendarDays size={13} className="shrink-0 text-white/55" /><span className="flex-1">{x}</span><ChevronRight size={14} className="text-white/45" />
+    <div data-testid="plan-list">
+      <div className="mt-1.5 flex items-center justify-center gap-4 text-[12px] text-white/85">
+        {canWrite && <button type="button" onClick={() => onEditTodo({})} data-testid="job-todo-add" className="inline-flex items-center gap-1 active:opacity-70"><Plus size={13} /> Attività</button>}
+        {canWrite && <button type="button" onClick={() => setSheet({})} data-testid="activity-new" className="inline-flex items-center gap-1 active:opacity-70"><Plus size={13} /> In cantiere</button>}
+        {canWrite && isAdmin && <button type="button" onClick={() => onEditTappa({})} data-testid="job-milestone-add" className="inline-flex items-center gap-1 active:opacity-70"><Plus size={13} /> Tappa</button>}
+      </div>
+      <div className="mt-2 flex justify-center">
+        <span className="inline-flex rounded-full bg-white/10 p-0.5" data-testid="plan-filter">
+          <button type="button" onClick={() => setAll(false)} className={sw(!all)} data-testid="plan-filter-todo">Da fare</button>
+          <button type="button" onClick={() => setAll(true)} className={sw(all)} data-testid="plan-filter-all">Tutto</button>
+        </span>
+      </div>
+      {tappe.map((m) => {
+        const n = counts(m.id);
+        const done = m.status === "done";
+        const st = done ? `conclusa il ${shortDay(m.done_date)}` : m.status === "late" ? `in ritardo di ${daysLabel(m.late_days)}`
+          : m.due_date ? `entro ${shortDay(m.due_date)}` : "";
+        return (
+          <div key={m.id} className="mt-1" data-testid="plan-tappa" data-status={m.status}>
+            <button type="button" onClick={() => (canWrite ? onEditTappa(m) : null)} className="w-full text-left flex items-start gap-3 pt-3 pb-1.5 border-t border-white/[0.16]">
+              <span className={`mt-[1px] h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-[12px] font-semibold ${done ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20 text-white"}`}>
+                {done ? <Check size={13} strokeWidth={2.8} /> : (m.order ?? 0) + 1}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className={`block text-[15px] font-semibold leading-snug break-words ${done ? "text-white/55" : "text-white"}`}>{m.title}</span>
+                <span className="block text-[11px] text-white/55">
+                  {[m.who, st, n.total ? `${n.done}/${n.total} attività` : ""].filter(Boolean).map((x, i) => (
+                    <React.Fragment key={i}>{i > 0 && " · "}<span style={x === st && m.status === "late" ? { color: LATE } : undefined}>{x}</span></React.Fragment>
+                  ))}
+                </span>
+              </span>
             </button>
-          ))}
+            {m.close_proposed && !done && isAdmin && (
+              <div className="pl-9 pb-2 text-[12px] text-white/80" data-testid="plan-tappa-close">
+                Le sue attività sono tutte fatte. È conclusa?
+                <span className="inline-flex gap-1.5 ml-1.5 align-middle">
+                  <button type="button" onClick={() => answer(m, true)} data-testid="plan-tappa-close-yes" className="px-2.5 py-1 rounded-full bg-white text-[#403A3C] text-[12px] font-semibold">Sì, conclusa</button>
+                  <button type="button" onClick={() => answer(m, false)} className="px-2.5 py-1 rounded-full bg-white/15 text-white text-[12px]">Non ancora</button>
+                </span>
+              </div>
+            )}
+            {itemsOf(m.id).map(item)}
+          </div>
+        );
+      })}
+      {(loose.length > 0 || !tappe.length) && (
+        <div className="mt-4" data-testid="plan-loose">
+          <div className="text-[10px] uppercase tracking-widest text-white/55 pb-1">{tappe.length ? "altre attività" : "attività"}</div>
+          {loose.map(({ k, x }) => (k === "a"
+            ? <ActivityCard key={x.id} a={x} meId={meId} isAdmin={isAdmin} canWrite={canWrite} onEdit={(y) => setSheet({ activity: y })} onChanged={onChanged} />
+            : <TodoRow key={x.id} todo={x} onToggle={canWrite ? tickTodo : () => {}} onOpen={canWrite ? onEditTodo : () => {}} />))}
+          {!loose.length && (
+            <div className="py-5 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="plan-empty">
+              Niente da fare. Le tappe arrivano dal preventivo; le attività le crei qui o scrivendo in chat, es. «domani Gino smonta la caldaia»,
+              «ricordati di comprare il silicone».
+            </div>
+          )}
         </div>
       )}
-      {open.length ? <div className="mt-3">{open.map(card)}</div> : (
-        <div className="mt-3 py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="plan-empty">
-          {isAdmin ? "Nessuna attività pianificata. Pianificala qui o scrivi in chat, ad esempio «pianifica smontaggio sanitari giovedì alle 8 con Marco, portare il flex»: chi la svolge la riceve su Telegram, conferma il giorno prima e riceve il meteo."
-            : "Nessuna attività pianificata per questa commessa."}
+      {isAdmin && canWrite && (
+        <div className="mt-4 flex justify-center gap-4 text-[12px] text-white/60">
+          {!(milestones || []).length && <button type="button" onClick={() => onTemplate("apply")} data-testid="ms-tpl-apply-btn" className="underline underline-offset-2">Tappe da un modello</button>}
+          {(milestones || []).length > 1 && <button type="button" onClick={() => onTemplate("save")} data-testid="ms-tpl-save-btn" className="underline underline-offset-2">Salva le tappe come modello</button>}
         </div>
       )}
-      {past.length > 0 && (
-        <div className="mt-2">
-          <button type="button" onClick={() => setShowPast((v) => !v)} className="text-[12px] text-white/60 py-1 inline-flex items-center gap-1" data-testid="plan-past-toggle">
-            {showPast ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Svolte e annullate ({past.length})
-          </button>
-          {showPast && past.map(card)}
-        </div>
-      )}
-      {sheet && <ActivitySheet commessa={commessa} activity={sheet.activity} prefill={sheet.prefill} onClose={() => setSheet(null)}
+      {sheet && <ActivitySheet commessa={commessa} activity={sheet.activity} milestones={milestones} onClose={() => setSheet(null)}
         onSaved={() => { setSheet(null); onChanged(); }} />}
     </div>
   );
@@ -2042,6 +2113,9 @@ function CostsView({ commessaId, onChanged, onOpenLog }) {
 
 // To Do: an activity planned for the commessa - who takes care of it and by when (if said)
 // stand out on top, like the author of a diary line; the dot ticks it done.
+// "Gino" and "Gino Neri" are the same person (who made it is kept by first name)
+const sameName = (a, b) => !!a && !!b && (a === b || a.split(" ")[0].toLowerCase() === b.split(" ")[0].toLowerCase());
+
 function TodoRow({ todo, onToggle, onOpen }) {
   const overdue = !todo.done && todo.due_date && todo.due_date < todayIso();
   return (
@@ -2056,8 +2130,8 @@ function TodoRow({ todo, onToggle, onOpen }) {
           {todo.kind === "materiale" && <Package size={12} strokeWidth={2} aria-label="materiale da prendere" />}
           <span className="inline-flex items-center gap-1" data-testid="job-todo-who"><UserRound size={12} strokeWidth={2} /> {todo.who}
             {todo.collaborator_id && <Send size={10} strokeWidth={2} className="text-white/55" aria-label="collaboratore, avvisato su Telegram" />}</span>
-          {todo.kind === "materiale" && todo.author_name && todo.author_name !== todo.who && (
-            <span className="text-white/55 font-normal" data-testid="job-todo-by">segnato da {todo.author_name}</span>
+          {(todo.created_by_name || todo.author_name) && !sameName(todo.created_by_name || todo.author_name, todo.who) && (
+            <span className="text-white/55 font-normal" data-testid="job-todo-by">da {todo.created_by_name || todo.author_name}</span>
           )}
           {todo.due_date && (
             <span className="inline-flex items-center gap-1" data-testid="job-todo-due">
@@ -2101,8 +2175,9 @@ function AssigneePicker({ who, setWho, collabId, setCollabId, team, collaborator
   );
 }
 
-function TodoDialog({ todo, commessaId, team, collaborators = [], onClose, onSaved }) {
+function TodoDialog({ todo, commessaId, team, collaborators = [], milestones = [], onClose, onSaved }) {
   const isNew = !todo.id;
+  const [tappa, setTappa] = useState(todo.milestone_id || "");
   const [text, setText] = useState(todo.text || "");
   const [who, setWho] = useState(todo.who || team[0] || "");
   const [collabId, setCollabId] = useState(todo.collaborator_id || "");
@@ -2112,8 +2187,8 @@ function TodoDialog({ todo, commessaId, team, collaborators = [], onClose, onSav
     if (!text.trim()) { toast.error("Scrivi l'attività da fare"); return; }
     setSaving(true);
     try {
-      const r = isNew ? await api.post(`/jobs/commesse/${commessaId}/todos`, { text, who, collaborator_id: collabId, due_date: due || null })
-        : await api.patch(`/jobs/todos/${todo.id}`, { text, who, collaborator_id: collabId, due_date: due || "" });
+      const r = isNew ? await api.post(`/jobs/commesse/${commessaId}/todos`, { text, who, collaborator_id: collabId, due_date: due || null, milestone_id: tappa || null })
+        : await api.patch(`/jobs/todos/${todo.id}`, { text, who, collaborator_id: collabId, due_date: due || "", milestone_id: tappa });
       if (r.data?.notified) toast.success(`Mandata a ${r.data.who} su Telegram`);
       onSaved();
     } catch (e) { toast.error(e.response?.data?.detail || "Errore nel salvataggio"); }
@@ -2128,14 +2203,20 @@ function TodoDialog({ todo, commessaId, team, collaborators = [], onClose, onSav
     <GlassBottomSheet onClose={onClose} testid="job-todo-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
       <div className="min-w-0 break-words" data-testid="job-todo-dialog">
         <div className="text-[17px] font-semibold text-white mb-3">{isNew ? "Nuova attività" : todo.kind === "materiale" ? (todo.category === "attrezzi" ? "Attrezzi da portare" : "Materiali da prendere") : "Attività"}</div>
-        {todo.kind === "materiale" && todo.author_name && (
-          <div className="text-[12px] text-white/60 mb-3" data-testid="job-todo-author">Segnato da {todo.author_name}{todo.who && todo.who !== todo.author_name ? ` · lo porta ${todo.who}` : ""}</div>
+        {!isNew && (todo.created_by_name || todo.author_name) && (
+          <div className="text-[12px] text-white/60 mb-3" data-testid="job-todo-author">
+            {todo.kind === "materiale" ? "Segnato" : "Creata"} da {todo.created_by_name || todo.author_name}
+            {todo.who && !sameName(todo.who, todo.created_by_name || todo.author_name) ? ` · ${todo.kind === "materiale" ? "lo porta" : "per"} ${todo.who}` : ""}
+          </div>
         )}
         <div className="space-y-4">
           <div>
             <div className={kick}>cosa c'è da fare</div>
             <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus={isNew} data-testid="job-todo-text"
               placeholder="Es. Montare i sanitari" className={AREA} />
+          </div>
+          <div>
+            <TappaPicker milestones={todo.kind === "materiale" ? [] : milestones} value={tappa} onChange={setTappa} />
           </div>
           <div>
             <div className={kick}>{todo.kind === "materiale" ? "chi lo porta" : "chi se ne occupa"}</div>
@@ -2169,39 +2250,9 @@ function TodoDialog({ todo, commessaId, team, collaborators = [], onClose, onSav
 const LATE = "#FF9C85";
 const daysLabel = (n) => `${n} ${n === 1 ? "giorno" : "giorni"}`;
 function milestoneState(m) {
-  if (m.status === "done") return { text: m.delay_days ? `fatta il ${shortDay(m.done_date)} · ${daysLabel(m.delay_days)} di ritardo` : `fatta il ${shortDay(m.done_date)} · in tempo`, late: !!m.delay_days };
+  if (m.status === "done") return { text: `conclusa il ${shortDay(m.done_date)}` + (m.original_due_date ? (m.delay_days ? ` · ${daysLabel(m.delay_days)} di ritardo` : " · in tempo") : ""), late: !!m.delay_days };
   if (m.status === "late") return { text: `in ritardo di ${daysLabel(m.late_days)}`, late: true };
   return { text: m.status === "soon" ? "in scadenza" : "", late: false };
-}
-
-function MilestoneRow({ m, onToggle, onOpen }) {
-  const st = milestoneState(m);
-  const done = m.status === "done";
-  const acts = (m.corrective_actions || []).length;
-  return (
-    <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]" data-testid="job-milestone" data-status={m.status}>
-      <button type="button" onClick={() => onToggle(m)} aria-pressed={done} data-testid="job-milestone-done"
-        aria-label={done ? "Segna come da fare" : "Segna come fatta"}
-        className={`mt-[1px] h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md ${done ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
-        {done && <Check size={12} strokeWidth={2.8} />}
-      </button>
-      <button type="button" onClick={() => onOpen(m)} className="min-w-0 text-left">
-        <span className={`flex items-center gap-x-3.5 gap-y-0.5 flex-wrap text-[12.5px] font-medium ${done ? "text-white/50" : "text-white"}`}>
-          <span className="inline-flex items-center gap-1"><UserRound size={12} strokeWidth={2} /> {m.who}
-            {m.collaborator_id && <Send size={10} strokeWidth={2} className="text-white/55" aria-label="collaboratore, avvisato su Telegram" />}</span>
-          <span className="inline-flex items-center gap-1" data-testid="job-milestone-due"><Flag size={12} strokeWidth={2} /> {shortDay(m.due_date)}</span>
-        </span>
-        <span className={`block mt-[3px] text-[14px] leading-[1.45] ${done ? "text-white/45" : "text-white/90"}`}>{m.title}</span>
-        {(st.text || m.slip_days > 0 || acts > 0) && (
-          <span className="block mt-[2px] text-[11.5px] text-white/55" data-testid="job-milestone-state">
-            {st.text && <span style={st.late ? { color: LATE } : undefined}>{st.text}</span>}
-            {m.slip_days > 0 && `${st.text ? " · " : ""}spostata di ${daysLabel(m.slip_days)}`}
-            {acts > 0 && ` · ${acts} ${acts === 1 ? "azione correttiva" : "azioni correttive"}`}
-          </span>
-        )}
-      </button>
-    </div>
-  );
 }
 
 function MilestoneSheet({ m, commessaId, team, collaborators = [], onClose, onSaved }) {
@@ -2211,98 +2262,81 @@ function MilestoneSheet({ m, commessaId, team, collaborators = [], onClose, onSa
   const [collabId, setCollabId] = useState(m.collaborator_id || "");
   const [due, setDue] = useState(m.due_date || "");
   const [doneDate, setDoneDate] = useState(m.done_date || "");
-  const [action, setAction] = useState("");
-  const [newDue, setNewDue] = useState("");
   const [busy, setBusy] = useState(false);
   const fail = (e) => toast.error(e.response?.data?.detail || "Errore nel salvataggio");
   const save = async () => {
-    if (!title.trim()) { toast.error("Scrivi la milestone"); return; }
-    if (!due) { toast.error("Indica la scadenza"); return; }
+    if (!title.trim()) { toast.error("Scrivi la tappa"); return; }
     setBusy(true);
     try {
-      const r = isNew ? await api.post(`/jobs/commesse/${commessaId}/milestones`, { title, who, collaborator_id: collabId, due_date: due })
-        : await api.patch(`/jobs/milestones/${m.id}`, { title, who, collaborator_id: collabId, ...(due !== m.due_date ? { due_date: due } : {}),
+      const r = isNew ? await api.post(`/jobs/commesse/${commessaId}/milestones`, { title, who, collaborator_id: collabId, due_date: due || null })
+        : await api.patch(`/jobs/milestones/${m.id}`, { title, who, collaborator_id: collabId, ...(due !== (m.due_date || "") ? { due_date: due } : {}),
           ...(m.status === "done" && doneDate && doneDate !== m.done_date ? { done_date: doneDate } : {}) });
       if (r.data?.notified) toast.success(`Mandata a ${r.data.who} su Telegram`);
       onSaved();
     } catch (e) { fail(e); } finally { setBusy(false); }
   };
-  const addAction = async () => {
-    if (!action.trim()) { toast.error("Scrivi l'azione correttiva"); return; }
-    setBusy(true);
-    try { await api.post(`/jobs/milestones/${m.id}/actions`, { text: action, new_due_date: newDue || null }); onSaved(); }
-    catch (e) { fail(e); } finally { setBusy(false); }
-  };
-  const del = async () => {
-    try { await api.delete(`/jobs/milestones/${m.id}`); onSaved(); } catch (e) { fail(e); }
-  };
-  const field = "h-9 rounded-lg bg-white/10 px-2.5 text-sm text-white placeholder:text-white/40 outline-none";
+  const call = async (fn) => { setBusy(true); try { await fn(); onSaved(); } catch (e) { fail(e); } finally { setBusy(false); } };
+  const kick = "text-[10px] uppercase tracking-widest text-white/55 mb-1";
   const st = isNew ? null : milestoneState(m);
   return (
     <GlassBottomSheet onClose={onClose} testid="job-milestone-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
-      <div className="text-lg font-semibold text-white mb-1">{isNew ? "Nuova milestone" : "Milestone"}</div>
-      {st?.text && <div className="text-[12.5px] mb-3" style={st.late ? { color: LATE } : { color: "rgba(255,255,255,0.6)" }} data-testid="job-milestone-sheet-state">{st.text}</div>}
-      <div className="space-y-4 mt-3">
-        <div>
-          <div className="kicker mb-1">cosa va completato</div>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus={isNew} data-testid="job-milestone-title"
-            placeholder="Es. Impianto elettrico completato" className={`${field} w-full`} />
-        </div>
-        <div className="min-w-0">
-          <div className="kicker mb-1">chi la esegue</div>
-          <AssigneePicker who={who} setWho={setWho} collabId={collabId} setCollabId={setCollabId} team={team} collaborators={collaborators} testid="job-ms-assignee" />
-        </div>
-        <div className="min-w-0">
-          <div className="kicker mb-1">scadenza</div>
-          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="job-milestone-due-input" className={`${field} w-full`} />
-        </div>
-        {!isNew && m.original_due_date && m.original_due_date !== m.due_date && (
-          <div className="text-[12px] text-white/55">Prima scadenza: {shortDay(m.original_due_date)}</div>
-        )}
-        {m.status === "done" && (
-          <div>
-            <div className="kicker mb-1">fatta il</div>
-            <input type="date" value={doneDate} onChange={(e) => setDoneDate(e.target.value)} data-testid="job-milestone-done-date" className={`${field} w-full`} />
-          </div>
-        )}
-        <div className="flex justify-end gap-2">
-          {!isNew && (
-            <button onClick={del} data-testid="job-milestone-delete" className="mr-auto px-3 py-2 rounded-full text-sm text-white/75 hover:bg-white/10 inline-flex items-center gap-1.5">
-              <Trash2 size={14} /> Elimina
-            </button>
-          )}
-          <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-white/80 hover:bg-white/10">Annulla</button>
-          <button onClick={save} disabled={busy} data-testid="job-milestone-save" className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">
-            {busy ? "Salvo…" : "Salva"}
-          </button>
-        </div>
-        {!isNew && (
-          <div className="pt-4 border-t border-white/[0.16]" data-testid="job-milestone-actions">
-            <div className="kicker mb-2">azioni correttive</div>
-            {(m.corrective_actions || []).map((a) => (
-              <div key={a.id} className="py-2 border-b border-white/[0.08] text-[13px] text-white/85">
-                {a.text}
-                <span className="block text-[11px] text-white/50">
-                  {a.by} · {shortDay(a.at.slice(0, 10))}{a.new_due_date ? ` · scadenza ${shortDay(a.old_due_date)} → ${shortDay(a.new_due_date)}` : ""}
-                </span>
-              </div>
-            ))}
-            {m.status !== "done" && (
-              <div className="mt-2 space-y-2">
-                <textarea value={action} onChange={(e) => setAction(e.target.value)} rows={2} data-testid="job-milestone-action-text"
-                  placeholder={m.status === "late" ? "Cosa fai per recuperare il ritardo?" : "Es. squadra in più da lunedì"}
-                  className="w-full rounded-lg bg-white/10 p-2.5 text-sm text-white placeholder:text-white/40 outline-none" />
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px] text-white/60 shrink-0">Nuova scadenza</span>
-                  <input type="date" value={newDue} onChange={(e) => setNewDue(e.target.value)} data-testid="job-milestone-action-due" className={`${field} flex-1 min-w-0`} />
-                  <button onClick={addAction} disabled={busy} data-testid="job-milestone-action-add"
-                    className="h-9 px-3 rounded-full text-sm bg-white/15 text-white shrink-0 disabled:opacity-50">Aggiungi</button>
-                </div>
-              </div>
+      <div className="min-w-0 break-words">
+        <div className="text-[17px] font-semibold text-white">{isNew ? "Nuova tappa" : `Tappa ${(m.order ?? 0) + 1}`}</div>
+        {st?.text && <div className="text-[12px] mt-0.5" style={st.late ? { color: LATE } : { color: "rgba(255,255,255,0.6)" }} data-testid="job-milestone-sheet-state">{st.text}</div>}
+        <div className="space-y-4 mt-4">
+          <div><div className={kick}>il lavoro</div>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus={isNew} data-testid="job-milestone-title"
+              placeholder="Es. Montaggio caldaia" className={FIELD} /></div>
+          <div className="min-w-0"><div className={kick}>chi la segue</div>
+            <AssigneePicker who={who} setWho={setWho} collabId={collabId} setCollabId={setCollabId} team={team} collaborators={collaborators} testid="job-ms-assignee" /></div>
+          <div className="min-w-0"><div className={kick}>data prevista (facoltativa)</div>
+            <div className="flex items-center gap-2 min-w-0">
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="job-milestone-due-input" className={`${FIELD} flex-1`} />
+              {due && <button type="button" onClick={() => setDue("")} className="p-2 text-white/60" aria-label="Togli la data"><X size={15} /></button>}
+            </div>
+            {!isNew && m.original_due_date && m.due_date && m.original_due_date !== m.due_date && (
+              <div className="mt-1 text-[11px] text-white/55">Prima data: {shortDay(m.original_due_date)}</div>
             )}
-            {m.status === "done" && !(m.corrective_actions || []).length && <div className="text-[12px] text-white/50">Nessuna.</div>}
           </div>
-        )}
+          {m.status === "done" && (
+            <div><div className={kick}>conclusa il</div>
+              <input type="date" value={doneDate} onChange={(e) => setDoneDate(e.target.value)} data-testid="job-milestone-done-date" className={FIELD} /></div>
+          )}
+          {!isNew && (
+            <div className="flex flex-wrap items-center gap-2 text-[12px]" data-testid="job-milestone-move">
+              <span className="text-white/60">Ordine dei lavori:</span>
+              <button type="button" disabled={busy} onClick={() => call(() => api.post(`/jobs/milestones/${m.id}/move`, { direction: "up" }))}
+                data-testid="job-milestone-up" className="px-3 py-1.5 rounded-full bg-white/10 text-white">↑ Prima</button>
+              <button type="button" disabled={busy} onClick={() => call(() => api.post(`/jobs/milestones/${m.id}/move`, { direction: "down" }))}
+                data-testid="job-milestone-down" className="px-3 py-1.5 rounded-full bg-white/10 text-white">↓ Dopo</button>
+            </div>
+          )}
+          {(m.corrective_actions || []).length > 0 && (
+            <div data-testid="job-milestone-actions"><div className={kick}>note sui ritardi</div>
+              {m.corrective_actions.map((a) => (
+                <div key={a.id} className="py-1 text-[12px] text-white/75">{a.text}
+                  <span className="text-white/50"> · {a.by} · {shortDay(a.at.slice(0, 10))}{a.new_due_date ? ` · ${a.old_due_date ? shortDay(a.old_due_date) : "senza data"} → ${shortDay(a.new_due_date)}` : ""}</span>
+                </div>
+              ))}</div>
+          )}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            {!isNew && m.status !== "done" && (
+              <button type="button" disabled={busy} onClick={() => call(() => api.patch(`/jobs/milestones/${m.id}`, { done: true }))} data-testid="job-milestone-done"
+                className="mr-auto h-10 px-3 rounded-full text-[13px] text-white/85 inline-flex items-center gap-1.5"><Check size={14} /> Conclusa</button>
+            )}
+            {!isNew && m.status === "done" && (
+              <button type="button" disabled={busy} onClick={() => call(() => api.patch(`/jobs/milestones/${m.id}`, { done: false }))}
+                className="mr-auto h-10 px-3 rounded-full text-[13px] text-white/75">Riapri</button>
+            )}
+            {!isNew && (
+              <button type="button" onClick={() => call(() => api.delete(`/jobs/milestones/${m.id}`))} data-testid="job-milestone-delete" aria-label="Elimina la tappa"
+                className="h-10 w-10 rounded-full flex items-center justify-center text-white/70"><Trash2 size={15} /></button>
+            )}
+            <button type="button" onClick={onClose} className="h-10 px-4 rounded-full lg-glass text-[14px] text-white">Annulla</button>
+            <button type="button" onClick={save} disabled={busy} data-testid="job-milestone-save"
+              className="h-10 px-5 rounded-full bg-white text-[#403A3C] text-[14px] font-semibold disabled:opacity-50">{busy ? "Salvo…" : "Salva"}</button>
+          </div>
+        </div>
       </div>
     </GlassBottomSheet>
   );
@@ -2449,8 +2483,16 @@ function CommessaChat({ commessa, onClose, onSaved }) {
     const ok = ["ok", "planned", "description", "commessa_update"].includes(r.data.status);
     const ask = r.data.status === "material_doubt" ? { body, images } : null;
     setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false, matAsk: null } : m)),
-      { role: "assistant", content: r.data.message, saved: ok, matAsk: ask, solve: r.data.log?.problems_to_confirm || null }]);
+      { role: "assistant", content: r.data.message, saved: ok, matAsk: ask, solve: r.data.log?.problems_to_confirm || null, askDate: r.data.ask_date || null }]);
     if (ok) onSaved();
+  };
+  // "C'è una data prevista?" for an activity without a day
+  const answerDate = async (i, ask, choice) => {
+    try {
+      const r = await api.post(`/jobs/todos/${ask.todo_id}/when`, { choice });
+      setMessages((ms) => [...ms.map((m, j) => (j === i ? { ...m, askDate: null } : m)), { role: "assistant", content: r.data.message }]);
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
   // "this note solves the problem …?": closed only on yes
   const answerSolve = async (i, p, yes) => {
@@ -2522,6 +2564,13 @@ function CommessaChat({ commessa, onClose, onSaved }) {
                     className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">🧰 Usati oggi</button>
                   <button onClick={() => answerMat(i, m.matAsk, "da_prendere")} disabled={busy} data-testid="chat-mat-plan"
                     className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">📌 Da prendere</button>
+                </div>
+              )}
+              {m.askDate && (
+                <div className="mt-1.5 flex flex-wrap gap-2" data-testid="chat-ask-date">
+                  {[["oggi", "Oggi"], ["domani", "Domani"], ["dopodomani", "Dopodomani"], ["lunedi", "Lunedì"], ["nessuna", "Nessuna data"]].map(([k, label]) => (
+                    <button key={k} onClick={() => answerDate(i, m.askDate, k)} className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white">{label}</button>
+                  ))}
                 </div>
               )}
               {(m.solve || []).map((p) => (
@@ -2629,7 +2678,6 @@ export default function JobDiaryPage() {
   const [tplOpen, setTplOpen] = useState(null);   // "apply" | "save"
   const [viewer, setViewer] = useState(null);   // {log, photo}
   const [section, setSection] = useState("diario");
-  const [planTab, setPlanTab] = useState("tutto");   // Pianificazione: tutto | attivita | milestone | todo
   const [period, setPeriod] = useState({ key: "30" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -2689,7 +2737,7 @@ export default function JobDiaryPage() {
   const reload = () => Promise.all([loadDetail(selectedId), loadList()]);
   useEffect(() => { loadList(); }, []);
   useEffect(() => { loadDetail(selectedId); }, [selectedId, period]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setSection("diario"); setPlanTab("tutto"); setMenu(null); setPeriod({ key: "30" }); }, [selectedId]);
+  useEffect(() => { setSection("diario"); setMenu(null); setPeriod({ key: "30" }); }, [selectedId]);
   // back on top: the page, or (desktop split) the right column, which scrolls by itself
   useEffect(() => { (document.querySelector('[data-testid="split-right"]') || window).scrollTo({ top: 0 }); }, [level, selectedId]);
   useEffect(() => { if (level === "clients") setChatOpen(false); }, [level]);
@@ -2799,7 +2847,7 @@ export default function JobDiaryPage() {
   const secAt = (i) => secs[(i + secs.length) % secs.length];
   const secIdx = Math.max(0, secs.findIndex((x) => x.key === section));
   const pickSection = (key) => {
-    if (key === "milestone" || key === "todo") { setSection("pianificazione"); setPlanTab(key); }   // now inside Pianificazione
+    if (key === "milestone" || key === "todo") setSection("pianificazione");   // now inside Pianificazione
     else setSection(key);
     setMenu(null);
   };
@@ -2875,12 +2923,7 @@ export default function JobDiaryPage() {
   const delFromEdit = (log) => { setEditing(null); delLog(log); };
   const milestones = detail?.milestones || [];
   const msSum = detail?.milestones_summary || { total: 0, done: 0, late: 0 };
-  const toggleMilestone = async (m) => {
-    try { await api.patch(`/jobs/milestones/${m.id}`, { done: m.status !== "done" }); await loadDetail(selectedId); }
-    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
-  };
   const todos = detail?.todos || [];
-  const openTodos = todos.filter((x) => !x.done).length;
   const toTake = todos.filter((x) => x.kind === "materiale" && !x.done && x.category !== "attrezzi");
   const toolsToTake = todos.filter((x) => x.kind === "materiale" && !x.done && x.category === "attrezzi");
   const toggleTodo = async (todo) => {
@@ -2932,9 +2975,9 @@ export default function JobDiaryPage() {
           <InfoCard icon={Euro} label="Costi" value={eur(detail.economics.cost_total)} testid="glance-costi" ariaLabel="Mostra costi e margine"
             note={detail.economics.budget ? `${Math.round(detail.economics.used_pct || 0)}% del preventivo` : ""} onClick={() => pickSection("costi")} />
         )}
-        <InfoCard icon={Flag} label="Milestone" value={msSum.total ? `${msSum.done}/${msSum.total}` : "nessuna"} testid="glance-milestone"
-          ariaLabel="Mostra le milestone" onClick={() => pickSection("milestone")}
-          note={msSum.late ? `${msSum.late} in ritardo` : msSum.next ? `prossima ${shortDay(msSum.next.due_date)}` : ""} />
+        <InfoCard icon={Flag} label="Tappe" value={msSum.total ? `${msSum.done}/${msSum.total}` : "nessuna"} testid="glance-milestone"
+          ariaLabel="Mostra le tappe del lavoro" onClick={() => pickSection("milestone")}
+          note={msSum.late ? `${msSum.late} in ritardo` : msSum.next ? `prossima: ${msSum.next.title.slice(0, 18)}` : ""} />
         <InfoCard icon={AlertTriangle} label="Segnalazioni" value={String(t.problems.length)} testid="glance-problemi" ariaLabel="Mostra i problemi"
           onClick={() => pickSection("problemi")} note={t.problems.length ? `ultima ${shortDay(t.problems.map((x) => x.date || "").sort().pop())}` : ""} />
         <InfoCard icon={FileText} label="Documenti" value={folderBusy ? "apro…" : String(docs.total)} testid="glance-documenti" onClick={openFolder}
@@ -3003,87 +3046,9 @@ export default function JobDiaryPage() {
         </div>
       ) : section === "pianificazione" ? (
         <div data-testid="job-plan-section">
-          {/* planned activities on site, milestones and To Do: one place, all together or one kind at a time */}
-          <div className="mt-1.5 flex justify-center">
-            <span className="inline-flex rounded-full bg-white/10 p-0.5" data-testid="plan-tabs">
-              {[["tutto", "Tutto", null], ["attivita", "Attività", (detail.activities || []).filter((x) => ["pianificata", "confermata", "in_corso"].includes(x.status)).length], ["milestone", "Milestone", msSum.total - msSum.done], ["todo", "To Do", openTodos]].map(([k, label, n]) => (
-                <button key={k} type="button" onClick={() => setPlanTab(k)} data-testid={`plan-tab-${k}`}
-                  className={`px-3 py-1 rounded-full text-[12px] transition-colors ${planTab === k ? "bg-white text-[#403A3C] font-semibold" : "text-white/75"}`}>
-                  {label}{n ? <span className={planTab === k ? "text-[#403A3C]/60" : "text-white/50"}> {n}</span> : null}
-                </button>
-              ))}
-            </span>
-          </div>
-          {(planTab === "tutto" || planTab === "attivita") && (
-            <div data-testid="plan-block-attivita">
-              {planTab === "tutto" && <div className="mt-4 text-[10px] uppercase tracking-widest text-white/55 text-center">attività in cantiere</div>}
-              <PlanView commessa={c} activities={detail.activities || []} quotes={detail.quotes || []} meId={detail.me_id} isAdmin={!!detail.is_admin}
-          canWrite={!ro} onChanged={() => loadDetail(selectedId)} />
-            </div>
-          )}
-          {(planTab === "tutto" || planTab === "milestone") && (
-            <div data-testid="plan-block-milestone">
-              {planTab === "tutto" && <div className="mt-6 text-[10px] uppercase tracking-widest text-white/55 text-center">milestone</div>}
-              <>
-          <div className={`mt-1.5 flex items-center justify-center gap-2.5 ${ro ? "hidden" : ""}`}>
-            <button type="button" onClick={() => setMsEditing({})} data-testid="job-milestone-add" aria-label="Nuova milestone"
-              className="h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 whitespace-nowrap">
-              <Plus size={17} />
-              <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova milestone</span>
-            </button>
-          </div>
-          <div className={`mt-0.5 flex items-center justify-center gap-4 text-[12px] text-white/75 ${ro ? "hidden" : ""}`}>
-            <button type="button" onClick={() => setTplOpen("apply")} data-testid="ms-tpl-apply-btn" className="inline-flex items-center gap-1.5 active:opacity-70">
-              <LayoutTemplate size={13} /> Da modello
-            </button>
-            {msSum.total > 0 && (
-              <button type="button" onClick={() => setTplOpen("save")} data-testid="ms-tpl-save-btn" className="inline-flex items-center gap-1.5 active:opacity-70">
-                <BookmarkPlus size={13} /> Salva come modello
-              </button>
-            )}
-          </div>
-          {msSum.total > 0 && (
-            <div className="mt-0.5 text-center text-[11.5px] text-white/60" data-testid="job-milestone-count">
-              {msSum.done}/{msSum.total} fatte
-              {msSum.late ? <span style={{ color: LATE }}> · {msSum.late} in ritardo</span> : null}
-              {msSum.done > 0 && <span data-testid="job-milestone-delays"> · {msSum.on_time} di {msSum.done} in tempo{msSum.avg_delay ? `, ritardo medio ${String(msSum.avg_delay).replace(".", ",")} g` : ""}</span>}
-            </div>
-          )}
-          <div className="mt-3" data-testid="job-milestones">
-            {milestones.map((m) => <MilestoneRow key={m.id} m={m} onToggle={ro ? () => {} : toggleMilestone} onOpen={ro ? () => {} : setMsEditing} />)}
-            {milestones.length === 0 && (
-              <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="job-milestones-empty">
-                Nessuna milestone. Tocca «Nuova milestone» per segnare le tappe del lavoro: cosa, chi la esegue ed entro quando.
-                Ti ricordo le scadenze su Telegram e, se una va in ritardo, puoi scrivere l'azione correttiva.
-              </div>
-            )}
-          </div>
-        </>
-            </div>
-          )}
-          {(planTab === "tutto" || planTab === "todo") && (
-            <div data-testid="plan-block-todo">
-              {planTab === "tutto" && <div className="mt-6 text-[10px] uppercase tracking-widest text-white/55 text-center">to do</div>}
-              <>
-          <div className="mt-1.5 flex items-center justify-center gap-2.5">
-            <button type="button" onClick={() => setTodoEditing({})} data-testid="job-todo-add" aria-label="Nuova attività"
-              className={`h-[34px] flex items-center gap-2 text-white/90 active:opacity-70 ${ro ? "hidden" : ""}`}>
-              <Plus size={17} />
-              <span className="text-[12px] font-medium tracking-[0.16em] uppercase text-white/85">Nuova attività</span>
-            </button>
-            <span className="text-[12px] tracking-[0.16em] uppercase text-white/55" data-testid="job-todo-count">· {openTodos} da fare</span>
-          </div>
-          <div className="mt-3" data-testid="job-todos">
-            {todos.map((x) => <TodoRow key={x.id} todo={x} onToggle={ro ? () => {} : toggleTodo} onOpen={ro ? () => {} : setTodoEditing} />)}
-            {todos.length === 0 && (
-              <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="job-todos-empty">
-                Nessuna attività in programma. Tocca «Nuova attività» per segnare cosa c'è da fare, chi se ne occupa ed entro quando.
-              </div>
-            )}
-          </div>
-        </>
-            </div>
-          )}
+          <PlanList commessa={c} milestones={milestones} activities={detail.activities || []} todos={todos.filter((x) => x.kind !== "materiale" || !x.done)}
+            meId={detail.me_id} isAdmin={!!detail.is_admin} canWrite={!ro} onChanged={() => loadDetail(selectedId)}
+            onEditTappa={setMsEditing} onEditTodo={setTodoEditing} onTemplate={setTplOpen} />
         </div>
       ) : (<>
       {section === "ore" && detail.hours_plan && <HoursPlan plan={detail.hours_plan} />}
@@ -3271,7 +3236,7 @@ export default function JobDiaryPage() {
           onSaved={async () => { setMsEditing(null); await loadDetail(selectedId); }} />
       )}
       {todoEditing && c && (
-        <TodoDialog todo={todoEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} onClose={() => setTodoEditing(null)}
+        <TodoDialog todo={todoEditing} commessaId={c.id} team={detail?.team || []} collaborators={detail?.collaborators || []} milestones={milestones} onClose={() => setTodoEditing(null)}
           onSaved={async () => { setTodoEditing(null); await loadDetail(selectedId); }} />
       )}
       {editing && (

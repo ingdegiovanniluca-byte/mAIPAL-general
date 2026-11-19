@@ -305,7 +305,7 @@ async def main():
     me = await server.update_profile(server.ProfilePatch(business_vertical="artigiano"), server.User(**U))
     cl = next(c for c in db.collections.docs if c.get("system_key") == "artigiano_clienti")
     db.collection_items.docs.append({"id": "c_r", "collection_id": cl["id"], "data": {"nome": "Mario Rossi"}})
-    for sid, title in (("s1", "Impianto elettrico"), ("s2", "Allarme"), ("s3", "Cancello")):
+    for sid, title in (("s1", "Impianto elettrico"), ("s2", "Allarme"), ("s3", "Cancello"), ("s4", "Allarme 2")):
         db.collection_sub_items.docs.append({"id": sid, "collection_id": cl["id"], "item_id": "c_r", "data": {"titolo": title, "stato": "nuova"}})
 
     # 0) the planned materials: quantities only when written; an old quote's lines read too
@@ -331,7 +331,7 @@ async def main():
     assert [m["title"] for m in ms] == ["Tracce", "Posa corrugati", "Cablaggio", "Montaggio frutti"]
     assert [m["due_date"] for m in ms] == [d.isoformat() for d in jl.spread_due_dates(4, date(2026, 11, 10), date(2026, 11, 20), mt.add_workdays, mt.workdays_between)]
     assert ms[-1]["due_date"] == "2026-11-20" and all(m["from_quote"] for m in ms)
-    assert "🚩 Ho creato 4 milestone dalle attività del preventivo, dal" in out["message"] and "3 materiali previsti" in out["message"], out["message"]
+    assert "🚩 Ho creato 4 tappe dai lavori del preventivo, nel loro ordine, dal" in out["message"] and "3 materiali previsti" in out["message"], out["message"]
     # a new version: the activities already there are not made twice
     QUOTE["activities"] = ["Tracce", "Posa corrugati", "Collaudo"]
     up = await server._ingest_commessa_document(me, "s1", "prev2.txt", b"PREVENTIVO v2 impianto elettrico Totale 3.200,00", "text/plain", hint="preventivo")
@@ -339,13 +339,18 @@ async def main():
     assert [m["title"] for m in db.job_milestones.docs if m["commessa_id"] == "s1"][-1] == "Collaudo"
     assert len([m for m in db.job_milestones.docs if m["commessa_id"] == "s1"]) == 5
 
-    # 2) no dates: To Do; the choice "Niente": nothing
+    # 2) no dates: tappe all the same, in order and without a date; the choice "Attività": activities; "Niente": nothing
     QUOTE.update(start="", end="", activities=["Smontaggio centrale vecchia", "Posa sirena"])
     up = await server._ingest_commessa_document(me, "s2", "prev.txt", b"PREVENTIVO allarme Totale 3.000,00 euro", "text/plain", hint="preventivo")
-    assert up["plan_default"] == "todo"
+    assert up["plan_default"] == "milestone"
     out = await server.confirm_quote(up["quote"]["id"], server.QuoteConfirmPayload(), me)
-    assert [t["text"] for t in db.job_todos.docs if t["commessa_id"] == "s2"] == ["Smontaggio centrale vecchia", "Posa sirena"]
-    assert "📌 Ho creato 2 To Do" in out["message"] and "senza date di inizio e fine" in out["message"]
+    ms = [m for m in db.job_milestones.docs if m["commessa_id"] == "s2"]
+    assert [(m["title"], m.get("due_date"), m.get("order")) for m in ms] == [("Smontaggio centrale vecchia", None, 0), ("Posa sirena", None, 1)], ms
+    assert "🚩 Ho creato 2 tappe dai lavori del preventivo, nel loro ordine, senza date" in out["message"], out["message"]
+    up = await server._ingest_commessa_document(me, "s4", "prev.txt", b"PREVENTIVO allarme 2 Totale 3.000,00 euro", "text/plain", hint="preventivo")
+    out = await server.confirm_quote(up["quote"]["id"], server.QuoteConfirmPayload(plan="todo"), me)
+    assert [t["text"] for t in db.job_todos.docs if t["commessa_id"] == "s4"] == ["Smontaggio centrale vecchia", "Posa sirena"]
+    assert "📌 Ho creato 2 attività dai lavori del preventivo" in out["message"], out["message"]
     up = await server._ingest_commessa_document(me, "s3", "prev.txt", b"PREVENTIVO cancello Totale 3.000,00 euro", "text/plain", hint="preventivo")
     await server.confirm_quote(up["quote"]["id"], server.QuoteConfirmPayload(plan="none"), me)
     assert not [t for t in db.job_todos.docs if t["commessa_id"] == "s3"] and not [m for m in db.job_milestones.docs if m["commessa_id"] == "s3"]

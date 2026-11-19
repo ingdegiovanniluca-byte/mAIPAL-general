@@ -323,7 +323,7 @@ COMMESSA_REPORT = {"key": "commessa", "name": "Report di commessa",
                    "hint": "Report della commessa bagno dei Rossi di ottobre, metti in evidenza i ritardi"}
 # (key, section title) in the report's order
 COMMESSA_PARTS = [("stato", "Riassunto stato commessa"), ("attivita", "Lavori svolti"), ("ore", "Ore lavorate"),
-                  ("problemi", "Problematiche"), ("materiali", "Materiali"), ("milestone", "Milestone"), ("costi", "Costi")]
+                  ("problemi", "Problematiche"), ("materiali", "Materiali"), ("milestone", "Tappe"), ("costi", "Costi")]
 COMMESSA_DEFAULT = ["stato", "ore", "problemi"]
 _PART_WORDS = {"stato": r"riassunt|\bstato (?:della|dei|del|commessa|lavori|avanzamento)|andamento|situazion", "attivita": r"lavori svolti|attivit|cosa (?:abbiamo|è stato) fatto",
                "ore": r"\bore\b|\bor[ae]\s+lavo|orari|presenz|per (?:lavorator|operai|persona)", "problemi": r"problem|criticit|anomali", "materiali": r"material",
