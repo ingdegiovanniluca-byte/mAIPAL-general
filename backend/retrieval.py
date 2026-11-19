@@ -165,6 +165,27 @@ def time_window(query: str, today: Optional[date] = None) -> Optional[Tuple[date
     return None
 
 
+# A follow-up question ("per che clienti?", "e quelle chiuse?", "chi ci lavora?") says little by itself: searched alone it
+# finds nothing. It is searched together with the question(s) before it in the same chat.
+_FOLLOWUP_START = re.compile(r"^\s*(e|ed|ma|per|di|da|con|quali|quale|quanti|quante|chi|dove|quando|come|perch[eé]|anche|invece|"
+                             r"solo|tutte?|tutti|quell[aeio]|quest[aeio]|loro|lui|lei|ok)\b", re.I)
+
+
+def followup_query(text: str, previous: List[str]) -> str:
+    """The text to search for a question: the question itself, or - when it is a short follow-up (up to 6 words, or up to
+    10 starting like "e…", "per che…", "quali…") - the previous question(s) of the chat with it (back to the last one that
+    stands on its own, at most two)."""
+    words = (text or "").split()
+    if not previous or not words or len(words) > 10 or (len(words) > 6 and not _FOLLOWUP_START.match(text)):
+        return text
+    before = []
+    for p in reversed([p for p in previous if (p or "").strip()][-2:]):
+        before.insert(0, " ".join(p.split())[:500])
+        if len(p.split()) > 6:   # a question on its own: no need to go further back
+            break
+    return "\n".join(before + [text]) if before else text
+
+
 def period_hint(query: str, today: Optional[date] = None) -> str:
     """A line for the answering model: which dates the question covers, so it lists every
     record of that period (and only those) instead of the few best-matching ones."""

@@ -1562,6 +1562,10 @@ def build_system_prompt(user: User, action: str) -> str:
             "(ogni data, in ordine cronologico), non solo la prima. "
             "Considera equivalenti parole vicine per significato (es. 'lezione' e 'pilates', 'corso' e 'lezione', singolare e plurale). "
             "Rispondi 'non ho trovato' SOLO se nessuna voce del contesto riguarda davvero la domanda. "
+            "SEGUITI: se la domanda è il seguito della precedente (es. «per che clienti?», «e quelle chiuse?», «chi ci lavora?»), "
+            "interpretala insieme alla domanda e alla risposta precedenti e rispondi dal contesto. "
+            "Quando citi una commessa (o un altro elemento che nel contesto sta sotto un altro, es. '[Lista: Clienti > Nome: Mario Rossi] "
+            "Titolo: Bagno'), indica sempre anche a chi appartiene, es. «Bagno — Mario Rossi». "
             "Se il contesto contiene le PRESENZE IN CANTIERE REGISTRATE, per le domande su chi è (o è stato oggi) in cantiere rispondi "
             "da quelle, anche quando dicono che nessuno ha registrato di essere in cantiere, precisando che si tratta delle presenze "
             "registrate (non di chi non l'ha segnato). "
@@ -1880,8 +1884,11 @@ async def chat_stream(payload: ChatRequest, current: User = Depends(get_current_
             scope = (conv.get("filters", {}) or {}).get("scope", "all")
         else:
             scope = (payload.filters or {}).get("scope", "all")
-        kb_context = await retrieve_kb(current.user_id, payload.content, scope=scope, org_id=current.org_id, live=True)
-        logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={payload.content[:60]!r} chunks={len(kb_context)}")
+        # a follow-up ("per che clienti?") is searched with the question before it
+        query = retrieval.followup_query(payload.content, [m.get("llm_content") or m.get("content") or ""
+                                                           for m in prior_messages if m.get("role") == "user"])
+        kb_context = await retrieve_kb(current.user_id, query, scope=scope, org_id=current.org_id, live=True)
+        logger.info(f"[RAG] user={current.user_id[:8]} scope={scope} q={query[:60]!r} chunks={len(kb_context)}")
     elif action == "task_todo":
         kb_context = await retrieve_kb(current.user_id, payload.content, scope="kb", org_id=current.org_id)
         logger.info(f"[RAG] user={current.user_id[:8]} scope=kb (task_todo) q={payload.content[:60]!r} chunks={len(kb_context)}")

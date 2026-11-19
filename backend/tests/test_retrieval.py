@@ -219,3 +219,30 @@ def test_latest_expenses_survive_a_crowded_month():
         got = {(c.get("meta") or {}).get("chunk_id") for c in res}
         assert {"kb_1", "kb_2", "kb_3", "kb_4"} <= got, (q, got)
         assert len(res) <= 40, len(res)   # the clients without an amount don't flood the answer
+
+
+# ---------------- a follow-up question ("per che clienti?") ----------------
+def test_followup_query_joins_the_previous_question():
+    prev = ["Dimmi quante commesse di manutenzione ho attive"]
+    assert retrieval.followup_query("Per che clienti", prev) == "Dimmi quante commesse di manutenzione ho attive\nPer che clienti"
+    assert retrieval.followup_query("e quelle chiuse il mese scorso con le ore?", prev).startswith("Dimmi quante")
+    # a question on its own, or no chat before: as it is
+    q = "quante ore ha fatto Gino sul cantiere di via Ovada la settimana scorsa"
+    assert retrieval.followup_query(q, prev) == q and retrieval.followup_query("Per che clienti", []) == "Per che clienti"
+    # two short follow-ups in a row: back to the last question that stands on its own
+    assert retrieval.followup_query("e chi ci lavora?", prev + ["Per che clienti"]) == \
+        "Dimmi quante commesse di manutenzione ho attive\nPer che clienti\ne chi ci lavora?"
+
+
+def test_followup_about_clients_finds_the_commesse_with_their_client():
+    clients = {"id": "cl", "user_id": U, "name": "Clienti", "fields": [{"key": "nome", "label": "Nome"}],
+               "sub_item_fields": [{"key": "titolo", "label": "Titolo"}, {"key": "stato", "label": "Stato"}]}
+    items = [{"id": "c_bo", "collection_id": "cl", "data": {"nome": "Bianchi Ottavio"}},
+             {"id": "c_cf", "collection_id": "cl", "data": {"nome": "Condominio Fiori"}}]
+    subs = [{"id": "s1", "item_id": "c_bo", "collection_id": "cl", "data": {"titolo": "Manutenzione caldaia Lamborghini ixcondens 35", "stato": "in lavorazione"}},
+            {"id": "s2", "item_id": "c_cf", "collection_id": "cl", "data": {"titolo": "Manutenzione centrale termica caldaia", "stato": "in lavorazione"}}]
+    db = _DB(kb_chunks=[_note(1, "Il codice del wifi dello studio è XYZ-123", "2026-09-01T10:00:00+00:00")],
+             collections=[clients], collection_items=items, collection_sub_items=subs)
+    q = retrieval.followup_query("Per che clienti", ["Dimmi quante commesse di manutenzione ho attive"])
+    shown = " | ".join(_texts(_run(q, db=db)))
+    assert "Clienti > Nome: Bianchi Ottavio] Titolo: Manutenzione caldaia" in shown and "Clienti > Nome: Condominio Fiori] Titolo: Manutenzione centrale" in shown, shown

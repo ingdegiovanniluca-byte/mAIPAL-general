@@ -51,6 +51,7 @@ La chat è il cuore di mAIPAL: scegli un **agente**, poi scrivi o detta il messa
 
 **Gli agenti**
 - **Cerca**: risponde alle domande usando quello che hai salvato (note, documenti, task, diario, liste).
+  - Puoi fare **domande di seguito** nella stessa chat: dopo «quante commesse di manutenzione ho attive?» basta «per che clienti?» o «e chi ci lavora?» (le cerco insieme alla domanda prima). Quando cita una commessa dice sempre anche il cliente.
 - **Salva**: memorizza note, codici, documenti e foto; capisce anche quando vuoi aggiungere, modificare o togliere un elemento da una lista.
 - **Task**: crea task con data, to-do senza data, ricorrenze e promemoria.
 - **Diario**: racconta la giornata e la salvo nel diario. Per gli artigiani diventa il **Diario di commessa**.
