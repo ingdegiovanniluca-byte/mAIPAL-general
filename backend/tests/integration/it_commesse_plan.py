@@ -353,8 +353,34 @@ async def main():
     assert (await server.classify_save_intent(server.ClassifySaveIntentPayload(
         text="Salva nella commessa Bagno del cliente Mario Rossi che domani Marco deve sostituire il filtro della caldaia"), me))["kind"] == "job_plan"
     # not a plan: work done + tomorrow's, a material to take, a question
-    for t in ["Finito il bagno, domani si fanno le finiture", "Domani Marco deve prendere il corrugato", "Cosa deve fare domani Marco?"]:
+    for t in ["Finito il bagno, domani si fanno le finiture", "Domani Marco deve prendere il corrugato", "Cosa deve fare domani Marco?",
+              "domani va bene alle 8", "domani c'è uno sciopero dei trasporti", "oggi fatta la prova fumi, Gino 2 ore",
+              "montata la caldaia, assegnata la prova fumi a domani"]:
         assert not jl.future_activity_said(t), t
+    #    said in other words: "va fatta", "c'è la…", "assegnala a…", "la fa…", "è prevista"
+    for t in ["domani va fatta la prova fumi, assegnala ad Avanzino", "Domani c'è la prova fumi, assegnala ad avanzino",
+              "domani prova fumi, assegnala a Gino", "prova fumi domani, la fa Gino", "domani è prevista la prova fumi",
+              "giovedì vanno sostituiti i radiatori, se ne occupa Gino", "Domani prova fumi da fare. Assegna a Gino"]:
+        assert jl.future_activity_said(t), t
+    assert jl.plan_said("programmare per domani la prova fumi con Gino")
+    async def read_act3(text, people, user_id=None, channel="web"):
+        return {"description": "Prova fumi", "date": (today + timedelta(days=1)).isoformat(), "start": "", "end": "", "assignees": ["Gino Neri"], "items": [], "info": ""}
+    jl.read_activity = read_act3
+    n_logs = len(db.job_logs.docs)
+    r = await server._save_job_log(me, "domani va fatta la prova fumi, assegnala a Gino", commessa_id="s_bagno")
+    assert r["status"] == "commessa_update" and "Gino Neri" in r["message"], r
+    a = [x for x in db.job_activities.docs if x["description"] == "Prova fumi"][-1]
+    assert [p["name"] for p in a["assignees"]] == ["Gino Neri"] and all(x.get("kind") for x in db.job_logs.docs[n_logs:])
+    #    the words don't say it but the reader of the note does (only a job for a day to come): planned all the same
+    real_interpret = jl.interpret
+    async def reads_plan(t, speaker, team, known=None, user_id=None, channel="web", **k):
+        return {"kind": "nota", "doubt": "", "date": jl.today_local().isoformat(), "text": t, "hours": [], "materials": [], "problems": [],
+                "client": "", "commessa": "", "to_plan": True}
+    jl.interpret = reads_plan
+    assert not jl.future_activity_said("domani collaudo caldaia con Gino")
+    r = await server._save_job_log(me, "domani collaudo caldaia con Gino", commessa_id="s_bagno")
+    assert r["status"] == "commessa_update", r
+    jl.interpret = real_interpret
 
     # 9) the model writes the day as a word ("domani") and the name is misspelled: the day is counted from the words,
     #    the person found anyway; with the day really missing, what is missing is said

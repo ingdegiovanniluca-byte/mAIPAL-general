@@ -452,10 +452,13 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "attende il via libera per la sostituzione dal proprietario\"), {\"work\": il lavoro in attesa, breve, con le parole della nota "
         "(\"Sostituzione del ventilatore\"), \"from\": da chi si attende, senza articolo (\"proprietario\"), \"what\": cosa si attende, "
         "senza articolo (\"via libera\")}. Se non è scritto: null.\n"
+        "10. \"to_plan\": true SOLO se tutto il messaggio parla di un LAVORO DA FARE in un giorno che deve ancora venire (domani, "
+        "giovedì, il 20…), eventualmente con chi lo farà o a chi assegnarlo (\"domani c'è la prova fumi, assegnala ad Avanzino\", "
+        "\"giovedì va fatto il collaudo con Gino\"), e non racconta lavoro fatto, ore, problemi o materiali da portare; altrimenti false.\n"
         "MAI inventare: ogni informazione deve essere scritta dall'utente.\n"
         "Rispondi SOLO con JSON: {\"kind\": \"nota|domanda|non_chiara\", \"doubt\": \"\", \"date\": \"\", \"text\": \"\", "
         "\"hours\": [], \"materials\": [], \"problems\": [], \"expenses\": [], \"times\": {\"start\": null, \"end\": null}, "
-        "\"tools\": [], \"problem_details\": [], \"waiting\": null, \"client\": \"\", \"commessa\": \"\"}"
+        "\"tools\": [], \"problem_details\": [], \"waiting\": null, \"to_plan\": false, \"client\": \"\", \"commessa\": \"\"}"
     )
     client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
@@ -490,6 +493,9 @@ async def interpret(text: str, speaker: str, team: list, known: Optional[dict] =
         "waiting": clean_waiting(parsed.get("waiting"), text),
         "tools": clean_tools(parsed.get("tools"), text, today),
         "problem_details": [d for d in (parsed.get("problem_details") or []) if isinstance(d, dict)],
+        # (only with a day to come in the words, and nothing done, no hours, no materials: never a diary note made a plan by mistake)
+        "to_plan": parsed.get("to_plan") is True and bool(_FUTURE_DAY.search(text)) and not clean_hours(parsed.get("hours"), speaker)
+        and not mats and not _DONE_NOW.search(_TO_BE_DONE.sub(" ", text)) and not _DONE_WORDS.search(_TO_BE_DONE.sub(" ", text)),
         "client": str(parsed.get("client") or "").strip(),
         "commessa": str(parsed.get("commessa") or "").strip(),
     }
@@ -1138,7 +1144,13 @@ def item_category(text: str) -> str:
     return "materiali"
 
 
-_PLAN_SAID = re.compile(r"^\s*(?:pianifica|programma|organizza|metti\s+in\s+programma|pianificare)\b", re.I)
+_PLAN_SAID = re.compile(r"^\s*(?:pianifica|pianificare|pianifichiamo|programma|programmare|programmiamo|organizza|organizzare|"
+                        r"metti\s+in\s+programma|mettere\s+in\s+programma|da\s+pianificare|da\s+programmare)\b", re.I)
+# a job given to someone ("assegnala ad Avanzino", "affidala a Gino", "la fa Pino"): with a day to come it is planning
+_ASSIGN = re.compile(r"\b(?:assegn\w*|affid\w*|(?:la|lo|li|le)\s+fa(?:nno)?|se\s+ne\s+occupa|se\s+ne\s+occupano|incaric\w*)\b", re.I)
+# "va fatta", "vanno sostituiti", "sarà montato": to do, not done
+_TO_BE_DONE = re.compile(r"\b(?:va|vanno|andr[aà]|andranno|sar[aà]|saranno|dev[eo]\s+essere|devono\s+essere|da)\s+"
+                         r"(?:\w+\s+)?(?:fatt|finit|terminat|completat|smontat|montat|posat|installat|rifatt|demolit|sostituit|eseguit|realizzat|chius)\w*", re.I)
 _DONE_WORDS = re.compile(r"\b(?:fatt[oaie]|finit[oaie]|terminat[oaie]|completat[oaie]|concluso|conclusa|smontat\w*|montat\w*|posat\w*|"
                          r"installat\w*|rifatt\w*|demolit\w*|sostituit\w*|eseguit\w*|realizzat\w*|chius[oa])\b", re.I)
 
@@ -1157,7 +1169,10 @@ _FUTURE_DAY = re.compile(
 _TO_DO = re.compile(
     r"\b(deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|c'[eè]\s+da|ci\s+sono\s+da|da\s+fare|si\s+fa|si\s+fanno|"
     r"far[aà]|faranno|faremo|fa\s+(la|il|lo|i|le|gli|l')|fanno\s+(la|il|lo|i|le|gli|l')|andr[aà]\s+a|andranno\s+a|va\s+a|vanno\s+a|"
-    r"verr[aà]\s+a|verranno\s+a|viene\s+a|vengono\s+a|ha\s+da|hanno\s+da|tocca\s+a)\b", re.I)
+    r"verr[aà]\s+a|verranno\s+a|viene\s+a|vengono\s+a|ha\s+da|hanno\s+da|tocca\s+a|"
+    r"va\s+(?!bene\b|meglio\b|male\b|via\b)\w+|vanno\s+(?!bene\b|meglio\b|male\b|via\b)\w+|da\s+\w+are|da\s+\w+ere|da\s+\w+ire|"
+    r"c'[eè]\s+(?:la|il|lo|l')|ci\s+sar[aà]|"
+    r"[eè]\s+previst[oa]|sono\s+previst[ie]|in\s+programma|previst[oaie]\s+(?:per|la|il))\b", re.I)
 _TO_TAKE = re.compile(r"\b(?:deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|devo)\s+(?:\w+\s+){0,2}?"
                       r"(?:portare|prendere|comprare|ordinare|recuperare|ritirare|procurare)\b|^\s*(?:domani\s+)?(?:porto|portiamo|prendo|prendiamo|compro|ordino)\b", re.I)
 _DONE_NOW = re.compile(r"\b(oggi|ieri|stamattina|stamani)\b.*\b(fatt[oaie]|finit[oaie]|posat\w*|montat\w*|ore)\b", re.I | re.S)
@@ -1167,9 +1182,10 @@ def future_activity_said(text: str) -> bool:
     t = (text or "").strip()
     if not t or t.endswith("?") or _QUESTION_START.match(t):
         return False
-    if not (_FUTURE_DAY.search(t) and _TO_DO.search(t)):
+    if not (_FUTURE_DAY.search(t) and (_TO_DO.search(t) or _ASSIGN.search(t))):
         return False
-    if _TO_TAKE.search(t) or _DONE_NOW.search(t) or _DONE_WORDS.search(t):   # a material to take; work done told too
+    rest = _TO_BE_DONE.sub(" ", t)   # ("va fatta la prova fumi": to do, not done)
+    if _TO_TAKE.search(t) or _DONE_NOW.search(rest) or _DONE_WORDS.search(rest):   # a material to take; work done told too
         return False
     return True
 

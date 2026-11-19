@@ -8119,7 +8119,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if not commessa_id:   # found in their Clienti list: not if the team's is read-only for them
         await _commessa_or_404(current, target["id"])
 
-    if not images and (jl.plan_said(text) or jl.future_activity_said(text)):
+    if not images and (jl.plan_said(text) or jl.future_activity_said(text) or parsed.get("to_plan")):
         # "pianifica … il 12/11 con Gino", or "domani Avanzino deve sostituire il filtro della caldaia": an activity, by anyone
         # (a collaborator for themselves or the colleagues of their company)
         return await _plan_from_message(current, clienti, target, text, channel, author)
