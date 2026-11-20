@@ -14,6 +14,7 @@ import ClientUpdatesSheet from "@/components/ClientUpdatesSheet";
 import CommessaShareSheet from "@/components/CommessaShareSheet";
 import { LiquidGlass, liquidPath, useMeasure, LIQUID_GAP } from "@/components/LiquidDock";
 import { usePref } from "@/lib/prefs";
+import { mentionQueryAt, slugify } from "@/lib/mentions";
 import FloatingGlassButton from "@/components/FloatingGlassButton";
 import { useAuth } from "@/auth/AuthContext";
 import { MOBILE_BREAKPOINT } from "@/hooks/use-is-mobile";
@@ -2081,6 +2082,7 @@ function CostsView({ commessaId, onChanged, onOpenLog }) {
   const done = (r) => { setE(r.data); onChanged(); };
   const fail = (err) => toast.error(err.response?.data?.detail || "Errore nel salvataggio");
   const setBudget = (n) => api.patch(`/jobs/commesse/${commessaId}/economics`, n === null ? { clear_budget: true } : { budget: n }).then(done).catch(fail);
+  const setExpected = (n) => api.patch(`/jobs/commesse/${commessaId}/economics`, n === null ? { clear_expected_cost: true } : { expected_cost: n }).then(done).catch(fail);
   const costs = (body) => api.patch(`/jobs/costs`, body, { params: { commessa_id: commessaId } }).then(done).catch(fail);
   // a material's price: this commessa's (it wins on the organization's price list); "nel listino": the list too
   const setPrice = (m, n, toListino = false) => api.put(`/jobs/commesse/${commessaId}/prices`,
@@ -2110,8 +2112,14 @@ function CostsView({ commessaId, onChanged, onOpenLog }) {
     <div className="mt-2" data-testid="costs-view">
       {/* the quote, the costs, the margin */}
       <div className={row}>
-        <span className="flex-1 text-[14px] text-white/90">Preventivo</span>
+        <span className="flex-1 text-[14px] text-white/90">Valore commessa</span>
         <MoneyInput value={e.budget} onSave={setBudget} placeholder="0" testid="costs-budget" wide />
+      </div>
+      <div className={row}>
+        <span className="flex-1 min-w-0 text-[14px] text-white/90">Spesa prevista
+          {e.expected_margin != null && <span className="block text-[11.5px] text-white/55" data-testid="costs-expected-margin">margine previsto {eur(e.expected_margin)}</span>}
+        </span>
+        <MoneyInput value={e.expected_cost} onSave={setExpected} placeholder="0" testid="costs-expected" wide />
       </div>
       <div className={row}>
         <span className="flex-1 text-[14px] text-white/90">Costi</span>
@@ -2129,11 +2137,12 @@ function CostsView({ commessaId, onChanged, onOpenLog }) {
             <div className="h-full rounded-full" style={{ width: `${Math.min(100, pct || 0)}%`, background: barColor }} />
           </div>
           <div className="mt-1.5 text-[12px] text-white/70" data-testid="costs-pct">
-            {pct >= 100 ? `Preventivo superato: speso il ${Math.round(pct)}%` : `Speso il ${Math.round(pct || 0)}% del preventivo`}
+            {pct >= 100 ? `Valore superato: speso il ${Math.round(pct)}%` : `Speso il ${Math.round(pct || 0)}% del valore`}
+            {e.expected_cost ? ` · ${Math.round((e.cost_total / e.expected_cost) * 100)}% della spesa prevista` : ""}
           </div>
           {e.forecast && <ForecastBlock f={e.forecast} />}
         </div>
-      ) : <div className="text-[12px] text-white/55 pb-1">Inserisci il preventivo per vedere il margine.</div>}
+      ) : <div className="text-[12px] text-white/55 pb-1">Inserisci il valore della commessa per vedere il margine (è lo stesso della lista Clienti).</div>}
       {!e.complete && (
         <div className="text-[12px] text-white/60" data-testid="costs-missing">
           Non conteggiati: {[e.unpriced_hours ? `${fmtNum(e.unpriced_hours)} h senza tariffa` : "", e.unpriced_materials.length ? `${e.unpriced_materials.length} material${e.unpriced_materials.length === 1 ? "e" : "i"} senza prezzo` : ""].filter(Boolean).join(", ")}: inseriscili qui sotto.
@@ -2526,6 +2535,41 @@ function CommessaChat({ commessa, onClose, onSaved }) {
   const taRef = useRef(null);
   const listRef = useRef(null);
   const [quote, setQuote] = useState(null);
+  // @: the people of the commessa (team-mates and collaborators enabled on it), tagged in a message
+  const [people, setPeople] = useState([]);
+  const [tagQ, setTagQ] = useState(null);
+  useEffect(() => {
+    api.get(`/jobs/commesse/${commessa.id}/plan-people`).then((r) => {
+      const used = new Set();
+      setPeople((r.data || []).map((p) => {
+        let slug = slugify(p.name);
+        if (used.has(slug)) slug = `${slug}-${String(p.id).slice(-3)}`;
+        used.add(slug);
+        return { ...p, slug };
+      }));
+    }).catch(() => setPeople([]));
+  }, [commessa.id]);
+  const onType = (e) => { setText(e.target.value); setTagQ(mentionQueryAt(e.target.value, e.target.selectionStart)); };
+  const tagMatches = tagQ === null ? [] : people.filter((p) => p.slug.includes(tagQ) || p.name.toLowerCase().includes(tagQ)).slice(0, 6);
+  const pickTag = (p) => {
+    const ta = taRef.current;
+    const caret = ta ? ta.selectionStart : text.length;
+    const before = text.slice(0, caret).replace(/@[\w-]*$/, `@${p.slug} `);
+    setText(before + text.slice(caret));
+    setTagQ(null);
+    setTimeout(() => { if (ta) { ta.focus(); ta.setSelectionRange(before.length, before.length); } }, 0);
+  };
+  // "@avanzino.neri domani …" -> the text with the names ("Avanzino Neri domani …") and who was tagged
+  const untag = (body) => {
+    const tagged = [];
+    const out = body.replace(/(^|[\s(,;.!?])@([a-z0-9][a-z0-9.-]*[a-z0-9]|[a-z0-9])(?![\w@])/gi, (m, pre, slug) => {
+      const p = people.find((x) => x.slug === slug.toLowerCase().replace(/\.+$/, ""));
+      if (!p) return m;
+      if (!tagged.some((t) => t.id === p.id)) tagged.push({ type: p.type, id: p.id });
+      return `${pre}${p.name}`;
+    });
+    return { text: out, tagged };
+  };
 
   useEffect(() => { setMessages([]); setText(""); setPhotos([]); }, [commessa.id]);
   // a document of this commessa (a quote, survey notes…): "preventivo" in the message -> read as the quote
@@ -2599,8 +2643,9 @@ function CommessaChat({ commessa, onClose, onSaved }) {
   // a question or an unclear entry is not saved; materials to take make a reminder ("planned");
   // "usati o da prendere?" is asked with two buttons
   const saveEntry = async (body, images, fromIdx = null, materialChoice = null, clientId = null) => {
-    const r = await api.post("/jobs/logs", { text: body, images, commessa_id: commessa.id, ...(materialChoice ? { material_choice: materialChoice } : {}),
-      ...(clientId ? { client_id: clientId, written_at: new Date().toISOString() } : {}) });
+    const { text: plain, tagged } = untag(body);
+    const r = await api.post("/jobs/logs", { text: plain, images, commessa_id: commessa.id, ...(materialChoice ? { material_choice: materialChoice } : {}),
+      ...(clientId ? { client_id: clientId, written_at: new Date().toISOString() } : {}), ...(tagged.length ? { tagged } : {}) });
     const ok = ["ok", "planned", "description", "commessa_update"].includes(r.data.status);
     const ask = r.data.status === "material_doubt" ? { body, images } : null;
     setMessages((ms) => [...ms.map((m, i) => (i === fromIdx ? { ...m, offerSave: false, matAsk: null } : m)),
@@ -2642,7 +2687,7 @@ function CommessaChat({ commessa, onClose, onSaved }) {
     setText(""); setPhotos([]);
     // in "Chiedi" a message that is not a question (an entry, a job for tomorrow) goes to the diary by itself
     const asDiary = mode === "diary" || !QUESTION_RX.test(body.trim());
-    if (asDiary && navigator.onLine === false) { await keepOffline(body, images); return; }
+    if (asDiary && navigator.onLine === false) { await keepOffline(untag(body).text, images); return; }
     setBusy(true);
     const clientId = newClientId();
     try {
@@ -2650,11 +2695,11 @@ function CommessaChat({ commessa, onClose, onSaved }) {
         await saveEntry(body, images, null, null, clientId);
       } else {
         const history = messages.filter((m) => m.mode !== "diary" && !m.saved).slice(-8).map((m) => ({ role: m.role, content: m.content }));
-        const r = await api.post(`/jobs/commesse/${commessa.id}/ask`, { question: body, history });
+        const r = await api.post(`/jobs/commesse/${commessa.id}/ask`, { question: untag(body).text, history });
         setMessages((ms) => [...ms, { role: "assistant", content: r.data.answer, offerSave: r.data.is_entry ? body : null }]);
       }
     } catch (e) {
-      if (asDiary && isNetworkError(e)) await keepOffline(body, images, clientId);
+      if (asDiary && isNetworkError(e)) await keepOffline(untag(body).text, images, clientId);
       else setMessages((ms) => [...ms, { role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]);
     } finally { setBusy(false); }
   };
@@ -2731,9 +2776,20 @@ function CommessaChat({ commessa, onClose, onSaved }) {
           {transcribing ? <Loader2 size={20} className="animate-spin relative" /> : recording ? <Square size={16} fill="currentColor" className="relative" /> : <Mic size={22} strokeWidth={1.8} />}
         </button>
         <div className="relative flex-1 min-w-0 min-h-[128px] flex flex-col pl-5 pr-3 pt-3 pb-3">
-          <textarea ref={taRef} value={text} onChange={(e) => setText(e.target.value)} rows={1} data-testid="commessa-chat-text"
+          {tagMatches.length > 0 && (
+            <div className="absolute left-3 right-3 bottom-full mb-2 z-20 rounded-2xl lg-glass py-1 shadow-lg" data-testid="commessa-chat-tags">
+              {tagMatches.map((p) => (
+                <button key={`${p.type}-${p.id}`} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => pickTag(p)}
+                  className="w-full text-left px-3.5 py-2 flex items-center gap-2 text-[14px] text-white active:bg-white/10">
+                  <span className="flex-1 min-w-0 truncate">{p.name}</span>
+                  <span className="text-[11.5px] text-white/60">{p.type === "collab" ? (p.company || "operatore") : "team"}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <textarea ref={taRef} value={text} onChange={onType} rows={1} data-testid="commessa-chat-text"
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia(`(min-width: ${MOBILE_BREAKPOINT}px)`).matches) { e.preventDefault(); send(); } }}
-            placeholder={mode === "ask" ? `Chiedi su «${commessa.title}»: ore, materiali, cosa manca…` : "Cosa avete fatto? Ore, materiali, problemi…"}
+            placeholder={mode === "ask" ? `Chiedi su «${commessa.title}»: ore, materiali, cosa manca… (@ per taggare)` : "Cosa avete fatto? Ore, materiali, problemi… (@ per taggare)"}
             className="w-full bg-transparent border-0 outline-none resize-none text-[15px] leading-relaxed py-1 text-white placeholder:text-white/70 no-scrollbar" />
           {photos.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-1">
@@ -3095,7 +3151,7 @@ export default function JobDiaryPage() {
           note={t.hours_pending_total ? `${fmtNum(t.hours_pending_total)} h da approvare` : ""} />
         {detail.economics && (
           <InfoCard icon={Euro} label="Costi" value={eur(detail.economics.cost_total)} testid="glance-costi" ariaLabel="Mostra costi e margine"
-            note={detail.economics.budget ? `${Math.round(detail.economics.used_pct || 0)}% del preventivo` : ""} onClick={() => pickSection("costi")} />
+            note={detail.economics.budget ? `${Math.round(detail.economics.used_pct || 0)}% del valore` : ""} onClick={() => pickSection("costi")} />
         )}
         <InfoCard icon={Flag} label="Tappe" value={msSum.total ? `${msSum.done}/${msSum.total}` : "nessuna"} testid="glance-milestone"
           ariaLabel="Mostra le tappe del lavoro" onClick={() => pickSection("milestone")}

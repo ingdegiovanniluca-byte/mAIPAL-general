@@ -38,6 +38,11 @@ COMMESSA_FIELDS = [
     {"key": "codice", "label": "Codice", "type": "text"},
     {"key": "ora_inizio", "label": "Orario standard inizio", "type": "text"},
     {"key": "ora_fine", "label": "Orario standard fine", "type": "text"},
+    # the money, the same as in the commessa's diary (Costi): changed on one side, changed on the other
+    {"key": "valore", "label": "Valore commessa", "type": "number",
+     "aliases": ["valore", "valore della commessa", "importo", "importo commessa", "importo lavori", "prezzo", "budget"]},
+    {"key": "spesa_prevista", "label": "Spesa prevista", "type": "number",
+     "aliases": ["spese previste", "costo previsto", "costi previsti", "spesa", "budget spesa", "costo stimato", "spesa stimata"]},
 ]
 
 
@@ -83,7 +88,9 @@ def merge_system_fields(existing: list, base: list) -> tuple[list, dict]:
         if i == 0 and fields:
             mapping[b["key"]] = fields[0]["key"]
             continue
-        same = next((f for f in fields if _norm(f.get("label")) == _norm(b["label"])), None)
+        names = {_norm(b["label"]), *(_norm(a) for a in b.get("aliases") or [])}
+        same = next((f for f in fields if _norm(f.get("label")) == _norm(b["label"])), None) \
+            or next((f for f in fields if _norm(f.get("label")) in names and f.get("key") not in mapping.values()), None)
         if same:
             mapping[b["key"]] = same["key"]
             if b.get("options") and not same.get("options") and same.get("type") in (None, "text", "select"):
@@ -93,7 +100,7 @@ def merge_system_fields(existing: list, base: list) -> tuple[list, dict]:
         while key in keys:
             key, n = f"{b['key']}_{n}", n + 1
         keys.add(key)
-        fields.append({**b, "key": key, "options": b.get("options"), "ref_collection_id": None})
+        fields.append({**{k: v for k, v in b.items() if k != "aliases"}, "key": key, "options": b.get("options"), "ref_collection_id": None})
         mapping[b["key"]] = key
     return fields, mapping
 

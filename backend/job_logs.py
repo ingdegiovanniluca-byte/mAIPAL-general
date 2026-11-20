@@ -1164,7 +1164,7 @@ def plan_said(text: str) -> bool:
 # the day's to do, the person told), not a diary note. Only when the whole message is about later: a message that also
 # tells work done ("finito il bagno, domani le finiture") stays an entry; "domani porto / deve prendere ..." is a material to take.
 _FUTURE_DAY = re.compile(
-    r"\b(domani|dopodomani|stasera|luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sabato|domenica|"
+    r"\b(domani|dopodomani|stasera|in\s+serata|stanotte|(?:questo|oggi|nel)\s+pomeriggio|in\s+giornata|pi[uù]\s+tardi|(?:tra|fra)\s+poco|luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sabato|domenica|"
     r"il\s+\d{1,2}(?:[/.-]\d{1,2})?|la\s+prossima\s+settimana|settimana\s+prossima|tra\s+\w+\s+giorn[oi]|fra\s+\w+\s+giorn[oi])\b", re.I)
 _TO_DO = re.compile(
     r"\b(deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|c'[eè]\s+da|ci\s+sono\s+da|da\s+fare|si\s+fa|si\s+fanno|"
@@ -1178,11 +1178,22 @@ _TO_TAKE = re.compile(r"\b(?:deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|dev
 _DONE_NOW = re.compile(r"\b(oggi|ieri|stamattina|stamani)\b.*\b(fatt[oaie]|finit[oaie]|posat\w*|montat\w*|ore)\b", re.I | re.S)
 
 
+_WEATHER = re.compile(r"\b(?:pioggia|piove|piover[aà]|neve|nevica|maltempo|temporal\w*|grandine|vento\s+forte|allerta\s+meteo|sciopero)\b", re.I)
+# today, said plainly ("oggi", "stamattina"): planning only with a clear "to do" or a job given to someone
+_TODAY = re.compile(r"\b(?:oggi|stamattina|stamani|in\s+mattinata)\b", re.I)
+_TO_DO_STRONG = re.compile(r"\b(?:deve|devono|dovr[aà]|dovranno|dobbiamo|bisogna|c'[eè]\s+da|da\s+fare|[eè]\s+previst[oa]|sono\s+previst[ie]|"
+                           r"in\s+programma|va\s+fatt\w*|vanno\s+fatt\w*)\b", re.I)
+
+
 def future_activity_said(text: str) -> bool:
     t = (text or "").strip()
     if not t or t.endswith("?") or _QUESTION_START.match(t):
         return False
-    if not (_FUTURE_DAY.search(t) and (_TO_DO.search(t) or _ASSIGN.search(t))):
+    if _WEATHER.search(t) and not _ASSIGN.search(t):   # "domani è prevista pioggia": the weather, not a job
+        return False
+    later = _FUTURE_DAY.search(t) and (_TO_DO.search(t) or _ASSIGN.search(t))
+    today = _TODAY.search(t) and (_TO_DO_STRONG.search(t) or _ASSIGN.search(t))
+    if not (later or today):
         return False
     rest = _TO_BE_DONE.sub(" ", t)   # ("va fatta la prova fumi": to do, not done)
     if _TO_TAKE.search(t) or _DONE_NOW.search(rest) or _DONE_WORDS.search(rest):   # a material to take; work done told too
@@ -1216,7 +1227,8 @@ def said_day(text: str, today: date) -> str:
         days.add(today + timedelta(days=2))
     elif re.search(r"\bdomani\b", n):
         days.add(today + timedelta(days=1))
-    if re.search(r"\b(?:oggi|stasera|stamattina|oggi pomeriggio)\b", n):
+    if re.search(r"\b(?:oggi|stasera|stamattina|stamani|stanotte|in serata|in mattinata|in giornata|(?:questo|oggi|nel) pomeriggio|"
+                 r"piu tardi|(?:tra|fra) poco)\b", n):
         days.add(today)
     for i, w in enumerate(_WEEKDAYS_IT):
         if re.search(rf"\b{w[:-1]}[iì]?\b" if w.endswith("i") else rf"\b{w}\b", n):

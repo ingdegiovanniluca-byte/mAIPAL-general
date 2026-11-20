@@ -667,6 +667,28 @@ def _plan(tenant: Optional[dict]) -> dict:
     return {**orgaccess.DEFAULT_PLAN, **(tenant.get("plan") or {}), **((e or {}).get("plan") or {})}
 
 
+async def _migrate_list_values() -> int:
+    """Once the Clienti lists have "Valore commessa" and "Spesa prevista": each commessa the same on both sides - the diary's
+    value when there is one (it has its history), else the list's. Idempotent. -> how many commesse aligned."""
+    n = 0
+    for coll in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0, "id": 1, "system_sub_map": 1}).to_list(5000):
+        smap = coll.get("system_sub_map") or {}
+        if not (smap.get("valore") or smap.get("spesa_prevista")):
+            continue
+        for sb in await db.collection_sub_items.find({"collection_id": coll["id"]}, {"_id": 0, "id": 1, "data": 1}).to_list(20000):
+            econ = await db.job_economics.find_one({"commessa_id": sb["id"]}, {"_id": 0, "budget": 1, "expected_cost": 1}) or {}
+            fill = {}
+            for base, field in (("valore", "budget"), ("spesa_prevista", "expected_cost")):
+                lv = _money_val((sb.get("data") or {}).get(smap.get(base) or ""))
+                if econ.get(field) is None and lv is not None:
+                    fill[field] = lv
+            if fill:
+                await db.job_economics.update_one({"commessa_id": sb["id"]}, {"$set": {"commessa_id": sb["id"], **fill}}, upsert=True)
+            await _econ_to_list(sb["id"])
+            n += 1
+    return n
+
+
 async def _migrate_commesse() -> int:
     """Specifica commesse (idempotent, at start): the Clienti lists get the new base attributes
     (client type, tax code, contact person; commessa code, standard times) and the new states;
@@ -4543,6 +4565,7 @@ async def create_sub_item(collection_id: str, item_id: str, payload: CollectionS
     }
     if coll.get("system_key") == vx.CLIENTI_KEY:
         await _after_new_commessa(coll, doc, item)
+        await _list_to_econ(current, coll, doc["id"], {}, data)   # a value written with the new commessa
     else:
         await db.collection_sub_items.insert_one(doc)
     doc.pop("_id", None)
@@ -4582,6 +4605,7 @@ async def update_sub_item(collection_id: str, item_id: str, sub_id: str, payload
     if coll.get("system_key") == vx.CLIENTI_KEY and before:   # a commessa's state change goes in its diary
         smap = coll.get("system_sub_map") or {}
         await _track_commessa_changes(current, coll, sub_id, before.get("data") or {}, after.get("data") or {})
+        await _list_to_econ(current, coll, sub_id, before.get("data") or {}, after.get("data") or {})
         old, new = vx.norm_stato(_sysval(before.get("data"), smap, "stato")), vx.norm_stato(_sysval(after.get("data"), smap, "stato"))
         if old != new:
             client = await db.collection_items.find_one({"id": item_id, "collection_id": collection_id}, {"_id": 0, "embedding": 0})
@@ -6670,6 +6694,7 @@ class JobLogPayload(BaseModel):
     material_choice: Optional[str] = None     # answer to "usati o da prendere?": usato | da_prendere
     client_id: Optional[str] = None           # the phone's own id of the entry: sent again (no signal), saved once
     written_at: Optional[str] = None          # when it was written (ISO), if sent later: its day is that one
+    tagged: List[Dict[str, str]] = []         # the people tagged with @ in the commessa's chat: [{"type": user|collab, "id"}]
 
 
 class JobTodoPayload(BaseModel):
@@ -7956,6 +7981,7 @@ async def _confirm_commessa_draft(current: User, draft_id: str, choice: str) -> 
     doc.pop("_id", None)
     if f.get("value"):
         await db.job_economics.update_one({"commessa_id": doc["id"]}, {"$set": {"commessa_id": doc["id"], "budget": f["value"]}}, upsert=True)
+        await _econ_to_list(doc["id"])
     await _track_commessa_changes(current, clienti, doc["id"], {}, {}, channel=d.get("channel") or "web",
                                   extra={"Creata": ("", f"{data.get(smap.get('codice', 'codice'))} – {f['title']}")})
     await db.commessa_drafts.update_one({"id": draft_id}, {"$set": {"status": "done", "commessa_id": doc["id"]}})
@@ -7982,7 +8008,7 @@ COMMESSA_NOT_FOUND_USER = ("Non l'ho salvato: non trovo questa commessa tra quel
 async def _save_job_log(current: User, text: str, images: Optional[List[str]] = None, commessa_id: Optional[str] = None,
                         hint_commessa_id: Optional[str] = None, new_client_name: Optional[str] = None,
                         conv_id: Optional[str] = None, channel: str = "web", client_item_id: Optional[str] = None,
-                        author: Optional[dict] = None, material_choice: Optional[str] = None) -> dict:
+                        author: Optional[dict] = None, material_choice: Optional[str] = None, tagged: Optional[list] = None) -> dict:
     """Shared by the chat agent, the commessa page, @diario and Telegram. `author`: a
     collaborator writing on Telegram ({"id", "first_name", "name", "company"}) - the entry is
     theirs, in the account (`current`) that enabled them on that commessa.
@@ -8122,7 +8148,7 @@ async def _save_job_log(current: User, text: str, images: Optional[List[str]] = 
     if not images and (jl.plan_said(text) or jl.future_activity_said(text) or parsed.get("to_plan")):
         # "pianifica … il 12/11 con Gino", or "domani Avanzino deve sostituire il filtro della caldaia": an activity, by anyone
         # (a collaborator for themselves or the colleagues of their company)
-        return await _plan_from_message(current, clienti, target, text, channel, author)
+        return await _plan_from_message(current, clienti, target, text, channel, author, tagged=tagged)
     said_value = jl.value_said(text) if not author and not images and _is_org_admin(current) else None
     if said_value:   # "il valore della commessa è 12.500 €" / "aggiungi 800 € al valore": the administrator's, in the diary
         econ = await db.job_economics.find_one({"commessa_id": target["id"]}, {"_id": 0, "budget": 1}) or {}
@@ -8292,14 +8318,52 @@ async def create_job_log(payload: JobLogPayload, current: User = Depends(get_cur
         done = await db.job_logs.find_one({"client_id": cid, "author_user_id": current.user_id}, {"_id": 0, "embedding": 0})
         if done:
             return {"status": "ok", "log": done, "message": "Questa voce era già salvata.", "duplicate": True}
+    tagged = await _tagged_people(current, payload.commessa_id, payload.tagged) if payload.tagged and payload.commessa_id else []
     with jl.as_of(_written_day(payload.written_at)):
         res = await _save_job_log(current, payload.text, payload.images, payload.commessa_id, payload.hint_commessa_id,
                                   payload.new_client_name, payload.conv_id, client_item_id=payload.client_item_id,
-                                  material_choice=payload.material_choice)
+                                  material_choice=payload.material_choice, tagged=tagged)
     if cid and res.get("status") == "ok" and (res.get("log") or {}).get("id"):
         await db.job_logs.update_one({"id": res["log"]["id"]}, {"$set": {"client_id": cid, "author_user_id": current.user_id}})
         res["log"]["client_id"] = cid
+    if tagged and res.get("status") == "ok" and (res.get("log") or {}).get("id"):   # a note: the people tagged get it
+        told = await _tell_tagged(current, res["log"], tagged)
+        if told:
+            await db.job_logs.update_one({"id": res["log"]["id"]}, {"$set": {"tagged": [{"type": p["type"], "id": p["id"], "name": p["name"]} for p in tagged]}})
+            res["message"] = (res.get("message") or "") + f"\n🔔 L'ho mandata a {_and_join(told)}."
     return res
+
+
+async def _tagged_people(current: User, commessa_id: str, refs: list) -> list:
+    """The @ tags of the commessa's chat -> the people (users and collaborators enabled on it) they name; the others dropped."""
+    clienti, _sub, _client = await _commessa_or_404(current, commessa_id)
+    people = await _activity_people(clienti, commessa_id)
+    want = {(str(r.get("type")), str(r.get("id"))) for r in refs or [] if isinstance(r, dict)}
+    return [p for p in people if (p["type"], p["id"]) in want and p["id"] != current.user_id][:20]
+
+
+async def _tell_tagged(current: User, log: dict, people: list) -> list:
+    """A diary note with people tagged: each one gets it (a collaborator on Telegram, a user in the app and on Telegram). -> names told"""
+    view = {"id": log.get("commessa_id"), "title": log.get("commessa_title") or "", "client_name": log.get("client_name") or ""}
+    text = (f"🔔 {_first_name(current.name)} ti ha taggato in una nota su «{view['title']}» — {view['client_name']}:\n"
+            f"«{(log.get('text') or '')[:600]}»")
+    told = []
+    for p in people:
+        try:
+            if p["type"] == "collab":
+                c = await db.collaborators.find_one({"id": p["id"]}, {"_id": 0})
+                if c and await _tell_collaborator(c, text):
+                    told.append(_first_name(p["name"]))
+            else:
+                push.fire_and_forget(db, p["id"], f"🔔 Nota su {view['title']}", (log.get("text") or "")[:140],
+                                     f"/dashboard/journal?commessa={view['id']}", f"tag-{log.get('id')}-{p['id']}", kind="shares")
+                u = await db.users.find_one({"user_id": p["id"]}, {"_id": 0, "telegram_chat_id": 1})
+                if u and u.get("telegram_chat_id") and await nprefs.wants(db, p["id"], "shares", "telegram"):
+                    await _tg_send(u["telegram_chat_id"], text)
+                told.append(_first_name(p["name"]))
+        except Exception:
+            logger.exception("tag notice failed")
+    return told
 
 
 async def _shared_commesse(current: User, skip: set) -> list:
@@ -9381,6 +9445,74 @@ BUDGET_ALERTS = (80, 100)
 class EconomicsPatch(BaseModel):
     budget: Optional[float] = None
     clear_budget: bool = False
+    expected_cost: Optional[float] = None   # the "Spesa prevista": what the works should cost
+    clear_expected_cost: bool = False
+
+
+def _money_val(v) -> Optional[float]:
+    """A money value written in a list cell: 12500, "12.500", "12.500,50 €", "€ 3.200" -> float; "" / not a number -> None."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return round(float(v), 2) if v >= 0 else None
+    t = re.sub(r"[^\d.,]", "", str(v))
+    if not t:
+        return None
+    if "," in t and "." in t:
+        t = t.replace(".", "").replace(",", ".")
+    elif "," in t:
+        t = t.replace(",", ".")
+    elif t.count(".") > 1 or re.fullmatch(r"\d{1,3}\.\d{3}", t):
+        t = t.replace(".", "")
+    try:
+        return round(float(t), 2)
+    except ValueError:
+        return None
+
+
+async def _econ_to_list(commessa_id: str) -> None:
+    """The commessa's value and expected cost (diary, Costi) written in its row of the Clienti list too."""
+    try:
+        sub = await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0, "data": 1, "collection_id": 1})
+        coll = await db.collections.find_one({"id": (sub or {}).get("collection_id")}, {"_id": 0, "system_sub_map": 1}) if sub else None
+        smap = (coll or {}).get("system_sub_map") or {}
+        if not sub or not (smap.get("valore") or smap.get("spesa_prevista")):
+            return
+        econ = await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1, "expected_cost": 1}) or {}
+        data = dict(sub.get("data") or {})
+        changed = False
+        for base, val in (("valore", econ.get("budget")), ("spesa_prevista", econ.get("expected_cost"))):
+            key = smap.get(base)
+            if key and _money_val(data.get(key)) != (round(float(val), 2) if val is not None else None):
+                data[key] = round(float(val), 2) if val is not None else ""
+                changed = True
+        if changed:
+            await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"data": data, "embedding": None}})
+    except Exception:
+        logger.exception("value to the Clienti list failed")
+
+
+async def _list_to_econ(current: User, coll: dict, sub_id: str, before: dict, after: dict) -> None:
+    """The value / expected cost changed in the Clienti list: the same in the commessa's diary (Costi), with its history."""
+    smap = coll.get("system_sub_map") or {}
+    try:
+        econ = await db.job_economics.find_one({"commessa_id": sub_id}, {"_id": 0, "budget": 1, "expected_cost": 1}) or {}
+        kv, ke = smap.get("valore"), smap.get("spesa_prevista")
+        if kv and kv in after and _money_val(after.get(kv)) != _money_val((before or {}).get(kv)):
+            new = _money_val(after.get(kv))
+            if new != econ.get("budget"):
+                ctx = await _commessa_ctx(sub_id)
+                if new is not None and ctx:
+                    await _set_commessa_value(current, coll, ctx[3], econ.get("budget"), new, "scritto nella lista Clienti")
+                else:
+                    await db.job_economics.update_one({"commessa_id": sub_id}, {"$set": {"commessa_id": sub_id, "budget": new}}, upsert=True)
+        if ke and ke in after and _money_val(after.get(ke)) != _money_val((before or {}).get(ke)):
+            new = _money_val(after.get(ke))
+            if new != econ.get("expected_cost"):
+                await db.job_economics.update_one({"commessa_id": sub_id}, {"$set": {"commessa_id": sub_id, "expected_cost": new}}, upsert=True)
+                await _track_commessa_changes(current, coll, sub_id, {}, {}, extra={"Spesa prevista": (econ.get("expected_cost"), new)})
+    except Exception:
+        logger.exception("value from the Clienti list failed")
 
 
 class ExtraCostPayload(BaseModel):
@@ -9468,6 +9600,7 @@ async def _commessa_economics(clienti: dict, commessa_id: str, logs: Optional[li
 
 
 async def _check_budget_alert(clienti: dict, commessa_id: str) -> None:
+    await _econ_to_list(commessa_id)   # (after every change of the value: the Clienti list keeps the same)
     await _budget_threshold_alert(clienti, commessa_id)
     await _check_forecast_alert(clienti, commessa_id)
 
@@ -9520,7 +9653,9 @@ async def get_commessa_economics(commessa_id: str, current: User = Depends(get_c
     team = await _team_first_names(current)
     collabs = [c.get("first_name") for c in await db.collaborators.find({"owner_user_id": clienti.get("user_id")}, {"_id": 0, "first_name": 1}).to_list(500)]
     rates = costs.get("rates") or {}
-    return {**e, "default_rate": costs.get("default_rate"), "forecast": forecast,
+    exp = ((await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "expected_cost": 1})) or {}).get("expected_cost")
+    return {**e, "default_rate": costs.get("default_rate"), "forecast": forecast, "expected_cost": exp,
+            "expected_margin": round(e["budget"] - exp, 2) if e.get("budget") is not None and exp is not None else None,
             "people": [{"who": n, "rate": _rate_of(rates, n)} for n in _econ_people(e, team, collabs)]}
 
 
@@ -11557,7 +11692,8 @@ async def _activities_started(worker_id: str, commessa_id: str, at: datetime) ->
             await db.job_activities.update_one({"id": a["id"]}, {"$set": {"status": "in_corso"}})
 
 
-async def _plan_from_message(current: User, clienti: dict, target: dict, text: str, channel: str, author: Optional[dict] = None) -> dict:
+async def _plan_from_message(current: User, clienti: dict, target: dict, text: str, channel: str, author: Optional[dict] = None,
+                             tagged: Optional[list] = None) -> dict:
     """"Pianifica smontaggio sanitari il 12/11 alle 8 con Gino e Marco, portare i flessibili", "domani Avanzino deve sostituire il
     ventilatore": an activity, in the tappa it belongs to. The administrator and the users plan for anyone; a collaborator (author,
     from Telegram) for themselves or the colleagues of their company only. Nobody named: for who wrote it (the administrator's
@@ -11569,6 +11705,9 @@ async def _plan_from_message(current: User, clienti: dict, target: dict, text: s
                                                                     "smonta i sanitari alle 8»."}
     by_name = {p["name"]: p for p in people}
     chosen = [by_name[n] for n in f["assignees"] if n in by_name]
+    for t in tagged or []:   # tagged with @: on it too
+        if not any(c["id"] == t["id"] for c in chosen):
+            chosen.append(next((p for p in people if p["id"] == t["id"]), t))
     if author:   # a collaborator: only themselves and the colleagues of their own company
         mine = (author.get("company") or "").strip().lower()
         allowed = [p for p in people if p["type"] == "collab" and (p["id"] == author["id"] or (mine and (p.get("company") or "").strip().lower() == mine))]
@@ -12177,6 +12316,15 @@ async def patch_commessa_economics(commessa_id: str, payload: EconomicsPatch, cu
     """The quote (what the client pays) of a commessa."""
     clienti, _, _ = await _commessa_or_404(current, commessa_id)
     _require_org_admin(current, COSTS_ADMIN_ONLY)
+    if payload.clear_expected_cost or payload.expected_cost is not None:   # the expected cost alone
+        exp = None if payload.clear_expected_cost else _num_or_none(payload.expected_cost)
+        old = (await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "expected_cost": 1}) or {}).get("expected_cost")
+        if exp != old:
+            await db.job_economics.update_one({"commessa_id": commessa_id}, {"$set": {"commessa_id": commessa_id, "expected_cost": exp}}, upsert=True)
+            await _track_commessa_changes(current, clienti, commessa_id, {}, {}, extra={"Spesa prevista": (old, exp)})
+            await _econ_to_list(commessa_id)
+        if payload.budget is None and not payload.clear_budget:
+            return await get_commessa_economics(commessa_id, current)
     budget = None if payload.clear_budget else _num_or_none(payload.budget)
     old_budget = (await db.job_economics.find_one({"commessa_id": commessa_id}, {"_id": 0, "budget": 1}) or {}).get("budget")
     if budget is not None and budget != old_budget:   # (the diary told, like a value from a quote or a message)
@@ -17712,6 +17860,7 @@ async def start_services():
     try:
         await _migrate_commesse()
         await _migrate_weekly_actions()
+        await _migrate_list_values()
     except Exception:
         logger.exception("commesse migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)
