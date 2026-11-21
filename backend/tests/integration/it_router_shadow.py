@@ -183,6 +183,16 @@ async def main():
     x = db.router_shadow.docs[-1]
     assert (x["channel"], x["chosen"], x["intent"], x["agree"]) == ("telegram", "job_log", "job_log", True), x
 
+    # 3b) Telegram inside a conversation: the router sees its last messages (mAIPAL's question too), like the app
+    db.conversations.docs.append({"conv_id": "cv_tg", "user_id": "u1", "messages": [
+        {"role": "user", "content": "ricordami di chiamare Rossi"}, {"role": "assistant", "content": "A che ora te lo ricordo?"}]})
+    tg._shadow({"user_id": "u1", "business_vertical": "artigiano"}, "alle 19", "task_todo",
+               {"current_action": "task_todo", "current_conv_id": "cv_tg", "last_user_message": "ricordami di chiamare Rossi"})
+    await done()
+    x = db.router_shadow.docs[-1]
+    assert x["channel"] == "telegram" and x["agree"] and x["level"] == "context" and x["ctx"].get("awaiting"), x
+    assert [m["content"] for m in x["ctx"]["history"]] == ["ricordami di chiamare Rossi", "A che ora te lo ricordo?"] and "conv_id" not in x["ctx"]
+
     # 4) not recorded: empty, an agent the trade doesn't have, the shadow off
     n = len(db.router_shadow.docs)
     server.shadow_route("u1", "artigiano", "   ", "info_request")

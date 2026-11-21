@@ -76,9 +76,9 @@ def _shadow(user: dict, text: str, action: str, prev_ctx: dict | None) -> None:
     Telegram's own classifier sent it - measured before the router chooses for real. Never in the way."""
     try:
         from server import shadow_route
-        ctx = ({"current_action": prev_ctx.get("current_action"),
+        ctx = ({"current_action": prev_ctx.get("current_action"), "conv_id": prev_ctx.get("current_conv_id"),
                 "history": [{"role": "user", "content": (prev_ctx.get("last_user_message") or "")[:300]}]}
-               if prev_ctx and prev_ctx.get("current_action") else {})
+               if prev_ctx and prev_ctx.get("current_action") else {})   # (the conversation's last messages: read with it)
         shadow_route(user["user_id"], user.get("business_vertical"), text, action, "telegram", ctx)
     except Exception:
         logger.exception("router shadow (telegram) failed")

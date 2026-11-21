@@ -1760,6 +1760,13 @@ _SHADOW_SLOTS = asyncio.Semaphore(4)
 async def _router_shadow(user_id: str, vertical: Optional[str], text: str, chosen: str, channel: str,
                          ctx: dict, has_images: bool, lists: list) -> None:
     try:
+        if ctx.get("conv_id"):   # (Telegram) the same context as the app: the conversation's last 4 messages, mAIPAL's answers too
+            conv = await db.conversations.find_one({"conv_id": ctx.pop("conv_id")}, {"_id": 0, "messages": {"$slice": -4}})
+            hist = [{"role": str(m.get("role") or ""), "content": str(m.get("content") or "")[:300]} for m in ((conv or {}).get("messages") or [])[-4:]]
+            if hist:
+                ctx["history"] = hist
+                if hist[-1]["role"] == "assistant" and hist[-1]["content"].rstrip().endswith("?"):
+                    ctx["awaiting"] = True   # mAIPAL asked something: the answer goes to the same agent
         async with _SHADOW_SLOTS:
             d = await chat_router.route(text, vertical=vertical, context=ctx, lists=lists, has_images=has_images,
                                         user_id=user_id, channel=channel)
