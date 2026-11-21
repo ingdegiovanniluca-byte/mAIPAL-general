@@ -759,8 +759,8 @@ export default function ChatPage() {
     if (commessaReport && comPeriod === "custom" && !comFrom && !comTo) { toast.error("Scegli le date del periodo"); return; }
     if (streaming || transcribing) return;
     setStreaming(true);
-    setThread((th) => (th && th.action === "work_report")
-      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+    setThread((th) => th
+      ? { ...th, action: "work_report", messages: [...th.messages, { role: "user", content }] }
       : { conv_id: null, action: "work_report", messages: [{ role: "user", content }], liveAnswer: "" });
     setText("");
     // a message in a report's chat changes THAT report (it used to make a new, invented one)
@@ -863,7 +863,7 @@ export default function ChatPage() {
     const entry = await keepDiaryEntry({ client_id: newClientId(), text: content || "", images, voice: voice || null,
       hint_commessa_id: hint, label: (content || (voice ? "Vocale" : "Foto dal cantiere")).slice(0, 80) });
     setThread((th) => {
-      const base = (th && th.action === "job_log") ? th : { conv_id: null, action: "job_log", messages: [], liveAnswer: "" };
+      const base = th ? { ...th, action: "job_log" } : { conv_id: null, action: "job_log", messages: [], liveAnswer: "" };
       const msgs = shown ? [...base.messages, { role: "user", content: shown }] : base.messages;
       return { ...base, messages: [...msgs, { role: "assistant", pendingId: entry.client_id,
         content: "⏳ Senza rete: l'ho salvata sul telefono. La invio da sola appena torna il segnale." }] };
@@ -873,7 +873,7 @@ export default function ChatPage() {
     const voice = await takeVoice();
     let content = text.trim();
     const hadVoice = !!voice;
-    const offlineHint = thread?.action === "job_log" ? [...thread.messages].reverse().find((m) => m.jobCommessaId)?.jobCommessaId || null : null;
+    const offlineHint = thread ? [...thread.messages].reverse().find((m) => m.jobCommessaId)?.jobCommessaId || null : null;
     if (voice) {
       const imgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
       const keepVoice = async () => {   // no network for the transcription: the audio waits on the phone
@@ -899,12 +899,12 @@ export default function ChatPage() {
     if (!content) { toast.error("Racconta cosa avete fatto"); return; }
     shadowRoute("job_log", content, images.length > 0);
     if (streaming || transcribing || uploadingFiles.length) return;
-    const hint = thread?.action === "job_log"
+    const hint = thread   // the commessa this chat was talking about (whichever agent wrote it)
       ? [...thread.messages].reverse().find((m) => m.jobCommessaId)?.jobCommessaId || null : null;
     setStreaming(true);
     const shown = images.length ? `${content}\n📷 ${images.length} foto` : content;
-    setThread((th) => (th && th.action === "job_log")
-      ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
+    setThread((th) => th
+      ? { ...th, action: "job_log", messages: [...th.messages, { role: "user", content: shown }] }
       : { conv_id: null, action: "job_log", messages: [{ role: "user", content: shown }], liveAnswer: "" });
     setText("");
     setAttachments([]);
@@ -937,7 +937,7 @@ export default function ChatPage() {
   useEffect(() => {
     const show = (reply) => {
       setThread((th) => {
-        const base = (th && th.action === "job_log") ? th : { conv_id: null, action: "job_log", messages: [{ role: "user", content: reply.text }], liveAnswer: "" };
+        const base = th ? { ...th, action: "job_log" } : { conv_id: null, action: "job_log", messages: [{ role: "user", content: reply.text }], liveAnswer: "" };
         const msgs = base.messages.map((m) => (m.pendingId === reply.client_id ? { ...m, pendingId: null, content: "✓ Inviata appena è tornata la rete." } : m));
         return { ...base, messages: msgs };
       });
@@ -956,7 +956,7 @@ export default function ChatPage() {
   useEffect(() => {
     takeReplies().then((list) => list.forEach((reply) => {
       setThread((th) => {
-        const base = (th && th.action === "job_log") ? th : { conv_id: null, action: "job_log", messages: [], liveAnswer: "" };
+        const base = th ? { ...th, action: "job_log" } : { conv_id: null, action: "job_log", messages: [], liveAnswer: "" };
         return { ...base, messages: [...base.messages, { role: "user", content: reply.text }] };
       });
       appendJobLogResult(reply.res, reply.images);
@@ -1013,7 +1013,7 @@ export default function ChatPage() {
 
     setStreaming(true);
     setThread((th) => th
-      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+      ? { ...th, action: "vet_report", messages: [...th.messages, { role: "user", content }] }
       : { conv_id: null, action: "vet_report", messages: [{ role: "user", content }], liveAnswer: "" });
     setText("");
 
@@ -1052,8 +1052,8 @@ export default function ChatPage() {
     const last = thread?.action === "lesson" ? [...thread.messages].reverse().find((m) => m.lessonId)?.lessonId : null;
     const isNew = !last || /\b(nuova|un'altra|altra)\s+lezione\b|^\s*(crea|creami|fai|fammi|prepara|preparami|genera)\b/i.test(content);
     setStreaming(true);
-    setThread((th) => (th && th.action === "lesson")
-      ? { ...th, messages: [...th.messages, { role: "user", content }] }
+    setThread((th) => th
+      ? { ...th, action: "lesson", messages: [...th.messages, { role: "user", content }] }
       : { conv_id: null, action: "lesson", messages: [{ role: "user", content }], liveAnswer: "" });
     setText("");
     try {
@@ -1094,8 +1094,8 @@ export default function ChatPage() {
     }
     setStreaming(true);
     setText("");
-    setThread((th) => (th && th.action === "scheduled_action")
-      ? { ...th, messages: [...th.messages.map((m) => (m === pendingDraft ? { ...m, schedDone: "replaced" } : m)), { role: "user", content }] }
+    setThread((th) => th
+      ? { ...th, action: "scheduled_action", messages: [...th.messages.map((m) => (m === pendingDraft ? { ...m, schedDone: "replaced" } : m)), { role: "user", content }] }
       : { conv_id: null, action: "scheduled_action", messages: [{ role: "user", content }], liveAnswer: "" });
     try {
       const { main: schedText, parts: schedTags } = splitMentions(content);
@@ -1402,15 +1402,14 @@ export default function ChatPage() {
     );
   };
 
-  // The wrong-agent suggestion's buttons: the same message goes, as a new chat, to the
-  // suggested agent (or to the chosen one anyway). send() runs once the state is in place.
+  // The wrong-agent suggestion's buttons: the same message goes to the suggested agent (or to the
+  // chosen one anyway), in the same chat - one chat is one conversation. send() runs once the state is in place.
   const skipAgentGuardRef = useRef(false);
   const [resendTick, setResendTick] = useState(0);
-  const resendTo = (agentId, content, keepThread = false) => {
+  const resendTo = (agentId, content) => {
     if (agentId === "journal" && !ACTIONS.some((a) => a.id === "journal")) agentId = "job_log";
-    skipAgentGuardRef.current = true;
-    if (!keepThread) setThread(null);   // "invia comunque" inside an open chat carries on in it
-    setMobileReplyTo(null);
+    skipAgentGuardRef.current = true;   // (the chat stays: only "Nuova chat" starts another conversation)
+    setMobileReplyTo((r) => (r && r.action !== agentId ? null : r));   // (the reply bar is for its own agent; the chat stays open)
     setActive(agentId);
     setText(content);
     setResendTick((n) => n + 1);
@@ -1600,7 +1599,7 @@ export default function ChatPage() {
     }
 
     if (thread) {
-      setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: displayQuestion }], liveAnswer: "" }));
+      setThread((th) => ({ ...th, action: active, messages: [...th.messages, { role: "user", content: displayQuestion }], liveAnswer: "" }));
     } else {
       setThread({ conv_id: null, action: active, messages: [{ role: "user", content: displayQuestion }], liveAnswer: "" });
     }
@@ -1925,10 +1924,10 @@ export default function ChatPage() {
   // ===== Mobile chat (like a browser's start page): agent name + ⓘ, its option icons, the
   // bar that opens up while you write, the row of agents (Cerca first, then the 3 most used,
   // then "Altri"). Desktop keeps its own card above.
+  // another agent for the next message: the chat open stays (one chat = one conversation; "Nuova chat" starts another)
   const selectAgent = (id) => {
     setActive(id);
-    if (thread && thread.action !== id) setThread(null);
-    setMobileReplyTo(null);
+    setMobileReplyTo((r) => (r && r.action !== id ? null : r));
     setVisitMenuOpen(false);
   };
   const usage = useMemo(() => {
@@ -2922,7 +2921,7 @@ export default function ChatPage() {
                         </button>
                         <button
                           data-testid="wrong-agent-keep"
-                          onClick={() => resendTo(m.wrongAgent.from, m.wrongAgent.text, !!thread?.conv_id)}
+                          onClick={() => resendTo(m.wrongAgent.from, m.wrongAgent.text)}
                           disabled={streaming}
                           className="text-xs px-3 py-1.5 rounded-full disabled:opacity-50 bg-white/10 hover:bg-white/20 text-white"
                         >

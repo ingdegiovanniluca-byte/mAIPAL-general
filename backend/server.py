@@ -8881,6 +8881,7 @@ async def update_job_todo(todo_id: str, payload: JobTodoPatch, current: User = D
     if payload.done is not None:
         upd["done"] = payload.done
         upd["done_at"] = datetime.now(timezone.utc).isoformat() if payload.done else None
+        upd["done_by"] = _first_name(current.name) if payload.done else None
     if payload.milestone_id is not None:
         upd["milestone_id"] = await _valid_tappa(todo["commessa_id"], payload.milestone_id or None)
     if upd:

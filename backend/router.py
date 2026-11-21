@@ -18,6 +18,9 @@ with two buttons. What changes or deletes data (lists, scheduled actions) needs 
 otherwise it is asked.
 
 route() only decides; it runs nothing. The same module is meant for the app and Telegram.
+
+In the app ONE CHAT IS ONE CONVERSATION: the router only picks the agent of the next message inside the chat
+that is open (its context is that chat); it never starts another conversation - only "Nuova chat" does.
 """
 import asyncio
 import json

@@ -1366,8 +1366,18 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
 // a question to the commessa's chat: "?" at the end, or how a question starts; anything else is something to record
 const QUESTION_RX = /\?\s*$|^(che\s+cosa|cosa|cos'|quando|dove|chi|come|quale|quali|qual|quanto|quanti|quante|perch[eé]|mi\s+dici|dimmi|sai|c'è|ci\s+sono|abbiamo|hai|ha|hanno|com'è|elenca|mostrami|riassumi|fammi)\b/i;
 const ACT_CATEGORIES = [["materiali", "Materiali"], ["attrezzi", "Attrezzi"], ["dpi", "DPI"], ["documenti", "Documenti"]];
-const ACT_STATUS = { pianificata: ["Pianificata", "#F2C14E"], confermata: ["Confermata", "#8ED973"], in_corso: ["In corso", "#7FC8F8"],
-  svolta: ["Svolta", "rgba(255,255,255,0.55)"], annullata: ["Annullata", "rgba(255,255,255,0.35)"] };
+const ACT_STATUS = { pianificata: ["Pianificata", "#F2C14E"], confermata: ["Confermata", "#7FC8F8"], in_corso: ["In corso", "#C9A7F5"],
+  svolta: ["Svolta", "#8ED973"], annullata: ["Annullata", "rgba(255,255,255,0.35)"] };
+// the local day (YYYY-MM-DD) of a moment, and how it went against the day planned: "in tempo" / "2 giorni dopo il previsto"
+const localDayOf = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const daysBetween = (a, b) => Math.round((new Date(`${b}T12:00:00`) - new Date(`${a}T12:00:00`)) / 864e5);
+const doneWhen = (doneAt, planned) => {
+  if (!doneAt) return { text: "", late: false };
+  const day = localDayOf(doneAt);
+  const late = planned ? daysBetween(planned, day) : 0;
+  return { text: `${shortDay(day)} alle ${hhmmOf(doneAt)}`, late: late > 0,
+    how: !planned ? "" : late > 0 ? `${late} ${late === 1 ? "giorno" : "giorni"} dopo il previsto` : "in tempo" };
+};
 const CONFIRM_MARK = { confermato: "✓", rifiutato: "✗", in_attesa: "…" };
 const actWhen = (a) => [shortDay(a.date), a.start_time && (a.end_time ? `${a.start_time}–${a.end_time}` : `ore ${a.start_time}`)].filter(Boolean).join(" · ");
 
@@ -1530,11 +1540,20 @@ function ActivityCard({ a, meId, isAdmin, canWrite, onEdit, onChanged }) {
   const addItem = () => { if (!text.trim()) return; call(() => api.post(`/jobs/activities/${a.id}/items`, { text }), "Aggiunto"); setText(""); setAdding(false); };
   const btn = "text-[12px] px-3 py-1.5 rounded-full bg-white/10 text-white active:opacity-70";
   return (
-    <div className={`py-3 border-t border-white/[0.13] ${open ? "" : "opacity-70"}`} data-testid="activity-card">
+    <div className={`py-3 border-t border-white/[0.13] ${a.status === "annullata" ? "opacity-60" : ""}`} data-testid="activity-card">
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
           <div className="text-[15px] font-semibold text-white leading-snug break-words">{a.description}</div>
-          <div className="text-[12px] text-white/60 mt-0.5">{actWhen(a)}{a.origin === "preventivo" ? " · dal preventivo" : ""}</div>
+          <div className="text-[12px] text-white/60 mt-0.5">{a.status === "svolta" ? "prevista " : ""}{actWhen(a)}{a.origin === "preventivo" ? " · dal preventivo" : ""}</div>
+          {a.status === "svolta" && a.done_at && (() => {
+            const w = doneWhen(a.done_at, a.date);
+            return (
+              <div className="text-[12px] mt-0.5" data-testid="activity-done-when">
+                <span className="text-white/85">Svolta il {w.text}{a.done_by ? ` · segnata da ${a.done_by}` : ""}</span>
+                {w.how && <span style={{ color: w.late ? LATE : "#8ED973" }}> · {w.how}</span>}
+              </div>
+            );
+          })()}
         </div>
         <span className="shrink-0 inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/90" data-testid="activity-status">
           <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />{label}</span>
@@ -1549,12 +1568,19 @@ function ActivityCard({ a, meId, isAdmin, canWrite, onEdit, onChanged }) {
             return (
               <span key={`${p.type}:${p.id}`} title={p.confirm?.reason || ""} data-testid="activity-assignee"
                 className={`text-[11.5px] px-2 py-0.5 rounded-full ${st === "confermato" ? "bg-[#8ED973]/20 text-white" : st === "rifiutato" ? "bg-[#F08A8A]/25 text-white" : "bg-white/10 text-white/75"}`}>
-                {CONFIRM_MARK[st]} {p.name}{st === "rifiutato" && p.confirm?.reason ? ` — ${p.confirm.reason}` : ""}
+                {CONFIRM_MARK[st]} {p.name}
               </span>
             );
           })}
         </div>
       )}
+      {(a.assignees || []).filter((p) => p.confirm?.at && (p.confirm.status === "rifiutato" || p.confirm.reason)).map((p) => (
+        <div key={`r-${p.type}:${p.id}`} className="mt-1 text-[12.5px] text-white/80 leading-snug" data-testid="activity-answer">
+          {p.confirm.status === "rifiutato" ? "✋" : "💬"} <b className="font-medium text-white">{p.name}</b>
+          {p.confirm.status === "rifiutato" ? " non può esserci" : ""}{p.confirm.reason ? `: «${p.confirm.reason}»` : ""}
+          <span className="text-white/55"> · scritto il {shortDay(localDayOf(p.confirm.at))} alle {hhmmOf(p.confirm.at)}</span>
+        </div>
+      ))}
       {ACT_CATEGORIES.some(([k]) => (a.items || []).some((i) => i.category === k)) && (
         <div className="mt-1.5 text-[13px] text-white/85 space-y-0.5">
           {ACT_CATEGORIES.map(([k, lbl]) => {
@@ -1635,7 +1661,7 @@ function PlanList({ commessa, milestones, activities, todos, meId, isAdmin, canW
         return (
           <div key={m.id} className="mt-1" data-testid="plan-tappa" data-status={m.status}>
             <button type="button" onClick={() => (canWrite ? onEditTappa(m) : null)} className="w-full text-left flex items-start gap-3 pt-3 pb-1.5 border-t border-white/[0.16]">
-              <span className={`mt-[1px] h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-[12px] font-semibold ${done ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20 text-white"}`}>
+              <span className={`mt-[1px] h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-[12px] font-semibold ${done ? "bg-[#8ED973] text-[#1F4D17]" : "bg-white/20 text-white"}`}>
                 {done ? <Check size={13} strokeWidth={2.8} /> : (m.order ?? 0) + 1}
               </span>
               <span className="min-w-0 flex-1">
@@ -2252,7 +2278,7 @@ function TodoRow({ todo, onToggle, onOpen }) {
     <div className="grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]" data-testid="job-todo" data-done={todo.done ? "1" : "0"}>
       <button type="button" onClick={() => onToggle(todo)} aria-pressed={!!todo.done} data-testid="job-todo-done"
         aria-label={todo.done ? "Segna come da fare" : "Segna come fatta"}
-        className={`mt-[1px] h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md ${todo.done ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
+        className={`mt-[1px] h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md ${todo.done ? "bg-[#8ED973] text-[#1F4D17]" : "bg-white/20"}`}>
         {todo.done && <Check size={12} strokeWidth={2.8} />}
       </button>
       <button type="button" onClick={() => onOpen(todo)} className="min-w-0 text-left">
@@ -2271,6 +2297,15 @@ function TodoRow({ todo, onToggle, onOpen }) {
         </span>
         <span className={`block mt-[3px] text-[14px] leading-[1.45] whitespace-pre-wrap ${todo.done ? "text-white/45 line-through" : "text-white/90"}`}>
           {todo.kind === "materiale" ? capFirst((todo.text || "").replace(/^Da (?:prendere|portare):\s*/, "")) : todo.text}</span>
+        {todo.done && todo.done_at && (() => {
+          const w = doneWhen(todo.done_at, todo.due_date);
+          return (
+            <span className="block text-[12px] mt-0.5" data-testid="job-todo-done-when">
+              <span className="text-white/70">Fatta il {w.text}{todo.done_by ? ` · da ${todo.done_by}` : ""}</span>
+              {w.how && <span style={{ color: w.late ? LATE : "#8ED973" }}> · {w.how}</span>}
+            </span>
+          );
+        })()}
       </button>
     </div>
   );
