@@ -3321,11 +3321,8 @@ export default function JobDiaryPage() {
         {diaryDays.length === 0 && (
           <div className="py-6 border-t border-white/[0.16] text-[13px] text-white/70" data-testid="diary-empty">
             {section === "diario" ? "Nessuna voce in questo periodo." : "Nessuna voce di questo tipo nel periodo."}
-            {period.key !== "all" && (
-              <button onClick={() => setPeriod({ key: "all" })} className="block mt-2 text-xs px-3 py-1.5 rounded-full bg-white/15">Mostra tutta la commessa</button>
-            )}
             {section === "diario" && (
-              <div className="mt-2 text-white/55">Per scrivere tocca il pulsante della chat <MessageCircle size={12} className="inline -mt-0.5" /> sul lato e scegli «Scrivi nel diario».</div>
+              <div className="mt-2 text-white/55">Per scrivere tocca il pulsante della chat <MessageCircle size={12} className="inline -mt-0.5" /> in basso a destra e scegli «Scrivi nel diario».</div>
             )}
           </div>
         )}
