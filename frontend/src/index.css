@@ -871,3 +871,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .typing-dots.small i { width: 5px; height: 5px; }
 @keyframes typing-dot { 0%, 60%, 100% { transform: translateY(0); opacity: .35; } 30% { transform: translateY(-4px); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .typing-dots i { animation-duration: 2.4s; } }
+
+/* inside a commessa's diary the bottom menu goes away (only the commessa chat's round button stays, in the "+" place) */
+body.hide-bottom-dock [data-bottom-dock] { display: none !important; }

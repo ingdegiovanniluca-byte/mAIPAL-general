@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload, ScrollText } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -3171,9 +3171,6 @@ export default function JobDiaryPage() {
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
           ariaLabel="Cambia lo stato della commessa" onClick={ro || detail.is_admin === false ? undefined : () => setMenu((m) => (m === "stato" ? null : "stato"))}
           note={c.stato === "persa" && c.lost_reason ? (LOST_CATEGORIES.find(([k]) => k === c.lost_reason.category) || [])[1] : ""} />
-        <InfoCard icon={ScrollText} label="Attività" testid="glance-descrizione" ariaLabel="La descrizione delle attività da svolgere"
-          value={c.descrizione ? (c.descrizione.split("\n")[0].slice(0, 26) + (c.descrizione.length > 26 ? "…" : "")) : "da descrivere"}
-          onClick={() => pickSection("preventivo")} />
         {(detail.on_site || []).length > 0 && (
           // one: the name; more: how many and of which role - tapped, everyone by role
           <InfoCard icon={HardHat} label="In cantiere ora" testid="glance-on-site" ariaLabel="Chi sta lavorando ora in cantiere" wide
@@ -3417,6 +3414,11 @@ export default function JobDiaryPage() {
   );
 
   const inCommessa = level !== "clients" && !!selectedId;
+  // inside a commessa's diary: no bottom menu, only the round button of its chat (in the "+" place)
+  useEffect(() => {
+    document.body.classList.toggle("hide-bottom-dock", !!inCommessa);
+    return () => document.body.classList.remove("hide-bottom-dock");
+  }, [inCommessa]);
   return (
     <div className="w-full" data-testid="job-diary-page" style={chatOpen ? { paddingBottom: "min(62vh, 520px)" } : undefined}>
       {(level !== "diary" || !selectedId) && (

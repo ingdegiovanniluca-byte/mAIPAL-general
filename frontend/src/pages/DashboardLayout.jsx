@@ -375,6 +375,7 @@ export default function DashboardLayout() {
             for everything else (News, Liste, Documenti, Impostazioni...). See LiquidDock. ===== */}
         {!keyboardOpen && (
           <div
+            data-bottom-dock=""
             className="md:hidden fixed left-0 right-0 z-40 flex items-center justify-center px-2 min-[380px]:px-3 pointer-events-none"
             style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)" }}
           >
