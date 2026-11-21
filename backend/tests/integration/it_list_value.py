@@ -285,6 +285,37 @@ async def main():
     assert out["status"] == "ok" and "🔔 L'ho mandata a Avanzino" in out["message"], out
     assert any("ti ha taggato in una nota su «Bagno»" in t_ for t_, _ in to(950)), to(950)
     assert next(x for x in db.job_logs.docs if x["id"] == out["log"]["id"])["tagged"][0]["name"] == "Avanzino Neri"
+
+    # 6) who doesn't see the costs doesn't see the list's money columns (list, its commesse, Cerca)
+    MARCO = server.User(**db.users.docs[1])
+    assert not await server._sees_costs(MARCO) and await server._sees_costs(me)
+    subs = [dict(sub(), data=dict(sub()["data"]))]
+    hidden = await server._hide_money(MARCO, dict(cl), subs)
+    assert not {smap["valore"], smap["spesa_prevista"]} & {f["key"] for f in hidden["sub_item_fields"]}
+    assert smap["valore"] not in subs[0]["data"] and subs[0]["data"]["titolo"] == "Bagno"
+    shown = await server._hide_money(me, dict(cl), [dict(sub(), data=dict(sub()["data"]))])
+    assert {smap["valore"]} <= {f["key"] for f in shown["sub_item_fields"]}
+    found = await retrieval.retrieve(db, "u1", "commessa Bagno valore", scope="all", hide_sub_keys={smap["valore"], smap["spesa_prevista"]})
+    assert not any("Valore commessa" in (h.get("display") or "") for h in found), [h.get("display") for h in found]
+
+    # 7) an administrator corrects a collaborator's note: the collaborator told what changed
+    db.job_logs.docs.append({"id": "lgav", "commessa_id": "s_bagno", "commessa_title": "Bagno", "collaborator_id": av["id"], "author_name": "Avanzino",
+                             "date": jl.today_local().isoformat(), "text": "montate 3 scatole 503", "raw_text": "montate 3 scatole 503",
+                             "hours": [{"who": "Avanzino", "hours": 8}], "materials": [{"name": "scatole 503", "qty": 3, "unit": "pz"}], "problems": []})
+    BOT_SENT.clear()
+    await server.update_job_log("lgav", server.JobLogPatch(materials=[{"name": "scatole 503", "qty": 2, "unit": "pz"}]), me)
+    await asyncio.sleep(0.05)
+    t_ = next(t for t, _ in to(950) if "ha corretto la tua nota" in t)
+    assert "• Materiali: 3 pz scatole 503 → 2 pz scatole 503" in t_ and "«Bagno»" in t_, t_
+
+    # 8) an administrator deletes someone else's note: written in the diary, its author told
+    BOT_SENT.clear()
+    await server.delete_job_log("lgav", me)
+    await asyncio.sleep(0.05)
+    assert not any(x["id"] == "lgav" for x in db.job_logs.docs)
+    ev = [x for x in db.job_logs.docs if x.get("kind") == "nota_eliminata"][-1]
+    assert ev["text"].startswith("🗑 Nota di Avanzino del") and "eliminata da Luca" in ev["text"] and "montate 3 scatole 503" in ev["text"], ev["text"]
+    assert any("ha eliminato la tua nota" in t for t, _ in to(950)), to(950)
     print("ALL OK")
 
 asyncio.run(main())

@@ -344,7 +344,7 @@ def _owned(user_id: str, org_id: Optional[str]) -> dict:
 
 
 async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "kb",
-                   org_id: Optional[str] = None, today: Optional[date] = None) -> List[dict]:
+                   org_id: Optional[str] = None, today: Optional[date] = None, hide_sub_keys: Optional[set] = None) -> List[dict]:
     today = today or datetime.now(LOCAL_TZ).date()
     try:
         q_emb = await emb.embed_query(query)
@@ -485,7 +485,8 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
             if not coll:
                 return None
             labels = {f["key"]: f["label"] for f in (coll.get("sub_item_fields") or [])}
-            parts = [f"{labels.get(k, k)}: {v}" for k, v in (s.get("data") or {}).items() if v not in (None, "")]
+            parts = [f"{labels.get(k, k)}: {v}" for k, v in (s.get("data") or {}).items()
+                     if v not in (None, "") and k not in (hide_sub_keys or ())]   # (money columns: not for who doesn't see the costs)
             if not parts:
                 return None
             sub_txt = " · ".join(parts)

@@ -644,6 +644,26 @@ async def _sees_costs(current: User) -> bool:
     return (t.get("sharing") or {}).get("users_see_costs") is True
 
 
+def _money_keys(coll: dict) -> set:
+    """The Clienti list's money columns (Valore commessa, Spesa prevista): their keys."""
+    if (coll or {}).get("system_key") != vx.CLIENTI_KEY:
+        return set()
+    smap = coll.get("system_sub_map") or {}
+    return {k for k in (smap.get("valore"), smap.get("spesa_prevista")) if k}
+
+
+async def _hide_money(current: User, coll: dict, subs: Optional[list] = None) -> dict:
+    """Who doesn't see the costs (organization's rule) doesn't see the Clienti list's money columns either: the columns and
+    their values taken out (in place). -> the list."""
+    keys = _money_keys(coll)
+    if not keys or await _sees_costs(current):
+        return coll
+    coll["sub_item_fields"] = [f for f in coll.get("sub_item_fields") or [] if f.get("key") not in keys]
+    for sb in subs or []:
+        sb["data"] = {k: v for k, v in (sb.get("data") or {}).items() if k not in keys}
+    return coll
+
+
 async def _org_settings_for(tenant_id: Optional[str]) -> dict:
     """The organization's settings for the automations (org_settings.DEFAULTS when none)."""
     t = await db.tenants.find_one({"id": tenant_id}, {"_id": 0, "settings": 1}) if tenant_id else None
@@ -1714,7 +1734,16 @@ async def retrieve_kb(user_id: str, query: str, limit: int = 8, scope: str = "kb
     """Search the user's saved knowledge - see retrieval.py (kept separate so it can be
     tested without the web server). Used by the web chat and the Telegram bot alike.
     live: a question to Cerca - "chi è in cantiere?" also gets who registered they are on site."""
-    hits = await retrieval.retrieve(db, user_id, query, limit=limit, scope=scope, org_id=org_id)
+    hide = set()
+    try:   # who doesn't see the costs: the Clienti list's money columns are not in the answers either
+        udoc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if udoc and not await _sees_costs(User(**{k: v for k, v in udoc.items() if k in User.model_fields})):
+            for c in await db.collections.find({"system_key": vx.CLIENTI_KEY, **_lists_query(User(**{k: v for k, v in udoc.items() if k in User.model_fields}))},
+                                               {"_id": 0, "system_key": 1, "system_sub_map": 1}).to_list(20):
+                hide |= _money_keys(c)
+    except Exception:
+        logger.exception("money columns check failed")
+    hits = await retrieval.retrieve(db, user_id, query, limit=limit, scope=scope, org_id=org_id, hide_sub_keys=hide)
     if live and sp.presence_question(query):
         try:
             hits = await _presence_context(user_id) + hits
@@ -3995,6 +4024,7 @@ async def list_collections(current: User = Depends(get_current_user)):
     for c in collections:
         await _repair_field_keys(c)
         _public_list_folder(c, storage_uid)
+        await _hide_money(current, c)
     ids = [c["id"] for c in collections]
     if ids:
         counts = await db.collection_items.aggregate([
@@ -4141,7 +4171,8 @@ async def get_collection(collection_id: str, current: User = Depends(get_current
     if not coll:
         raise HTTPException(status_code=404, detail="Lista non trovata")
     await _repair_field_keys(coll)
-    return _public_list_folder((await _add_sharing_info([coll], current))[0], await _storage_user(current.user_id))
+    out = _public_list_folder((await _add_sharing_info([coll], current))[0], await _storage_user(current.user_id))
+    return await _hide_money(current, out)
 
 
 @api_router.patch("/collections/{collection_id}")
@@ -4531,6 +4562,7 @@ async def list_sub_items(collection_id: str, item_id: str, current: User = Depen
     uid = await _storage_user(current.user_id)
     for sb in subs:   # the folder on the archive used (their own, or the organization administrator's)
         sb["drive_folder"] = (sb.pop("drive_folders", None) or {}).get(uid)
+    await _hide_money(current, dict(coll), subs)
     return subs
 
 
@@ -15064,6 +15096,11 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
     if upd:
         upd["embedding"] = None
         await db.job_logs.update_one({"id": log_id}, {"$set": upd})
+        if not mine and admin:   # an administrator corrected someone else's note: its author is told what changed
+            lines = _correction_lines(log, upd, changed, pause_changed, pres)
+            if lines:
+                _bg(_tell_note_author(log, f"✏️ {_first_name(current.name)} ha corretto la tua nota del {_short_it_date(log.get('date'))} "
+                                           f"su «{log.get('commessa_title') or ''}»:\n" + "\n".join(lines), "Nota corretta"))
         if "phase" in upd and not upd["phase"]:
             await _fill_phases(log["commessa_id"], [upd_log := {**log, **upd}])
             return _public_log(upd_log)
@@ -15074,11 +15111,61 @@ async def update_job_log(log_id: str, payload: JobLogPatch, current: User = Depe
     return _public_log({**log, **upd})
 
 
+def _correction_lines(log: dict, upd: dict, changed: dict, pause_changed: bool, pres: dict) -> list:
+    """What an administrator changed in a note, in words: "Ore: Gino 8 h → Gino 7 h"."""
+    out = []
+    if "hours" in changed:
+        out.append(f"• Ore: {jl.hours_line(log.get('hours') or []) or '—'} → {jl.hours_line(upd.get('hours') or []) or '—'}")
+    if pause_changed:
+        out.append(f"• Pausa: {pres.get('pause_min') or 0} min → {upd['presence']['pause_min']} min")
+    if "materials" in changed:
+        out.append(f"• Materiali: {jl.materials_line(log.get('materials') or []) or '—'} → {jl.materials_line(upd.get('materials') or []) or '—'}")
+    if "problems" in changed:
+        out.append(f"• Problemi: {'; '.join(log.get('problems') or []) or '—'} → {'; '.join(upd.get('problems') or []) or '—'}")
+    if "date" in changed:
+        out.append(f"• Giorno: {_short_it_date(log.get('date'))} → {_short_it_date(upd.get('date'))}")
+    return out
+
+
+async def _tell_note_author(log: dict, text: str, title: str) -> None:
+    """The author of a note (a collaborator on Telegram, a user in the app and on Telegram) told something about it."""
+    try:
+        if log.get("collaborator_id"):
+            c = await db.collaborators.find_one({"id": log["collaborator_id"]}, {"_id": 0})
+            if c:
+                await _tell_collaborator(c, text)
+            return
+        uid = log.get("author_user_id") or log.get("user_id")
+        if not uid:
+            return
+        push.fire_and_forget(db, uid, f"{title} · {log.get('commessa_title') or ''}", text.split("\n", 1)[-1][:140],
+                             f"/dashboard/journal?commessa={log.get('commessa_id')}", f"note-{log.get('id')}-{title}", kind="shares")
+        u = await db.users.find_one({"user_id": uid}, {"_id": 0, "telegram_chat_id": 1})
+        if u and u.get("telegram_chat_id") and await nprefs.wants(db, uid, "shares", "telegram"):
+            await _tg_send(u["telegram_chat_id"], text)
+    except Exception:
+        logger.exception("note author notice failed")
+
+
 @api_router.delete("/jobs/logs/{log_id}")
 async def delete_job_log(log_id: str, current: User = Depends(get_current_user)):
-    await _job_log_or_404(current, log_id)
+    """A note: by who wrote it, or by an administrator - then written in the diary (whose note, of which day, what it said)
+    and its author told. A line of the diary that is not a note (a change of state, a report…): as before."""
+    log = await _job_log_or_404(current, log_id)
+    mine = _log_author_is(current, log)
+    if not log.get("kind") and not mine and not _is_org_admin(current):
+        raise HTTPException(status_code=403, detail="Questa nota l'ha scritta un altro: può eliminarla solo chi l'ha scritta o un amministratore.")
     await db.job_logs.delete_one({"id": log_id})
     await db.job_photos.delete_many({"log_id": log_id})
+    if not log.get("kind") and not mine:
+        ctx = await _commessa_ctx(log["commessa_id"])
+        who = log.get("author_name") or "un collaboratore"
+        what = " ".join((log.get("raw_text") or log.get("text") or "").split())
+        if ctx:
+            await _job_event(current, ctx[0], ctx[3], "nota_eliminata",
+                             f"🗑 Nota di {who} del {_short_it_date(log.get('date'))} eliminata da {_first_name(current.name)}: «{what[:300]}»")
+        _bg(_tell_note_author(log, f"🗑 {_first_name(current.name)} ha eliminato la tua nota del {_short_it_date(log.get('date'))} "
+                                   f"su «{log.get('commessa_title') or ''}»:\n«{what[:300]}»", "Nota eliminata"))
     return {"ok": True}
 
 
