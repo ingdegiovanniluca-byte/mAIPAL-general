@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload, Hash } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -3154,7 +3154,7 @@ export default function JobDiaryPage() {
           <ArrowLeft size={16} />
         </button>
         <h1 className="min-w-0 flex-1 text-[17px] font-semibold text-white truncate" data-testid="commessa-title">
-          {c.codice && <span className="text-white/50 font-normal mr-1.5" data-testid="commessa-code">{c.codice}</span>}{c.title}
+          {c.title}
         </h1>
       </div>
       {/* me on site: "Sono in cantiere" / "Ho finito", like the collaborators on Telegram */}
@@ -3168,6 +3168,7 @@ export default function JobDiaryPage() {
       {/* the commessa in one row that scrolls sideways: state, hours, reports, documents, then
           the card's details (site, dates, phone, e-mail) */}
       <div ref={totalsRow} className="mt-4 -mx-4 px-4 flex gap-7 overflow-x-auto no-scrollbar snap-x snap-mandatory scroll-px-4" data-testid="commessa-totals">
+        {c.codice && <InfoCard icon={Hash} label="Codice" value={c.codice} testid="commessa-code" ariaLabel={`Codice della commessa ${c.codice}`} />}
         <InfoCard icon={CircleDot} label="Stato" value={capFirst(c.stato || "senza stato")} testid="glance-stato"
           ariaLabel="Cambia lo stato della commessa" onClick={ro || detail.is_admin === false ? undefined : () => setMenu((m) => (m === "stato" ? null : "stato"))}
           note={c.stato === "persa" && c.lost_reason ? (LOST_CATEGORIES.find(([k]) => k === c.lost_reason.category) || [])[1] : ""} />
