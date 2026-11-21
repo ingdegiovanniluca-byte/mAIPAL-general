@@ -3429,7 +3429,7 @@ export default function JobDiaryPage() {
 
       {inCommessa && c && !chatOpen && (
         <FloatingGlassButton icon={MessageCircle} label="Chat della commessa: chiedi o scrivi nel diario" testid="commessa-chat-toggle"
-          onClick={() => setChatOpen(true)} />
+          onClick={() => setChatOpen(true)} dock />
       )}
       {chatOpen && c && <CommessaChat commessa={c} onClose={() => setChatOpen(false)} onSaved={reload} />}
       {closeCheck && <CloseCheckSheet check={closeCheck} onClose={() => setCloseCheck(null)} onConfirm={() => setStato("completata", true)} />}
