@@ -464,6 +464,13 @@ async def main():
     await server._choose_quote_value(me, "q9", "add")
     assert next(q for q in db.job_quotes.docs if q["id"] == "q9").get("added") is True
 
+    #     the ones added before they were marked: found in the diary's line of the value
+    db.job_quotes.docs.append({"id": "q8", "commessa_id": "s1", "status": "confirmed", "version": 4, "data": {"total": 500.0, "activities": ["Box doccia"]}})
+    db.job_logs.docs.append({"id": "lv8", "commessa_id": "s1", "kind": "valore", "date": "2026-10-01",
+                             "text": "💶 Valore della commessa: € 9.550 → € 10.050 (preventivo v4 aggiunto: € 500)."})
+    assert await server._migrate_added_quotes() == 1 and next(q for q in db.job_quotes.docs if q["id"] == "q8")["added"] is True
+    assert await server._migrate_added_quotes() == 0
+
     # 13) the survey's documents: their link (Drive) once the archive copy is saved
     db.job_logs.docs.append({"id": "sv1", "commessa_id": "s1", "section": "sopralluogo", "date": "2026-10-01", "text": "📎 rilievo.pdf",
                              "doc_name": "rilievo.pdf", "doc_archive": {"path": "x", "link": None, "status": "queued"}, "photos": []})

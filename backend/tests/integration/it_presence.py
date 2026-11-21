@@ -179,6 +179,9 @@ async def tap(data):
 def kb_label(markup):
     return markup.keyboard[0][0].text if markup is not None and hasattr(markup, "keyboard") else None
 
+# steps at 6:05 / 7:01 / "ho finito alle 7:30" next to the real clock: the day fixed at 10:00 (passes at any hour)
+import clock; clock.set_time(10, 0)
+
 async def main():
     me = await server.update_profile(server.ProfilePatch(business_vertical="artigiano"), server.User(**U))
     cl = next(c for c in db.collections.docs if c.get("system_key") == "artigiano_clienti")

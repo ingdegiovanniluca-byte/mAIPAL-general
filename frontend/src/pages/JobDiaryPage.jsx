@@ -934,7 +934,7 @@ function descSource(info) {
 }
 
 // ===== Documenti e link: the commessa's folder (Drive / OneDrive) and the useful links (a manual, a Drive folder, a web page)
-function DocsLinksSheet({ commessa, links, docs, canWrite, folderBusy, onFolder, onClose, onChanged }) {
+function DocsLinksSheet({ commessa, links, docs, canWrite, isAdmin, folderBusy, onFolder, onClose, onChanged }) {
   const [list, setList] = useState(links);
   const [adding, setAdding] = useState(false);
   const [url, setUrl] = useState("");
@@ -951,6 +951,10 @@ function DocsLinksSheet({ commessa, links, docs, canWrite, folderBusy, onFolder,
   };
   const del = async (l) => {
     try { const r = await api.delete(`/jobs/commesse/${commessa.id}/links/${l.id}`); setList(r.data.links); onChanged(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const share = async (l) => {   // shown to the collaborators of the commessa on Telegram («link»), or not
+    try { const r = await api.patch(`/jobs/commesse/${commessa.id}/links/${l.id}`, { shared: !l.shared }); setList(r.data.links); onChanged(); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   };
   const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
@@ -972,8 +976,15 @@ function DocsLinksSheet({ commessa, links, docs, canWrite, folderBusy, onFolder,
         <div key={l.id} className="flex items-center gap-2 py-2.5 border-t border-white/[0.13]" data-testid="docs-link">
           <a href={l.url} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0 active:opacity-80">
             <span className="block text-[14px] text-white truncate">{l.title}</span>
-            <span className="block text-[11.5px] text-white/55 truncate">{host(l.url)}{l.by ? ` · ${l.by}` : ""}</span>
+            <span className="block text-[11.5px] text-white/55 truncate">{host(l.url)}{l.by ? ` · ${l.by}` : ""}{l.by_collab ? " su Telegram" : ""}</span>
           </a>
+          {isAdmin && canWrite && !l.by_collab && (
+            <button type="button" onClick={() => share(l)} aria-pressed={!!l.shared} data-testid="docs-link-share"
+              title={l.shared ? "Visibile ai collaboratori su Telegram: tocca per nasconderlo" : "Tocca per mostrarlo ai collaboratori su Telegram"}
+              className={`shrink-0 text-[11px] px-2 py-1 rounded-full ${l.shared ? "bg-[#8ED973]/25 text-white" : "bg-white/10 text-white/60"}`}>
+              {l.shared ? "✓ collaboratori" : "collaboratori"}
+            </button>
+          )}
           {canWrite && <button type="button" onClick={() => del(l)} aria-label="Togli il link" className="p-1.5 text-white/50 active:opacity-70"><Trash2 size={14} /></button>}
         </div>
       ))}
@@ -3436,7 +3447,7 @@ export default function JobDiaryPage() {
       {lostOpen && c && <LostSheet commessa={c} onClose={() => setLostOpen(false)} onSaved={() => { setLostOpen(false); reload(); }} />}
       {historyOpen && c && <HistorySheet rows={detail?.history || []} onClose={() => setHistoryOpen(false)} />}
       {docsOpen && c && (
-        <DocsLinksSheet commessa={c} links={detail?.links || []} docs={docs} canWrite={!ro} folderBusy={folderBusy} onFolder={openFolder}
+        <DocsLinksSheet commessa={c} links={detail?.links || []} docs={docs} canWrite={!ro} isAdmin={!!detail?.is_admin} folderBusy={folderBusy} onFolder={openFolder}
           onClose={() => setDocsOpen(false)} onChanged={() => loadDetail(selectedId)} />
       )}
       {contactsOpen && c && (

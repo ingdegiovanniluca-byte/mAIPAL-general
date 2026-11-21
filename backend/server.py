@@ -687,6 +687,17 @@ def _plan(tenant: Optional[dict]) -> dict:
     return {**orgaccess.DEFAULT_PLAN, **(tenant.get("plan") or {}), **((e or {}).get("plan") or {})}
 
 
+async def _migrate_added_quotes() -> int:
+    """The quotes added to a commessa's value before they were marked so: found in its diary ("💶 Valore della commessa:
+    … (preventivo v2 aggiunto: € …)") and marked - their works shown under the description. Idempotent. -> how many."""
+    n = 0
+    for lg in await db.job_logs.find({"kind": "valore"}, {"_id": 0, "commessa_id": 1, "text": 1}).to_list(50000):
+        for v in re.findall(r"preventivo v(\d+) aggiunto", lg.get("text") or ""):
+            r = await db.job_quotes.update_one({"commessa_id": lg["commessa_id"], "version": int(v), "added": {"$ne": True}}, {"$set": {"added": True}})
+            n += getattr(r, "modified_count", 0) or 0
+    return n
+
+
 async def _migrate_list_values() -> int:
     """Once the Clienti lists have "Valore commessa" and "Spesa prevista": each commessa the same on both sides - the diary's
     value when there is one (it has its history), else the list's. Idempotent. -> how many commesse aligned."""
@@ -6358,7 +6369,8 @@ async def _fill_report_from_diary(sections: list, report_type: str, cid: str, da
         work_reports.set_field(sections, "Materiali impiegati", "\n".join(f"- {m}" for m in jl.materials_line(tot["materials"]).split(", ") if m), overwrite=False)
         work_reports.set_field(sections, "Problemi riscontrati", "\n".join(f"- {p['text']}" for p in tot["problems"][:15]), overwrite=False)
         ms = await _commessa_milestones(cid)
-        work_reports.set_field(sections, "Milestone", "\n".join(_ms_report_line(v) for v in ms[:15]), overwrite=False)   # (the template's field)
+        for label in ("Tappe", "Milestone"):   # (the template's field: "Milestone" in the models saved before the name changed)
+            work_reports.set_field(sections, label, "\n".join(_ms_report_line(v) for v in ms[:15]), overwrite=False)
     else:
         start = (data_inizio or "")[:10] or (days[0] if days else None)
         if start:
@@ -8738,6 +8750,83 @@ async def _notify_assignee(kind: str, item: dict, view: dict, change: str = "new
 
 
 COLLAB_NOT_YOURS = "Questa attività non è più tra le tue."
+
+
+# ---- the collaborator on Telegram: a useful link sent, the links of the commessa, a note of theirs corrected ----
+_URL_IN = re.compile(r"(https?://\S+|(?:www\.)?[\w-]+(?:\.[\w-]+)*\.(?:it|com|net|org|eu|io|ms|ly|gl)/\S*)", re.I)
+_LINKS_ASKED = re.compile(r"^\s*(?:/?link|i\s+link|link\s+utili|🔗\s*link(?:\s+utili)?|documenti|manuali)\s*[?!.]*\s*$", re.I)
+
+
+async def _collab_link_message(collab: dict, view: dict, text: str) -> Optional[str]:
+    """A message that is a web address (with a few words: its name) -> saved on the commessa, the answer; "link" -> the
+    commessa's links the collaborator may see. Anything else: None (a normal note)."""
+    t = " ".join((text or "").split())
+    ctx = await _commessa_ctx(view["id"])
+    if not ctx or not t:
+        return None
+    clienti, sub, client, _v = ctx
+    if _LINKS_ASKED.match(t):
+        links = _collab_links(sub.get("links"))
+        if not links:
+            return f"🔗 Su «{view['title']}» non ci sono link utili per te, per ora. Se ne hai uno, mandamelo e lo salvo."
+        return f"🔗 Link utili di «{view['title']}»:\n" + "\n".join(f"• {x['title']}: {x['url']}" for x in links[:20])
+    m = _URL_IN.search(t)
+    if not m:
+        return None
+    rest = (t[:m.start()] + " " + t[m.end():]).strip(" -:–")
+    if len(rest.split()) > 8:   # a note that also has an address in it: a normal note
+        return None
+    url = _clean_url(m.group(1).rstrip(".,;)"))
+    if not url:
+        return None
+    owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
+    if not owner:
+        return None
+    link, _all = await _new_commessa_link(User(**{k: v for k, v in owner.items() if k in User.model_fields}), clienti, sub, client, url,
+                                          rest, _collab_name(collab), by_collab=collab["id"])
+    return (f"🔗 Link salvato su «{view['title']}»: {link['title']}.\nLo vedono l'amministratore e chi lavora sulla commessa; "
+            "scrivi «link» per vedere tutti quelli della commessa.")
+
+
+async def _collab_correct_log(collab: dict, log_id: str, correction: str) -> str:
+    """A collaborator's own note corrected from Telegram: only what the correction says, each change kept like in the app
+    (who, when, before) and the administrator told. -> the answer."""
+    log = await db.job_logs.find_one({"id": log_id}, {"_id": 0})
+    if not log or log.get("collaborator_id") != collab["id"]:
+        return "Questa nota non c'è più o non è tua."
+    if (log.get("created_at") or "") < (datetime.now(timezone.utc) - timedelta(days=7)).isoformat():
+        return "Si possono correggere le note degli ultimi 7 giorni: per questa chiedi a chi ti ha invitato."
+    speaker = collab.get("first_name") or _collab_name(collab)
+    try:
+        new = await jl.correct_note(log, correction, speaker)
+    except Exception:
+        logger.exception("note correction failed")
+        return "Non sono riuscito a correggerla, riprova tra poco."
+    old_mats = {jl._norm(m.get("name") or ""): m for m in log.get("materials") or []}
+    new["materials"] = [{**{k: v for k, v in old_mats.get(jl._norm(m["name"]), {}).items() if k not in ("qty", "unit", "name")}, **m}
+                        for m in new["materials"]]
+    upd = {k: v for k, v in new.items() if v != (log.get(k) or ([] if k != "text" else ""))}
+    if not upd:
+        return "Non vedo cosa cambiare in questa nota: scrivimi la correzione, es. «erano 2 pezzi, non 3»."
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upd["edits"] = [*(log.get("edits") or []), {"at": now_iso, "by": speaker, "by_collab": collab["id"], "channel": "telegram",
+                                                "before": {k: log.get(k) for k in upd}}][-30:]
+    if "hours" in upd:
+        upd["hours_changes"] = [*(log.get("hours_changes") or []), {"at": now_iso, "by": speaker, "admin": False,
+                                                                    "before": log.get("hours") or [], "after": upd["hours"]}][-20:]
+    upd["embedding"] = None
+    await db.job_logs.update_one({"id": log_id}, {"$set": upd})
+    lines = _correction_lines(log, upd, upd, False, {})
+    if "text" in upd and not lines:
+        lines = [f"• Testo: «{upd['text'][:200]}»"]
+    ctx = await _commessa_ctx(log["commessa_id"])
+    if ctx:
+        owner = await db.users.find_one({"user_id": ctx[0].get("user_id")}, {"_id": 0})
+        if owner:
+            await _notify_owner(User(**{k: v for k, v in owner.items() if k in User.model_fields}),
+                                f"✏️ {_collab_name(collab)} ha corretto la sua nota del {_short_it_date(log.get('date'))} su «{log.get('commessa_title') or ''}»:\n"
+                                + "\n".join(lines))
+    return f"✏️ Nota corretta:\n" + "\n".join(lines) + "\nLa modifica resta scritta nella nota."
 
 
 async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
@@ -11735,8 +11824,8 @@ async def _activities_started(worker_id: str, commessa_id: str, at: datetime) ->
 async def _plan_from_message(current: User, clienti: dict, target: dict, text: str, channel: str, author: Optional[dict] = None,
                              tagged: Optional[list] = None) -> dict:
     """"Pianifica smontaggio sanitari il 12/11 alle 8 con Gino e Marco, portare i flessibili", "domani Avanzino deve sostituire il
-    ventilatore": an activity, in the tappa it belongs to. The administrator and the users plan for anyone; a collaborator (author,
-    from Telegram) for themselves or the colleagues of their company only. Nobody named: for who wrote it (the administrator's
+    ventilatore": an activity, in the tappa it belongs to. Anyone plans for anyone working on the commessa (a collaborator from
+    Telegram too: the administrator sees it all). Nobody named: for who wrote it (the administrator's
     stays unassigned). Without a day: made all the same and the day asked (buttons)."""
     people = await _activity_people(clienti, target["id"])
     f = await jl.read_activity(text, [p["name"] for p in people], current.user_id, channel)
@@ -11748,14 +11837,8 @@ async def _plan_from_message(current: User, clienti: dict, target: dict, text: s
     for t in tagged or []:   # tagged with @: on it too
         if not any(c["id"] == t["id"] for c in chosen):
             chosen.append(next((p for p in people if p["id"] == t["id"]), t))
-    if author:   # a collaborator: only themselves and the colleagues of their own company
-        mine = (author.get("company") or "").strip().lower()
-        allowed = [p for p in people if p["type"] == "collab" and (p["id"] == author["id"] or (mine and (p.get("company") or "").strip().lower() == mine))]
-        if any(p not in allowed for p in chosen):
-            names = ", ".join(_first_name(p["name"]) for p in allowed if p["id"] != author["id"])
-            return {"status": "unclear", "commessa": target, "message": "Posso segnare attività solo per te"
-                    + (f" o per i colleghi della tua azienda ({names})" if names else "") + ". Per gli altri chiedi a chi ti ha invitato."}
-        chosen = chosen or [p for p in allowed if p["id"] == author["id"]]
+    if author:   # a collaborator: for anyone working on the commessa (the administrator sees it all); nobody named: for themselves
+        chosen = chosen or [p for p in people if p["type"] == "collab" and p["id"] == author["id"]]
     elif not chosen and not _is_org_admin(current):
         chosen = [p for p in people if p["type"] == "user" and p["id"] == current.user_id]
     creator = {"name": (author or {}).get("first_name") or _first_name(current.name), "collab_id": (author or {}).get("id")}
@@ -12025,21 +12108,56 @@ def _link_title(url: str) -> str:
             "1drv.ms": "OneDrive", "dropbox.com": "Dropbox"}.get(host, host or url)
 
 
+def _clean_url(url: str) -> Optional[str]:
+    """A web address (http/https; "drive.google.com/…" gets its https://) or None."""
+    url = (url or "").strip().strip("<>")
+    if url and not re.match(r"^https?://", url, re.I) and re.match(r"^[\w.-]+\.[a-z]{2,}(/|$)", url, re.I):
+        url = "https://" + url
+    return url if re.match(r"^https?://[^\s/]+\.[^\s]+$", url, re.I) and len(url) <= 2000 else None
+
+
+async def _new_commessa_link(owner: User, clienti: dict, sub: dict, client: Optional[dict], url: str, title: str, by: str,
+                             by_collab: Optional[str] = None) -> tuple:
+    """A link saved on the commessa (with its line in the diary). -> (the link, all the links)"""
+    link = {"id": f"lnk_{uuid.uuid4().hex[:10]}", "url": url, "title": " ".join((title or "").split())[:120] or _link_title(url), "by": by,
+            "at": datetime.now(timezone.utc).isoformat(), "shared": bool(by_collab), **({"by_collab": by_collab} if by_collab else {})}
+    cur = (await db.collection_sub_items.find_one({"id": sub["id"]}, {"_id": 0, "links": 1}) or {}).get("links") or []
+    links = [*cur, link][-100:]
+    await db.collection_sub_items.update_one({"id": sub["id"]}, {"$set": {"links": links}})
+    log = await _job_event(owner, clienti, _commessa_view(sub, client, clienti), "documento",
+                           f"🔗 Link utile aggiunto: {link['title']}" + (f" (da {by}, su Telegram)" if by_collab else "") + ".")
+    if by_collab:
+        await db.job_logs.update_one({"id": log["id"]}, {"$set": {"author_name": by}})
+    return link, links
+
+
+def _collab_links(links: Optional[list]) -> list:
+    """The links a collaborator sees: the ones the administrator shared, and the ones collaborators sent."""
+    return [x for x in links or [] if x.get("shared") or x.get("by_collab")]
+
+
 @api_router.post("/jobs/commesse/{commessa_id}/links")
 async def add_commessa_link(commessa_id: str, payload: CommessaLinkPayload, current: User = Depends(get_current_user)):
     """A useful link on the commessa (anyone who can write on it): only web addresses (http/https)."""
     clienti, sub, client = await _commessa_or_404(current, commessa_id)
-    url = (payload.url or "").strip()
-    if url and not re.match(r"^https?://", url, re.I) and re.match(r"^[\w.-]+\.[a-z]{2,}(/|$)", url, re.I):
-        url = "https://" + url
-    if not re.match(r"^https?://[^\s/]+\.[^\s]+$", url, re.I) or len(url) > 2000:
+    url = _clean_url(payload.url)
+    if not url:
         raise HTTPException(status_code=400, detail="Scrivi un indirizzo web valido, es. https://drive.google.com/…")
-    title = " ".join((payload.title or "").split())[:120] or _link_title(url)
-    link = {"id": f"lnk_{uuid.uuid4().hex[:10]}", "url": url, "title": title, "by": _first_name(current.name),
-            "at": datetime.now(timezone.utc).isoformat()}
-    links = [*(sub.get("links") or []), link][-100:]
+    _link, links = await _new_commessa_link(current, clienti, sub, client, url, payload.title or "", _first_name(current.name))
+    return {"links": links}
+
+
+class CommessaLinkPatch(BaseModel):
+    shared: bool
+
+
+@api_router.patch("/jobs/commesse/{commessa_id}/links/{link_id}")
+async def share_commessa_link(commessa_id: str, link_id: str, payload: CommessaLinkPatch, current: User = Depends(get_current_user)):
+    """A link shown to the collaborators of the commessa on Telegram, or not (the administrator)."""
+    _clienti, sub, _client = await _commessa_or_404(current, commessa_id)
+    _require_org_admin(current, "I link li condivide con i collaboratori l'amministratore.")
+    links = [({**x, "shared": payload.shared} if x.get("id") == link_id else x) for x in sub.get("links") or []]
     await db.collection_sub_items.update_one({"id": commessa_id}, {"$set": {"links": links}})
-    await _job_event(current, clienti, _commessa_view(sub, client, clienti), "documento", f"🔗 Link utile aggiunto: {title}.")
     return {"links": links}
 
 
@@ -12859,7 +12977,7 @@ async def _collab_answer(collab: dict, owner: User, view: dict, question: str, h
             "todos_line": " | ".join(f"«{t['text']}» ({t.get('who') or '-'})" + (f" entro {t['due_date']}" if t.get("due_date") else "")
                                      for t in _sort_job_todos(open_todos)),
             "contacts_line": contacts_line(await _commessa_contacts(view["id"])),   # the job's trades: useful to them too
-            "links_line": links_line(((await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0, "links": 1})) or {}).get("links"))}
+            "links_line": links_line(_collab_links(((await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0, "links": 1})) or {}).get("links")))}
     await _fill_phases(view["id"], logs, view.get("stato"))
     out = await jl.answer(view, logs, reports, question, history[-8:], user_id=owner.user_id, channel="telegram")
     return out["answer"]
@@ -17956,6 +18074,7 @@ async def start_services():
         await _migrate_commesse()
         await _migrate_weekly_actions()
         await _migrate_list_values()
+        await _migrate_added_quotes()
     except Exception:
         logger.exception("commesse migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)

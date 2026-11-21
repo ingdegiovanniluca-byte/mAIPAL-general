@@ -47,12 +47,12 @@ INTERVENTO_SECTIONS = [
     {"title": "Note", "fields": ["Anomalie riscontrate", "Consigli al cliente", "Prossimi passi"]},
 ]
 
-# Stato avanzamento lavori (SAL): where the job is - hours, materials, problems and milestones
+# Stato avanzamento lavori (SAL): where the job is - hours, materials, problems and tappe
 # of the period also come from the commessa's diary when the dictation doesn't say them
 SAL_SECTIONS = [
     CLIENT_SECTION,
     {"title": "Avanzamento", "fields": ["Data", "Eseguito da", "Periodo di riferimento", "Percentuale di avanzamento"]},
-    {"title": "Lavori del periodo", "fields": ["Lavori eseguiti", "Ore impiegate", "Materiali impiegati", "Milestone"]},
+    {"title": "Lavori del periodo", "fields": ["Lavori eseguiti", "Ore impiegate", "Materiali impiegati", "Tappe"]},
     {"title": "Criticità e prossimi passi", "fields": ["Problemi riscontrati", "Varianti o lavori extra", "Prossime attività",
                                                       "Previsione di fine lavori"]},
     {"title": "Note", "fields": ["Note"]},

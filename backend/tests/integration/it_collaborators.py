@@ -244,7 +244,7 @@ async def main():
     assert lg["hours"] == [] and lg["hours_pending"] == [{"who": "Gino", "hours": 4.0}] and lg["hours_review"]["status"] == "pending"
     assert any("🕒 Ore da approvare: Gino Neri (Idraulica Neri)" in t for _c, t in NOTICES)
     assert jl.interpret.last["speaker"] == "Gino" and "Luca" in jl.interpret.last["team"]
-    assert buttons(REPLIES[-1][1]) == [f"clu:{lg['id']}"]
+    assert buttons(REPLIES[-1][1]) == [f"clu:{lg['id']}", f"cle:{lg['id']}"]
     assert "segnala su «Bagno»" in NOTICES[-1][1] and "manca una scatola 503" in NOTICES[-1][1]
     # the next message stays on the same commessa
     jl.interpret = said()
@@ -295,7 +295,7 @@ async def main():
     assert await send(900, "qui ho montato il miscelatore")
     lg = next(x for x in db.job_logs.docs if x["id"] == pid)
     assert len(db.job_logs.docs) == n and lg["text"] == "Montato il miscelatore." and "Descrizione aggiunta" in REPLIES[-1][0]
-    assert buttons(REPLIES[-1][1]) == [f"clu:{pid}"]
+    assert buttons(REPLIES[-1][1]) == [f"clu:{pid}", f"cle:{pid}"]
     assert await tap(900, f"clu:{pid}") and "resta la foto" in REPLIES[-1][0]
     lg = next(x for x in db.job_logs.docs if x["id"] == pid)
     assert lg["text"] == "Foto dal cantiere" and lg["photos"] and "before_description" not in lg
@@ -333,6 +333,43 @@ async def main():
     assert "s_box" in db.collaborators.docs[0]["commesse"]
     await server.set_commessa_collaborator("s_box", c0["id"], server.CollabEnablePayload(enabled=False), me)
     assert "s_box" not in db.collaborators.docs[0]["commesse"]
+
+    # 11b) useful links: the ones the collaborator sends are saved on the commessa; "link" shows them and the ones the
+    #      administrator shared - not the others
+    gino = next(x for x in db.collaborators.docs if x["id"] == c0["id"])
+    view = (await server._commessa_ctx("s_bagno"))[3]
+    r = await server._collab_link_message(gino, view, "manuale caldaia https://www.vaillant.it/manuale.pdf")
+    assert r.startswith("🔗 Link salvato su «Bagno»: manuale caldaia"), r
+    links = next(x for x in db.collection_sub_items.docs if x["id"] == "s_bagno")["links"]
+    assert links[-1]["by_collab"] == gino["id"] and links[-1]["url"] == "https://www.vaillant.it/manuale.pdf"
+    assert any(lg.get("kind") == "documento" and "da Gino Neri, su Telegram" in lg["text"] for lg in db.job_logs.docs)
+    await server.add_commessa_link("s_bagno", server.CommessaLinkPayload(url="https://drive.google.com/x", title="Disegni"), me)
+    await server.add_commessa_link("s_bagno", server.CommessaLinkPayload(url="https://drive.google.com/y", title="Contratto"), me)
+    r = await server._collab_link_message(gino, view, "link")
+    assert "manuale caldaia" in r and "Disegni" not in r and "Contratto" not in r, r
+    lid_d = next(x["id"] for x in next(x for x in db.collection_sub_items.docs if x["id"] == "s_bagno")["links"] if x["title"] == "Disegni")
+    await server.share_commessa_link("s_bagno", lid_d, server.CommessaLinkPatch(shared=True), me)
+    r = await server._collab_link_message(gino, view, "link utili")
+    assert "Disegni: https://drive.google.com/x" in r and "Contratto" not in r, r
+    assert await server._collab_link_message(gino, view, "oggi montato il miscelatore, il catalogo è su www.grohe.it/catalogo con le misure e i codici dei ricambi") is None
+
+    # 11c) ✏️ Correggi: the next message corrects their note (only what it says), kept like in the app, the administrator told
+    lg = {"id": "lgc", "commessa_id": "s_bagno", "commessa_title": "Bagno", "collaborator_id": gino["id"], "author_name": "Gino",
+          "date": jl.today_local().isoformat(), "created_at": datetime.now(timezone.utc).isoformat(), "text": "Montate 3 scatole 503",
+          "hours": [], "materials": [{"name": "scatole 503", "qty": 3, "unit": "pz", "status": "usato"}], "problems": []}
+    db.job_logs.docs.append(dict(lg))
+    async def corrects(note, correction, speaker, user_id=None, channel="telegram"):
+        assert "erano 2" in correction
+        return {"text": "Montate 2 scatole 503", "hours": [], "materials": [{"name": "scatole 503", "qty": 2, "unit": "pz"}], "problems": []}
+    jl.correct_note = corrects
+    assert await tap(900, "cle:lgc") and "cosa correggere" in REPLIES[-1][0]
+    NOTICES.clear() if isinstance(NOTICES, list) else None
+    assert await send(900, "erano 2 pezzi, non 3")
+    assert "✏️ Nota corretta" in REPLIES[-1][0] and "• Materiali: 3 pz scatole 503 → 2 pz scatole 503" in REPLIES[-1][0], REPLIES[-1]
+    x = next(y for y in db.job_logs.docs if y["id"] == "lgc")
+    assert x["materials"][0]["qty"] == 2 and x["materials"][0]["status"] == "usato" and x["edits"][-1]["by"] == "Gino"
+    assert x["edits"][-1]["before"]["materials"][0]["qty"] == 3 and not next(c for c in db.collaborators.docs if c["id"] == gino["id"]).get("pending_edit")
+    assert await tap(901, "cle:lgc") is not None   # (someone else: not theirs)
 
     # 12) a new code; an expired one is refused; deleting a commessa drops it from them; removal
     r = await server.reinvite_collaborator(c0["id"], me)

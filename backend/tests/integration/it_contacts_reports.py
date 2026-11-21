@@ -195,10 +195,10 @@ async def main():
     r = await server._generate_work_report(me, "SAL del Bagno dei Rossi: 60%, impianti completati", "sal")
     assert SEEN[-1] == "Stato avanzamento lavori" and r["commessa_id"] == "s_bagno"
     f = {k: v for sec in r["sections"] for k, v in sec["fields"].items()}
-    print({k: f[k] for k in ("Periodo di riferimento", "Ore impiegate", "Materiali impiegati", "Problemi riscontrati", "Milestone")})
+    print({k: f[k] for k in ("Periodo di riferimento", "Ore impiegate", "Materiali impiegati", "Problemi riscontrati", "Tappe")})
     assert f["Percentuale di avanzamento"] == "60%" and f["Lavori eseguiti"] == "Impianti completati"
     assert f["Ore impiegate"] == "10 h" and "20 m corrugato" in f["Materiali impiegati"] and "manca il miscelatore" in f["Problemi riscontrati"]
-    assert f["Periodo di riferimento"].startswith("dal 10/10/2026") and f"Impianto idraulico: prevista entro il {DUE_IT}" in f["Milestone"]
+    assert f["Periodo di riferimento"].startswith("dal 10/10/2026") and f"Impianto idraulico: prevista entro il {DUE_IT}" in f["Tappe"]
     # a second SAL: only what came after the first
     for x in db.work_reports.docs:
         x["created_at"] = "2026-10-12T10:00:00+00:00"

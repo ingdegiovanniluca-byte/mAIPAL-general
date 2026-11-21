@@ -86,6 +86,9 @@ async def _keyboard_for(recs: list) -> ReplyKeyboardMarkup:
     return presence_keyboard(False)
 
 
+EDIT_FRESH = timedelta(minutes=30)   # ✏️ Correggi: the correction is the next message, within half an hour
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -285,6 +288,12 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
     await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"tg_state": {"target": view["id"], "at": _now().isoformat()},
                                                                     "pending": None, "unclear": None, "last_message_at": _now().isoformat()}})
     everyone = await _all_active(db, update, rec)   # their records of every firm (the 📍 button follows any open time)
+    if not images:   # a web address (a manual, a Drive folder): a useful link of the commessa; "link": the ones they can see
+        from server import _collab_link_message
+        said_link = await _collab_link_message(rec, view, content)
+        if said_link:
+            await _reply(update, said_link, reply_markup=await _keyboard_for(everyone))
+            return
     try:
         res = await _save_job_log(owner, content, images=images or None, commessa_id=view["id"], channel="telegram", author=author,
                                   material_choice=material_choice)
@@ -305,7 +314,8 @@ async def process(update: Update, rec: dict, target: tuple, content: str, images
         return
     if res["status"] == "ok":
         log = res["log"]
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clu:{log['id']}")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"↩️ Annulla ({COLLAB_UNDO_MINUTES} min)", callback_data=f"clu:{log['id']}"),
+                                    InlineKeyboardButton("✏️ Correggi", callback_data=f"cle:{log['id']}")]])
         await _reply(update, res["message"], reply_markup=kb)
         await _still_working(update, everyone)
         if log.get("problems"):
@@ -410,6 +420,12 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: l
         content = text
     else:
         await _reply(update, "Mandami un testo, un messaggio vocale o una foto.")
+        return
+    editing = next((r for r in active if (r.get("pending_edit") or {}).get("at", "") >= (_now() - EDIT_FRESH).isoformat()), None)
+    if editing and not images:   # the answer to ✏️ Correggi
+        from server import _collab_correct_log
+        await db.collaborators.update_one({"id": editing["id"]}, {"$set": {"pending_edit": None}})
+        await _reply(update, await _collab_correct_log(editing, editing["pending_edit"]["log_id"], content), reply_markup=await _keyboard_for(active))
         return
     target = _choose(_latest_state(active), content, targets)
     if not target:   # on site (time open): what they do or photograph there is that commessa's
@@ -724,6 +740,15 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
         await _reply(update, "↩️ Promemoria annullato." if gone else
                      f"Sono passati più di {COLLAB_UNDO_MINUTES} minuti: per correggerlo rivolgiti a chi ti ha invitato.")
         return
+    if data.startswith("cle:"):   # ✏️ Correggi: the next message is the correction of that note
+        log = await db.job_logs.find_one({"id": data[4:]}, {"_id": 0, "id": 1, "collaborator_id": 1})
+        rec = next((r for r in recs if log and r["id"] == log.get("collaborator_id")), None)
+        if not rec:
+            await _reply(update, "Questa nota non c'è più o non è tua.")
+            return
+        await db.collaborators.update_one({"id": rec["id"]}, {"$set": {"pending_edit": {"log_id": log["id"], "at": _now().isoformat()}}})
+        await _reply(update, "✏️ Scrivi (o detta) cosa correggere, es. «erano 2 pezzi, non 3» o «le ore erano 6».")
+        return
     if data.startswith("clu:"):
         log = await db.job_logs.find_one({"id": data[4:]}, {"_id": 0, "id": 1, "collaborator_id": 1, "created_at": 1,
                                                             "described_at": 1, "before_description": 1})
@@ -744,7 +769,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             await _reply(update, "Questa voce non c'è più.")
             return
         if not fresh:
-            await _reply(update, f"Sono passati più di {COLLAB_UNDO_MINUTES} minuti: per correggerla rivolgiti a chi ti ha invitato.")
+            await _reply(update, f"Sono passati più di {COLLAB_UNDO_MINUTES} minuti: non si annulla più, ma puoi correggerla con ✏️ Correggi.")
             return
         await db.job_logs.delete_one({"id": log["id"]})
         await db.job_photos.delete_many({"log_id": log["id"]})

@@ -269,13 +269,13 @@ async def main():
     out = await server.set_todo_when(tm["id"], server.PlanWhenPayload(choice="domani"), me)
     assert out["todo"]["due_date"] == iso(1) and "Te lo ricordo il giorno prima" in out["message"]
 
-    # 3) a collaborator: for himself or the colleagues of his company only
-    said_act.update(description="Passare i cavi in cucina", date=iso(2), assignees=["Ugo Verdi"])
+    # 3) a collaborator: for anyone working on the commessa (another firm's too)
+    said_act.update(description="Tracce in bagno", date=iso(3), assignees=["Ugo Verdi"])
     REPLIES.clear()
-    assert await send(900, "pianifica dopodomani Ugo passa i cavi in cucina")
-    assert "Posso segnare attività solo per te o per i colleghi della tua azienda (Pino)" in REPLIES[-1][0], REPLIES[-1]
-    assert not any(a["description"] == "Passare i cavi in cucina" for a in db.job_activities.docs)
-    said_act.update(assignees=["Pino Neri"])
+    assert await send(900, "pianifica tra 3 giorni Ugo fa le tracce in bagno")
+    a = next(x for x in db.job_activities.docs if x["description"] == "Tracce in bagno")
+    assert [p["name"] for p in a["assignees"]] == ["Ugo Verdi"] and a["created_by_collab"] == crew["Gino"]["id"], a
+    said_act.update(description="Passare i cavi in cucina", date=iso(2), assignees=["Pino Neri"])
     assert await send(900, "pianifica dopodomani Pino passa i cavi in cucina")
     a = next(x for x in db.job_activities.docs if x["description"] == "Passare i cavi in cucina")
     assert [p["name"] for p in a["assignees"]] == ["Pino Neri"] and a["created_by_collab"] == crew["Gino"]["id"] and a["created_by_name"] == "Gino"

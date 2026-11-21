@@ -1980,3 +1980,29 @@ def search_text(log: dict) -> str:
     if log.get("problems"):
         bits.append("Problemi: " + "; ".join(log["problems"]) + ".")
     return " ".join(b for b in bits if b)
+
+
+# ---- a collaborator corrects their own note from Telegram ("erano 2 pezzi, non 3", "le ore erano 6") ----
+async def correct_note(note: dict, correction: str, speaker: str, user_id: Optional[str] = None, channel: str = "telegram") -> dict:
+    """The note with only what the correction says changed: {"text", "hours", "materials", "problems"} (cleaned like a new note).
+    Nothing invented: what the correction doesn't touch stays as it was."""
+    current = {"text": note.get("text") or "", "hours": note.get("hours") or [], "materials": [
+        {k: m.get(k) for k in ("name", "qty", "unit") if m.get(k) is not None} for m in note.get("materials") or []],
+        "problems": note.get("problems") or []}
+    system = ("Ricevi una NOTA di cantiere già salvata (JSON) e la CORREZIONE scritta da chi l'ha mandata. Restituisci la nota corretta "
+              "cambiando SOLO quello che la correzione dice (quantità, ore, materiali, problemi, testo); tutto il resto identico. "
+              "Il testo va aggiornato se la correzione cambia qualcosa che vi è scritto. MAI inventare. "
+              "Rispondi SOLO con JSON: {\"text\": \"\", \"hours\": [{\"who\", \"hours\"}], \"materials\": [{\"name\", \"qty\", \"unit\"}], \"problems\": []}")
+    client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    try:
+        resp = await client.chat.completions.create(model=MODEL, max_completion_tokens=1200, response_format={"type": "json_object"},
+                                                    messages=[{"role": "system", "content": system},
+                                                              {"role": "user", "content": f"NOTA:\n{json.dumps(current, ensure_ascii=False)}\n\nCORREZIONE:\n{correction[:1500]}"}])
+    except Exception:
+        _track(None, user_id, channel, status="errore")
+        raise
+    _track(resp, user_id, channel)
+    m = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
+    p = json.loads(m.group(0)) if m else {}
+    return {"text": str(p.get("text") or current["text"]).strip()[:4000], "hours": clean_hours(p.get("hours") or [], speaker),
+            "materials": clean_materials(p.get("materials") or []), "problems": clean_problems(p.get("problems") or [])}
