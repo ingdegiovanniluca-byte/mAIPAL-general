@@ -7522,7 +7522,7 @@ async def _hours_to_approve_notice(owner: User, log: dict, author: dict, view: d
     what = f"{_short_it_date(log['date'])}: {jl.hours_line(log['hours_pending'])}{_review_detail(log)}"
     try:
         await _notify_owner(owner, f"🕒 Ore da approvare: {who} su «{view['title']}» — {view['client_name']}, {what}.\n"
-                                   "Le approvi nel diario della commessa, sezione Ore.", kind="hours")
+                                   "Le approvi nel diario della commessa, sezione Ore.", kind="hours", push_too=False)   # (the entry's push says it)
     except Exception:
         logger.exception("hours to approve notice failed")
     # (on the phone: the entry's own notification says "da approvare")
@@ -8879,7 +8879,7 @@ async def _collab_mark_done(collab: dict, kind: str, item_id: str) -> str:
     push.fire_and_forget(db, owner.user_id, f"✅ {_collab_name(collab)} · {view.get('title')}", f"Fatta: «{what}»",
                          f"/dashboard/journal?commessa={view['id']}", f"done-{item_id}", kind="done")
     try:
-        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la tappa'} «{what}» su «{view['title']}» — {view['client_name']}.", kind="done")
+        await _notify_owner(owner, f"✅ {who} ha segnato come fatta {'l’attività' if kind == 't' else 'la tappa'} «{what}» su «{view['title']}» — {view['client_name']}.", kind="done", push_too=False)
     except Exception:
         logger.exception("owner notice failed")
     return f"✅ Fatto! «{what}» è segnata come fatta, {owner.name.split(' ')[0] if owner.name else 'il titolare'} lo vede nel diario."
@@ -11411,7 +11411,7 @@ async def _activity_confirm(activity_id: str, worker_id: str, status: str, reaso
         od = await db.users.find_one({"user_id": ctx[0].get("user_id")}, {"_id": 0})
         if od:
             await _notify_owner(User(**od), f"❌ *{found['name']}* non può esserci per «{a['description']}» su «{ctx[3]['title']}» "
-                                             f"({_short_it_date(a['date'])})" + (f": {reason}" if reason else "") + ".", kind="confirm")
+                                             f"({_short_it_date(a['date'])})" + (f": {reason}" if reason else "") + ".", kind="confirm", push_too=False)
             push.fire_and_forget(db, od["user_id"], f"❌ {found['name']} non può esserci", f"«{a['description']}» · {_short_it_date(a['date'])}",
                                  f"/dashboard/journal?commessa={a['commessa_id']}", f"act-no-{activity_id}-{worker_id}", kind="confirm")
         return "Ok, ho avvisato l'amministratore."
@@ -11552,7 +11552,7 @@ async def _waiting_from_log(current: User, clienti: dict, target: dict, log: dic
         text = (f"⏳ *In attesa* su {_wait_where(target)}: «{w['work']}», {jl.waiting_label(w)} (scritto da {operator['name']}).\n"
                 f"Ti ho messo da fare per il {_short_it_date(admin_due)}: «{ask['text']}». "
                 f"Il {_short_it_date(ask_on)} chiedo a {operator['name']} se è arrivato e se il lavoro è stato fatto.")
-        await _notify_owner(User(**owner), text, kind="problems")
+        await _notify_owner(User(**owner), text, kind="problems", push_too=False)
         push.fire_and_forget(db, owner_id, f"⏳ {target.get('title')}", f"{w['work']}: {jl.waiting_label(w)}",
                              f"/dashboard/journal?commessa={target['id']}", f"wait-{wid}", kind="problems")
     return {**wait, "label": jl.waiting_label(w), "ask_text": ask["text"], "admin_due": admin_due, "owner": owner_first}
@@ -11712,7 +11712,7 @@ async def _wait_answer(wid: str, choice: str, by: dict) -> str:
             if op and op.get("id") != by.get("id"):
                 await _tell_wait_operator(wait, other)
         elif owner:
-            await _notify_owner(owner, other, kind="problems")
+            await _notify_owner(owner, other, kind="problems", push_too=False)
             push.fire_and_forget(db, owner.user_id, f"{other[:2]} {view.get('title')}", other[2:].strip()[:140],
                                  f"/dashboard/journal?commessa={view['id']}", f"wait-{wid}", kind="problems")
     if op.get("kind") == "collab":
@@ -13843,7 +13843,7 @@ async def _presence_late_check(now_utc: Optional[datetime] = None) -> int:
             if owner_doc:
                 note = (f"🕖 Alle {sp.hhmm(now.astimezone(LOCAL_TZ))} risulta ancora in cantiere *{_collab_name(w)}* su «{s_['commessa_title']}» "
                         f"(dalle {since}). Gli ho chiesto se è ancora lì: ti dico cosa risponde.")
-                await _notify_owner(User(**owner_doc), note, kind="presence")
+                await _notify_owner(User(**owner_doc), note, kind="presence", push_too=False)
                 push.fire_and_forget(db, own, "🕖 Ancora in cantiere", f"{_collab_name(w)} su «{s_['commessa_title']}» dalle {since}",
                                      f"/dashboard/journal?commessa={s_['commessa_id']}", f"late-o-{s_['id']}", kind="presence")
                 await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"late_told_owner": True}})
@@ -14850,14 +14850,19 @@ async def unlink_client_updates(commessa_id: str, current: User = Depends(get_cu
     return await _client_updates_state(clienti, sub, client)
 
 
-async def _notify_owner(owner: User, text: str, kind: Optional[str] = None) -> None:
-    """A note to the admin on Telegram (if linked): a collaborator linked, a problem reported. With a
-    kind, only if they want that kind on Telegram (Impostazioni > Notifiche)."""
+async def _notify_owner(owner: User, text: str, kind: Optional[str] = None, push_too: bool = True, url: str = "/dashboard/journal") -> None:
+    """A note to the admin: on Telegram (if linked) and in the app (a push on the phone), each where they want that kind
+    (Impostazioni > Notifiche: app, Telegram or both). push_too=False where the caller sends its own push."""
     if owner.telegram_chat_id and await nprefs.wants(db, owner.user_id, kind, "telegram"):
         try:
             await _send_telegram_text(owner.telegram_chat_id, text)
         except Exception:
             logger.exception("collaborator notice to owner failed")
+    if push_too:
+        plain = text.replace("*", "").replace("_", " ").strip()
+        head, _, rest = plain.partition("\n")
+        title, body = (head[:70], (head[70:] + " " + rest).strip()[:180]) if len(head) > 70 or not rest else (head, rest[:180])
+        push.fire_and_forget(db, owner.user_id, title, body or head, url, f"own-{abs(hash(plain)) % 10**10}", kind=kind)
 
 
 @api_router.patch("/jobs/commesse/{commessa_id}/stato")

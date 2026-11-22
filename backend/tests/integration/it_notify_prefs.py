@@ -179,6 +179,7 @@ async def main():
     await server._notify_owner(me, "🕒 Ore da approvare", kind="hours")
     await server._notify_owner(me, "⚠️ Archivio")            # no kind: always
     assert [t for _c, t in NOTICES] == ["🕒 Ore da approvare", "⚠️ Archivio"], NOTICES
+    await asyncio.sleep(0.5)   # (the same notices in the app too: sent in the background)
     n = len(PUSHED)
     server.push.fire_and_forget(db, "u1", "⚠️ Problema", "x", "/x", "t4", kind="problems")
     assert not await pushed_more_than(n, wait=0.5)

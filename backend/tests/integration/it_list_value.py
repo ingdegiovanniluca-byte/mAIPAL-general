@@ -316,6 +316,23 @@ async def main():
     ev = [x for x in db.job_logs.docs if x.get("kind") == "nota_eliminata"][-1]
     assert ev["text"].startswith("🗑 Nota di Avanzino del") and "eliminata da Luca" in ev["text"] and "montate 3 scatole 503" in ev["text"], ev["text"]
     assert any("ha eliminato la tua nota" in t for t, _ in to(950)), to(950)
+
+    # 9) a notice to the administrator ("ancora in cantiere", the answer…): in the app too, where the preferences say so
+    import notify_prefs as nprefs
+    PUSHED = []
+    real_push = server.push.fire_and_forget
+    server.push.fire_and_forget = lambda db_, uid, title, body, url="/dashboard", tag=None, kind=None: PUSHED.append((uid, title, body, kind))
+    me_doc = server.User(**next(u for u in db.users.docs if u["user_id"] == "u1"))
+    await nprefs.set_pref(db, "u1", "presence", True, "both")
+    BOT_SENT.clear(); NOTICES.clear()
+    await server._notify_owner(me_doc, "✅ *Avanzino Neri* conferma di essere ancora in cantiere su «Bagno».", kind="presence")
+    assert NOTICES and PUSHED[-1][0] == "u1" and PUSHED[-1][1].startswith("✅ Avanzino Neri conferma") and PUSHED[-1][3] == "presence", PUSHED
+    n = len(PUSHED)
+    await server._notify_owner(me_doc, "x", kind="presence", push_too=False)   # (the caller sends its own)
+    assert len(PUSHED) == n
+    await nprefs.set_pref(db, "u1", "presence", True, "telegram")
+    real_push(db, "u1", "t", "b", kind="presence")   # telegram only: the app's push is not sent (checked inside)
+    server.push.fire_and_forget = real_push
     print("ALL OK")
 
 asyncio.run(main())
