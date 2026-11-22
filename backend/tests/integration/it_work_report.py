@@ -120,7 +120,7 @@ server._storage_save = fake_save
 
 CALLS = []
 def interp(client, job, fields=None, summary=None):
-    async def f(text, sections, user_name="", user_id=None, channel="web", report_name=""):
+    async def f(text, sections, user_name="", user_id=None, channel="web", report_name="", context="", photos=0):
         CALLS.append(text)
         out = [{"title": s["title"], "fields": {k: (fields or {}).get(k, "") for k in s["fields"]}} for s in sections]
         res = {"sections": out, "client": {"name": "", "phone": "", "email": "", "address": "", **client}, "job_title": job}

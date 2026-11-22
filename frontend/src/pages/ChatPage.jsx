@@ -736,9 +736,9 @@ export default function ChatPage() {
   // the report's chat, written in a Chat conversation (Cronologia: it can be taken up again). Its id is made
   // here with the first message, so what is written with no signal joins the same report when sent later.
   const newDraftId = () => "rdr_" + newClientId().replace(/[^0-9a-f]/gi, "").toLowerCase().slice(0, 24).padEnd(12, "0");
-  const keepReportOffline = async ({ content, voice, draftId, convId }) => {
-    const entry = await keepDiaryEntry({ kind: "report", client_id: newClientId(), text: content || "", voice: voice || null,
-      draft_id: draftId, conv_id: convId || null, label: (content || "Vocale per il report").slice(0, 80) });
+  const keepReportOffline = async ({ content, voice, images, draftId, convId }) => {
+    const entry = await keepDiaryEntry({ kind: "report", client_id: newClientId(), text: content || "", voice: voice || null, images: images || [],
+      draft_id: draftId, conv_id: convId || null, label: (content || (voice ? "Vocale per il report" : "Foto per il report")).slice(0, 80) });
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", pendingId: entry.client_id,
       content: "⏳ Senza rete: l'ho tenuto sul telefono. Lo aggiungo al report da solo appena torna il segnale." }] }));
   };
@@ -757,9 +757,10 @@ export default function ChatPage() {
     };
     if (voice) {
       const keepVoice = async () => {   // no network for the transcription: the audio waits on the phone
-        start(`${content ? `${content}\n` : ""}🎤 vocale`);
-        await keepReportOffline({ content, voice: voice.blob, draftId, convId });
-        setPendingVoice(null);
+        const imgs = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
+        start(`${content ? `${content}\n` : ""}🎤 vocale${imgs.length ? `\n📷 ${imgs.length} foto` : ""}`);
+        await keepReportOffline({ content, voice: voice.blob, images: imgs, draftId, convId });
+        setAttachments([]); setPendingVoice(null);
       };
       if (!lastReport && navigator.onLine === false) { await keepVoice(); return; }
       setTranscribing(true);
@@ -772,17 +773,19 @@ export default function ChatPage() {
       setTranscribing(false);
       setPendingVoice(null);
     }
-    if (!content) { toast.error("Scrivi o detta cosa mettere nel report"); return; }
+    const images = attachments.filter((a) => a.journalImage).map((a) => a.dataUri);
+    if (!content && !images.length) { toast.error("Scrivi o detta cosa mettere nel report"); return; }
     const { main: workText } = splitMentions(content);
     if (lastReport && navigator.onLine === false) { toast.error("Senza rete: la modifica del report mandala quando torna il segnale"); return; }
-    start(content);
-    if (!lastReport && navigator.onLine === false) { await keepReportOffline({ content: workText || content, draftId, convId }); return; }
+    start([content, images.length ? `📷 ${images.length} foto` : ""].filter(Boolean).join("\n"));
+    setAttachments([]);
+    if (!lastReport && navigator.onLine === false) { await keepReportOffline({ content: workText || content, images, draftId, convId }); return; }
     setStreaming(true);
     const clientId = newClientId();
     try {
       // a message in a report's chat changes THAT report (it used to make a new, invented one)
       if (lastReport) {
-        const r = await api.post(`/work/reports/${lastReport.reportId}/revise`, { text: workText || content, conv_id: convId });
+        const r = await api.post(`/work/reports/${lastReport.reportId}/revise`, { text: workText || content, images, conv_id: convId });
         const changedNow = (r.data.changed || []).length > 0;
         setThread((th) => ({ ...th, messages: [...th.messages, changedNow
           ? { role: "assistant", content: r.data.message, reportId: r.data.id, reportKind: "work", reportVersion: r.data.version }
@@ -793,12 +796,12 @@ export default function ChatPage() {
       // from what is said (buttons only when not clear); made only on «genera» or the button
       if (splitMentions(content).parts.length) reportTaggedRef.current.push(content);
       shadowRoute("work_report", workText || content);
-      const r = await api.post("/work/report-chat", { draft_id: draftId, text: workText || content, conv_id: convId,
+      const r = await api.post("/work/report-chat", { draft_id: draftId, text: workText || content, images, conv_id: convId,
         client_id: clientId, written_at: new Date().toISOString() });
       await appendReportChat(r.data);
     } catch (e) {
       if (!lastReport && isNetworkError(e)) {   // the network dropped on the way: kept (same id: if it did arrive, it isn't added twice)
-        const entry = await keepDiaryEntry({ kind: "report", client_id: clientId, text: workText || content, draft_id: draftId,
+        const entry = await keepDiaryEntry({ kind: "report", client_id: clientId, text: workText || content, images, draft_id: draftId,
           conv_id: convId, label: (workText || content).slice(0, 80) });
         setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", pendingId: entry.client_id,
           content: "⏳ Senza rete: l'ho tenuto sul telefono. Lo aggiungo al report da solo appena torna il segnale." }] }));
@@ -1724,11 +1727,13 @@ export default function ChatPage() {
     // KB/Drive - they're only sent to the backend once, embedded in the journal entry,
     // when the message is saved (see send()'s payload.images). Non-image files go to
     // Drive instead (payload.documents), same as a plain attachment elsewhere in the app.
-    if (active === "journal" || active === "job_log") {
+    // Report: the same - the photos go in the report ("Documentazione fotografica")
+    if (active === "journal" || active === "job_log" || active === "work_report") {
       const existingImgCount = attachments.filter((a) => a.journalImage).length;
-      let remainingImgs = (active === "job_log" ? 10 : 5) - existingImgCount;
+      let remainingImgs = (active === "journal" ? 5 : 10) - existingImgCount;
       for (const f of files) {
         if (active === "job_log" && !f.type.startsWith("image/")) { toast.error(`${f.name}: nel diario di commessa vanno solo foto`); continue; }
+        if (active === "work_report" && !f.type.startsWith("image/")) { toast.error(`${f.name}: nel report vanno solo foto`); continue; }
         if (!f.type.startsWith("image/")) {
           setUploadingFiles((u) => [...u, f.name]);
           try {
@@ -1746,7 +1751,7 @@ export default function ChatPage() {
           }
           continue;
         }
-        if (remainingImgs <= 0) { toast.error(`Massimo ${active === "job_log" ? 10 : 5} foto per voce di diario`); continue; }
+        if (remainingImgs <= 0) { toast.error(active === "work_report" ? "Massimo 10 foto per messaggio" : `Massimo ${active === "job_log" ? 10 : 5} foto per voce di diario`); continue; }
         setUploadingFiles((u) => [...u, f.name]);
         try {
           const dataUri = await fileToJournalImageDataUri(f);
@@ -2625,7 +2630,7 @@ export default function ChatPage() {
           </div>
           </>
           )}
-          <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : active === "job_log" ? "image/*" : undefined} data-testid="file-input" />
+          <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} accept={active === "info_upload" ? ".pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.xml,.yaml,.yml,.log,.jpg,.jpeg,.png,.webp,.heic,.heif" : active === "journal" ? "image/*,.pdf,.docx,.xlsx,.txt,.md,.csv" : (active === "job_log" || active === "work_report") ? "image/*" : undefined} data-testid="file-input" />
         </aside>
 
         {/* RIGHT 2/3 — scrolls. On mobile (spec v2 §3) this area is either the conversation

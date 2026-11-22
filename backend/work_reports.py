@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import openai
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
+from docx.shared import Cm, Pt
 
 import usage_tracking as ut
 
@@ -122,8 +122,10 @@ def find_matching_clients(text: str, clients: list, name_key: str) -> list:
 
 
 async def interpret(text: str, sections: list, user_name: str = "", user_id: Optional[str] = None, channel: str = "web",
-                    report_name: str = "") -> dict:
-    """{"sections": [{"title", "fields": {label: value}}], "client": {...}, "job_title": "..."}"""
+                    report_name: str = "", context: str = "", photos: int = 0) -> dict:
+    """{"sections": [{"title", "fields": {label: value}}], "client": {...}, "job_title": "..."}
+    context: what the app already knows of the commessa (its title, description, survey notes) - true data, usable as the text;
+    photos: how many photos go in the report (shown in its own section, never described here)."""
     today = datetime.now(LOCAL_TZ)
     skeleton = json.dumps([{"title": s["title"], "fields": s["fields"]} for s in sections], ensure_ascii=False)
     system = (
@@ -138,7 +140,12 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
         "2. Linguaggio tecnico e professionale del settore, frasi impersonali e concise (es. 'Si rileva…', "
         "'Si propone…'), niente prima persona, niente commenti fuori dai campi.\n"
         "3. Liste di lavori o materiali: una voce per riga, preceduta da '- '.\n"
-        "Rispondi SOLO con JSON: {\"sections\": [{\"title\": \"...\", \"fields\": {\"Nome campo\": \"valore\"}}], "
+        + ("4. Dopo il resoconto trovi i DATI DELLA COMMESSA già registrati nell'app (titolo, descrizione, note del sopralluogo): "
+           "sono veri, usali come il resoconto per compilare i campi pertinenti. Non aggiungere nulla che non sia scritto lì o nel resoconto.\n"
+           if context else "")
+        + (f"5. Al report sono allegate {photos} foto, in una sezione 'Documentazione fotografica' a parte: puoi rimandarvi "
+           "('si veda la documentazione fotografica') ma NON descrivere cosa mostrano se il testo non lo dice.\n" if photos else "")
+        + "Rispondi SOLO con JSON: {\"sections\": [{\"title\": \"...\", \"fields\": {\"Nome campo\": \"valore\"}}], "
         "\"client\": {\"name\": \"nome e cognome o ragione sociale del cliente, se detto\", \"phone\": \"\", \"email\": \"\", "
         "\"address\": \"indirizzo del cantiere, se detto\"}, \"job_title\": \"titolo breve dei lavori (max 8 parole), "
         "es. 'Rifacimento impianto elettrico cucina'\", \"summary\": \"riassunto del report in 1-3 frasi brevi (max 300 "
@@ -149,7 +156,8 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
     try:
         resp = await client.chat.completions.create(
             model=MODEL, max_completion_tokens=4096, response_format={"type": "json_object"},
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": text + (f"\n\n--- DATI DELLA COMMESSA (già registrati) ---\n{context}" if context else "")}],
         )
     except Exception:
         _track(None, user_id, channel, status="errore")
@@ -271,7 +279,9 @@ def set_field(sections: list, label: str, value: str, overwrite: bool = True) ->
             s["fields"][label] = value
 
 
-def build_docx(title: str, client_name: Optional[str], job_title: Optional[str], sections: list, company: str = "") -> bytes:
+def build_docx(title: str, client_name: Optional[str], job_title: Optional[str], sections: list, company: str = "",
+               photos: Optional[list] = None) -> bytes:
+    """photos: [{"bytes": jpeg, "caption": text}] - the "Documentazione fotografica", before the signatures."""
     doc = Document()
     if company:
         p = doc.add_paragraph(company)
@@ -295,6 +305,20 @@ def build_docx(title: str, client_name: Optional[str], job_title: Optional[str],
             for p in row.cells[0].paragraphs:
                 for r in p.runs:
                     r.bold = True
+    shots = [p for p in (photos or []) if p.get("bytes")]
+    if shots:
+        doc.add_heading("Documentazione fotografica", level=1)
+        for i, ph in enumerate(shots, 1):
+            try:
+                doc.add_picture(io.BytesIO(ph["bytes"]), width=Cm(14))
+                doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            except Exception:
+                logger.exception("report photo not added")
+                continue
+            cap = doc.add_paragraph(f"Foto {i}" + (f" – {ph['caption']}" if ph.get("caption") else ""))
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cap.runs[0].italic = True
+            cap.runs[0].font.size = Pt(9)
     # signatures: room to sign on the printed copy (no digital signature for now)
     doc.add_paragraph()
     doc.add_paragraph("Luogo e data: ________________________________")

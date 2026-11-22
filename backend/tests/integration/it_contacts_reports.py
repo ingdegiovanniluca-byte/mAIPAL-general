@@ -133,7 +133,7 @@ async def no_deliver(*a, **k): return None, None, False
 server._deliver_work_report = no_deliver
 SEEN = []
 def interp(fields, job="Bagno"):
-    async def f(text, sections, user_name="", user_id=None, channel="web", report_name=""):
+    async def f(text, sections, user_name="", user_id=None, channel="web", report_name="", context="", photos=0):
         SEEN.append(report_name)
         out = [{"title": s["title"], "fields": {k: fields.get(k, "") for k in s["fields"]}} for s in sections]
         return {"sections": out, "client": {"name": "Mario Rossi", "phone": "", "email": "", "address": ""}, "job_title": job, "summary": "ok"}

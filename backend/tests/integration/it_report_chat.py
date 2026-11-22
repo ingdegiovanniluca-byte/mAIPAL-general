@@ -271,9 +271,23 @@ async def fake_commessa_summary(*a, **k):
     return {"stato": "Lavori conclusi.", "attivita": "Rifacimento del bagno."}
 import work_reports
 work_reports.commessa_summary = fake_commessa_summary
-REPORTS = []
+REPORTS, DOCX = [], []
 async def fake_deliver(current, docx_bytes, fname, folder, subs, caption):
-    REPORTS.append((fname, " / ".join([folder] + list(subs)))); return "https://drive/r", "https://drive/f", False
+    REPORTS.append((fname, " / ".join([folder] + list(subs)))); DOCX.append(docx_bytes); return "https://drive/r", "https://drive/f", False
+
+
+def photo_uri(color=(200, 120, 40)):
+    import io as _io, base64 as _b
+    from PIL import Image
+    buf = _io.BytesIO(); Image.new("RGB", (64, 48), color).save(buf, "JPEG")
+    return "data:image/jpeg;base64," + _b.b64encode(buf.getvalue()).decode()
+
+
+def docx_photos(raw):
+    import io as _io, zipfile
+    z = zipfile.ZipFile(_io.BytesIO(raw))
+    xml = z.read("word/document.xml").decode()
+    return sum(1 for n in z.namelist() if n.startswith("word/media/")), xml
 server._deliver_work_report = fake_deliver
 
 
@@ -298,9 +312,9 @@ class FakeOpenAI:
 jl.openai.AsyncOpenAI = FakeOpenAI
 
 
-INTERP = []
-async def fake_interpret(text, sections, user_name="", user_id=None, channel="web", report_name=""):
-    INTERP.append(text)
+INTERP, INTERP_KW = [], []
+async def fake_interpret(text, sections, user_name="", user_id=None, channel="web", report_name="", context="", photos=0):
+    INTERP.append(text); INTERP_KW.append({"context": context, "photos": photos})
     secs = [{"title": s["title"], "fields": {f: "" for f in s["fields"]}} for s in sections]
     return {"sections": secs, "client": {"name": "", "phone": "", "email": "", "address": ""}, "job_title": "", "summary": "ok"}
 work_reports.interpret = fake_interpret
@@ -423,6 +437,50 @@ async def main():
     # nothing to say yet: "genera" asks for the content
     r = await chat(text="genera")
     assert "Prima dimmi cosa scrivere" in r["reply"] and not r["report"]
+    # 8) the photos and what the commessa already knows: a Primo sopralluogo with a photo sent in the chat, the commessa's
+    #    description and its survey notes and photo in the diary -> all in the report; "metti l'immagine" after: the photo asked
+    db.collection_items.docs.append({"id": "c_massimo", "collection_id": cl["id"], "data": {"nome": "Massimo D."}})
+    db.collection_sub_items.docs.append({"id": "s5", "collection_id": cl["id"], "item_id": "c_massimo",
+                                         "data": {"titolo": "Valutazione impianto fotovoltaico", "stato": "sopralluogo", "codice": "2026-005",
+                                                  "descrizione": "Impianto fotovoltaico da 6 kW sul tetto della villetta"}})
+    db.job_logs.docs.append({"id": "jl_s1", "commessa_id": "s5", "section": "sopralluogo", "text": "Tetto in coppi, accesso dal cortile",
+                             "date": "2026-11-20", "created_at": "2026-11-20T09:00:00+00:00", "photos": [{"id": "jph_1"}]})
+    import base64 as _b
+    db.job_photos.docs.append({"id": "jph_1", "log_id": "jl_s1", "commessa_id": "s5", "data_b64": photo_uri((10, 90, 200)).split(",", 1)[1]})
+    r = await chat(text="Dimmi le commesse per Massimo d")
+    assert [o["commessa_id"] for o in r["ask"]["options"]] == ["s5"] and "D.." not in r["reply"], r
+    r = await server.report_chat_set(r["draft"]["id"], server.ReportChatSet(commessa_id="s5"), me)
+    d8 = r["draft"]["id"]
+    r = await chat(draft_id=d8, text="Fai il report di sopralluogo")
+    assert r["draft"]["report_type"] == "sopralluogo" and r["draft"]["commessa"]["title"] == "Valutazione impianto fotovoltaico", r
+    await chat(draft_id=d8, text="Per l'installazione dell impianto é disponibile una falda a sud est di 20 m2")
+    r = await chat(draft_id=d8, text="Ti mando l’immagine della falda")                    # announced, not sent
+    assert "Non mi è arrivata nessuna foto" in r["reply"], r["reply"]
+    r = await chat(draft_id=d8, text="Ti mando l’immagine della falda su cui si può installare l’impianto", images=[photo_uri()])
+    assert "📷 1 foto" in r["reply"] and r["draft"]["messages"] == 4, r
+    conv = next(c for c in db.conversations.docs if c["conv_id"] == r["conv_id"])
+    assert conv["messages"][-2]["content"].endswith("📷 1 foto")
+    r = await chat(draft_id=d8, images=[photo_uri((0, 200, 0))])                          # a photo alone
+    assert r["draft"]["messages"] == 5 and "📷 2 foto" in r["reply"], r
+    REPORTS.clear(); DOCX.clear(); INTERP_KW.clear()
+    r = await chat(draft_id=d8, text="Genera report", conv_id=r["conv_id"])
+    rep = r["report"]
+    assert rep and rep["commessa_id"] == "s5" and len(rep["photo_ids"]) == 2 and rep["survey_photo_ids"] == ["jph_1"], r
+    kw = INTERP_KW[-1]
+    assert kw["photos"] == 3 and "Valutazione impianto fotovoltaico" in kw["context"] and "6 kW" in kw["context"] \
+        and "Tetto in coppi" in kw["context"], kw
+    assert "falda a sud est di 20 m2" in INTERP[-1]
+    n, xml = docx_photos(DOCX[-1])
+    assert n == 3 and "Documentazione fotografica" in xml and "Falda su cui si può installare l&apos;impianto" in xml.replace("'", "&apos;"), (n, xml[-800:])
+    assert REPORTS[-1][1] == "Clienti / Massimo D. / 2026-005 – Valutazione impianto fotovoltaico / Report", REPORTS
+    # a change asking for a photo without one: asked; with one: added (version 2), the other photos kept
+    r = await server.revise_work_report(rep["id"], server.ReviseWorkReportPayload(text="Metti l’immagine nel report", conv_id=r["conv_id"]), me)
+    assert "Mandami qui la foto" in r["message"] and not r["changed"], r["message"]
+    DOCX.clear()
+    r = await server.revise_work_report(rep["id"], server.ReviseWorkReportPayload(text="Metti l’immagine nel report", images=[photo_uri((90, 90, 90))]), me)
+    assert r["version"] == 2 and "aggiunta 1 foto" in r["message"] and len(r["photo_ids"]) == 3, r["message"]
+    n, xml = docx_photos(DOCX[-1])
+    assert n == 4, n
     print("ALL OK")
 
 asyncio.run(main())

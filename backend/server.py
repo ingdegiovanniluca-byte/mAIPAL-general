@@ -6160,9 +6160,77 @@ async def generate_work_report(payload: GenerateWorkReportPayload, current: User
                                        commessa_opts=opts)
 
 
+REPORT_PHOTOS_MAX = 12
+# "metti l'immagine nel report", "aggiungi le foto", "ti mando la foto": about the photos, not a field to change
+_PHOTO_ASK = re.compile(r"\b(?:mett|aggiung|inserisc|inserir|allega|mand|invi|carica|includ)\w*\b.{0,40}\b(?:immagin[ei]|foto(?:grafi[ae])?|scatt[oi])\b"
+                        r"|^\s*(?:(?:ecco|questa|queste|qui)\s+)?(?:l[ae']\s*)?(?:immagin[ei]|foto(?:grafi[ae])?)\b", re.I)
+
+
+def _photo_caption(text: str) -> str:
+    """The caption of a photo from the message sent with it: "ti mando l'immagine della falda a sud" -> "Falda a sud"."""
+    t = re.sub(r"^\s*(?:(?:ti|vi)\s+)?(?:mando|invio|allego|ecco|carico|metto|questa\s+è|queste\s+sono)\s+(?:anche\s+)?(?:l[ae']\s*|una\s+|le\s+|la\s+)?"
+               r"(?:immagin[ei]|foto(?:grafi[ae])?)\s*(?:della|del|dello|dei|delle|degli|di|dell')?\s*", "", (text or "").replace("’", "'"), flags=re.I).strip(" .,:;")
+    return (t[:1].upper() + t[1:])[:160] if t else ""
+
+
+async def _store_report_photos(current: User, draft_id: str, images: List[str], caption: str = "") -> list:
+    """The photos sent in the report's chat: kept (compressed) for the report's "Documentazione fotografica". -> ids"""
+    import base64 as _b64
+    ids = []
+    for uri in (images or [])[:10]:
+        raw = _data_uri_bytes(uri)
+        if not raw:
+            continue
+        try:
+            jpeg = _downscale_image_bytes(raw, max_dim=JOB_PHOTO_MAX_DIM, max_bytes=JOB_PHOTO_MAX_BYTES)
+        except Exception:
+            logger.exception("report photo compress failed")
+            continue
+        ph = {"id": f"rph_{uuid.uuid4().hex[:12]}", "draft_id": draft_id, "user_id": current.user_id, "mime": "image/jpeg",
+              "data_b64": _b64.b64encode(jpeg).decode("ascii"), "caption": _photo_caption(caption),
+              "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.report_photos.insert_one(ph)
+        ids.append(ph["id"])
+    return ids
+
+
+async def _report_photos(photo_ids: list, survey_photo_ids: Optional[list] = None) -> list:
+    """[{"bytes", "caption"}]: the survey's photos (from the commessa's diary) first, then the ones sent in the chat."""
+    import base64 as _b64
+    out = []
+    for pid in (survey_photo_ids or []):
+        ph = await db.job_photos.find_one({"id": pid}, {"_id": 0, "data_b64": 1, "log_id": 1})
+        if ph and ph.get("data_b64"):
+            out.append({"bytes": _b64.b64decode(ph["data_b64"]), "caption": "dal sopralluogo"})
+    for pid in photo_ids or []:
+        ph = await db.report_photos.find_one({"id": pid}, {"_id": 0, "data_b64": 1, "caption": 1})
+        if ph and ph.get("data_b64"):
+            out.append({"bytes": _b64.b64decode(ph["data_b64"]), "caption": ph.get("caption") or ""})
+    return out[:REPORT_PHOTOS_MAX]
+
+
+async def _report_commessa_context(clienti: dict, sub: dict, client: Optional[dict], report_type: str) -> tuple:
+    """What the app knows of the commessa, for the report: title, client, site, state, description; for a Primo sopralluogo also
+    the survey's notes and photos in its diary. -> (text, survey photo ids)"""
+    view = _commessa_view(sub, client, clienti)
+    lines = [f"Commessa: {view['title']}" + (f" (codice {view['codice']})" if view.get("codice") else ""),
+             f"Cliente: {view['client_name']}" if view.get("client_name") else "",
+             f"Indirizzo del cantiere: {view['address']}" if view.get("address") else "",
+             f"Descrizione delle attività: {view['descrizione']}" if view.get("descrizione") else ""]
+    photo_ids = []
+    if report_type == "sopralluogo":
+        logs = sorted(await _survey_logs(sub["id"]), key=lambda lg: lg.get("created_at") or "")
+        notes = [f"- {lg.get('date') or ''}: {(lg.get('text') or '').strip()}" for lg in logs if (lg.get("text") or "").strip()]
+        if notes:
+            lines.append("Note del sopralluogo nel diario:\n" + "\n".join(notes[-20:]))
+        photo_ids = [p["id"] for lg in logs for p in (lg.get("photos") or []) if p.get("id")][:8]
+    return "\n".join(x for x in lines if x), photo_ids
+
+
 async def _generate_work_report(current: User, text: str, report_type: str = "sopralluogo", client_item_id: Optional[str] = None,
                                 new_client: bool = False, channel: str = "web", commessa_opts: Optional[dict] = None,
-                                commessa_id: Optional[str] = None, no_commessa: bool = False, keep_type: bool = False) -> dict:
+                                commessa_id: Optional[str] = None, no_commessa: bool = False, keep_type: bool = False,
+                                photo_ids: Optional[list] = None) -> dict:
     """The artigiano's report from a dictation. The client is recognized deterministically in the
     Clienti list (several clients with that name -> {"status": "ambiguous_client", "candidates"}
     and the caller re-calls with client_item_id, or new_client); a client or a commessa that
@@ -6215,9 +6283,14 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
                 for c in matches]}
         client = matches[0] if matches else None
 
+    # what the app already knows of the chosen commessa (its title, description, the survey's notes and photos): used too
+    context, survey_photo_ids = "", []
+    if chosen:
+        context, survey_photo_ids = await _report_commessa_context(chosen_list or clienti, chosen, client, report_type)
+    photos = await _report_photos(photo_ids or [], survey_photo_ids)
     try:
         interpreted = await work_reports.interpret(text, skeleton, user_name=current.name or "", user_id=current.user_id, channel=channel,
-                                                   report_name=template_name)
+                                                   report_name=template_name, context=context, photos=len(photos))
     except Exception as e:
         logger.exception("work report interpretation failed")
         raise HTTPException(status_code=500, detail=f"Generazione fallita: {e}")
@@ -6290,7 +6363,7 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     if current.org_id:
         org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
         company = (org or {}).get("name") or ""
-    docx_bytes = work_reports.build_docx(template_name, client_name or None, commessa_title or None, sections, company=company)
+    docx_bytes = work_reports.build_docx(template_name, client_name or None, commessa_title or None, sections, company=company, photos=photos)
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {client_name or 'senza cliente'} - {stamp}.docx".replace("/", "-")
 
@@ -6325,6 +6398,7 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         "summary": interpreted.get("summary") or work_reports.summary_of(sections),
         "company": company,
         "drive_path": [folder] + subs,
+        "photo_ids": list(photo_ids or []), "survey_photo_ids": survey_photo_ids,   # (kept for the next versions)
         "version": 1,
         "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
         "docx_filename": fname,
@@ -6379,6 +6453,7 @@ class ReportChatPayload(BaseModel):
     conv_id: Optional[str] = None    # the Chat conversation it is written in (Cronologia)
     client_id: Optional[str] = None  # the message's own id: sent twice (offline, then again), kept once
     written_at: Optional[str] = None
+    images: List[str] = []            # photos (data URIs): in the report's "Documentazione fotografica"
 
 
 class ReportChatSet(BaseModel):
@@ -6464,18 +6539,20 @@ async def _commesse_asked(current: User, text: str) -> tuple:
     return ask, reply
 
 
-async def _report_draft_step(current: User, d: dict, text: str, at: Optional[str] = None) -> tuple:
-    """A message of the report's chat: kept; the type and the commessa read from it when not known yet. -> (reply, ask)"""
+async def _report_draft_step(current: User, d: dict, text: str, at: Optional[str] = None, photo_ids: Optional[list] = None) -> tuple:
+    """A message of the report's chat (text and/or photos): kept; the type and the commessa read from it when not known yet. -> (reply, ask)"""
     now = datetime.now(timezone.utc).isoformat()
-    d["messages"] = [*(d.get("messages") or []), {"text": text, "at": at or now}][-60:]
+    d["messages"] = [*(d.get("messages") or []), {"text": text, "at": at or now, **({"photo_ids": photo_ids} if photo_ids else {})}][-60:]
     upd = {"messages": d["messages"], "updated_at": now}
+    if photo_ids:
+        d["photo_ids"] = upd["photo_ids"] = [*(d.get("photo_ids") or []), *photo_ids][-REPORT_PHOTOS_MAX:]
     ask, note = None, ""
-    if not d.get("report_type"):
+    if text and not d.get("report_type"):
         custom = await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(200)
         t = work_reports.detect_report_type(text, custom)
         if t:
             d["report_type"] = upd["report_type"] = t
-    if not d.get("commessa_id") and not d.get("no_commessa"):
+    if text and not d.get("commessa_id") and not d.get("no_commessa"):
         clienti = await _clienti_list(current)
         if clienti:
             res = await _resolve_commessa(clienti, text, "", "", None)
@@ -6501,8 +6578,13 @@ async def _report_draft_step(current: User, d: dict, text: str, at: Optional[str
     else:
         bits.append(note.rstrip(".") if note else "🧱 commessa non ancora indicata")
     n = len(d["messages"])
+    nph = len(d.get("photo_ids") or [])
+    if nph:
+        bits.append(f"📷 {nph} foto")
     reply = (f"📝 Annotato ({n} {'messaggio' if n == 1 else 'messaggi'}). " + " · ".join(bits)
              + ".\nPuoi aggiungere altro, scritto o a voce. Quando hai finito scrivi «genera il report» o tocca «Genera report».")
+    if text and not photo_ids and _PHOTO_ASK.search(text):
+        reply += "\n📷 Non mi è arrivata nessuna foto: mandala con la graffetta (📎) e la metto nel report."
     if ask and ask["kind"] == "type":
         reply += "\nChe report è?"
     elif ask:
@@ -6527,9 +6609,11 @@ async def _report_draft_generate(current: User, d: dict) -> tuple:
             ask["allow_none"] = False
         return ("Di quale commessa? Scegline una" + ("" if is_com else ", oppure «Nessuna commessa» (lo salvo nella cartella Report)")
                 + ". Puoi anche chiedermi «commesse attive di Rossi»."), ask, None
-    text = "\n".join(m["text"] for m in d["messages"])
+    text = "\n".join(m["text"] for m in d["messages"] if m.get("text"))
+    if not text and d.get("photo_ids"):
+        text = "Documentazione fotografica del sopralluogo."
     rep = await _generate_work_report(current, text, d["report_type"], commessa_id=d.get("commessa_id"), no_commessa=bool(d.get("no_commessa")),
-                                      keep_type=True)
+                                      keep_type=True, photo_ids=d.get("photo_ids") or [])
     if rep.get("status") in ("pick_commessa", "ambiguous_client"):
         return rep.get("message") or "Di quale commessa?", {"kind": "commessa", "options": rep.get("candidates") or [], "allow_none": not is_com}, None
     await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"status": "generated", "report_id": rep.get("id"), "generate_asked": False}})
@@ -6596,6 +6680,7 @@ async def _report_conv_write(current: User, conv_id: Optional[str], user_text: s
 async def _report_answer(current: User, d: dict, user_text: str, reply: str, ask: Optional[dict] = None, rep: Optional[dict] = None,
                          conv_id: Optional[str] = None) -> dict:
     """The answer of the report's chat, also written in its conversation."""
+    reply = re.sub(r"(?<!\.)\.\.(?!\.)", ".", reply or "")   # "Massimo D.." (a name ending with a dot)
     view = await _report_draft_view(current, d, reply, ask, rep)
     cid = await _report_conv_id(current, d, conv_id, user_text)
     out = []
@@ -6627,16 +6712,20 @@ async def report_chat(payload: ReportChatPayload, current: User = Depends(get_cu
     if payload.client_id:
         d["client_ids"] = [*(d.get("client_ids") or []), payload.client_id][-200:]
         await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"client_ids": d["client_ids"]}})
-    shown = text or ("Genera report" if payload.generate else "")
+    photo_ids = await _store_report_photos(current, d["id"], payload.images, text) if payload.images else []
+    shown = (text or ("Genera report" if payload.generate else "")) + (f"\n📷 {len(photo_ids)} foto" if photo_ids else "")
+    if photo_ids and (payload.generate or _GENERATE_SAID.match(text or "") or _asks_commesse(text)):   # (kept for the report anyway)
+        d["photo_ids"] = [*(d.get("photo_ids") or []), *photo_ids][-REPORT_PHOTOS_MAX:]
+        await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"photo_ids": d["photo_ids"]}})
     if payload.generate or _GENERATE_SAID.match(text or ""):
         reply, ask, rep = await _report_draft_generate(current, d)
         return await _report_answer(current, d, shown, reply, ask, rep, payload.conv_id)
-    if not text:
+    if not text and not photo_ids:
         raise HTTPException(status_code=400, detail="Scrivi o detta cosa mettere nel report")
-    if _asks_commesse(text):
+    if text and _asks_commesse(text):
         ask, reply = await _commesse_asked(current, text)
         return await _report_answer(current, d, shown, reply, ask, conv_id=payload.conv_id)
-    reply, ask = await _report_draft_step(current, d, text, payload.written_at)
+    reply, ask = await _report_draft_step(current, d, text, payload.written_at, photo_ids)
     return await _report_answer(current, d, shown, reply, ask, conv_id=payload.conv_id)
 
 
@@ -6973,26 +7062,28 @@ async def _deliver_work_report(current: User, docx_bytes: bytes, fname: str, fol
 
 
 class ReviseWorkReportPayload(BaseModel):
-    text: str
+    text: str = ""
+    images: List[str] = []   # photos to add to the report
     conv_id: Optional[str] = None   # the report chat's conversation (Cronologia)
 
 
 @api_router.post("/work/reports/{report_id}/revise")
 async def revise_work_report(report_id: str, payload: ReviseWorkReportPayload, current: User = Depends(get_current_user)):
-    r = await _revise_work_report(current, report_id, payload.text)
+    r = await _revise_work_report(current, report_id, payload.text, images=payload.images)
     if payload.conv_id:   # the report's chat: the change asked and the answer, in its conversation (Cronologia)
         changed = bool(r.get("changed"))
-        await _report_conv_write(current, payload.conv_id, payload.text, [{"content": r.get("message") or "",
+        shown = (payload.text or "") + (f"\n📷 {len(payload.images)} foto" if payload.images else "")
+        await _report_conv_write(current, payload.conv_id, shown.strip(), [{"content": r.get("message") or "",
                                  **({"reportId": r.get("id"), "reportKind": "work", "reportVersion": r.get("version")} if changed else {})}])
     return r
 
 
-async def _revise_work_report(current: User, report_id: str, instruction: str, channel: str = "web") -> dict:
+async def _revise_work_report(current: User, report_id: str, instruction: str, channel: str = "web", images: Optional[list] = None) -> dict:
     """A change to a report already made, asked in the same chat: the same report, only what was
     asked changes (never a new report, never a new client). The new .docx is "versione N" in
     the same folder; the client's card changes only for data the request states."""
     instruction = (instruction or "").strip()
-    if not instruction:
+    if not instruction and not images:
         raise HTTPException(status_code=400, detail="Scrivi cosa cambiare nel report")
     rep = await db.work_reports.find_one({"id": report_id, "user_id": current.user_id}, {"_id": 0})
     if not rep:
@@ -7000,16 +7091,28 @@ async def _revise_work_report(current: User, report_id: str, instruction: str, c
     old = rep.get("sections") or []
     if not old:
         raise HTTPException(status_code=400, detail="Questo report è di una versione precedente dell'app: non posso modificarlo, generane uno nuovo")
-    try:
-        res = await work_reports.revise(old, instruction, user_id=current.user_id, channel=channel)
-    except Exception as e:
-        logger.exception("work report revision failed")
-        raise HTTPException(status_code=500, detail=f"Modifica fallita: {e}")
-    sections, said = res["sections"], _really_said(res["client"], instruction)
-    changed = work_reports.changed_fields(old, sections)
-    if not changed:
-        return {**{k: v for k, v in rep.items() if k != "docx_b64"}, "revised": True, "changed": [],
-                "message": "Non ho trovato cosa cambiare: dimmi il campo e il nuovo valore (es. «nei tempi indicativi metti 3 giorni»)."}
+    # photos sent with the change: added to the report's "Documentazione fotografica"
+    new_photos = await _store_report_photos(current, rep["id"], images, instruction) if images else []
+    photo_ids = [*(rep.get("photo_ids") or []), *new_photos][-REPORT_PHOTOS_MAX:]
+    only_photos = bool(new_photos) and (not instruction or bool(_PHOTO_ASK.search(instruction)))
+    if only_photos:
+        sections, said, changed = old, {}, []
+    else:
+        if not instruction:
+            raise HTTPException(status_code=400, detail="Scrivi cosa cambiare nel report")
+        if _PHOTO_ASK.search(instruction) and not new_photos:
+            return {**{k: v for k, v in rep.items() if k != "docx_b64"}, "revised": True, "changed": [],
+                    "message": "Mandami qui la foto (📎, anche più di una) e la aggiungo al report, nella «Documentazione fotografica»."}
+        try:
+            res = await work_reports.revise(old, instruction, user_id=current.user_id, channel=channel)
+        except Exception as e:
+            logger.exception("work report revision failed")
+            raise HTTPException(status_code=500, detail=f"Modifica fallita: {e}")
+        sections, said = res["sections"], _really_said(res["client"], instruction)
+        changed = work_reports.changed_fields(old, sections)
+        if not changed and not new_photos:
+            return {**{k: v for k, v in rep.items() if k != "docx_b64"}, "revised": True, "changed": [],
+                    "message": "Non ho trovato cosa cambiare: dimmi il campo e il nuovo valore (es. «nei tempi indicativi metti 3 giorni»)."}
 
     # the client's card: only data the request states; a new name only for a client this report created
     client_name, note = rep.get("client_name") or "", ""
@@ -7036,8 +7139,9 @@ async def _revise_work_report(current: User, report_id: str, instruction: str, c
         client_name = said["name"]
 
     version = int(rep.get("version") or 1) + 1
+    photos = await _report_photos(photo_ids, rep.get("survey_photo_ids") or [])
     docx_bytes = work_reports.build_docx(rep["template_name"], client_name or None, rep.get("commessa_title") or None, sections,
-                                         company=rep.get("company") or "")
+                                         company=rep.get("company") or "", photos=photos)
     base_name = re.sub(r"( - v\d+)?\.docx$", "", rep.get("docx_filename") or rep["template_name"])
     fname = f"{base_name} - v{version}.docx"
     path = rep.get("drive_path") or ([vx.CLIENTI_NAME, rep["client_name"]] + ([rep["commessa_title"]] if rep.get("commessa_title") else [])
@@ -7050,15 +7154,22 @@ async def _revise_work_report(current: User, report_id: str, instruction: str, c
            "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"), "drive_link": drive_link or rep.get("drive_link"),
            "drive_folder": drive_folder or rep.get("drive_folder"), "telegram_sent": telegram_sent,
            "updated_at": datetime.now(timezone.utc).isoformat(), "embedding": None,
-           "revisions": (rep.get("revisions") or []) + [{"text": instruction, "changed": changed, "at": datetime.now(timezone.utc).isoformat()}]}
+           "photo_ids": photo_ids,
+           "revisions": (rep.get("revisions") or []) + [{"text": instruction, "changed": changed, "photos_added": len(new_photos),
+                                                         "at": datetime.now(timezone.utc).isoformat()}]}
     await db.work_reports.update_one({"id": report_id}, {"$set": upd})
     out = {**{k: v for k, v in rep.items() if k != "docx_b64"}, **{k: v for k, v in upd.items() if k not in ("docx_b64", "embedding")}}
-    shown = ", ".join(c.split(" › ")[1] for c in changed[:8]) + ("…" if len(changed) > 8 else "")
+    what = []
+    if changed:
+        what.append("modificato " + ", ".join(c.split(" › ")[1] for c in changed[:8]) + ("…" if len(changed) > 8 else ""))
+    if new_photos:
+        what.append(f"aggiunt{'a' if len(new_photos) == 1 else 'e'} {len(new_photos)} foto nella «Documentazione fotografica»")
+    shown = " e ".join(what)
     if rep.get("commessa_id"):
         await _log_report_event(current, out, f"Report «{rep['template_name']}» aggiornato alla versione {version} da "
-                                f"{_first_name(current.name)}: modificato {shown}.", channel)
-    out.update({"revised": True, "changed": changed,
-                "message": f"✏️ Report aggiornato (versione {version}): modificato {shown}." + (f"\n{note}" if note else "")})
+                                f"{_first_name(current.name)}: {shown}.", channel)
+    out.update({"revised": True, "changed": changed or (["Documentazione fotografica › foto"] if new_photos else []),
+                "message": f"✏️ Report aggiornato (versione {version}): {shown}." + (f"\n{note}" if note else "")})
     return out
 
 
