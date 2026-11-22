@@ -565,7 +565,7 @@ export default function ChatPage() {
       messages = [{ role: "user", content: conv.user_message }];
       if (conv.agent_response) messages.push({ role: "assistant", content: conv.agent_response });
     }
-    setThread({ conv_id: conv.conv_id, action: conv.action, messages, liveAnswer: "" });
+    setThread({ conv_id: conv.conv_id, action: conv.action, messages, liveAnswer: "", reportDraftId: conv.report_draft_id || null });
     setActive(conv.action);
   };
   const closeThread = () => { setThread(null); setFocusMode(false); setPendingDriveUpload(null); setMobileReplyTo(null); };
@@ -733,30 +733,56 @@ export default function ChatPage() {
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: lines, reportId: rep.id, reportKind: "work", reportVersion: rep.version || 1 }] }));
   };
 
+  // the report's chat, written in a Chat conversation (Cronologia: it can be taken up again). Its id is made
+  // here with the first message, so what is written with no signal joins the same report when sent later.
+  const newDraftId = () => "rdr_" + newClientId().replace(/[^0-9a-f]/gi, "").toLowerCase().slice(0, 24).padEnd(12, "0");
+  const keepReportOffline = async ({ content, voice, draftId, convId }) => {
+    const entry = await keepDiaryEntry({ kind: "report", client_id: newClientId(), text: content || "", voice: voice || null,
+      draft_id: draftId, conv_id: convId || null, label: (content || "Vocale per il report").slice(0, 80) });
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", pendingId: entry.client_id,
+      content: "⏳ Senza rete: l'ho tenuto sul telefono. Lo aggiungo al report da solo appena torna il segnale." }] }));
+  };
   const sendWorkReport = async () => {
+    if (streaming || transcribing) return;
     const voice = await takeVoice();
     let content = text.trim();
+    const lastReport = thread ? [...thread.messages].reverse().find((m) => m.reportKind === "work" && m.reportId) : null;
+    const draftId = thread?.reportDraftId || newDraftId();
+    const convId = thread?.conv_id || null;
+    const start = (shown) => {
+      setThread((th) => th
+        ? { ...th, action: "work_report", reportDraftId: th.reportDraftId || draftId, messages: [...th.messages, { role: "user", content: shown }] }
+        : { conv_id: null, action: "work_report", reportDraftId: draftId, messages: [{ role: "user", content: shown }], liveAnswer: "" });
+      setText("");
+    };
     if (voice) {
+      const keepVoice = async () => {   // no network for the transcription: the audio waits on the phone
+        start(`${content ? `${content}\n` : ""}🎤 vocale`);
+        await keepReportOffline({ content, voice: voice.blob, draftId, convId });
+        setPendingVoice(null);
+      };
+      if (!lastReport && navigator.onLine === false) { await keepVoice(); return; }
       setTranscribing(true);
       try { content = [content, await transcribeBlob(voice.blob)].filter(Boolean).join(" ").trim(); }
-      catch (e) { toast.error("Trascrizione fallita: " + e.message); setTranscribing(false); return; }
+      catch (e) {
+        setTranscribing(false);
+        if (!lastReport && isNetworkError(e)) { await keepVoice(); return; }
+        toast.error("Trascrizione fallita: " + e.message); return;
+      }
       setTranscribing(false);
       setPendingVoice(null);
     }
-    const lastReport = thread?.action === "work_report"
-      ? [...thread.messages].reverse().find((m) => m.reportKind === "work" && m.reportId) : null;
     if (!content) { toast.error("Scrivi o detta cosa mettere nel report"); return; }
-    if (streaming || transcribing) return;
+    const { main: workText } = splitMentions(content);
+    if (lastReport && navigator.onLine === false) { toast.error("Senza rete: la modifica del report mandala quando torna il segnale"); return; }
+    start(content);
+    if (!lastReport && navigator.onLine === false) { await keepReportOffline({ content: workText || content, draftId, convId }); return; }
     setStreaming(true);
-    setThread((th) => th
-      ? { ...th, action: "work_report", messages: [...th.messages, { role: "user", content }] }
-      : { conv_id: null, action: "work_report", messages: [{ role: "user", content }], liveAnswer: "" });
-    setText("");
+    const clientId = newClientId();
     try {
-      const { main: workText } = splitMentions(content);
       // a message in a report's chat changes THAT report (it used to make a new, invented one)
       if (lastReport) {
-        const r = await api.post(`/work/reports/${lastReport.reportId}/revise`, { text: workText || content });
+        const r = await api.post(`/work/reports/${lastReport.reportId}/revise`, { text: workText || content, conv_id: convId });
         const changedNow = (r.data.changed || []).length > 0;
         setThread((th) => ({ ...th, messages: [...th.messages, changedNow
           ? { role: "assistant", content: r.data.message, reportId: r.data.id, reportKind: "work", reportVersion: r.data.version }
@@ -767,11 +793,19 @@ export default function ChatPage() {
       // from what is said (buttons only when not clear); made only on «genera» or the button
       if (splitMentions(content).parts.length) reportTaggedRef.current.push(content);
       shadowRoute("work_report", workText || content);
-      const r = await api.post("/work/report-chat", { draft_id: thread?.reportDraftId || null, text: workText || content });
+      const r = await api.post("/work/report-chat", { draft_id: draftId, text: workText || content, conv_id: convId,
+        client_id: clientId, written_at: new Date().toISOString() });
       await appendReportChat(r.data);
     } catch (e) {
-      const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
-      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+      if (!lastReport && isNetworkError(e)) {   // the network dropped on the way: kept (same id: if it did arrive, it isn't added twice)
+        const entry = await keepDiaryEntry({ kind: "report", client_id: clientId, text: workText || content, draft_id: draftId,
+          conv_id: convId, label: (workText || content).slice(0, 80) });
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", pendingId: entry.client_id,
+          content: "⏳ Senza rete: l'ho tenuto sul telefono. Lo aggiungo al report da solo appena torna il segnale." }] }));
+      } else {
+        const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
+        setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+      }
     } finally {
       setStreaming(false);
     }
@@ -784,8 +818,9 @@ export default function ChatPage() {
   const appendReportChat = async (data) => {
     const draftId = data.draft?.id;
     const canGenerate = !data.report && !data.ask && (data.draft?.messages || 0) > 0;
+    if (data.conv_id && data.conv_id !== thread?.conv_id) load();
     setThread((th) => ({
-      ...th, reportDraftId: draftId,
+      ...th, reportDraftId: draftId, conv_id: data.conv_id || th.conv_id,
       messages: [
         ...th.messages.map((m) => (m.reportAsk || m.reportGen ? { ...m, reportAsk: m.reportAsk ? { ...m.reportAsk, done: true } : null, reportGen: null } : m)),
         ...(data.reply ? [{ role: "assistant", content: data.reply, reportAsk: data.ask ? { ...data.ask, draftId } : null, reportGen: canGenerate ? draftId : null }] : []),
@@ -800,6 +835,7 @@ export default function ChatPage() {
   };
   const reportChatAct = async (label, call) => {
     if (streaming || transcribing) return;
+    if (navigator.onLine === false) { toast.error("Senza rete: scegli quando torna il segnale (i messaggi invece li tengo)"); return; }
     setStreaming(true);
     setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: label }] }));
     try {
@@ -816,7 +852,7 @@ export default function ChatPage() {
     ask.kind === "type" ? opt.name : opt ? `${opt.title} · ${opt.client_name}` : "Nessuna commessa",
     () => api.post(`/work/report-chat/${ask.draftId}/set`,
       ask.kind === "type" ? { report_type: opt.key } : opt ? { commessa_id: opt.commessa_id } : { no_commessa: true }));
-  const reportGenerate = (draftId) => reportChatAct("Genera report", () => api.post("/work/report-chat", { draft_id: draftId, generate: true }));
+  const reportGenerate = (draftId) => reportChatAct("Genera report", () => api.post("/work/report-chat", { draft_id: draftId, generate: true, conv_id: thread?.conv_id || null }));
 
   const resolveWorkClient = async (amb, clientId) => {
     setStreaming(true);
@@ -974,6 +1010,13 @@ export default function ChatPage() {
     const onSent = (ev) => {
       const reply = ev.detail;
       const here = thread?.messages?.some((m) => m.pendingId === reply.client_id);
+      if (reply.kind === "report") {   // a message of a report's chat: shown if that chat is open (it is in the Cronologia anyway)
+        if (!here) return;
+        ev.preventDefault();
+        setThread((th) => ({ ...th, messages: th.messages.map((m) => (m.pendingId === reply.client_id ? { ...m, pendingId: null, content: "✓ Inviato appena è tornata la rete." } : m)) }));
+        appendReportChat(reply.res);
+        return;
+      }
       const needsAnswer = !["ok", "planned", "description", "commessa_update"].includes(reply.res?.status);
       if (here || needsAnswer) { ev.preventDefault(); show(reply); }
     };

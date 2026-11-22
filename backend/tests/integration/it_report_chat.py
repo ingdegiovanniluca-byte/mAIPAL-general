@@ -371,6 +371,55 @@ async def main():
     assert rep and not rep["commessa_id"] and rep["client_name"] == "Mario Rossi", r
     assert REPORTS[-1][1] == "Clienti / Mario Rossi", REPORTS
     assert len(db.collection_items.docs) == n_items and len(db.collection_sub_items.docs) == n_subs
+    # 6) the commesse asked in other words: "dimmi l'elenco delle commesse", "che lavori ho?", a client said a little wrong
+    db.collection_sub_items.docs.append({"id": "s4", "collection_id": cl["id"], "item_id": "c_verdi",
+                                         "data": {"titolo": "Tettoia", "stato": "completata", "codice": "2026-004"}})
+    all_open = {"Manutenzione caldaia", "Bagno", "Manutenzione centrale termica"}
+    for q in ("dimmi l'elenco delle commesse", "dammi la lista delle commesse", "che lavori ho?", "elenco dei cantieri aperti",
+              "quali commesse abbiamo attive?"):
+        r = await chat(text=q)
+        assert {o["title"] for o in r["ask"]["options"]} == all_open and "Non ho trovato" not in r["reply"], (q, r["ask"], r["reply"])
+        assert r["draft"]["messages"] == 0, q   # a question, not a line of the report
+    r = await chat(text="quali sono le commesse del signor Rosi")       # (dictated: Rossi)
+    assert {o["title"] for o in r["ask"]["options"]} == {"Manutenzione caldaia", "Bagno"} and "Mario Rossi" in r["reply"], r
+    r = await chat(text="lavori di Verdi?")
+    assert {o["title"] for o in r["ask"]["options"]} == {"Manutenzione centrale termica"}, r
+    r = await chat(text="commesse chiuse di Anna Verdi")
+    assert {o["title"] for o in r["ask"]["options"]} == {"Manutenzione centrale termica", "Tettoia"}, r
+    r = await chat(text="mostrami le commesse della piscina")
+    assert {o["title"] for o in r["ask"]["options"]} == all_open and "Non ho trovato commesse per «piscina»" in r["reply"], r
+    # a long dictation that says "lavori" is a line of the report, not a question
+    r = await chat(text="SAL: lavori di rifacimento della centrale termica, che lavori restano li vediamo la settimana prossima con il cliente in cantiere")
+    assert r["draft"]["messages"] == 1 and r["draft"]["report_type"] == "sal", r
+
+    # 7) the conversation stays in the Chat's Cronologia: the messages, the buttons; a message sent twice (offline) kept once
+    r = await chat(draft_id="rdr_0123456789ab", text="intervento da Anna Verdi, cambiato il vaso di espansione", client_id="m1",
+                   written_at="2026-11-20T08:00:00+00:00")
+    assert r["draft"]["id"] == "rdr_0123456789ab" and r["conv_id"]   # the app's own id: the messages kept offline join it
+    conv = next(c for c in db.conversations.docs if c["conv_id"] == r["conv_id"])
+    assert conv["action"] == "work_report" and conv["report_draft_id"] == "rdr_0123456789ab"
+    assert [m["role"] for m in conv["messages"]] == ["user", "assistant"] and "vaso di espansione" in conv["messages"][0]["content"]
+    r2 = await chat(draft_id="rdr_0123456789ab", text="intervento da Anna Verdi, cambiato il vaso di espansione", client_id="m1", conv_id=r["conv_id"])
+    assert r2.get("duplicate") and r2["draft"]["messages"] == 1
+    d6 = db.report_drafts.docs[-1]
+    assert d6["messages"][0]["at"] == "2026-11-20T08:00:00+00:00"
+    r = await chat(draft_id="rdr_0123456789ab", text="e ripristinata la pressione", client_id="m2", conv_id=r["conv_id"])
+    conv = next(c for c in db.conversations.docs if c["conv_id"] == r["conv_id"])
+    assert len(conv["messages"]) == 4 and conv["messages"][-1].get("reportGen") == "rdr_0123456789ab", conv["messages"][-1]
+    r = await chat(draft_id="rdr_0123456789ab", generate=True, conv_id=r["conv_id"])
+    conv = next(c for c in db.conversations.docs if c["conv_id"] == r["conv_id"])
+    assert conv["messages"][-2]["content"] == "Genera report" and not conv["messages"][-3].get("reportGen")
+    if r["report"]:
+        assert conv["messages"][-1].get("reportId") == r["report"]["id"]
+    else:   # (the commessa asked: its buttons are in the conversation)
+        assert conv["messages"][-1]["reportAsk"]["kind"] == "commessa" and conv["messages"][-1]["reportAsk"]["draftId"] == "rdr_0123456789ab"
+        r = await server.report_chat_set("rdr_0123456789ab", server.ReportChatSet(commessa_id="s3"), me)
+        conv = next(c for c in db.conversations.docs if c["conv_id"] == r["conv_id"])
+        assert r["report"] and conv["messages"][-2]["content"].startswith("Manutenzione centrale termica")
+        assert conv["messages"][-1]["reportId"] == r["report"]["id"] and conv["messages"][-3]["reportAsk"]["done"]
+    # after the report a message with that id opens a new draft, never the one made
+    r = await chat(draft_id="rdr_0123456789ab", text="sopralluogo da Anna Verdi per la caldaia")
+    assert r["draft"]["id"] != "rdr_0123456789ab" and r["draft"]["messages"] == 1
     # nothing to say yet: "genera" asks for the content
     r = await chat(text="genera")
     assert "Prima dimmi cosa scrivere" in r["reply"] and not r["report"]

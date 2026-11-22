@@ -76,7 +76,7 @@ Scrivi `@task`, `@salva`, `@cerca`, `@diario`, `@lista` o `@azione` dentro il me
 
 **Cronologia**
 - Sul telefono il tasto tondo con l'orologio, sul lato destro, apre la cronologia delle chat; sparisce mentre scorri o scrivi.
-- Tocca una chat della cronologia per riprenderla e continuare a scrivere nello stesso contesto.
+- Tocca una chat della cronologia per riprenderla e continuare a scrivere nello stesso contesto. Ci sono anche le chat del **Report**, con i loro pulsanti: un report lasciato a metà lo riprendi e lo generi da lì.
 - Le chat si cancellano da sole **10 giorni** dopo l'ultimo messaggio: segna con la **stella** quelle da tenere. Note, task e diario salvati restano comunque.
 
 ## Cerca
@@ -398,7 +398,7 @@ L'agente **Report** genera report in Word, con lo spazio per le firme.
 **Come funziona la chat del Report**
 - Non ci sono pulsanti da scegliere prima: scrivi o detta, anche in **più messaggi** (scritti o vocali), cosa mettere nel report. Ogni messaggio viene annotato e mAIPAL ti risponde con il tipo di report e la commessa che ha capito.
 - **Il tipo di report e la commessa li capisce dai messaggi**: "SAL del bagno dei Rossi…", "intervento da…", "report della commessa…", o il nome di un tuo modello. Se non li capisce, **te li chiede con i pulsanti** nella chat.
-- **Non ricordi il nome della commessa?** Chiedi "commesse attive di Rossi" oppure "commesse di manutenzione attive": mAIPAL ti mostra le commesse aperte di quel cliente o di quel tipo, e tocchi quella giusta. C'è anche **Nessuna commessa**.
+- **Non ricordi il nome della commessa?** Chiedi "commesse attive di Rossi", "lavori di Verdi?", "commesse di manutenzione" oppure semplicemente "dimmi l'elenco delle commesse": mAIPAL ti mostra le commesse aperte di quel cliente (anche se il nome è detto un po' storto a voce), di quel tipo, oppure tutte. Puoi dire anche **lavori** o **cantieri** al posto di commesse; con "commesse chiuse di…" vedi anche quelle chiuse. Tocchi quella giusta, oppure **Nessuna commessa**. Se nomini un cliente che non ha commesse attive, te lo dice e ti mostra quelle chiuse.
 - **Il report si genera solo alla fine**: quando scrivi o dici "genera il report", oppure tocchi **Genera report**. Il report usa **tutti i messaggi** della chat, con il tipo e la commessa scelti. Se manca ancora il tipo o la commessa, mAIPAL te li chiede prima di generarlo.
 - **Dove si salva** (Drive / OneDrive, cartella mAIPAL):
   - con una commessa: **Clienti › cliente › codice – commessa › Report**;
@@ -406,7 +406,8 @@ L'agente **Report** genera report in Word, con lo spazio per le firme.
   - senza cliente né commessa: **Report › tipo di report** (es. Report › Rapporto di intervento).
 - Scegliendo una commessa o **Nessuna commessa** mAIPAL non crea clienti né commesse nuovi.
 - In alto resta solo l'icona per **caricare un tuo modello** di report.
-- I messaggi del Report non finiscono nella cronologia generale della chat.
+- **La conversazione resta nella Cronologia di Chat**: puoi riaprirla e continuare da dove eri rimasto (anche toccare i pulsanti ancora aperti o **Genera report**).
+- **Senza rete**: i messaggi (scritti o vocali) restano sul telefono e vengono aggiunti al report da soli appena torna il segnale; nella chat vedi «⏳ Senza rete…» e poi «✓ Inviato». Per scegliere con i pulsanti, generare con il pulsante o modificare un report già fatto serve la rete; puoi però scrivere «genera il report» anche senza rete e verrà eseguito al ritorno del segnale.
 
 I tipi sono:
 - **Primo sopralluogo**: stato attuale, rilievi, lavori proposti, tempi e stima indicativa.

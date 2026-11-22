@@ -45,6 +45,7 @@ export function onOutboxChange(fn) { listeners.add(fn); return () => listeners.d
 const changed = async () => { const n = await pendingCount(); listeners.forEach((fn) => fn(n)); };
 
 // kept on the phone: {client_id, text, images, voice (Blob), commessa_id, hint_commessa_id, written_at, label}
+// or a message of a report's chat: {kind: "report", client_id, text, voice, draft_id, conv_id, written_at, label}
 export async function keepDiaryEntry(entry) {
   const e = { tries: 0, ...entry, written_at: entry.written_at || new Date().toISOString() };
   await tx(ENTRIES, "readwrite", (s) => s.put(e));
@@ -86,6 +87,14 @@ export function flushOutbox() {
             if (!text) text = e.images?.length ? "Foto dal cantiere" : "";
           }
           if (!text) { await tx(ENTRIES, "readwrite", (s) => s.delete(e.client_id)); continue; }
+          if (e.kind === "report") {   // the report's chat: added to its report (and to its conversation in the Cronologia)
+            const r = await api.post("/work/report-chat", { draft_id: e.draft_id, text, conv_id: e.conv_id || undefined,
+              client_id: e.client_id, written_at: e.written_at });
+            await tx(ENTRIES, "readwrite", (s) => s.delete(e.client_id));
+            sent += 1;
+            window.dispatchEvent(new CustomEvent("maipal-outbox-sent", { detail: { kind: "report", client_id: e.client_id, text, written_at: e.written_at, res: r.data }, cancelable: true }));
+            continue;
+          }
           const r = await api.post("/jobs/logs", { text, images: e.images || [], commessa_id: e.commessa_id || undefined,
             hint_commessa_id: e.hint_commessa_id || undefined, client_id: e.client_id, written_at: e.written_at });
           await tx(ENTRIES, "readwrite", (s) => s.delete(e.client_id));

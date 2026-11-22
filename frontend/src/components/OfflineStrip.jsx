@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { flushOutbox, onOutboxChange, pendingCount } from "@/lib/outbox";
 
 /* With no signal: a small strip on top ("Senza rete · 2 voci in attesa"), and the diary's entries kept on
-   the phone are sent by themselves - when the network comes back, when the app is opened again or comes
+   the phone (and the messages of a report's chat) are sent by themselves - when the network comes back, when the app is opened again or comes
    back to the front, and every half a minute while it is open. */
 export default function OfflineStrip() {
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine !== false);
@@ -12,7 +12,7 @@ export default function OfflineStrip() {
   useEffect(() => {
     const flush = () => {
       if (navigator.onLine === false) return;
-      flushOutbox().then((n) => { if (n) toast.success(n === 1 ? "Inviata la voce del diario salvata senza rete" : `Inviate ${n} voci del diario salvate senza rete`); });
+      flushOutbox().then((n) => { if (n) toast.success(n === 1 ? "Inviato quello che avevi scritto senza rete" : `Inviati ${n} messaggi scritti senza rete`); });
     };
     const up = () => { setOnline(true); flush(); };
     const down = () => setOnline(false);
