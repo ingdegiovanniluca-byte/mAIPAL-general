@@ -157,7 +157,8 @@ async def main():
     assert len(subs) == 1 and subs[0]["item_id"] == items[0]["id"]
     assert subs[0]["data"]["titolo"] == "Rifacimento impianto elettrico cucina" and subs[0]["data"]["stato"] == "nuova" and subs[0]["data"]["codice"]
     assert subs[0]["data"]["indirizzo_cantiere"] == "Via Roma 5, Torino"
-    assert SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", "Rifacimento impianto elettrico cucina"]
+    # in the client's folder, in the commessa's, under Report
+    assert SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", f"{subs[0]['data']['codice']} – Rifacimento impianto elettrico cucina", "Report"], SAVED[-1]["subs"]
     txt = doc_text(SAVED[-1]["bytes"])
     for must in ("Primo sopralluogo", "Mario Rossi", "333 1234567", "Via Roma 5, Torino", "Luca", "Firma del tecnico",
                  "Firma del cliente per presa visione", "Luogo e data", "Impresa di Luca", "Nuovo quadro"):
@@ -208,7 +209,7 @@ async def main():
     wr.interpret = interp({}, "")
     nitems = len(db.collection_items.docs)
     r = await server._generate_work_report(me, "verifica quadro elettrico condominiale")
-    assert r["client_item_id"] is None and SAVED[-1]["folder"] == "Report" and SAVED[-1]["subs"] == []
+    assert r["client_item_id"] is None and SAVED[-1]["folder"] == "Report" and len(SAVED[-1]["subs"]) == 1, SAVED[-1]["subs"]   # Report/<type>
     assert len(db.collection_items.docs) == nitems and "senza cliente" in r["docx_filename"]
 
     # 5) the archive and the download
@@ -267,7 +268,7 @@ async def main():
     assert line["report_id"] == first["id"] and line["commessa_id"] == first["commessa_id"] and line["report_version"] == 2
     assert line["text"] == "Report «Primo sopralluogo» aggiornato alla versione 2 da Luca: modificato Tempi indicativi."
     assert len(db.collection_items.docs) == n_clients and len(db.work_reports.docs) == n_reports   # nothing new
-    assert SAVED[-1]["subs"] == ["Mario Rossi", "Rifacimento impianto elettrico cucina"] and SAVED[-1]["fname"].endswith(" - v2.docx")
+    assert SAVED[-1]["subs"][0] == "Mario Rossi" and SAVED[-1]["subs"][-1] == "Report" and SAVED[-1]["fname"].endswith(" - v2.docx")
     txt = doc_text(SAVED[-1]["bytes"]); assert "3 giorni lavorativi" in txt and "Mario Rossi" in txt and "Nuovo quadro" in txt
     async def four(sections, instruction, user_id=None, channel="web"):
         out = [{"title": x["title"], "fields": dict(x["fields"])} for x in sections]

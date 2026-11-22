@@ -6160,7 +6160,8 @@ async def generate_work_report(payload: GenerateWorkReportPayload, current: User
 
 
 async def _generate_work_report(current: User, text: str, report_type: str = "sopralluogo", client_item_id: Optional[str] = None,
-                                new_client: bool = False, channel: str = "web", commessa_opts: Optional[dict] = None) -> dict:
+                                new_client: bool = False, channel: str = "web", commessa_opts: Optional[dict] = None,
+                                commessa_id: Optional[str] = None, no_commessa: bool = False, keep_type: bool = False) -> dict:
     """The artigiano's report from a dictation. The client is recognized deterministically in the
     Clienti list (several clients with that name -> {"status": "ambiguous_client", "candidates"}
     and the caller re-calls with client_item_id, or new_client); a client or a commessa that
@@ -6172,11 +6173,12 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     # the message says which report it is ("SAL del bagno", "fammi il report della commessa ..."):
     # that wins over the type selected in the chat, which only counts when the message doesn't say
     custom = await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(200)
-    said_type = work_reports.detect_report_type(text, custom)
+    said_type = None if keep_type else work_reports.detect_report_type(text, custom)
     from_text = bool(said_type) and said_type != report_type
     report_type = said_type or report_type
     if report_type == work_reports.COMMESSA_REPORT["key"]:   # from the diary, never dictated
-        rep = await _generate_commessa_report(current, CommessaReportPayload(text=text, **(commessa_opts or {})), channel)
+        rep = await _generate_commessa_report(current, CommessaReportPayload(text=text, **{**(commessa_opts or {}),
+                                                                                             **({"commessa_id": commessa_id} if commessa_id else {})}), channel)
         return {**rep, "type_from_text": from_text}
     if report_type in work_reports.BUILTIN_TEMPLATES:
         template_name = work_reports.BUILTIN_TEMPLATES[report_type]["name"]
@@ -6192,12 +6194,18 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     name_key = fmap.get("nome", "nome")
     clients = await db.collection_items.find({"collection_id": clienti["id"]}, {"_id": 0, "embedding": 0}).to_list(2000)
     client = None
+    chosen = None   # the commessa chosen in the report's chat: its client, never searched nor created
+    if commessa_id:
+        _cl, chosen, _cc = await _commessa_or_404(current, commessa_id, write=False)
+        client_item_id = chosen.get("item_id")
     if client_item_id:
         client = next((c for c in clients if c["id"] == client_item_id), None)
         if not client:
             raise HTTPException(status_code=404, detail="Cliente non trovato")
     elif not new_client:
         matches = work_reports.find_matching_clients(text, clients, name_key)
+        if len(matches) > 1 and no_commessa:   # "nessuna commessa": a client only when it is certain
+            matches = []
         if len(matches) > 1:
             return {"status": "ambiguous_client", "text": text, "report_type": report_type, "candidates": [
                 {"item_id": c["id"], "name": _sysval(c.get("data"), fmap, "nome"),
@@ -6220,7 +6228,9 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
             work_reports.clear_field(sections, label)
 
     client_created = False
-    if not client and said.get("name"):
+    if no_commessa:   # "nessuna commessa": in the folder of a client already there, else a report of its own; nothing added
+        pass
+    elif not client and said.get("name"):
         # the model may have caught a client the name match missed (e.g. "dalla signora Bianchi")
         again = work_reports.find_matching_clients(said["name"], clients, name_key) if not new_client else []
         exact = [c for c in again if _norm_title(_sysval(c.get("data"), fmap, "nome")) == _norm_title(said["name"])]
@@ -6251,7 +6261,9 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
 
     client_name = _sysval(client.get("data"), fmap, "nome") if client else ""
     commessa, commessa_created = None, False
-    if client:
+    if chosen:
+        commessa = chosen
+    elif client and not no_commessa:
         oggetto = next((s["fields"].get("Oggetto dell'intervento") for s in sections if "Oggetto dell'intervento" in s["fields"]), "")
         site = said.get("address") or _sysval(client.get("data"), fmap, "indirizzo")
         commessa, commessa_created = await _find_or_create_commessa(clienti, client, interpreted["job_title"], site, text, oggetto or "")
@@ -6280,10 +6292,12 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {client_name or 'senza cliente'} - {stamp}.docx".replace("/", "-")
 
-    if client:
-        folder, subs = (clienti.get("name") or vx.CLIENTI_NAME), [client_name] + ([commessa_title] if commessa_title else [])
-    else:
-        folder, subs = "Report", []
+    if commessa:   # the commessa's folder of the client, its Report folder
+        folder, subs = _commessa_archive_place(clienti, commessa, _commessa_view(commessa, client, clienti), "report")
+    elif client:
+        folder, subs = (clienti.get("name") or vx.CLIENTI_NAME), [client_name]
+    else:   # no client, no commessa: the general Report folder, by type
+        folder, subs = "Report", [template_name]
     drive_link, drive_folder, telegram_sent = await _deliver_work_report(
         current, docx_bytes, fname, folder, subs, f"📄 {template_name}" + (f" — {client_name}" if client_name else ""))
 
@@ -6324,6 +6338,201 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         head = f"Report «{template_name}» generato da {_first_name(current.name)}" + (" (commessa aperta da questo report)" if commessa_created else "") + "."
         await _log_report_event(current, report_doc, head + (f"\n{report_doc['summary']}" if report_doc["summary"] else ""), channel)
     return report_doc
+
+
+# ---- the REPORT'S CHAT: several messages (text or voice) collected, the type and the commessa understood from them (asked with
+# buttons only when not clear), the active commesse listed on request; the report made only when asked ("genera il report" /
+# the button), from everything said in that chat.
+_GENERATE_SAID = re.compile(r"^\s*(?:ok[,!.\s]*|bene[,!.\s]*|perfetto[,!.\s]*)?(?:genera|generalo|generami|crea|crealo|fai|fallo|fammi|prepara|preparalo|"
+                            r"procedi|vai)(?:\s+(?:pure|ora|adesso|il|lo|un))*(?:\s+(?:report|documento))?\s*[.!]*\s*$", re.I)
+_COMMESSE_ASKED = re.compile(r"\b(?:quali|che|elenca|elenco|mostra(?:mi)?|dammi|lista|vedere)\b[^?]*\bcommess[ae]\b"
+                             r"|\bcommesse\b.{0,40}\b(?:attive|aperte|in\s+corso|in\s+lavorazione)\b"
+                             r"|\b(?:attive|aperte)\b.{0,30}\bcommesse\b", re.I)
+
+
+class ReportChatPayload(BaseModel):
+    draft_id: Optional[str] = None
+    text: str = ""
+    generate: bool = False
+
+
+class ReportChatSet(BaseModel):
+    report_type: Optional[str] = None
+    commessa_id: Optional[str] = None
+    no_commessa: Optional[bool] = None
+
+
+async def _report_types(current: User) -> list:
+    custom = await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(200)
+    return [{"key": k, "name": t["name"]} for k, t in work_reports.BUILTIN_TEMPLATES.items()] \
+        + [{"key": work_reports.COMMESSA_REPORT["key"], "name": work_reports.COMMESSA_REPORT["name"]}] \
+        + [{"key": t["id"], "name": t["name"]} for t in custom]
+
+
+async def _report_draft_view(current: User, d: dict, reply: str, ask: Optional[dict] = None, report: Optional[dict] = None) -> dict:
+    types = {t["key"]: t["name"] for t in await _report_types(current)}
+    com = None
+    if d.get("commessa_id"):
+        ctx = await _commessa_ctx(d["commessa_id"])
+        if ctx:
+            com = {"id": ctx[3]["id"], "title": ctx[3]["title"], "client_name": ctx[3]["client_name"]}
+    return {"draft": {"id": d["id"], "report_type": d.get("report_type"), "type_name": types.get(d.get("report_type")), "commessa": com,
+                      "no_commessa": bool(d.get("no_commessa")), "messages": len(d.get("messages") or []), "status": d.get("status")},
+            "reply": reply, "ask": ask, "report": report}
+
+
+def _commessa_rows(commesse: list) -> list:
+    return [{"commessa_id": c["id"], "title": c["title"], "client_name": c["client_name"], "stato": c["stato"]} for c in commesse[:15]]
+
+
+async def _commesse_asked(current: User, text: str) -> Optional[dict]:
+    """"quali commesse attive ha Rossi?", "commesse di manutenzione attive": the open commesse of that client or of that kind
+    (words of their title), to choose from. -> the ask, or None."""
+    clienti = await _clienti_list(current)
+    if not clienti:
+        return {"kind": "commessa", "options": [], "allow_none": True}
+    commesse, clients = await _all_commesse(clienti)
+    open_ = [c for c in commesse if not vx.is_closed(c["stato"])]
+    fmap = clienti.get("system_map") or {}
+    named = work_reports.find_matching_clients(text, list(clients.values()), fmap.get("nome", "nome"))
+    if named:
+        ids = {c["id"] for c in named}
+        rows = [c for c in open_ if c["client_item_id"] in ids]
+    else:
+        words = [w for w in jl._words(text) if len(w) >= 4 and w not in {"commessa", "commesse", "attive", "aperte", "quali", "elenca",
+                                                                          "mostrami", "lavorazione", "corso", "dammi", "lista", "report"}]
+        rows = [c for c in open_ if words and any(jl._said(w, set(jl._words(c["title"] + " " + (c.get("descrizione") or "")))) for w in words)] if words else []
+        if not rows and not words:
+            rows = open_
+    rows.sort(key=lambda c: (c["client_name"] or "", c["title"]))
+    return {"kind": "commessa", "options": _commessa_rows(rows), "allow_none": True}
+
+
+async def _report_draft_step(current: User, d: dict, text: str) -> tuple:
+    """A message of the report's chat: kept; the type and the commessa read from it when not known yet. -> (reply, ask)"""
+    now = datetime.now(timezone.utc).isoformat()
+    d["messages"] = [*(d.get("messages") or []), {"text": text, "at": now}][-60:]
+    upd = {"messages": d["messages"], "updated_at": now}
+    ask = None
+    if not d.get("report_type"):
+        custom = await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        t = work_reports.detect_report_type(text, custom)
+        if t:
+            d["report_type"] = upd["report_type"] = t
+    if not d.get("commessa_id") and not d.get("no_commessa"):
+        clienti = await _clienti_list(current)
+        if clienti:
+            res = await _resolve_commessa(clienti, text, "", "", None)
+            if res.get("commessa"):
+                d["commessa_id"] = upd["commessa_id"] = res["commessa"]["id"]
+            elif res.get("reason") in ("several", "clients") and res.get("pick"):
+                ask = {"kind": "commessa", "options": res["pick"][:15], "allow_none": True}
+    await db.report_drafts.update_one({"id": d["id"]}, {"$set": upd})
+    if not ask and not d.get("report_type"):
+        ask = {"kind": "type", "options": await _report_types(current)}
+    types = {t["key"]: t["name"] for t in await _report_types(current)}
+    bits = [f"📋 {types.get(d.get('report_type')) or 'tipo di report da scegliere'}"]
+    if d.get("commessa_id"):
+        ctx = await _commessa_ctx(d["commessa_id"])
+        bits.append(f"🧱 {ctx[3]['title']} — {ctx[3]['client_name']}" if ctx else "🧱 commessa")
+    elif d.get("no_commessa"):
+        bits.append("🧱 nessuna commessa")
+    else:
+        bits.append("🧱 commessa non ancora indicata")
+    n = len(d["messages"])
+    reply = (f"📝 Annotato ({n} {'messaggio' if n == 1 else 'messaggi'}). " + " · ".join(bits)
+             + ".\nPuoi aggiungere altro, scritto o a voce. Quando hai finito scrivi «genera il report» o tocca «Genera report».")
+    if ask and ask["kind"] == "type":
+        reply += "\nChe report è?"
+    elif ask:
+        reply += "\nDi quale commessa si tratta?"
+    return reply, ask
+
+
+async def _report_draft_generate(current: User, d: dict) -> tuple:
+    """The report from everything said in the chat. Missing the type or the commessa: asked first. -> (reply, ask, report)"""
+    if not d.get("messages"):
+        return "Prima dimmi cosa scrivere nel report (anche a voce).", None, None
+    if not d.get("report_type"):
+        await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"generate_asked": True}})
+        return "Che report è? Poi lo genero.", {"kind": "type", "options": await _report_types(current)}, None
+    is_com = d["report_type"] == work_reports.COMMESSA_REPORT["key"]
+    if not d.get("commessa_id") and not d.get("no_commessa"):
+        await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"generate_asked": True}})
+        ask = await _commesse_asked(current, " ".join(m["text"] for m in d["messages"]))
+        if not ask["options"]:
+            ask = await _commesse_asked(current, "commesse attive")
+        if is_com:
+            ask["allow_none"] = False
+        return ("Di quale commessa? Scegline una" + ("" if is_com else ", oppure «Nessuna commessa» (lo salvo nella cartella Report)")
+                + ". Puoi anche chiedermi «commesse attive di Rossi»."), ask, None
+    text = "\n".join(m["text"] for m in d["messages"])
+    rep = await _generate_work_report(current, text, d["report_type"], commessa_id=d.get("commessa_id"), no_commessa=bool(d.get("no_commessa")),
+                                      keep_type=True)
+    if rep.get("status") in ("pick_commessa", "ambiguous_client"):
+        return rep.get("message") or "Di quale commessa?", {"kind": "commessa", "options": rep.get("candidates") or [], "allow_none": not is_com}, None
+    await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"status": "generated", "report_id": rep.get("id"), "generate_asked": False}})
+    d["status"] = "generated"
+    return "", None, rep
+
+
+@api_router.post("/work/report-chat")
+async def report_chat(payload: ReportChatPayload, current: User = Depends(get_current_user)):
+    """The report's chat: a message (kept for the report), a question about the active commesse, or "genera"."""
+    d = await db.report_drafts.find_one({"id": payload.draft_id, "user_id": current.user_id}, {"_id": 0}) if payload.draft_id else None
+    if not d or d.get("status") == "generated":
+        d = {"id": f"rdr_{uuid.uuid4().hex[:12]}", "user_id": current.user_id, "messages": [], "report_type": None, "commessa_id": None,
+             "no_commessa": False, "status": "open", "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.report_drafts.insert_one(dict(d))
+    text = " ".join((payload.text or "").split())
+    if payload.generate or _GENERATE_SAID.match(text or ""):
+        reply, ask, rep = await _report_draft_generate(current, d)
+        return await _report_draft_view(current, d, reply, ask, rep)
+    if not text:
+        raise HTTPException(status_code=400, detail="Scrivi o detta cosa mettere nel report")
+    if _COMMESSE_ASKED.search(text):
+        ask = await _commesse_asked(current, text)
+        reply = ("Ecco le commesse attive" + ("" if ask["options"] else ": nessuna trovata") + ". Tocca quella del report"
+                 + (", oppure «Nessuna commessa»." if ask.get("allow_none") else "."))
+        return await _report_draft_view(current, d, reply, ask)
+    reply, ask = await _report_draft_step(current, d, text)
+    return await _report_draft_view(current, d, reply, ask)
+
+
+@api_router.post("/work/report-chat/{draft_id}/set")
+async def report_chat_set(draft_id: str, payload: ReportChatSet, current: User = Depends(get_current_user)):
+    """A button of the report's chat: the type, the commessa or "nessuna commessa". If "genera" was waiting for it: made now."""
+    d = await db.report_drafts.find_one({"id": draft_id, "user_id": current.user_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Questo report non c'è più: scrivilo di nuovo")
+    upd = {}
+    if payload.report_type:
+        if payload.report_type not in {t["key"] for t in await _report_types(current)}:
+            raise HTTPException(status_code=400, detail="Tipo di report non valido")
+        upd["report_type"] = payload.report_type
+    if payload.commessa_id:
+        await _commessa_or_404(current, payload.commessa_id, write=False)
+        upd.update(commessa_id=payload.commessa_id, no_commessa=False)
+    if payload.no_commessa:
+        upd.update(commessa_id=None, no_commessa=True)
+    d.update(upd)
+    await db.report_drafts.update_one({"id": draft_id}, {"$set": upd})
+    if d.get("generate_asked"):
+        reply, ask, rep = await _report_draft_generate(current, d)
+        return await _report_draft_view(current, d, reply, ask, rep)
+    types = {t["key"]: t["name"] for t in await _report_types(current)}
+    if payload.report_type:
+        reply = f"📋 {types.get(payload.report_type)}."
+    elif payload.commessa_id:
+        ctx = await _commessa_ctx(payload.commessa_id)
+        reply = f"🧱 {ctx[3]['title']} — {ctx[3]['client_name']}." if ctx else "🧱 Commessa scelta."
+    else:
+        reply = "🧱 Nessuna commessa: lo salvo nella cartella Report."
+    ask = None
+    if not d.get("report_type"):
+        ask, reply = {"kind": "type", "options": await _report_types(current)}, reply + " Che report è?"
+    reply += " Continua a scrivere, o tocca «Genera report» quando hai finito." if d.get("messages") else " Ora dimmi cosa scrivere nel report."
+    return await _report_draft_view(current, d, reply, ask)
 
 
 async def _log_report_event(current: User, rep: dict, text: str, channel: str = "web") -> None:

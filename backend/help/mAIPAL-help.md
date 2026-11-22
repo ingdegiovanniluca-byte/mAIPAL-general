@@ -393,24 +393,35 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 
 ## Report di lavoro
 <!-- id: report-lavoro · verticale: artigiano -->
-L'agente **Report** genera report in Word, con lo spazio per le firme. **Che report fare lo capisce dal messaggio**: "SAL del bagno dei Rossi…", "fine lavori dai Bianchi…", "variante per i Verdi…", "intervento da…", "sopralluogo da…", "report della commessa…", o il nome di un tuo modello. Il tipo scelto con l'icona sotto il nome (accanto c'è scritto quale è) vale solo quando il messaggio non lo dice; se il messaggio chiede un altro tipo, la risposta lo segnala con "capito dal messaggio". I tipi sono:
+L'agente **Report** genera report in Word, con lo spazio per le firme.
+
+**Come funziona la chat del Report**
+- Non ci sono pulsanti da scegliere prima: scrivi o detta, anche in **più messaggi** (scritti o vocali), cosa mettere nel report. Ogni messaggio viene annotato e mAIPAL ti risponde con il tipo di report e la commessa che ha capito.
+- **Il tipo di report e la commessa li capisce dai messaggi**: "SAL del bagno dei Rossi…", "intervento da…", "report della commessa…", o il nome di un tuo modello. Se non li capisce, **te li chiede con i pulsanti** nella chat.
+- **Non ricordi il nome della commessa?** Chiedi "commesse attive di Rossi" oppure "commesse di manutenzione attive": mAIPAL ti mostra le commesse aperte di quel cliente o di quel tipo, e tocchi quella giusta. C'è anche **Nessuna commessa**.
+- **Il report si genera solo alla fine**: quando scrivi o dici "genera il report", oppure tocchi **Genera report**. Il report usa **tutti i messaggi** della chat, con il tipo e la commessa scelti. Se manca ancora il tipo o la commessa, mAIPAL te li chiede prima di generarlo.
+- **Dove si salva** (Drive / OneDrive, cartella mAIPAL):
+  - con una commessa: **Clienti › cliente › codice – commessa › Report**;
+  - senza commessa ma con un cliente già presente nella lista Clienti: nella **cartella del cliente**;
+  - senza cliente né commessa: **Report › tipo di report** (es. Report › Rapporto di intervento).
+- Scegliendo una commessa o **Nessuna commessa** mAIPAL non crea clienti né commesse nuovi.
+- In alto resta solo l'icona per **caricare un tuo modello** di report.
+- I messaggi del Report non finiscono nella cronologia generale della chat.
+
+I tipi sono:
 - **Primo sopralluogo**: stato attuale, rilievi, lavori proposti, tempi e stima indicativa.
 - **Rapporto di intervento**: un intervento (riparazione, manutenzione, installazione): orario, attività svolte, materiali, ore, esito.
 - **Stato avanzamento lavori (SAL)**: percentuale di avanzamento, lavori del periodo (con le **Tappe**), problemi, prossime attività e previsione di fine lavori. Ore, materiali, problemi e tappe del periodo (dall'ultimo SAL, o dall'inizio) li prende **dal diario della commessa** se non li detti. Lo fai in **Chat → agente Report** («SAL del bagno dei Rossi…») o con /report su Telegram; lo ritrovi nel **diario della commessa** (la riga del report con **Scarica il report**) e nella cartella **Report** della commessa su Drive / OneDrive.
 - **Verbale di fine lavori**: lavori eseguiti, verifiche e collaudi, documentazione consegnata, garanzia; data di inizio e ore complessive dal diario.
 - **Lavori extra / variante**: lavori aggiunti o cambiati, con tempi e costo indicativo, da far approvare al cliente.
-- **Report di commessa**: non si detta, si costruisce **dal diario della commessa**. Sotto il nome scegli **cosa inserire** (riassunto stato commessa, lavori svolti, ore lavorate, problematiche, materiali, tappe, costi) e il **periodo** (tutta la commessa, ultimi 7 o 30 giorni, mese scorso, oppure dal… al… con le date). Poi scrivi di quale commessa si tratta, ad esempio "Report del bagno dei Rossi, metti in evidenza i ritardi".
-  - Quello che scrivi nel messaggio (parti e periodo) vale più dei pulsanti: i pulsanti servono per quello che il messaggio non dice.
-  - Basta anche scriverlo nel messaggio, qualunque tipo sia selezionato: "Fammi il report della commessa impianto elettrico di Luca D per la settimana corrente, con attività, materiali e ore per lavoratore". mAIPAL capisce che è un report di commessa e prende dal messaggio le parti e il periodo. Funziona anche da Telegram con `/report`.
-  - Il periodo puoi anche scriverlo nel messaggio ("di ottobre", "dal 1 al 15/10", "ultime due settimane") quando hai scelto "Tutta la commessa".
+- **Report di commessa**: non si detta, si costruisce **dal diario della commessa**. Scrivi di quale commessa, cosa inserire (riassunto stato commessa, lavori svolti, ore lavorate, problematiche, materiali, tappe, costi) e il periodo, ad esempio: "Fammi il report della commessa impianto elettrico di Luca D per la settimana corrente, con attività, materiali e ore per lavoratore". Se non dici le parti, mette quelle standard; se non dici il periodo, tutta la commessa.
+  - Il periodo si scrive nel messaggio: "di ottobre", "dal 1 al 15/10", "ultime due settimane", "mese scorso". Funziona anche da Telegram con `/report`.
   - Ore, problemi, materiali, tappe e costi sono copiati dal diario così come sono. Il riassunto e i lavori svolti li scrive mAIPAL solo da quello che c'è nel diario del periodo.
   - Se la commessa non è chiara mAIPAL ti chiede quale con i pulsanti. Non crea mai clienti o commesse nuovi.
   - Le parti che hai scelto restano nel report anche quando nel periodo non c'è niente: in quel caso è scritto.
   - Per un periodo i costi sono quelli di quei giorni; il preventivo e il margine compaiono solo per tutta la commessa.
-- Oppure **carica un tuo modello** Word.
-- Detta o scrivi com'è andato: l'esempio nella casella cambia con il tipo di report scelto.
-- mAIPAL riconosce il cliente nella lista Clienti e la commessa; se non ci sono li crea. Se ci sono più clienti simili, te lo chiede.
-- Il report si salva su Drive/OneDrive nella cartella del cliente e della commessa (mAIPAL/Clienti/cliente/commessa) e si scarica dalla chat.
+- Oppure **carica un tuo modello** Word (icona in alto, sotto il nome dell'agente).
+- Il report si scarica anche dalla chat (**Scarica il report**).
 - **Modificare il report**: nella stessa chat scrivi la correzione ("nei tempi metti 3 giorni"): mAIPAL crea la versione successiva cambiando solo quello che hai detto.
 - **Nel diario della commessa** resta scritto ogni report generato (tipo, autore e un breve riassunto) e ogni sua nuova versione.
 - Da Telegram: comando `/report`, poi scegli il tipo.

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, Check, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, Dumbbell } from "lucide-react";
+import { ArrowLeft, CloudUpload, Search, CheckSquare, Paperclip, Mic, MicOff, Square, Send, Calendar, X, MessageSquarePlus, Star, Trash2, Maximize2, Minimize2, BookOpen, Layers, Database, HardDrive, Loader2, Stethoscope, Download, UploadCloud, Reply, History, Plus, Repeat, Cloud, Folder, Bell, ClipboardList, AtSign, ScanText, HardHat, UserPlus, NotebookPen, FolderPlus, Dumbbell } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { Textarea } from "@/components/ui/textarea";
@@ -92,8 +92,8 @@ const ALL_ACTIONS = [
   {
     id: "work_report", key: "workreport", short: "Report", icon: <HardHat size={22} />,
     title: "Report di lavoro",
-    subtitle: "Detta il sopralluogo: genero il report e lo collego al cliente e alla commessa",
-    placeholder: 'Es. "Sopralluogo dal signor Rossi in via Roma 5: impianto della cucina da rifare…"',
+    subtitle: "Scrivi o detta anche in più messaggi: il report lo genero alla fine, nella cartella della commessa",
+    placeholder: 'Es. "Sopralluogo per la commessa bagno di Rossi: piastrelle da rifare…"',
     color: "#A0672E",
   },
   {
@@ -444,14 +444,7 @@ export default function ChatPage() {
     } catch { /* silent: resta il Primo sopralluogo */ }
   };
   useEffect(() => { if (active === "work_report") loadWorkTemplates(); }, [active]);
-  // Report di commessa: what goes in (null = the default parts) and the period
   const comTpl = (workTemplates.builtin || []).find((t) => t.commessa);
-  const [comParts, setComParts] = useState(null);
-  const [comPeriod, setComPeriod] = useState("all");   // all | last7 | last30 | prev_month | custom
-  const [comFrom, setComFrom] = useState("");
-  const [comTo, setComTo] = useState("");
-  const comPartsOn = comParts || comTpl?.default_parts || [];
-  const toggleComPart = (k) => setComParts(comPartsOn.includes(k) ? comPartsOn.filter((x) => x !== k) : [...comPartsOn, k]);
   // the selector, the menu and the upload dialog are shared by Referto and Report
   const isWork = active === "work_report";
   const tplList = isWork ? workTemplates : vetTemplates;
@@ -460,10 +453,8 @@ export default function ChatPage() {
 
   const activeAction = useMemo(() => {
     const a = active === "help" ? HELP_ACTION : ACTIONS.find((x) => x.id === active) || ACTIONS[0];
-    // Report: the example in the box follows the kind of report chosen
-    const hint = a.id === "work_report" && (workTemplates.builtin || []).find((t) => t.key === workType)?.hint;
-    return hint ? { ...a, placeholder: `Es. "${hint}"` } : a;
-  }, [ACTIONS, active, workTemplates, workType]);
+    return a;
+  }, [ACTIONS, active]);
   // Help asked again while already in the chat (avatar menu -> Help): a fresh Help chat
   useEffect(() => {
     if (location.state?.action !== "help" || !location.state?.nonce) return;
@@ -754,18 +745,16 @@ export default function ChatPage() {
     }
     const lastReport = thread?.action === "work_report"
       ? [...thread.messages].reverse().find((m) => m.reportKind === "work" && m.reportId) : null;
-    const commessaReport = workType === comTpl?.key && !lastReport;
-    if (!content) { toast.error(commessaReport ? "Scrivi di quale commessa vuoi il report" : "Descrivi il sopralluogo"); return; }
-    if (commessaReport && comPeriod === "custom" && !comFrom && !comTo) { toast.error("Scegli le date del periodo"); return; }
+    if (!content) { toast.error("Scrivi o detta cosa mettere nel report"); return; }
     if (streaming || transcribing) return;
     setStreaming(true);
     setThread((th) => th
       ? { ...th, action: "work_report", messages: [...th.messages, { role: "user", content }] }
       : { conv_id: null, action: "work_report", messages: [{ role: "user", content }], liveAnswer: "" });
     setText("");
-    // a message in a report's chat changes THAT report (it used to make a new, invented one)
     try {
       const { main: workText } = splitMentions(content);
+      // a message in a report's chat changes THAT report (it used to make a new, invented one)
       if (lastReport) {
         const r = await api.post(`/work/reports/${lastReport.reportId}/revise`, { text: workText || content });
         const changedNow = (r.data.changed || []).length > 0;
@@ -774,14 +763,12 @@ export default function ChatPage() {
           : { role: "assistant", content: r.data.message }] }));
         return;
       }
-      // the message decides the report (and, for a report di commessa, what goes in and the
-      // period); the type selected and the chips only count for what the message doesn't say
-      const opts = commessaReport ? { include: comParts || [], period: comPeriod, date_from: comPeriod === "custom" ? comFrom || null : null,
-                                      date_to: comPeriod === "custom" ? comTo || null : null } : {};
+      // before the report: every message is kept for it; the type and the commessa are read
+      // from what is said (buttons only when not clear); made only on «genera» or the button
+      if (splitMentions(content).parts.length) reportTaggedRef.current.push(content);
       shadowRoute("work_report", workText || content);
-      const r = await api.post("/work/generate-report", { text: workText || content, report_type: workType, ...opts });
-      appendWorkReportResult(r.data, opts);
-      await dispatchTagged(content, r.data?.id ? { type: "work_report", id: r.data.id, preview: (workText || "").slice(0, 200) } : null);
+      const r = await api.post("/work/report-chat", { draft_id: thread?.reportDraftId || null, text: workText || content });
+      await appendReportChat(r.data);
     } catch (e) {
       const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
       setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
@@ -789,6 +776,47 @@ export default function ChatPage() {
       setStreaming(false);
     }
   };
+
+  // the report's chat: the reply, the buttons when the agent didn't understand (type, commessa),
+  // «Genera report» once something is written; the report itself when made
+  const reportTaggedRef = useRef([]);
+  useEffect(() => { if (!thread) reportTaggedRef.current = []; }, [thread]);
+  const appendReportChat = async (data) => {
+    const draftId = data.draft?.id;
+    const canGenerate = !data.report && !data.ask && (data.draft?.messages || 0) > 0;
+    setThread((th) => ({
+      ...th, reportDraftId: draftId,
+      messages: [
+        ...th.messages.map((m) => (m.reportAsk || m.reportGen ? { ...m, reportAsk: m.reportAsk ? { ...m.reportAsk, done: true } : null, reportGen: null } : m)),
+        ...(data.reply ? [{ role: "assistant", content: data.reply, reportAsk: data.ask ? { ...data.ask, draftId } : null, reportGen: canGenerate ? draftId : null }] : []),
+      ],
+    }));
+    if (data.report) {
+      appendWorkReportResult(data.report);
+      const tagged = reportTaggedRef.current;
+      reportTaggedRef.current = [];
+      for (const t of tagged) await dispatchTagged(t, data.report.id ? { type: "work_report", id: data.report.id, preview: splitMentions(t).main.slice(0, 200) } : null);
+    }
+  };
+  const reportChatAct = async (label, call) => {
+    if (streaming || transcribing) return;
+    setStreaming(true);
+    setThread((th) => ({ ...th, messages: [...th.messages, { role: "user", content: label }] }));
+    try {
+      const r = await call();
+      await appendReportChat(r.data);
+    } catch (e) {
+      const errText = "⚠️ " + (e.response?.data?.detail || "Errore nella generazione del report");
+      setThread((th) => ({ ...th, messages: [...th.messages, { role: "assistant", content: errText }] }));
+    } finally {
+      setStreaming(false);
+    }
+  };
+  const reportPick = (ask, opt) => reportChatAct(
+    ask.kind === "type" ? opt.name : opt ? `${opt.title} · ${opt.client_name}` : "Nessuna commessa",
+    () => api.post(`/work/report-chat/${ask.draftId}/set`,
+      ask.kind === "type" ? { report_type: opt.key } : opt ? { commessa_id: opt.commessa_id } : { no_commessa: true }));
+  const reportGenerate = (draftId) => reportChatAct("Genera report", () => api.post("/work/report-chat", { draft_id: draftId, generate: true }));
 
   const resolveWorkClient = async (amb, clientId) => {
     setStreaming(true);
@@ -2016,16 +2044,8 @@ export default function ChatPage() {
     }, "Promemoria"));
   } else if (active === "vet_report" || active === "work_report") {
     if (isWork) {
-      // Report: the selected type written beside its icon (the message can still ask for another)
-      const selName = visitTypes.find((t) => t.id === tplSel)?.name || "Primo sopralluogo";
-      agentOptions.push(
-        <button key="visit-type" type="button" data-testid="opt-visit-type" onClick={() => setVisitMenuOpen((v) => !v)}
-          title="Tipo di report" aria-label={`Tipo di report: ${selName}`} aria-expanded={visitMenuOpen}
-          className="h-8 inline-flex items-center gap-1.5 text-white drop-shadow-[0_0_6px_rgba(255,255,255,0.55)]">
-          <ClipboardList size={19} className="shrink-0" />
-          <span className="text-[13px] font-medium whitespace-nowrap" data-testid="visit-type-label">{selName}</span>
-        </button>,
-      );
+      // Report: no type to choose up here - the chat understands it (and asks with buttons when it can't)
+      agentOptions.push(optIcon("upload-work-template", UploadCloud, false, () => setShowTemplateUpload(true), "Carica un modello di report"));
     } else {
       agentOptions.push(optIcon("visit-type", ClipboardList, true, () => setVisitMenuOpen((v) => !v), "Tipo di visita"));
     }
@@ -2129,7 +2149,7 @@ export default function ChatPage() {
         </div>
         {/* always as tall as one row of icons, so name, bar and agents never move between agents */}
         <div className="h-8 flex items-center justify-center gap-3" data-testid="agent-options">{agentOptions}</div>
-        {visitMenuOpen && (active === "vet_report" || active === "work_report") && (
+        {visitMenuOpen && active === "vet_report" && (
           <div className="mt-2 flex flex-wrap justify-center gap-1.5" data-testid="visit-type-menu">
             {visitTypes.map((t) => (
               <button key={t.id} onClick={() => { setTplSel(t.id); setVisitMenuOpen(false); }}
@@ -2138,40 +2158,6 @@ export default function ChatPage() {
             <button onClick={() => { setShowTemplateUpload(true); setVisitMenuOpen(false); }} className="text-xs px-3 py-1.5 rounded-full bg-white/10 text-white/85 inline-flex items-center gap-1">
               <UploadCloud size={12} /> carica modello
             </button>
-          </div>
-        )}
-        {active === "work_report" && comTpl && workType === comTpl.key && !visitMenuOpen && (
-          // Report di commessa: what goes in and for which days - the rest comes from the diary
-          <div className="mt-2 space-y-2.5" data-testid="commessa-report-options">
-            <div>
-              <div className="text-[10.5px] uppercase tracking-widest text-white/50 text-center mb-1.5">{comTpl.name} · cosa inserire</div>
-              <div className="flex flex-wrap justify-center gap-1.5">
-                {(comTpl.parts || []).map((p) => (
-                  <button key={p.key} type="button" onClick={() => toggleComPart(p.key)} data-testid={`com-part-${p.key}`} aria-pressed={comPartsOn.includes(p.key)}
-                    className={`text-xs px-3 py-1.5 rounded-full inline-flex items-center gap-1 ${comPartsOn.includes(p.key) ? "bg-white text-[#403A3C]" : "bg-white/10 text-white/85"}`}>
-                    {comPartsOn.includes(p.key) && <Check size={11} />}{p.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10.5px] uppercase tracking-widest text-white/50 text-center mb-1.5">periodo</div>
-              <div className="flex flex-wrap justify-center gap-1.5">
-                {[["all", "Tutta la commessa"], ["last7", "Ultimi 7 giorni"], ["last30", "Ultimi 30 giorni"], ["prev_month", "Mese scorso"], ["custom", "Date"]].map(([k, label]) => (
-                  <button key={k} type="button" onClick={() => setComPeriod(k)} data-testid={`com-period-${k}`} aria-pressed={comPeriod === k}
-                    className={`text-xs px-3 py-1.5 rounded-full ${comPeriod === k ? "bg-white text-[#403A3C]" : "bg-white/10 text-white/85"}`}>{label}</button>
-                ))}
-              </div>
-              {comPeriod === "custom" && (
-                <div className="mt-2 flex items-center justify-center gap-2 text-xs text-white/70">
-                  dal <input type="date" value={comFrom} max={comTo || undefined} onChange={(e) => setComFrom(e.target.value)} data-testid="com-from"
-                    className="com-date h-8 rounded-full bg-white/10 px-3 text-white" />
-                  al <input type="date" value={comTo} min={comFrom || undefined} onChange={(e) => setComTo(e.target.value)} data-testid="com-to"
-                    className="com-date h-8 rounded-full bg-white/10 px-3 text-white" />
-                </div>
-              )}
-              {comPeriod === "all" && <div className="mt-1.5 text-[11px] text-white/45 text-center">o scrivi il periodo nel messaggio (es. «di ottobre», «dal 1 al 15/10»)</div>}
-            </div>
           </div>
         )}
       </div>
@@ -2499,7 +2485,7 @@ export default function ChatPage() {
                     </button>
                   </div>
                 )}
-                {(active === "vet_report" || active === "work_report") && !thread && (
+                {active === "vet_report" && !thread && (
                   <div className="flex items-center gap-1 flex-wrap" data-testid="visit-type-selector">
                     <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
                       {tplList.builtin.map((t) => (
@@ -2828,6 +2814,33 @@ export default function ChatPage() {
                         )}
                       </div>
                     )}
+                    {m.reportAsk && !m.reportAsk.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid={`report-ask-${m.reportAsk.kind}`}>
+                        {m.reportAsk.kind === "type"
+                          ? m.reportAsk.options.map((o) => (
+                            <button key={o.key} onClick={() => reportPick(m.reportAsk, o)} disabled={streaming} data-testid={`report-type-${o.key}`}
+                              className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">{o.name}</button>
+                          ))
+                          : m.reportAsk.options.map((c) => (
+                            <button key={c.commessa_id} onClick={() => reportPick(m.reportAsk, c)} disabled={streaming} data-testid={`report-commessa-${c.commessa_id}`}
+                              className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
+                              {c.title} · {c.client_name}{isClosed(c.stato) ? ` (${c.stato})` : ""}
+                            </button>
+                          ))}
+                        {m.reportAsk.kind === "commessa" && m.reportAsk.allow_none && (
+                          <button onClick={() => reportPick(m.reportAsk, null)} disabled={streaming} data-testid="report-no-commessa"
+                            className="text-xs px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/15 text-white/75 border border-white/15 disabled:opacity-50">Nessuna commessa</button>
+                        )}
+                      </div>
+                    )}
+                    {m.reportGen && (
+                      <div className="mt-2 ml-4">
+                        <button onClick={() => reportGenerate(m.reportGen)} disabled={streaming} data-testid="report-generate"
+                          className="h-9 px-4 rounded-full text-[13px] font-semibold bg-white text-[#403A3C] shadow-[0_4px_16px_rgba(0,0,0,0.18)] hover:bg-white/90 disabled:opacity-50 inline-flex items-center gap-1.5">
+                          <ClipboardList size={14} /> Genera report
+                        </button>
+                      </div>
+                    )}
                     {m.comPick && !m.comPick.done && (
                       <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="commessa-report-pick">
                         {m.comPick.candidates.map((c) => (
@@ -3046,9 +3059,7 @@ export default function ChatPage() {
         <FloatingGlassButton icon={History} label={mobileHistoryView ? "Torna alla chat" : "Cronologia delle chat"} testid="mobile-history-toggle"
           active={mobileHistoryView} hideWhileTyping
           // with a conversation open the composer sits at the bottom, where the button would cover its mic;
-          hidden={!!text.trim() || recording || transcribing || !!pendingVoice || allAgentsOpen || infoOpen || (!!thread && !mobileHistoryView)
-            // the report di commessa's options push the agents down, under the button
-            || (!thread && active === "work_report" && !!comTpl && workType === comTpl.key)}
+          hidden={!!text.trim() || recording || transcribing || !!pendingVoice || allAgentsOpen || infoOpen || (!!thread && !mobileHistoryView)}
           onClick={() => setMobileView((v) => (v === "history" ? "chat" : "history"))} />
       )}
       {showTemplateUpload && (
