@@ -204,7 +204,8 @@ async def main():
     assert a["wants"] == ["costi", "ore", "problemi", "stato"] and "evidenzia i ritardi" in a["request"]
     assert "posa tubazioni" in a["diary"] and "tracce" not in a["diary"] and "Stato: sospesa" in a["diary"] and "Impianti" in a["facts"]
     txt = doc_text(SAVED[-1]["bytes"])
-    for must in ("Report di commessa", "Mario Rossi", "Bagno", "piastrelle in ritardo", "Firma del tecnico"):
+    for must in ("REPORT DI COMMESSA", "Mario Rossi", "Bagno", "piastrelle in ritardo", "Redatto da (il tecnico)", "Documento n.: RC-",
+                 "Revisione: 00", "§9.1.1 monitoraggio"):   # a record of the quality system: identified, signed
         assert must in txt, must
     assert "tubo rotto" not in txt and SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", "Bagno", "Report"]   # (AUT-GEN-06: the Report folder)
     assert len(db.collection_sub_items.docs) == nsubs and len(db.collection_items.docs) == nitems    # nothing created

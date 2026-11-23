@@ -160,9 +160,13 @@ async def main():
     # in the client's folder, in the commessa's, under Report
     assert SAVED[-1]["folder"] == "Clienti" and SAVED[-1]["subs"] == ["Mario Rossi", f"{subs[0]['data']['codice']} – Rifacimento impianto elettrico cucina", "Report"], SAVED[-1]["subs"]
     txt = doc_text(SAVED[-1]["bytes"])
-    for must in ("Primo sopralluogo", "Mario Rossi", "333 1234567", "Via Roma 5, Torino", "Luca", "Firma del tecnico",
-                 "Firma del cliente per presa visione", "Luogo e data", "Impresa di Luca", "Nuovo quadro"):
+    for must in ("PRIMO SOPRALLUOGO", "Mario Rossi", "333 1234567", "Via Roma 5, Torino", "Luca", "Redatto da (il tecnico)",
+                 "Verificato e approvato da", "Per presa visione (il cliente)", "Luogo e data", "Impresa di Luca", "Nuovo quadro",
+                 # the record of the quality system: its number, revision, the commessa, the rules that apply, the scope
+                 f"VS-{subs[0]['data']['codice']}-01", "Revisione: 00", f"{subs[0]['data']['codice']} – Rifacimento impianto elettrico cucina",
+                 "CEI 64-8", "D.M. 37/2008", "D.Lgs. 81/2008", "Rilievo dello stato di fatto", "UNI EN ISO 9001:2015"):
         assert must in txt, must
+    assert "Stato delle revisioni" not in txt and "Misure di prevenzione" not in txt   # nothing said: left out
     assert "Note e prescrizioni" not in txt   # a section nobody talked about stays out
     stored = db.work_reports.docs[-1]
     assert stored["docx_b64"] and stored["client_item_id"] == items[0]["id"] and stored["commessa_id"] == subs[0]["id"]
@@ -263,16 +267,17 @@ async def main():
     SAVED.clear()
     r = await server._revise_work_report(me, first["id"], "nei tempi indicativi metti 3 giorni lavorativi")
     print(r["message"])
-    assert r["changed"] == ["Proposta › Tempi indicativi"] and r["version"] == 2 and r["client_name"] == "Mario Rossi"
+    assert r["changed"] == ["7. Proposta tecnica › Tempi indicativi"] and r["version"] == 2 and r["client_name"] == "Mario Rossi"
     line = [x for x in db.job_logs.docs if x.get("kind") == "report"][-1]
     assert line["report_id"] == first["id"] and line["commessa_id"] == first["commessa_id"] and line["report_version"] == 2
     assert line["text"] == "Report «Primo sopralluogo» aggiornato alla versione 2 da Luca: modificato Tempi indicativi."
     assert len(db.collection_items.docs) == n_clients and len(db.work_reports.docs) == n_reports   # nothing new
     assert SAVED[-1]["subs"][0] == "Mario Rossi" and SAVED[-1]["subs"][-1] == "Report" and SAVED[-1]["fname"].endswith(" - v2.docx")
     txt = doc_text(SAVED[-1]["bytes"]); assert "3 giorni lavorativi" in txt and "Mario Rossi" in txt and "Nuovo quadro" in txt
+    assert "Revisione: 01" in txt and "Stato delle revisioni" in txt and "Prima emissione" in txt and "Modificato Tempi indicativi" in txt, txt
     async def four(sections, instruction, user_id=None, channel="web"):
         out = [{"title": x["title"], "fields": dict(x["fields"])} for x in sections]
-        out[3]["fields"]["Tempi indicativi"] = "4 giorni"
+        next(x for x in out if "Tempi indicativi" in x["fields"])["fields"]["Tempi indicativi"] = "4 giorni"
         return {"sections": out, "client": {}, "job_title": ""}
     wr.revise = four
     again = await server._revise_work_report(me, first["id"], "e poi metti 4 giorni")
@@ -356,5 +361,17 @@ async def main():
     await db.users.update_one({"user_id": "u1"}, {"$set": {"business_vertical": "veterinario"}})
     await tb._cmd_report(upd, Ctx())
     assert SENT[-1][1].inline_keyboard[0][0].callback_data.startswith("vetrep:")
+    # every ready model: a record of the quality system - numbered sections, identification, its ISO clauses, who signs
+    for key, t in wr.BUILTIN_TEMPLATES.items():
+        assert t["sections"][0]["fields"][:5] == ["Cliente", "Telefono", "Email", "Indirizzo del cantiere", "Riferimento commessa"], key
+        assert all(sec["title"].split(".")[0].isdigit() for sec in t["sections"]), key
+        secs = [{"title": sec["title"], "fields": {f: ("x" if i < 2 else "") for i, f in enumerate(sec["fields"])}} for sec in t["sections"]]
+        info = server._report_doc_info({"report_type": key, "doc_code": f"{wr.DOC_PREFIX[key]}-2026-001-01", "version": 1,
+                                        "created_at": "2026-11-23T08:00:00+00:00", "doc_commessa": "2026-001 – Bagno"})
+        txt = doc_text(wr.build_docx(t["name"], "Mario Rossi", "Bagno", secs, company="Impresa", doc_info=info))
+        assert f"{wr.DOC_PREFIX[key]}-2026-001-01" in txt and "UNI EN ISO 9001:2015" in txt and wr.QUALITY_CLAUSES[key] in txt, key
+        assert wr.CLIENT_SIGN.get(key, "Per presa visione (il cliente)") in txt and "Verificato e approvato da" in txt, key
+    assert "presa in consegna" in wr.CLIENT_SIGN["fine_lavori"] and "accettazione della variante" in wr.CLIENT_SIGN["variante"]
+    assert "CEI 0-21" in wr.applicable_norms("impianto fotovoltaico da 6 kW") and wr.applicable_norms("tinteggiatura del soggiorno") == ""
     print("ALL OK")
 asyncio.run(main())

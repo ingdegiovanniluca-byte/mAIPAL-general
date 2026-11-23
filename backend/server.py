@@ -6227,6 +6227,40 @@ async def _report_commessa_context(clienti: dict, sub: dict, client: Optional[di
     return "\n".join(x for x in lines if x), photo_ids
 
 
+async def _report_doc_code(report_type: str, commessa_id: Optional[str], codice: str) -> str:
+    """The report's document number (ISO 9001 §7.5.2): VS-2026-005-02 = the 2nd Primo sopralluogo of commessa 2026-005;
+    without a commessa VS-20261123-1015."""
+    prefix = work_reports.DOC_PREFIX.get(report_type, "RPT")
+    if commessa_id and codice:
+        n = await db.work_reports.count_documents({"commessa_id": commessa_id, "report_type": report_type})
+        return f"{prefix}-{codice}-{n + 1:02d}"
+    return f"{prefix}-{datetime.now(work_reports.LOCAL_TZ).strftime('%Y%m%d-%H%M')}"
+
+
+def _report_doc_info(rep: dict) -> Optional[dict]:
+    """The identification block of a built-in report (not of the user's own models): number, revision, date, commessa,
+    the revisions' history."""
+    if rep.get("report_type") not in work_reports.QUALITY_CLAUSES or not rep.get("doc_code"):
+        return None
+    def _d(iso):
+        try:
+            return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(work_reports.LOCAL_TZ).strftime("%d/%m/%Y")
+        except Exception:
+            return ""
+    revs = []
+    if (rep.get("version") or 1) > 1:
+        revs.append({"rev": 0, "date": _d(rep.get("created_at")), "what": "Prima emissione"})
+        for i, x in enumerate(rep.get("revisions") or [], 1):
+            what = ", ".join(c.split(" › ")[-1] for c in (x.get("changed") or []) if not c.startswith("Documentazione fotografica"))
+            bits = ([f"modificato {what}"] if what else []) + ([f"aggiunte {x['photos_added']} foto"] if x.get("photos_added") else [])
+            what = "; ".join(bits)
+            revs.append({"rev": i, "date": _d(x.get("at")), "what": (what[:1].upper() + what[1:]) or "Aggiornamento"})
+    return {"code": rep["doc_code"], "revision": max(0, int(rep.get("version") or 1) - 1),
+            "date": _d(rep.get("updated_at") or rep.get("created_at")), "commessa": rep.get("doc_commessa") or "-",
+            "revisions": revs, "quality_note": work_reports.quality_note(rep["report_type"]),
+            "client_sign": work_reports.CLIENT_SIGN.get(rep["report_type"])}
+
+
 async def _generate_work_report(current: User, text: str, report_type: str = "sopralluogo", client_item_id: Optional[str] = None,
                                 new_client: bool = False, channel: str = "web", commessa_opts: Optional[dict] = None,
                                 commessa_id: Optional[str] = None, no_commessa: bool = False, keep_type: bool = False,
@@ -6358,12 +6392,30 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
     work_reports.set_field(sections, "Data", datetime.now(work_reports.LOCAL_TZ).strftime("%d/%m/%Y"), overwrite=False)
     if commessa and not commessa_created and report_type in ("sal", "fine_lavori"):
         await _fill_report_from_diary(sections, report_type, commessa["id"], _sysval(commessa.get("data"), smap, "data_inizio"))
+    codice = _sysval(commessa.get("data"), smap, "codice") if commessa else ""
+    doc_commessa = " – ".join(x for x in (codice, commessa_title) if x)
+    work_reports.set_field(sections, "Riferimento commessa", doc_commessa)
+    if report_type == "sopralluogo":
+        work_reports.set_field(sections, "Scopo del sopralluogo", "Rilievo dello stato di fatto e raccolta dei requisiti del cliente "
+                               "per la formulazione della proposta tecnico-economica.", overwrite=False)
+    if report_type in ("sopralluogo", "fine_lavori"):   # the rules that apply (fine lavori: what the conformity declares)
+        norms = work_reports.applicable_norms(" ".join([text, context, commessa_title or "", interpreted.get("job_title") or ""]))
+        said_norms = next((sec["fields"].get("Riferimenti normativi applicabili") for sec in sections
+                           if "Riferimenti normativi applicabili" in sec["fields"]), "")
+        if norms:
+            work_reports.set_field(sections, "Riferimenti normativi applicabili", "\n".join(x for x in (said_norms, norms) if x))
+    doc_code = await _report_doc_code(report_type, commessa["id"] if commessa else None, codice) \
+        if report_type in work_reports.BUILTIN_TEMPLATES else None
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc_info = _report_doc_info({"report_type": report_type, "doc_code": doc_code, "version": 1, "created_at": now_iso,
+                                 "doc_commessa": doc_commessa})
 
     company = ""
     if current.org_id:
         org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
         company = (org or {}).get("name") or ""
-    docx_bytes = work_reports.build_docx(template_name, client_name or None, commessa_title or None, sections, company=company, photos=photos)
+    docx_bytes = work_reports.build_docx(template_name, client_name or None, commessa_title or None, sections, company=company, photos=photos,
+                                         doc_info=doc_info)
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {client_name or 'senza cliente'} - {stamp}.docx".replace("/", "-")
 
@@ -6399,13 +6451,14 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         "company": company,
         "drive_path": [folder] + subs,
         "photo_ids": list(photo_ids or []), "survey_photo_ids": survey_photo_ids,   # (kept for the next versions)
+        "doc_code": doc_code, "doc_commessa": doc_commessa or None,   # the document's identification (ISO 9001 §7.5)
         "version": 1,
         "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
         "docx_filename": fname,
         "drive_link": drive_link,
         "drive_folder": drive_folder,
         "telegram_sent": telegram_sent,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
     }
     await db.work_reports.insert_one(report_doc)
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_report", channel=channel, trigger="utente", org_id=current.org_id)
@@ -6985,7 +7038,12 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
     if current.org_id:
         org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
         company = (org or {}).get("name") or ""
-    docx_bytes = work_reports.build_docx(template_name, view["client_name"] or None, view["title"] or None, sections, company=company)
+    doc_code = await _report_doc_code("commessa", cid, view.get("codice") or "")
+    doc_commessa = " – ".join(x for x in (view.get("codice"), view["title"]) if x)
+    created_iso = datetime.now(timezone.utc).isoformat()
+    docx_bytes = work_reports.build_docx(template_name, view["client_name"] or None, view["title"] or None, sections, company=company,
+                                         doc_info=_report_doc_info({"report_type": "commessa", "doc_code": doc_code, "version": 1,
+                                                                    "created_at": created_iso, "doc_commessa": doc_commessa}))
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {view['client_name'] or view['title']} - {stamp}.docx".replace("/", "-")
     _sub_doc = await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0}) or {"id": view["id"]}
@@ -7003,10 +7061,10 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
         "commessa_id": cid, "commessa_title": view["title"], "commessa_created": False,
         "period_from": start.isoformat(), "period_to": end.isoformat(), "period_label": plabel, "include": wants,
         "transcript": text, "sections": sections, "summary": summary, "company": company,
-        "drive_path": [folder] + subs, "version": 1,
+        "drive_path": [folder] + subs, "version": 1, "doc_code": doc_code, "doc_commessa": doc_commessa or None,
         "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"), "docx_filename": fname,
         "drive_link": drive_link, "drive_folder": drive_folder, "telegram_sent": telegram_sent,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": created_iso,
     }
     await db.work_reports.insert_one(report_doc)
     ut.fire_and_forget_feature_event(user_id=current.user_id, feature="creazione_report", channel=channel, trigger="utente", org_id=current.org_id)
@@ -7140,8 +7198,11 @@ async def _revise_work_report(current: User, report_id: str, instruction: str, c
 
     version = int(rep.get("version") or 1) + 1
     photos = await _report_photos(photo_ids, rep.get("survey_photo_ids") or [])
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc_info = _report_doc_info({**rep, "version": version, "updated_at": now_iso,
+                                 "revisions": (rep.get("revisions") or []) + [{"changed": changed, "photos_added": len(new_photos), "at": now_iso}]})
     docx_bytes = work_reports.build_docx(rep["template_name"], client_name or None, rep.get("commessa_title") or None, sections,
-                                         company=rep.get("company") or "", photos=photos)
+                                         company=rep.get("company") or "", photos=photos, doc_info=doc_info)
     base_name = re.sub(r"( - v\d+)?\.docx$", "", rep.get("docx_filename") or rep["template_name"])
     fname = f"{base_name} - v{version}.docx"
     path = rep.get("drive_path") or ([vx.CLIENTI_NAME, rep["client_name"]] + ([rep["commessa_title"]] if rep.get("commessa_title") else [])
@@ -11575,8 +11636,13 @@ async def make_variant(commessa_id: str, payload: VariantPayload, current: User 
         org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
         company = (org or {}).get("name") or ""
     name = work_reports.BUILTIN_TEMPLATES["variante"]["name"]
-    docx_bytes = work_reports.build_docx(name, view["client_name"] or None, view["title"] or None, sections, company=company)
     n = await db.work_reports.count_documents({"commessa_id": commessa_id, "report_type": "variante"}) + 1
+    doc_code = await _report_doc_code("variante", commessa_id, view.get("codice") or "")
+    doc_commessa = " – ".join(x for x in (view.get("codice"), view["title"]) if x)
+    created_iso = datetime.now(timezone.utc).isoformat()
+    docx_bytes = work_reports.build_docx(name, view["client_name"] or None, view["title"] or None, sections, company=company,
+                                         doc_info=_report_doc_info({"report_type": "variante", "doc_code": doc_code, "version": 1,
+                                                                    "created_at": created_iso, "doc_commessa": doc_commessa}))
     fname = an.file_name("preventivo", today, "variante", "docx", version=n)
     folder, subs = _commessa_archive_place(clienti, sub, view, "preventivo")
     link, drive_folder, tg_sent = await _deliver_work_report(current, docx_bytes, fname, folder, subs, f"📄 {name} — {view['title']}")
@@ -11587,7 +11653,7 @@ async def make_variant(commessa_id: str, payload: VariantPayload, current: User 
            "commessa_created": False, "sections": sections, "summary": f"{len(rows)} lavori extra" + (f", {jl._eur(total)}" if total else ""),
            "company": company, "drive_path": [folder] + subs, "version": n, "docx_b64": _b64.b64encode(docx_bytes).decode("ascii"),
            "docx_filename": fname, "drive_link": link, "drive_folder": drive_folder, "telegram_sent": tg_sent,
-           "extra_ids": [x["id"] for x in rows], "created_at": datetime.now(timezone.utc).isoformat()}
+           "extra_ids": [x["id"] for x in rows], "doc_code": doc_code, "doc_commessa": doc_commessa or None, "created_at": created_iso}
     await db.work_reports.insert_one(doc)
     await db.job_extra_works.update_many({"id": {"$in": doc["extra_ids"]}}, {"$set": {"variant_report_id": doc["id"]}})
     doc.pop("_id", None)

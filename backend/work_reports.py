@@ -28,51 +28,135 @@ MODEL = "gpt-4o"
 FEATURE = "creazione_report"
 LOCAL_TZ = ZoneInfo("Europe/Rome")
 
+# Primo sopralluogo: a verbale structured as a record of the quality system (UNI EN ISO 9001:2015 §7.5 documented
+# information, §8.2.2-8.2.3 the customer's requirements determined and reviewed), with the health & safety (ISO 45001,
+# D.Lgs. 81/2008) and environmental (ISO 14001) aspects seen on site. Field names used elsewhere stay as they were
+# ("Oggetto dell'intervento", "Lavori proposti", "Tempi indicativi", "Stima economica indicativa", "Note e prescrizioni").
 SOPRALLUOGO_SECTIONS = [
-    {"title": "Dati del cliente", "fields": ["Cliente", "Telefono", "Email", "Indirizzo del cantiere"]},
-    {"title": "Sopralluogo", "fields": ["Data", "Eseguito da", "Oggetto dell'intervento"]},
-    {"title": "Stato attuale e rilievi", "fields": ["Descrizione dello stato attuale", "Misure e rilievi",
-                                                  "Impianti / strutture esistenti", "Criticità riscontrate"]},
-    {"title": "Proposta", "fields": ["Lavori proposti", "Materiali stimati", "Tempi indicativi", "Stima economica indicativa"]},
-    {"title": "Note", "fields": ["Note e prescrizioni", "Prossimi passi"]},
+    {"title": "1. Dati identificativi", "fields": ["Cliente", "Telefono", "Email", "Indirizzo del cantiere", "Riferimento commessa"]},   # (= CLIENT_SECTION)
+    {"title": "2. Dati del sopralluogo", "fields": ["Data", "Eseguito da", "Presenti al sopralluogo", "Oggetto dell'intervento",
+                                                    "Scopo del sopralluogo"]},
+    {"title": "3. Requisiti del cliente", "fields": ["Esigenze e richieste del cliente", "Vincoli e condizioni (accessi, orari, tempi)",
+                                                     "Riferimenti normativi applicabili"]},
+    {"title": "4. Stato di fatto e rilievi", "fields": ["Descrizione dello stato attuale", "Misure e rilievi",
+                                                        "Impianti / strutture esistenti", "Strumenti di misura utilizzati"]},
+    {"title": "5. Valutazione tecnica", "fields": ["Fattibilità tecnica", "Criticità e non conformità riscontrate",
+                                                   "Verifiche e approfondimenti necessari"]},
+    {"title": "6. Sicurezza e ambiente", "fields": ["Rischi per la sicurezza rilevati", "Misure di prevenzione e DPI previsti",
+                                                    "Aspetti ambientali e gestione dei rifiuti"]},
+    {"title": "7. Proposta tecnica", "fields": ["Lavori proposti", "Materiali e componenti previsti", "Tempi indicativi",
+                                                "Stima economica indicativa"]},
+    {"title": "8. Azioni successive", "fields": ["Prossimi passi", "Documentazione da acquisire", "Note e prescrizioni"]},
 ]
+# what the model must not write by itself: the app fills these (commessa, applicable rules)
+APP_FILLED = {"Riferimento commessa"}
 
-CLIENT_SECTION = {"title": "Dati del cliente", "fields": ["Cliente", "Telefono", "Email", "Indirizzo del cantiere"]}
+# the rules that apply to a kind of work - fixed and checked here, never written by the model; shown as indicative
+# ("da confermare in progettazione"). Matched on the words of the dictation and of the commessa.
+_NORMS = [
+    (r"fotovoltaic|pannell[io] solar|\bfv\b|inverter|accumul", ["CEI 0-21 (connessione alla rete BT)", "Guida CEI 82-25 (impianti fotovoltaici)"]),
+    (r"elettric|quadro|prese?\b|punti luce|illuminaz|differenzial|salvavita|messa a terra", ["CEI 64-8 (impianti elettrici utilizzatori BT)"]),
+    (r"\bgas\b|caldaia|metano|gpl|piano cottura", ["UNI 7129 (impianti a gas per uso domestico)"]),
+    (r"idraulic|idric|acqua sanitaria|scarich|tubazion|bagno|sanitari|doccia", ["UNI 9182 e UNI EN 806 (impianti idrici)"]),
+    (r"condizionator|climatizz|pompa di calore|split|refrigerant", ["Regolamento (UE) 2024/573 (gas fluorurati)"]),
+]
+_IMPIANTI = r"impiant|fotovoltaic|caldaia|\bgas\b|elettric|idraulic|condizionator|climatizz|pompa di calore"
 
-# Rapporto di intervento: one visit (a repair, a maintenance, an installation)
+
+def applicable_norms(text: str) -> str:
+    """The rules that apply to the work said (one per line), or "" when the kind of work isn't clear."""
+    low = (text or "").lower()
+    out = []
+    for pat, norms in _NORMS:
+        if re.search(pat, low):
+            out += [n for n in norms if n not in out]
+    if re.search(_IMPIANTI, low):
+        out.append("D.M. 37/2008 (installazione degli impianti, dichiarazione di conformità)")
+    if out:
+        out.append("D.Lgs. 81/2008 (salute e sicurezza nei luoghi di lavoro)")
+        return "\n".join(f"- {n}" for n in out) + "\n(Riferimenti indicativi, da confermare in fase di progettazione.)"
+    return ""
+
+
+# how each report is named in its document code (ISO 9001 §7.5.2: identification of the documented information)
+DOC_PREFIX = {"sopralluogo": "VS", "intervento": "RI", "sal": "SAL", "fine_lavori": "VFL", "variante": "VAR", "commessa": "RC"}
+
+CLIENT_SECTION = {"title": "1. Dati identificativi", "fields": ["Cliente", "Telefono", "Email", "Indirizzo del cantiere", "Riferimento commessa"]}
+
+# The other ready models, revised the same way: records of the quality system (UNI EN ISO 9001:2015 - the clauses of each
+# in QUALITY_CLAUSES), with the safety (ISO 45001, D.Lgs. 81/2008) and environmental (ISO 14001) aspects of the work.
+# The names the app fills from the diary stay as they were ("Periodo di riferimento", "Ore impiegate", "Materiali impiegati",
+# "Problemi riscontrati", "Tappe", "Data inizio lavori", "Data fine lavori", "Ore complessive", "Attività svolte", ...).
+
+# Rapporto di intervento: one visit (a repair, a maintenance, an installation) - service provision, release, nonconformities
 INTERVENTO_SECTIONS = [
     CLIENT_SECTION,
-    {"title": "Intervento", "fields": ["Data", "Eseguito da", "Orario", "Tipo di intervento", "Motivo della richiesta"]},
-    {"title": "Lavori eseguiti", "fields": ["Attività svolte", "Materiali utilizzati", "Ore di lavoro", "Esito"]},
-    {"title": "Note", "fields": ["Anomalie riscontrate", "Consigli al cliente", "Prossimi passi"]},
+    {"title": "2. Dati dell'intervento", "fields": ["Data", "Eseguito da", "Orario", "Tipo di intervento", "Motivo della richiesta"]},
+    {"title": "3. Diagnosi", "fields": ["Anomalie riscontrate", "Causa individuata"]},
+    {"title": "4. Attività eseguite", "fields": ["Attività svolte", "Materiali utilizzati", "Ore di lavoro", "Strumenti di misura utilizzati"]},
+    {"title": "5. Verifiche ed esito", "fields": ["Prove e verifiche eseguite", "Esito", "Non conformità residue o lavori da completare"]},
+    {"title": "6. Sicurezza e ambiente", "fields": ["Misure di sicurezza adottate", "Materiali rimossi e smaltimento"]},
+    {"title": "7. Indicazioni al cliente", "fields": ["Consigli al cliente", "Prossimi passi"]},
 ]
 
-# Stato avanzamento lavori (SAL): where the job is - hours, materials, problems and tappe
-# of the period also come from the commessa's diary when the dictation doesn't say them
+# Stato avanzamento lavori (SAL): where the job is - hours, materials, problems and tappe of the period also come from the
+# commessa's diary when the dictation doesn't say them; monitoring, changes and corrective actions
 SAL_SECTIONS = [
     CLIENT_SECTION,
-    {"title": "Avanzamento", "fields": ["Data", "Eseguito da", "Periodo di riferimento", "Percentuale di avanzamento"]},
-    {"title": "Lavori del periodo", "fields": ["Lavori eseguiti", "Ore impiegate", "Materiali impiegati", "Tappe"]},
-    {"title": "Criticità e prossimi passi", "fields": ["Problemi riscontrati", "Varianti o lavori extra", "Prossime attività",
-                                                      "Previsione di fine lavori"]},
-    {"title": "Note", "fields": ["Note"]},
+    {"title": "2. Dati dello stato di avanzamento", "fields": ["Data", "Eseguito da", "Periodo di riferimento", "Percentuale di avanzamento"]},
+    {"title": "3. Lavori del periodo", "fields": ["Lavori eseguiti", "Ore impiegate", "Materiali impiegati", "Tappe"]},
+    {"title": "4. Controlli e verifiche", "fields": ["Controlli eseguiti nel periodo", "Esito dei controlli"]},
+    {"title": "5. Criticità e modifiche", "fields": ["Problemi riscontrati", "Azioni correttive", "Varianti o lavori extra"]},
+    {"title": "6. Sicurezza e ambiente", "fields": ["Sicurezza in cantiere", "Rifiuti prodotti e smaltimento"]},
+    {"title": "7. Programmazione", "fields": ["Prossime attività", "Previsione di fine lavori"]},
+    {"title": "8. Note", "fields": ["Note"]},
 ]
 
-# Verbale di fine lavori e consegna
+# Verbale di fine lavori e consegna: release of the work, the documents handed over (D.M. 37/2008), after-delivery
 FINE_LAVORI_SECTIONS = [
     CLIENT_SECTION,
-    {"title": "Lavori", "fields": ["Data", "Eseguito da", "Oggetto dei lavori", "Data inizio lavori", "Data fine lavori", "Ore complessive"]},
-    {"title": "Consegna", "fields": ["Lavori eseguiti", "Verifiche e collaudi", "Documentazione consegnata", "Garanzia"]},
-    {"title": "Note", "fields": ["Riserve o lavori da completare", "Istruzioni per il cliente"]},
+    {"title": "2. Dati dei lavori", "fields": ["Data", "Eseguito da", "Oggetto dei lavori", "Data inizio lavori", "Data fine lavori",
+                                               "Ore complessive"]},
+    {"title": "3. Lavori eseguiti", "fields": ["Lavori eseguiti", "Materiali e componenti installati"]},
+    {"title": "4. Verifiche e collaudi", "fields": ["Verifiche e collaudi", "Esito del collaudo", "Strumenti di misura utilizzati"]},
+    {"title": "5. Documentazione e conformità", "fields": ["Documentazione consegnata", "Riferimenti normativi applicabili"]},
+    {"title": "6. Consegna e garanzia", "fields": ["Garanzia", "Istruzioni per il cliente", "Manutenzione consigliata"]},
+    {"title": "7. Riserve", "fields": ["Riserve o lavori da completare"]},
+    {"title": "8. Sicurezza e ambiente", "fields": ["Pulizia del cantiere e smaltimento dei rifiuti"]},
 ]
 
-# Lavori extra / variante: what was added or changed, to be approved by the client
+# Lavori extra / variante: a change to the agreed requirements, to be approved by the client before it is done
 VARIANTE_SECTIONS = [
     CLIENT_SECTION,
-    {"title": "Variante", "fields": ["Data", "Eseguito da", "Oggetto", "Motivo della variante"]},
-    {"title": "Lavori aggiuntivi", "fields": ["Descrizione dei lavori", "Materiali", "Tempi aggiuntivi", "Costo aggiuntivo indicativo"]},
-    {"title": "Note", "fields": ["Note e condizioni"]},
+    {"title": "2. Dati della variante", "fields": ["Data", "Eseguito da", "Oggetto", "Motivo della variante", "Richiesta da"]},
+    {"title": "3. Descrizione della modifica", "fields": ["Descrizione dei lavori", "Materiali", "Effetti sui lavori previsti"]},
+    {"title": "4. Effetti su tempi e costi", "fields": ["Tempi aggiuntivi", "Costo aggiuntivo indicativo"]},
+    {"title": "5. Condizioni", "fields": ["Note e condizioni"]},
 ]
+
+# the clauses of UNI EN ISO 9001:2015 each record answers to (shown at the end of the document)
+QUALITY_CLAUSES = {
+    "sopralluogo": "§7.5 informazioni documentate, §8.2 requisiti per prodotti e servizi",
+    "intervento": "§7.5 informazioni documentate, §8.5.1 controllo dell'erogazione del servizio, §8.6 rilascio, "
+                  "§8.7 controllo degli output non conformi",
+    "sal": "§7.5 informazioni documentate, §8.5.1 controllo dell'erogazione del servizio, §8.5.6 controllo delle modifiche, "
+           "§9.1.1 monitoraggio e misurazione",
+    "fine_lavori": "§7.5 informazioni documentate, §8.6 rilascio di prodotti e servizi, §8.5.5 attività post-consegna",
+    "variante": "§7.5 informazioni documentate, §8.2.4 modifiche ai requisiti, §8.5.6 controllo delle modifiche",
+    "commessa": "§7.5 informazioni documentate, §9.1.1 monitoraggio, misurazione, analisi e valutazione",
+}
+# who signs for the client, by record
+CLIENT_SIGN = {"fine_lavori": "Per accettazione e presa in consegna (il cliente)",
+               "variante": "Per accettazione della variante (il cliente)"}
+
+
+def quality_note(report_type: str) -> str:
+    clauses = QUALITY_CLAUSES.get(report_type)
+    if not clauses:
+        return ""
+    return (f"Modulo strutturato secondo i requisiti di registrazione della UNI EN ISO 9001:2015 ({clauses}); aspetti di "
+            "sicurezza e ambiente secondo i principi di UNI EN ISO 45001 e UNI EN ISO 14001.")
+
 
 # at most five ready models (plus the user's own uploaded ones)
 BUILTIN_TEMPLATES = {
@@ -140,6 +224,15 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
         "2. Linguaggio tecnico e professionale del settore, frasi impersonali e concise (es. 'Si rileva…', "
         "'Si propone…'), niente prima persona, niente commenti fuori dai campi.\n"
         "3. Liste di lavori o materiali: una voce per riga, preceduta da '- '.\n"
+        "3b. È una registrazione del sistema qualità (UNI EN ISO 9001): scrivi fatti rilevati e decisioni, non opinioni. "
+        "'Criticità e non conformità riscontrate': solo ciò che è detto come problema o non a norma. 'Prossimi passi': un'azione per "
+        "riga, con chi la fa e la scadenza SOLO se dette. 'Rischi per la sicurezza', 'Misure di prevenzione e DPI', 'Aspetti "
+        "ambientali e gestione dei rifiuti', 'Strumenti di misura utilizzati', 'Presenti al sopralluogo': solo se detti. "
+        "'Riferimenti normativi applicabili': solo norme citate nel testo (le altre le aggiunge l'app). 'Riferimento commessa': "
+        "lascialo vuoto. Allo stesso modo, solo se detti: 'Causa individuata', 'Prove e verifiche eseguite', 'Controlli eseguiti "
+        "nel periodo', 'Esito dei controlli', 'Azioni correttive', 'Esito del collaudo', 'Documentazione consegnata', 'Garanzia', "
+        "'Manutenzione consigliata', 'Richiesta da', 'Effetti sui lavori previsti', 'Sicurezza in cantiere', 'Rifiuti prodotti e "
+        "smaltimento', 'Pulizia del cantiere e smaltimento dei rifiuti'.\n"
         + ("4. Dopo il resoconto trovi i DATI DELLA COMMESSA già registrati nell'app (titolo, descrizione, note del sopralluogo): "
            "sono veri, usali come il resoconto per compilare i campi pertinenti. Non aggiungere nulla che non sia scritto lì o nel resoconto.\n"
            if context else "")
@@ -182,7 +275,9 @@ async def interpret(text: str, sections: list, user_name: str = "", user_id: Opt
 
 
 # fields that are not the report's content: who the client is, who signed it, when
-_NOT_CONTENT = {"Cliente", "Telefono", "Email", "Indirizzo del cantiere", "Data", "Eseguito da"}
+_NOT_CONTENT = {"Cliente", "Telefono", "Email", "Indirizzo del cantiere", "Data", "Eseguito da", "Riferimento commessa",
+                "Presenti al sopralluogo", "Strumenti di misura utilizzati", "Riferimenti normativi applicabili",
+                "Scopo del sopralluogo"}
 
 
 def summary_of(sections: list, limit: int = 300) -> str:
@@ -279,35 +374,114 @@ def set_field(sections: list, label: str, value: str, overwrite: bool = True) ->
             s["fields"][label] = value
 
 
+def _page_field(paragraph, code: str) -> None:
+    """A Word field (PAGE / NUMPAGES) in the paragraph: the page numbers, kept right by Word."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    run = paragraph.add_run()
+    for kind, text in (("begin", None), (None, code), ("separate", None), (None, None), ("end", None)):
+        if kind:
+            el = OxmlElement("w:fldChar"); el.set(qn("w:fldCharType"), kind); run._r.append(el)
+        elif text:
+            el = OxmlElement("w:instrText"); el.set(qn("xml:space"), "preserve"); el.text = f" {text} "; run._r.append(el)
+        else:
+            el = OxmlElement("w:t"); el.text = "1"; run._r.append(el)
+    run.font.size = Pt(8)
+
+
+def _shade(cell, hex_fill: str) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto"); shd.set(qn("w:fill"), hex_fill)
+    cell._tc.get_or_add_tcPr().append(shd)
+
+
 def build_docx(title: str, client_name: Optional[str], job_title: Optional[str], sections: list, company: str = "",
-               photos: Optional[list] = None) -> bytes:
-    """photos: [{"bytes": jpeg, "caption": text}] - the "Documentazione fotografica", before the signatures."""
+               photos: Optional[list] = None, doc_info: Optional[dict] = None) -> bytes:
+    """photos: [{"bytes": jpeg, "caption": text}] - the "Documentazione fotografica", before the signatures.
+    doc_info: the document's identification (ISO 9001 §7.5): {"code", "revision", "date", "commessa", "revisions":
+    [{"rev", "date", "what"}], "quality_note": bool} - a control block on top, the code and the pages in the footer,
+    the revisions' history, and the signatures of who wrote it, who approved it and the client."""
     doc = Document()
-    if company:
-        p = doc.add_paragraph(company)
-        p.runs[0].bold = True
-    heading = doc.add_heading(title, level=0)
-    for run in heading.runs:
-        run.font.size = Pt(20)
-    sub = doc.add_paragraph(" · ".join(x for x in (client_name and f"Cliente: {client_name}", job_title and f"Lavori: {job_title}") if x)
-                            or "Cliente: non indicato")
-    sub.runs[0].italic = True
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    info = doc_info or {}
+    if info:
+        sec0 = doc.sections[0]
+        sec0.left_margin = sec0.right_margin = Cm(2)
+        sec0.top_margin, sec0.bottom_margin = Cm(1.8), Cm(1.8)
+        # the control block: who issues it and what it is | its number, revision, date, commessa
+        head = doc.add_table(rows=4, cols=2)
+        head.style = "Table Grid"
+        left = head.cell(0, 0).merge(head.cell(3, 0))
+        left.text = ""
+        p = left.paragraphs[0]
+        r = p.add_run(company or ""); r.bold = True; r.font.size = Pt(11)
+        p2 = left.add_paragraph(); r2 = p2.add_run(title.upper()); r2.bold = True; r2.font.size = Pt(15)
+        if job_title or client_name:
+            p3 = left.add_paragraph(" · ".join(x for x in (client_name and f"Cliente: {client_name}", job_title and f"Lavori: {job_title}") if x))
+            p3.runs[0].italic = True; p3.runs[0].font.size = Pt(9)
+        rows = [("Documento n.", info.get("code") or "-"), ("Revisione", f"{int(info.get('revision') or 0):02d}"),
+                ("Data di emissione", info.get("date") or "-"), ("Commessa", info.get("commessa") or "-")]
+        for i, (label, value) in enumerate(rows):
+            c = head.cell(i, 1)
+            c.text = ""
+            pr = c.paragraphs[0]
+            lr = pr.add_run(f"{label}: "); lr.bold = True; lr.font.size = Pt(9)
+            vr = pr.add_run(value); vr.font.size = Pt(9)
+        head.autofit = False
+        head.columns[0].width, head.columns[1].width = Cm(10.5), Cm(6.5)
+        for row in head.rows:
+            row.cells[0].width, row.cells[1].width = Cm(10.5), Cm(6.5)
+        # the footer: the code, the revision and the pages, on every page
+        fp = sec0.footer.paragraphs[0]
+        fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        fr = fp.add_run(f"{info.get('code') or title} · Rev. {int(info.get('revision') or 0):02d} · Pag. ")
+        fr.font.size = Pt(8)
+        _page_field(fp, "PAGE")
+        fr2 = fp.add_run(" di "); fr2.font.size = Pt(8)
+        _page_field(fp, "NUMPAGES")
+        doc.add_paragraph()
+    else:
+        if company:
+            p = doc.add_paragraph(company)
+            p.runs[0].bold = True
+        heading = doc.add_heading(title, level=0)
+        for run in heading.runs:
+            run.font.size = Pt(20)
+        sub = doc.add_paragraph(" · ".join(x for x in (client_name and f"Cliente: {client_name}", job_title and f"Lavori: {job_title}") if x)
+                                or "Cliente: non indicato")
+        sub.runs[0].italic = True
+    n_sec = 0
     for sec in sections:
         if not any(v for v in sec["fields"].values()):
             continue   # a section nobody talked about stays out of the client's copy
-        doc.add_heading(sec["title"], level=1)
+        n_sec += 1
+        # a record: the sections shown numbered in order (an empty one leaves no gap)
+        plain = re.sub(r"^\d+\.\s*", "", sec["title"])
+        doc.add_heading(f"{n_sec}. {plain}" if info else sec["title"], level=1)
         table = doc.add_table(rows=0, cols=2)
-        table.style = "Light Grid Accent 1"
+        table.style = "Table Grid" if info else "Light Grid Accent 1"
+        if info:
+            table.autofit = False
+            table.columns[0].width, table.columns[1].width = Cm(5.5), Cm(11.5)
         for label, value in sec["fields"].items():
+            if info and not value:
+                continue   # a record: only what was found, said or decided
             row = table.add_row()
             row.cells[0].text = label
             row.cells[1].text = value or "-"
+            if info:
+                row.cells[0].width, row.cells[1].width = Cm(5.5), Cm(11.5)
+                _shade(row.cells[0], "F2F2F2")
             for p in row.cells[0].paragraphs:
                 for r in p.runs:
                     r.bold = True
     shots = [p for p in (photos or []) if p.get("bytes")]
     if shots:
-        doc.add_heading("Documentazione fotografica", level=1)
+        n_sec += 1
+        doc.add_heading((f"{n_sec}. " if info else "") + "Documentazione fotografica", level=1)
         for i, ph in enumerate(shots, 1):
             try:
                 doc.add_picture(io.BytesIO(ph["bytes"]), width=Cm(14))
@@ -319,20 +493,57 @@ def build_docx(title: str, client_name: Optional[str], job_title: Optional[str],
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             cap.runs[0].italic = True
             cap.runs[0].font.size = Pt(9)
+    if info and info.get("revisions"):   # ISO 9001 §7.5.3: the changes, identified
+        doc.add_heading("Stato delle revisioni", level=1)
+        rv = doc.add_table(rows=1, cols=3)
+        rv.style = "Table Grid"
+        rv.autofit = False
+        for c, t in zip(rv.rows[0].cells, ("Rev.", "Data", "Descrizione della modifica")):
+            c.text = t
+            _shade(c, "F2F2F2")
+            for r in c.paragraphs[0].runs:
+                r.bold = True
+        for x in info["revisions"]:
+            cells = rv.add_row().cells
+            cells[0].text, cells[1].text, cells[2].text = f"{int(x.get('rev') or 0):02d}", x.get("date") or "", x.get("what") or ""
+        for row in rv.rows:
+            row.cells[0].width, row.cells[1].width, row.cells[2].width = Cm(1.5), Cm(3), Cm(12.5)
     # signatures: room to sign on the printed copy (no digital signature for now)
-    doc.add_paragraph()
-    doc.add_paragraph("Luogo e data: ________________________________")
-    doc.add_paragraph()
-    sig = doc.add_table(rows=2, cols=2)
-    sig.cell(0, 0).text = "Firma del tecnico"
-    sig.cell(0, 1).text = "Firma del cliente per presa visione"
-    sig.cell(1, 0).text = "\n\n______________________________"
-    sig.cell(1, 1).text = "\n\n______________________________"
-    for c in (sig.cell(0, 0), sig.cell(0, 1)):
-        for p in c.paragraphs:
+    # the signatures stay together, on one page, with the place and date
+    for t in ("", "Luogo e data: ________________________________", ""):
+        doc.add_paragraph(t).paragraph_format.keep_with_next = True
+    heads = (["Redatto da (il tecnico)", "Verificato e approvato da", info.get("client_sign") or "Per presa visione (il cliente)"] if info
+             else ["Firma del tecnico", "Firma del cliente per presa visione"])
+    sig = doc.add_table(rows=2, cols=len(heads))
+    if info:
+        sig.autofit = False
+        for i in range(len(heads)):
+            sig.columns[i].width = Cm(17 / len(heads))
+            for r in range(2):
+                sig.cell(r, i).width = Cm(17 / len(heads))
+    for i, h in enumerate(heads):
+        sig.cell(0, i).text = h
+        sig.cell(1, i).text = "\n\n" + "_" * (22 if info else 30)
+        for p in sig.cell(0, i).paragraphs:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in p.runs:
                 r.bold = True
+                if info:
+                    r.font.size = Pt(9)
+        for p in sig.cell(1, i).paragraphs:
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for p in sig.cell(0, i).paragraphs:
+            p.paragraph_format.keep_with_next = True
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    for row in sig.rows:   # a row never split across two pages
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+    if info.get("quality_note"):
+        q = doc.add_paragraph()
+        q.paragraph_format.space_before = Pt(14)
+        qr = q.add_run(info["quality_note"] if isinstance(info["quality_note"], str) else quality_note("sopralluogo"))
+        qr.italic = True
+        qr.font.size = Pt(7.5)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
