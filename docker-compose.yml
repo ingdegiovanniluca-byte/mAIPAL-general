@@ -14,12 +14,14 @@ services:
     environment:
       ROLE: api
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      SEARCH_INDEX_URL: ${SEARCH_INDEX_URL-http://qdrant:6333}
     volumes:
       # who may come in as an organization's administrator (org_admins.txt): edited on the server,
       # read again when it changes - no rebuild, no restart
       - ./backend/data/access:/app/data/access
     depends_on:
       - mongodb
+      - qdrant
 
   # the periodic jobs (reminders, presences, summaries, news...) and the Telegram bot. A second copy is
   # a spare: each job runs on one copy at a time, and the bot on the leader only.
@@ -29,10 +31,20 @@ services:
     env_file: .env
     environment:
       ROLE: worker
+      SEARCH_INDEX_URL: ${SEARCH_INDEX_URL-http://qdrant:6333}
     volumes:
       - ./backend/data/access:/app/data/access
     depends_on:
       - mongodb
+      - qdrant
+
+  # the search index (backend/search_index.py): a copy of what is searchable, so a question searches the whole
+  # history. Rebuilt from MongoDB by the worker if lost. Reachable only by backend and worker (no port open).
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
 
   frontend:
     build:
@@ -48,3 +60,4 @@ services:
 
 volumes:
   mongo_data:
+  qdrant_data:

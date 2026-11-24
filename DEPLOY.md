@@ -180,3 +180,30 @@ backup automatici. I passi sono descritti nel documento di analisi.
   cd backend
   ISOLATION_MONGO_URL=mongodb://localhost:27018 python -m pytest tests/test_tenant_isolation.py
   ```
+
+## 9. Indice di ricerca (Cerca su tutto lo storico)
+
+Le domande a Cerca leggono i record più recenti da MongoDB e, per tutto il resto dello storico, chiedono a un
+**indice di ricerca** (Qdrant, servizio `qdrant` nel `docker-compose.yml`, vedi `backend/search_index.py`).
+Senza indice resta il comportamento di prima: vengono letti al massimo 5.000 pezzi di note/documenti e 3.000 voci
+di diario per domanda, e quelli più vecchi non vengono cercati (ora il log lo segnala).
+
+- **Avvio**: `docker compose up -d` avvia anche `qdrant`. Il worker crea l'indice e ci copia tutti i record
+  già salvati, un po' ogni minuto; finché non ha finito Cerca funziona come prima. Poi ogni nota, voce di diario,
+  task, to-do, report o elemento di lista nuovo o modificato entra nell'indice entro un minuto (una cancellazione
+  lo toglie). Lo stato: `docker compose exec worker python scripts/search_reindex.py`.
+- **Sicurezza**: l'indice non ha porte aperte verso l'esterno. Dice solo *quali* record guardare: ogni record viene
+  poi riletto da MongoDB con gli stessi filtri per utente e organizzazione di sempre, quindi un dato di un'altra
+  organizzazione non può arrivare in una risposta neppure se l'indice sbagliasse. Facoltativo: una chiave
+  (`QDRANT__SERVICE__API_KEY` sul servizio `qdrant` e lo stesso valore in `SEARCH_INDEX_API_KEY` nel `.env`).
+- **Spazio**: circa 1,5 KB per record (il significato è compresso); 1 milione di record ≈ 1,5–2 GB.
+- **Backup**: non serve. MongoDB contiene tutto, l'indice è una copia che si ricostruisce:
+  `docker compose exec worker python scripts/search_reindex.py --rebuild` (anche se il volume `qdrant_data` va perso:
+  il worker se ne accorge e lo ricostruisce da solo).
+- **Passare a un altro indice** (un altro server, o MongoDB Atlas Vector Search in cloud): si imposta
+  `SEARCH_INDEX_URL` sul nuovo indice e si fa `--rebuild`; per Atlas serve una classe con gli stessi metodi di
+  `QdrantIndex` in `backend/search_index.py`. Il resto dell'app non cambia.
+- **Disattivarlo**: `SEARCH_INDEX_URL=` (vuoto) nel `.env`. Se poi lo riattivi, fai `--rebuild`.
+- Variabili: `SEARCH_RECENT_KB` e `SEARCH_RECENT_LOGS` (record più recenti letti da MongoDB per domanda quando
+  l'indice è completo, predefiniti 800 e 500).
+- Prova con MongoDB e Qdrant veri: `backend/tests/integration/it_search_index.py` (istruzioni in testa al file).

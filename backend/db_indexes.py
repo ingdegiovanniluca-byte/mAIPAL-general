@@ -109,6 +109,11 @@ INDEXES: Tuple[Tuple[str, list, dict], ...] = (
     # knowledge base, chat, news
     ("kb_chunks", [("user_id", A), ("created_at", D)], {}),
     ("kb_chunks", [("tenant_kb", A)], {"sparse": True}),
+    ("kb_chunks", [("tenant_kb", A), ("created_at", D)], {"sparse": True}),
+    # the search index (search_index.py): the records still to index, the deleted ones to remove
+    *((c, [("ix_h", A)], {}) for c in ("kb_chunks", "tasks", "todos", "journal_entries", "vet_reports", "work_reports",
+                                         "job_logs", "collection_items")),
+    ("search_index_gone", [("at", A)], {"expireAfterSeconds": 30 * 86400}),
     ("kb_chunks", [("doc_id", A)], {}),
     ("kb_chunks", [("chunk_id", A)], {}),
     ("kb_documents", [("doc_id", A)], {}),

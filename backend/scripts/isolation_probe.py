@@ -343,6 +343,9 @@ async def main():
     leaks = [x for x in results if x["read"] or x["write"]]
     unreached = [x for x in results if not (200 <= x["a"] < 300) and not (x["read"] or x["write"])]
     print(f"ROUTES PROBED: {len(results)}  LEAKS: {len(leaks)}  NOT REACHED BY A EITHER: {len(unreached)}")
+    if os.environ.get("PROBE_DUMP"):   # every answer's status, to compare two runs (e.g. with / without the search index)
+        with open(os.environ["PROBE_DUMP"], "w") as f:
+            json.dump([{k: x[k] for k in ("m", "p", "a", "b")} for x in results], f, indent=0)
     for x in leaks:
         kind = ("LETTURA " if x["read"] else "") + ("SCRITTURA " + ", ".join(x["write"]) if x["write"] else "")
         print(f"LEAK {x['m']:6s} {x['p']:60s} B={x['b']} A={x['a']} {kind}\n      {x['snip'][:200]!r}")

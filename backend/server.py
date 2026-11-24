@@ -42,6 +42,7 @@ import microsoft_integration as ms
 import telegram_bot as tg
 import jobs
 import db_indexes
+import search_index
 import embeddings as emb
 import retrieval
 import news_service
@@ -75,7 +76,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = search_index.track(client[os.environ['DB_NAME']])   # (writes to searchable records are seen by the search index)
 ut.init(db)
 
 # Passed as `api_key=` into LlmChat/OpenAISpeechToText for interface compatibility, but
@@ -18698,6 +18699,8 @@ async def start_services():
     J("scheduled_actions", 30, _scheduled_actions_tick, 20, max_run=600)
     J("task_series", 6 * 3600, _task_series_tick, 30)
     J("conversation_cleanup", 6 * 3600, _cleanup_old_conversations, 60)
+    if search_index.configured():   # the search index: what changed in the last minute (the first time, everything)
+        J("search_index_sync", 60, lambda: search_index.sync_tick(db), 40, 1800)
     # Telegram allows one copy to read the bot's messages: the leader (another takes over if it stops)
     jobs.as_leader(db, "telegram_polling", tg.start_polling)
 

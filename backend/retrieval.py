@@ -21,6 +21,7 @@ Kept free of FastAPI/server imports (the db is passed in) so it can be tested di
 import calendar
 import logging
 import math
+import os
 import re
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
@@ -31,6 +32,7 @@ import numpy as np
 import embeddings as emb
 import job_logs as jl
 import list_updates as lu
+import search_index as six
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +339,119 @@ def _is_strong_match(score: int, n_tied: int) -> bool:
     return score >= 20 or n_tied <= 3
 
 
+# ---- one record -> what the search sees ("text") and what the answering model reads ("display") ----
+# (also used by the search index, so the index holds exactly the text searched here)
+def kb_candidate(c: dict) -> dict:
+    return {
+        "text": c.get("text", ""),
+        "display": _kb_display(c),
+        "source": "kb",
+        "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title"), "doc_id": c.get("doc_id"),
+                 "chunk_index": c.get("chunk_index", 0), "created_at": c.get("created_at")},
+        "embedding": c.get("embedding"),
+        "day": _local_day(c.get("created_at")),
+    }
+
+
+def task_candidate(t: dict) -> Optional[dict]:
+    txt = " · ".join(p for p in [t.get("title", ""), t.get("description", ""), t.get("notes", "")] if p)
+    if not txt:
+        return None
+    when = t.get("due_date", "") + (f" {t.get('due_time', '')}" if t.get("due_time") else "")
+    done = " · completato" if t.get("completed") else ""
+    display = f"[Task] {t.get('title', '')} — {when} · priorità {t.get('priority', 'media')}{done}. {t.get('description', '') or ''}".strip()
+    return {"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": t.get("embedding"),
+            "day": _local_day(t.get("due_date"))}
+
+
+def todo_candidate(td: dict) -> Optional[dict]:
+    txt = " · ".join(p for p in [td.get("title", ""), td.get("description", ""), td.get("notes", "")] if p)
+    if not txt:
+        return None
+    display = f"[To-Do] {td.get('title', '')} — stato {td.get('status', 'da_fare')} ({td.get('completion_percent', 0)}%). {td.get('description', '') or ''}".strip()
+    return {"text": txt, "display": display, "source": "todo", "meta": {"id": td.get("id")}, "embedding": td.get("embedding")}
+
+
+def journal_candidate(j: dict) -> Optional[dict]:
+    txt = (j.get("cleaned_text") or j.get("raw_text") or "").strip()
+    if not txt:
+        return None
+    # The whole day (up to 1500 chars), not just its opening: a name mentioned late in a
+    # long entry used to be cut off before the model ever saw it.
+    display = f"[Diario · {j.get('date', '')} ({format_it_date(j.get('date'))})] {j.get('title', '')}. {txt[:1500]}".strip()
+    return {"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": j.get("embedding"),
+            "day": _local_day(j.get("date"))}
+
+
+def vet_candidate(vrp: dict) -> Optional[dict]:
+    txt = (vrp.get("transcript") or "").strip()
+    if not txt:
+        return None
+    who = vrp.get("patient_name") or "paziente non identificato"
+    visit_date = (vrp.get("created_at") or "")[:10]
+    display = f"[Referto veterinario · {visit_date}] {who} — {vrp.get('template_name', '')}. {txt[:600]}".strip()
+    return {"text": f"{who} {txt}", "display": display, "source": "vet_report",
+            "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
+            "embedding": vrp.get("embedding"), "day": _local_day(visit_date)}
+
+
+def work_candidate(wrp: dict) -> Optional[dict]:
+    txt = (wrp.get("transcript") or "").strip()
+    if not txt:
+        return None
+    who = wrp.get("client_name") or "cliente non indicato"
+    job = f" · {wrp['commessa_title']}" if wrp.get("commessa_title") else ""
+    rep_date = (wrp.get("created_at") or "")[:10]
+    display = f"[{wrp.get('template_name', 'Report')} · {rep_date}] {who}{job}. {txt[:600]}".strip()
+    return {"text": f"{who}{job} {txt}", "display": display, "source": "work_report",
+            "meta": {"id": wrp.get("id"), "client_item_id": wrp.get("client_item_id"), "date": rep_date},
+            "embedding": wrp.get("embedding"), "day": _local_day(rep_date)}
+
+
+def job_log_candidate(lg: dict) -> Optional[dict]:
+    txt = jl.search_text(lg)
+    if not txt:
+        return None
+    where = " · ".join(x for x in (lg.get("client_name"), lg.get("commessa_title")) if x)
+    who = f" ({lg['author_name']})" if lg.get("author_name") else ""
+    display = f"[Diario commessa · {lg.get('date', '')}] {where}{who}: {txt[:900]}"
+    return {"text": f"{where} {txt}", "display": display, "source": "job_log",
+            "meta": {"id": lg.get("id"), "commessa_id": lg.get("commessa_id"), "date": lg.get("date")},
+            "embedding": lg.get("embedding"), "day": _local_day(lg.get("date"))}
+
+
+def item_candidate(it: dict, coll: Optional[dict]) -> Optional[dict]:
+    """An element of a Lista (coll = its list, for the attribute names)."""
+    if not coll:
+        return None
+    labels = {f["key"]: f["label"] for f in (coll.get("fields") or [])}
+    parts = [f"{labels.get(k, k)}: {v}" for k, v in (it.get("data") or {}).items() if v not in (None, "")]
+    if not parts:
+        return None
+    txt = " · ".join(parts)
+    day = _data_day(it.get("data")) or _local_day(it.get("created_at"))
+    added = "" if _data_day(it.get("data")) else (f" (aggiunto {format_it_date(it.get('created_at'))})" if it.get("created_at") else "")
+    return {"text": txt, "display": f"[Lista: {coll.get('name', '')}] {txt}{added}", "source": "collection_item",
+            "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": it.get("embedding"),
+            "day": day}
+
+
+CANDIDATE = {"kb": kb_candidate, "task": task_candidate, "todo": todo_candidate, "journal": journal_candidate,
+             "vet_report": vet_candidate, "work_report": work_candidate, "job_log": job_log_candidate}
+
+# How many records are read per question. Without the search index these are hard limits (the older
+# records are not searched); with it, only the latest ones are read and the index brings the rest.
+KB_CAP, LOGS_CAP = 5000, 3000
+RECENT_KB_INDEXED = int(os.environ.get("SEARCH_RECENT_KB", "800"))
+RECENT_LOGS_INDEXED = int(os.environ.get("SEARCH_RECENT_LOGS", "500"))
+
+
+def _owned_or_shared_q(user_id: str, org_id: Optional[str], query_field: str = "user_id") -> dict:
+    if org_id:
+        return {"$or": [{query_field: user_id}, {"org_id": org_id, "visibility": "org"}]}
+    return {query_field: user_id}
+
+
 def _owned(user_id: str, org_id: Optional[str]) -> dict:
     if org_id:
         return {"$or": [{"user_id": user_id}, {"org_id": org_id, "visibility": "org"}]}
@@ -365,18 +480,47 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
     # ---- KB notes/documents (always): theirs and their organization's knowledge ----
     me = await db.users.find_one({"user_id": user_id}, {"_id": 0, "tenant_id": 1}) or {}
     kb_q = {"$or": [{"user_id": user_id}, {"tenant_kb": me["tenant_id"]}]} if me.get("tenant_id") else {"user_id": user_id}
-    kb_docs = await db.kb_chunks.find(kb_q, {"_id": 0}).to_list(5000)
+    lists_q = _owned_or_shared_q(user_id, org_id)
+    if org_id:  # lists a team-mate shared by name (see server._lists_query)
+        lists_q = {"$or": lists_q["$or"] + [{"org_id": org_id, "shared_with": user_id}]}
+    colls = await db.collections.find(lists_q, {"_id": 0}).to_list(500)
+
+    # ---- the search index: the whole history, not only the latest records read below ----
+    hits: dict = {}
+    use_index = False
+    if q_emb is not None and await six.ready(db):
+        try:
+            hits = await six.recall(q_emb, terms, window, user_id=user_id, org_id=org_id, tenant_id=me.get("tenant_id"),
+                                    coll_ids=[c["id"] for c in colls if c.get("id")], everything=(scope == "all"))
+            use_index = True
+        except Exception:
+            logger.exception("search index not reachable: searching the latest records only")
+            six.unhealthy()
+    kb_cap = RECENT_KB_INDEXED if use_index else KB_CAP
+    log_cap = RECENT_LOGS_INDEXED if use_index else LOGS_CAP
+
+    def _cap_note(source: str, docs: list, cap: int) -> None:
+        if len(docs) >= cap and not use_index:   # (before, silent: older records were simply not searched)
+            logger.warning(f"[retrieve] {source}: over {cap} records, the older ones are not searched (no search index)")
+
+    async def _with_hits(source: str, coll, q: dict, docs: list, idf: str = "id", proj: Optional[dict] = None) -> list:
+        """The records of `source` the index found that aren't among `docs` yet, read with the permission filter q."""
+        have = {d.get(idf) for d in docs}
+        want = [i for i in hits.get(source, ()) if i not in have]
+        if not want:
+            return docs
+        return docs + await coll.find({"$and": [q, {idf: {"$in": want}}]}, proj or {"_id": 0}).to_list(len(want))
+    kb_docs = await db.kb_chunks.find(kb_q, {"_id": 0}).sort("created_at", -1).to_list(kb_cap)
+    _cap_note("kb", kb_docs, kb_cap)
+    kb_docs = await _with_hits("kb", db.kb_chunks, kb_q, kb_docs, "chunk_id")
+    hit_docs = {c.get("doc_id") for c in kb_docs if c.get("chunk_id") in set(hits.get("kb", ())) and c.get("doc_id")}
+    if hit_docs:   # a chunk found by the index brings its whole document (see "document expansion")
+        have = [c.get("chunk_id") for c in kb_docs]
+        kb_docs += await db.kb_chunks.find({"$and": [kb_q, {"doc_id": {"$in": list(hit_docs)}}, {"chunk_id": {"$nin": have}}]},
+                                           {"_id": 0}).to_list(500)
     doc_siblings: dict = {}
     for c in kb_docs:
-        item = {
-            "text": c.get("text", ""),
-            "display": _kb_display(c),
-            "source": "kb",
-            "meta": {"chunk_id": c.get("chunk_id"), "title": c.get("title"), "doc_id": c.get("doc_id"),
-                     "chunk_index": c.get("chunk_index", 0), "created_at": c.get("created_at")},
-            "embedding": c.get("embedding"),
-            "day": _local_day(c.get("created_at")),
-        }
+        item = kb_candidate(c)
         candidates.append(item)
         if c.get("doc_id"):
             doc_siblings.setdefault(c["doc_id"], []).append(item)
@@ -384,99 +528,55 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
         doc_siblings[did].sort(key=lambda x: x["meta"].get("chunk_index", 0))
 
     def _owned_or_shared(query_field: str = "user_id") -> dict:
-        if org_id:
-            return {"$or": [{query_field: user_id}, {"org_id": org_id, "visibility": "org"}]}
-        return {query_field: user_id}
+        return _owned_or_shared_q(user_id, org_id, query_field)
 
     if scope == "all":
-        for t in await db.tasks.find(_owned_or_shared(), {"_id": 0}).to_list(1000):
-            txt = " · ".join(p for p in [t.get("title", ""), t.get("description", ""), t.get("notes", "")] if p)
-            if not txt:
-                continue
-            when = t.get("due_date", "") + (f" {t.get('due_time', '')}" if t.get("due_time") else "")
-            done = " · completato" if t.get("completed") else ""
-            display = f"[Task] {t.get('title', '')} — {when} · priorità {t.get('priority', 'media')}{done}. {t.get('description', '') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "task", "meta": {"id": t.get("id")}, "embedding": t.get("embedding"),
-                               "day": _local_day(t.get("due_date"))})
-        for td in await db.todos.find({"user_id": user_id}, {"_id": 0}).to_list(1000):
-            txt = " · ".join(p for p in [td.get("title", ""), td.get("description", ""), td.get("notes", "")] if p)
-            if not txt:
-                continue
-            display = f"[To-Do] {td.get('title', '')} — stato {td.get('status', 'da_fare')} ({td.get('completion_percent', 0)}%). {td.get('description', '') or ''}".strip()
-            candidates.append({"text": txt, "display": display, "source": "todo", "meta": {"id": td.get("id")}, "embedding": td.get("embedding")})
-        for j in await db.journal_entries.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(1000):
-            txt = (j.get("cleaned_text") or j.get("raw_text") or "").strip()
-            if not txt:
-                continue
-            # The whole day (up to 1500 chars), not just its opening: a name mentioned late in a
-            # long entry used to be cut off before the model ever saw it.
-            display = f"[Diario · {j.get('date', '')} ({format_it_date(j.get('date'))})] {j.get('title', '')}. {txt[:1500]}".strip()
-            candidates.append({"text": txt, "display": display, "source": "journal", "meta": {"id": j.get("id"), "date": j.get("date")}, "embedding": j.get("embedding"),
-                               "day": _local_day(j.get("date"))})
-        for vrp in await db.vet_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(1000):
-            txt = (vrp.get("transcript") or "").strip()
-            if not txt:
-                continue
-            who = vrp.get("patient_name") or "paziente non identificato"
-            visit_date = (vrp.get("created_at") or "")[:10]
-            display = f"[Referto veterinario · {visit_date}] {who} — {vrp.get('template_name', '')}. {txt[:600]}".strip()
-            candidates.append({"text": f"{who} {txt}", "display": display, "source": "vet_report",
-                               "meta": {"id": vrp.get("id"), "patient_item_id": vrp.get("patient_item_id"), "date": visit_date},
-                               "embedding": vrp.get("embedding"), "day": _local_day(visit_date)})
-
-        for wrp in await db.work_reports.find({"user_id": user_id}, {"_id": 0, "docx_b64": 0}).sort("created_at", -1).to_list(1000):
-            txt = (wrp.get("transcript") or "").strip()
-            if not txt:
-                continue
-            who = wrp.get("client_name") or "cliente non indicato"
-            job = f" · {wrp['commessa_title']}" if wrp.get("commessa_title") else ""
-            rep_date = (wrp.get("created_at") or "")[:10]
-            display = f"[{wrp.get('template_name', 'Report')} · {rep_date}] {who}{job}. {txt[:600]}".strip()
-            candidates.append({"text": f"{who}{job} {txt}", "display": display, "source": "work_report",
-                               "meta": {"id": wrp.get("id"), "client_item_id": wrp.get("client_item_id"), "date": rep_date},
-                               "embedding": wrp.get("embedding"), "day": _local_day(rep_date)})
+        # (each source: its most recent records, plus the older ones the index found - read here with the
+        # same permission filter, so a record of someone else can never come in through the index)
+        own = {"user_id": user_id}
+        noblob = {"_id": 0, "docx_b64": 0}
+        loads = (
+            ("task", db.tasks, _owned_or_shared(), db.tasks.find(_owned_or_shared(), {"_id": 0}), {"_id": 0}),
+            ("todo", db.todos, own, db.todos.find(own, {"_id": 0}), {"_id": 0}),
+            ("journal", db.journal_entries, own, db.journal_entries.find(own, {"_id": 0}).sort("date", -1), {"_id": 0}),
+            ("vet_report", db.vet_reports, own, db.vet_reports.find(own, noblob).sort("created_at", -1), noblob),
+            ("work_report", db.work_reports, own, db.work_reports.find(own, noblob).sort("created_at", -1), noblob),
+        )
+        for source, coll, q, cursor, proj in loads:
+            docs = await cursor.to_list(1000)
+            _cap_note(source, docs, 1000)
+            for d in await _with_hits(source, coll, q, docs, proj=proj):
+                cand = CANDIDATE[source](d)
+                if cand:
+                    candidates.append(cand)
 
         # diario di commessa (artigiano): the team's entries, with hours/materials/problems
         job_q = {"$or": [{"user_id": user_id}, {"org_id": org_id}]} if org_id else {"user_id": user_id}
-        job_logs_all = await db.job_logs.find(job_q, {"_id": 0}).sort("date", -1).to_list(3000)
+        job_logs_all = await db.job_logs.find(job_q, {"_id": 0}).sort("date", -1).to_list(log_cap)
+        job_logs_cut = len(job_logs_all) >= log_cap
+        _cap_note("job_log", job_logs_all, log_cap)
+        job_logs_all = await _with_hits("job_log", db.job_logs, job_q, job_logs_all)
         for lg in job_logs_all:
-            txt = jl.search_text(lg)
-            if not txt:
-                continue
-            where = " · ".join(x for x in (lg.get("client_name"), lg.get("commessa_title")) if x)
-            who = f" ({lg['author_name']})" if lg.get("author_name") else ""
-            display = f"[Diario commessa · {lg.get('date', '')}] {where}{who}: {txt[:900]}"
-            candidates.append({"text": f"{where} {txt}", "display": display, "source": "job_log",
-                               "meta": {"id": lg.get("id"), "commessa_id": lg.get("commessa_id"), "date": lg.get("date")},
-                               "embedding": lg.get("embedding"), "day": _local_day(lg.get("date"))})
+            cand = job_log_candidate(lg)
+            if cand:
+                candidates.append(cand)
 
     # ---- Liste ----
     extra_scan: List[dict] = []  # list sub-elements, searched by name only (no embedding cost)
-    lists_q = _owned_or_shared()
-    if org_id:  # lists a team-mate shared by name (see server._lists_query)
-        lists_q = {"$or": lists_q["$or"] + [{"org_id": org_id, "shared_with": user_id}]}
-    colls = await db.collections.find(lists_q, {"_id": 0}).to_list(500)
     if colls:
         coll_map = {c["id"]: c for c in colls}
-        coll_items = await db.collection_items.find({"collection_id": {"$in": list(coll_map.keys())}}, {"_id": 0}).to_list(5000)
+        items_q = {"collection_id": {"$in": list(coll_map.keys())}}
+        coll_items = await db.collection_items.find(items_q, {"_id": 0}).to_list(5000)
+        _cap_note("collection_item", coll_items, 5000)
+        coll_items = await _with_hits("collection_item", db.collection_items, items_q, coll_items)
         item_display_map: dict = {}
         item_candidates: List[dict] = []
         for it in coll_items:
-            coll = coll_map.get(it.get("collection_id"))
-            if not coll:
+            cand = item_candidate(it, coll_map.get(it.get("collection_id")))
+            if not cand:
                 continue
-            labels = {f["key"]: f["label"] for f in (coll.get("fields") or [])}
-            parts = [f"{labels.get(k, k)}: {v}" for k, v in (it.get("data") or {}).items() if v not in (None, "")]
-            if not parts:
-                continue
-            txt = " · ".join(parts)
-            day = _data_day(it.get("data")) or _local_day(it.get("created_at"))
-            added = "" if _data_day(it.get("data")) else (f" (aggiunto {format_it_date(it.get('created_at'))})" if it.get("created_at") else "")
-            cand = {"text": txt, "display": f"[Lista: {coll.get('name', '')}] {txt}{added}", "source": "collection_item",
-                    "meta": {"id": it.get("id"), "collection_id": it.get("collection_id")}, "embedding": it.get("embedding"),
-                    "day": day}
             item_candidates.append(cand)
-            item_display_map[it["id"]] = txt
+            item_display_map[it["id"]] = cand["text"]
         if scope == "all":
             candidates.extend(item_candidates)
 
@@ -745,12 +845,24 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
         for lg in job_logs_all:
             if lg.get("commessa_id"):
                 by_comm.setdefault(lg["commessa_id"], []).append(lg)
-        names = [(cid, f"{lgs[0].get('client_name') or ''} {lgs[0].get('commessa_title') or ''}") for cid, lgs in by_comm.items()]
-        score, matched = _match_scored(query, names)
+        names = {cid: f"{lgs[0].get('client_name') or ''} {lgs[0].get('commessa_title') or ''}" for cid, lgs in by_comm.items()}
+        if job_logs_cut:   # a long diary: also the commesse whose entries are all older than the ones read
+            try:
+                async for g in db.job_logs.aggregate([{"$match": job_q}, {"$group": {
+                        "_id": "$commessa_id", "c": {"$first": "$client_name"}, "t": {"$first": "$commessa_title"}}}]):
+                    if g.get("_id") and g["_id"] not in names:
+                        names[g["_id"]] = f"{g.get('c') or ''} {g.get('t') or ''}"
+            except Exception:
+                logger.exception("commesse of the diary not listed")
+        score, matched = _match_scored(query, list(names.items()))
         if matched and _is_strong_match(score, len(matched)):
             summaries = []
             for cid in matched[:3]:
-                lgs = by_comm[cid]
+                lgs = by_comm.get(cid) or []
+                if job_logs_cut or not lgs:   # the totals count every entry, not only the latest ones
+                    lgs = await db.job_logs.find({"$and": [job_q, {"commessa_id": cid}]}, {"_id": 0, "embedding": 0}).sort("date", -1).to_list(None)
+                if not lgs:
+                    continue
                 tot = jl.totals(lgs)
                 per = ", ".join(f"{k} {jl._fmt_num(v)} h" for k, v in tot["by_person"].items())
                 bits = [f"{tot['entries']} voci dal {tot['first_day']} al {tot['last_day']}.",
