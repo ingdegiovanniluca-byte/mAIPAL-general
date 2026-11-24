@@ -52,6 +52,66 @@ def bot_token() -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
+# ---- one Bot for every message the server sends ----
+# A new Bot per message opened a new connection pool (and a TLS handshake) every time and never closed it.
+# The shared one keeps its connections and reuses them; a small limiter keeps the whole server under
+# Telegram's limit (about 30 messages a second), now that the periodic jobs send at the same time.
+SEND_RATE = float(os.environ.get("TELEGRAM_SEND_RATE", "25"))   # messages per second, all chats together
+_shared: dict = {}
+
+
+class _Limiter:
+    def __init__(self, rate: float):
+        self.gap = 1.0 / max(rate, 1.0)
+        self.next_at = 0.0
+        self.lock = None
+
+    async def wait(self):
+        import asyncio, time
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        async with self.lock:
+            now = time.monotonic()
+            if self.next_at > now:
+                await asyncio.sleep(self.next_at - now)
+            self.next_at = max(now, self.next_at) + self.gap
+
+
+class _LimitedBot:
+    """The Bot's methods, each call waiting its turn under SEND_RATE."""
+    def __init__(self, bot, limiter: _Limiter):
+        self._bot, self._limiter = bot, limiter
+
+    def __getattr__(self, name):
+        attr = getattr(self._bot, name)
+        if not callable(attr):
+            return attr
+        import inspect
+        if not inspect.iscoroutinefunction(attr):
+            return attr
+        async def call(*a, **k):
+            await self._limiter.wait()
+            return await attr(*a, **k)
+        return call
+
+
+def shared_bot():
+    """The Bot to send with (instead of Bot(token=...) each time)."""
+    import telegram
+    key = (telegram.Bot, bot_token())
+    b = _shared.get(key)
+    if b is None:
+        try:
+            from telegram.request import HTTPXRequest
+            raw = telegram.Bot(token=bot_token(), request=HTTPXRequest(connection_pool_size=32, pool_timeout=10.0))
+        except TypeError:   # (a stand-in Bot in the tests)
+            raw = telegram.Bot(token=bot_token())
+        b = _LimitedBot(raw, _Limiter(SEND_RATE))
+        _shared.clear()
+        _shared[key] = b
+    return b
+
+
 def _to_user_pydantic(doc):
     from server import User
     return User(**{k: doc.get(k) for k in [
@@ -1863,13 +1923,18 @@ async def stop_polling():
     _application = None
 
 
+_USERNAME: dict = {}
+
+
 async def bot_username() -> str:
+    """The bot's @name (asked to Telegram once per token, then remembered)."""
     if not bot_token():
         return ""
+    if bot_token() in _USERNAME:
+        return _USERNAME[bot_token()]
     try:
-        from telegram import Bot
-        b = Bot(token=bot_token())
-        me = await b.get_me()
-        return me.username or ""
+        me = await shared_bot().get_me()
+        _USERNAME[bot_token()] = me.username or ""
+        return _USERNAME[bot_token()]
     except Exception:
         return ""

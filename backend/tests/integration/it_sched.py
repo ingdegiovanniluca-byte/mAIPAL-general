@@ -129,8 +129,7 @@ async def main():
     print("CREATED:", a["title"], a["schedule_label"], "next:", a["next_run_label"])
     # force due, run loop body once
     db.scheduled_actions.docs[0]["next_run_at"] = server._dt_iso(datetime.now(timezone.utc) - timedelta(hours=30))
-    loop_task = asyncio.create_task(server._scheduled_actions_loop())
-    await asyncio.sleep(21.5); loop_task.cancel()
+    await server._scheduled_actions_tick()   # (the job's run: every 30 s on the worker, see jobs.py)
     act = db.scheduled_actions.docs[0]
     print("RUN1:", act["last_status"], act["last_result"], "| runs:", act["runs"], "| next:", act["next_run_at"])
     assert act["last_status"] == "ok" and len(db.collection_sub_items.docs) == 0 and len(db.collection_items.docs) == 3

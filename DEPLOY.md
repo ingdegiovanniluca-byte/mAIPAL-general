@@ -147,3 +147,36 @@ locale attraverso il tunnel.
 - I log: `docker compose logs -f backend` / `frontend` / `mongodb`.
 - Backup dati: il volume Docker `mongo_data` contiene tutto (utenti, task, diario,
   knowledge base) — fai backup periodici con `docker run --rm -v maipal-general_mongo_data:/data -v $(pwd):/backup mongo:7 mongodump --out /backup/dump_$(date +%F)`.
+
+## 8. Più organizzazioni: API, worker e controlli di isolamento
+
+Il backend ha due ruoli, scelti con la variabile `ROLE` (vedi `backend/jobs.py`):
+
+- **`api`** (servizio `backend` nel `docker-compose.yml`): risponde alle richieste dell'app. Non esegue lavori
+  periodici né il bot Telegram, quindi se ne possono avviare più copie: `docker compose up -d --scale backend=3`.
+  Ogni copia usa `WEB_CONCURRENCY` processi (predefinito 2; uno per core disponibile è un buon valore).
+- **`worker`** (servizio `worker`): esegue i lavori periodici (promemoria, presenze, riepiloghi, news,
+  azioni programmate…) e il bot Telegram. Ogni lavoro gira per conto suo; il turno viene preso nel database
+  (collezione `job_leases`), quindi una seconda copia del worker fa da riserva senza mandare doppi messaggi.
+  Il bot Telegram è attivo su una sola copia alla volta e passa a un'altra se quella si ferma.
+- **`all`** (predefinito se `ROLE` manca): tutto in un processo, come prima.
+
+All'avvio vengono creati gli indici del database (`backend/db_indexes.py`); le sessioni scadute vengono cancellate da
+MongoDB stesso. Variabili utili: `DAILY_PARALLEL` (utenti serviti insieme dai riepiloghi del mattino e della sera,
+predefinito 8), `NEWS_PARALLEL` (news preparate insieme, predefinito 4), `TELEGRAM_SEND_RATE` (messaggi al secondo
+di tutto il server, predefinito 25: Telegram ne accetta circa 30).
+
+Per molte organizzazioni il PC di casa non basta: serve un server in cloud (UE) con MongoDB in replica set e
+backup automatici. I passi sono descritti nel documento di analisi.
+
+**Isolamento tra organizzazioni** (un'organizzazione non deve mai vedere i dati di un'altra):
+
+- `backend/tests/test_tenant_isolation.py` gira con gli altri test e fallisce se un endpoint nuovo cerca un id
+  ricevuto dalla richiesta senza filtrare per utente o organizzazione, finché non viene controllato.
+- La prova completa: l'amministratore di un'organizzazione chiama ogni endpoint con gli id dei dati di un'altra.
+  Serve un MongoDB **di prova** (il database viene svuotato a ogni passo):
+  ```bash
+  docker run -d --name mongo-prova -p 27018:27017 mongo:7
+  cd backend
+  ISOLATION_MONGO_URL=mongodb://localhost:27018 python -m pytest tests/test_tenant_isolation.py
+  ```

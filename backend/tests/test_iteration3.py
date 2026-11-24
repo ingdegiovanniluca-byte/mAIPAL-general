@@ -158,8 +158,8 @@ def test_patch_todo_notes_persists(client):
 # ---------- Reminders loop function exists ----------
 def test_reminders_loop_source_exists():
     src = open("/app/backend/server.py").read()
-    assert "_reminders_loop" in src
-    assert "asyncio.create_task(_reminders_loop())" in src
+    assert "async def _reminders_tick" in src
+    assert 'J("task_reminders", 30 * 60, _reminders_tick' in src   # a periodic job (jobs.py), every 30 minutes
     assert "reminder_sent" in src
 
 

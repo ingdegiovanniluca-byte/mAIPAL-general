@@ -5,13 +5,31 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  # the requests: as many copies as needed (docker compose up -d --scale backend=3), each with
+  # WEB_CONCURRENCY processes; no periodic job and no Telegram bot here (see backend/jobs.py)
   backend:
     build: ./backend
     restart: unless-stopped
     env_file: .env
+    environment:
+      ROLE: api
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
     volumes:
       # who may come in as an organization's administrator (org_admins.txt): edited on the server,
       # read again when it changes - no rebuild, no restart
+      - ./backend/data/access:/app/data/access
+    depends_on:
+      - mongodb
+
+  # the periodic jobs (reminders, presences, summaries, news...) and the Telegram bot. A second copy is
+  # a spare: each job runs on one copy at a time, and the bot on the leader only.
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROLE: worker
+    volumes:
       - ./backend/data/access:/app/data/access
     depends_on:
       - mongodb

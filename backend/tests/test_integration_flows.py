@@ -15,7 +15,8 @@ SCRIPTS = sorted((HERE / "integration").glob("it_*.py"))
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=[s.stem for s in SCRIPTS])
 def test_flow(script):
-    env = {**os.environ, "MONGO_URL": "mongodb://x", "DB_NAME": "t", "OPENAI_API_KEY": "x"}
+    env = {**os.environ, "MONGO_URL": "mongodb://x", "DB_NAME": "t", "OPENAI_API_KEY": "x",
+           "TELEGRAM_SEND_RATE": "1000000"}   # (the scripts fake Telegram: no pacing between their messages)
     proc = subprocess.run([sys.executable, str(script)], cwd=HERE.parent, env=env,
                           capture_output=True, text=True, timeout=600)
     out = proc.stdout + proc.stderr

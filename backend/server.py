@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
+import copy
 import os
 import base64
 import json
@@ -39,6 +40,8 @@ from llm_integrations import LlmChat, UserMessage, TextDelta, StreamDone, ImageC
 import google_integration as gi
 import microsoft_integration as ms
 import telegram_bot as tg
+import jobs
+import db_indexes
 import embeddings as emb
 import retrieval
 import news_service
@@ -670,6 +673,38 @@ async def _org_settings_for(tenant_id: Optional[str]) -> dict:
     return osettings.settings(t)
 
 
+# ---- a memory for one run of a periodic job ----
+# A job goes through thousands of presences / activities / quotes and, for each, reads the same commessa, the same
+# organization's settings, the same worker again and again. Inside one run of a job (see _in_tick) these reads are
+# made once; anywhere else (the requests) nothing changes - they always read the database.
+import contextvars as _cv
+_TICK_CACHE: _cv.ContextVar = _cv.ContextVar("tick_cache", default=None)
+
+
+def _tick_cached(fn):
+    import functools
+    @functools.wraps(fn)
+    async def wrapper(*args):
+        cache = _TICK_CACHE.get()
+        if cache is None:
+            return await fn(*args)
+        key = (fn.__name__, args)
+        if key not in cache:
+            cache[key] = await fn(*args)
+        return copy.deepcopy(cache[key])   # (callers may change what they get)
+    return wrapper
+
+
+async def _in_tick(fn, *a, **k):
+    """Runs a periodic job with its own memory (above)."""
+    token = _TICK_CACHE.set({})
+    try:
+        return await fn(*a, **k)
+    finally:
+        _TICK_CACHE.reset(token)
+
+
+@_tick_cached
 async def _settings_of_user(user_id: Optional[str]) -> dict:
     u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "tenant_id": 1}) if user_id else None
     return await _org_settings_for((u or {}).get("tenant_id"))
@@ -3301,17 +3336,6 @@ async def _cleanup_old_conversations() -> int:
     return len(expired)
 
 
-async def _conversation_cleanup_loop():
-    """Every 6 hours (and shortly after start-up, so a PC that was off catches up)."""
-    await asyncio.sleep(60)
-    while True:
-        try:
-            await _cleanup_old_conversations()
-        except Exception:
-            logger.exception("conversation cleanup failed")
-        await asyncio.sleep(6 * 3600)
-
-
 # ============ TASKS ============
 @api_router.get("/tasks")
 async def list_tasks(current: User = Depends(get_current_user)):
@@ -3624,19 +3648,13 @@ async def get_task_recurrence(task_id: str, current: User = Depends(get_current_
     return {"series": {k: series.get(k) for k in ("id", "rule", "label", "start_date", "active", "calendar_synced")}}
 
 
-async def _task_series_loop():
+async def _task_series_tick():
     """Every 6 hours: tops up every active series to today + WINDOW_DAYS."""
-    await asyncio.sleep(30)
-    while True:
+    async for ser in db.task_series.find({"active": True}, {"_id": 0}):
         try:
-            async for s in db.task_series.find({"active": True}, {"_id": 0}):
-                try:
-                    await _extend_series(s)
-                except Exception:
-                    logger.exception(f"extending series {s.get('id')} failed")
+            await _extend_series(ser)
         except Exception:
-            logger.exception("task series loop iteration failed")
-        await asyncio.sleep(6 * 3600)
+            logger.exception(f"extending series {ser.get('id')} failed")
 
 
 # ============ TODOS ============
@@ -3669,12 +3687,16 @@ async def update_todo(todo_id: str, payload: dict, current: User = Depends(get_c
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()   # the To-Do folders say when they last changed
     await db.todos.update_one({"id": todo_id, "user_id": current.user_id}, {"$set": payload})
     doc = await db.todos.find_one({"id": todo_id, "user_id": current.user_id}, {"_id": 0, "embedding": 0})
+    if not doc:   # (someone else's or gone: never "ok")
+        raise HTTPException(status_code=404, detail="To do non trovato")
     return doc
 
 
 @api_router.delete("/todos/{todo_id}")
 async def delete_todo(todo_id: str, current: User = Depends(get_current_user)):
-    await db.todos.delete_one({"id": todo_id, "user_id": current.user_id})
+    r = await db.todos.delete_one({"id": todo_id, "user_id": current.user_id})
+    if not r.deleted_count:
+        raise HTTPException(status_code=404, detail="To do non trovato")
     await db.todo_covers.delete_many({"todo_id": todo_id, "user_id": current.user_id})
     return {"ok": True}
 
@@ -3785,7 +3807,7 @@ async def assign_task(task_id: str, payload: TaskAssignPayload, current: User = 
             and await nprefs.wants(db, assignee["user_id"], "shares", "telegram"):
         try:
             from telegram import Bot
-            bot = Bot(token=tg.bot_token())
+            bot = tg.shared_bot()
             due_part = f"\n📅 Scadenza: {doc.get('due_date')}" if doc.get("due_date") else ""
             notes_line = f"\n📝 {doc['notes']}" if doc.get("notes") else ""
             text = (
@@ -3962,8 +3984,9 @@ async def _todo_step_reminders(now_utc: Optional[datetime] = None) -> int:
         return 0
     today = now.date().isoformat()
     sent = 0
-    q = {"$or": [{"steps": {"$exists": True}}, {"reminder": True}]}
-    for todo in await db.todos.find(q, {"_id": 0, "embedding": 0}).to_list(5000):
+    # only the to dos with something due today (a step or the to do itself): not every to do of every organization
+    q = {"$or": [{"steps.due_date": today}, {"reminder": True, "due_date": today}]}
+    async for todo in db.todos.find(q, {"_id": 0, "embedding": 0}):
         if todo.get("status") == "fatto":
             continue
         lines, steps, changed = [], [dict(x) for x in todo.get("steps") or []], False
@@ -3982,16 +4005,6 @@ async def _todo_step_reminders(now_utc: Optional[datetime] = None) -> int:
         upd = {**({"steps": steps} if changed else {}), **({"reminded_on": today} if todo_due else {})}
         await db.todos.update_one({"id": todo["id"]}, {"$set": upd})
     return sent
-
-
-async def _todo_reminders_loop():
-    await asyncio.sleep(120)
-    while True:
-        try:
-            await _todo_step_reminders()
-        except Exception:
-            logger.exception("to do reminders iteration failed")
-        await asyncio.sleep(600)
 
 
 @api_router.post("/todos/{todo_id}/favorite")
@@ -6015,7 +6028,7 @@ async def _generate_vet_report(current: User, text: str, visit_type: str, patien
         try:
             from telegram import Bot
             import io as _io
-            bot = Bot(token=tg.bot_token())
+            bot = tg.shared_bot()
             await bot.send_document(
                 chat_id=current.telegram_chat_id,
                 document=_io.BytesIO(docx_bytes),
@@ -7117,7 +7130,7 @@ async def _deliver_work_report(current: User, docx_bytes: bytes, fname: str, fol
         try:
             from telegram import Bot
             import io as _io
-            await Bot(token=tg.bot_token()).send_document(chat_id=current.telegram_chat_id, document=_io.BytesIO(docx_bytes),
+            await tg.shared_bot().send_document(chat_id=current.telegram_chat_id, document=_io.BytesIO(docx_bytes),
                                                           filename=fname, caption=caption)
             telegram_sent = True
         except Exception:
@@ -7695,7 +7708,7 @@ async def _archive_retry(now_utc: Optional[datetime] = None) -> int:
     administrator is told once. -> how many saved now."""
     now = now_utc or datetime.now(timezone.utc)
     saved = 0
-    for rec in await db.archive_files.find({"status": "queued"}, {"_id": 0}).to_list(200):
+    for rec in await db.archive_files.find({"status": "queued"}, {"_id": 0}).to_list(None):
         if rec.get("next_try_at") and rec["next_try_at"] > now.isoformat():
             continue
         if await _archive_try(rec):
@@ -8265,7 +8278,7 @@ async def _material_reminders(now_utc: Optional[datetime] = None) -> int:
     today = now.astimezone(LOCAL_TZ).date()
     days = [today.isoformat(), (today + timedelta(days=1)).isoformat()]
     sent = 0
-    for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$in": days}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(2000):
+    for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$in": days}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(None):
         eve, morning = _mat_reminder_times(t["due_date"])
         kind = "morning" if now >= morning else "eve" if now >= eve else None
         if not kind or (t.get("reminded") or {}).get(kind) == t["due_date"]:
@@ -8324,7 +8337,7 @@ async def _material_expired(now_utc: Optional[datetime] = None) -> int:
     limit = (now_local.date() - timedelta(days=MAT_EXPIRED_DAYS)).isoformat()
     sent = 0
     for t in await db.job_todos.find({"kind": "materiale", "done": False, "due_date": {"$lte": limit}, "reminders_off": {"$ne": True}},
-                                     {"_id": 0}).to_list(2000):
+                                     {"_id": 0}).to_list(None):
         if t.get("expired_asked") == t["due_date"]:
             continue
         await db.job_todos.update_one({"id": t["id"]}, {"$set": {"expired_asked": t["due_date"]}})
@@ -9250,7 +9263,7 @@ async def _tell_collaborator(collab: dict, text: str, done_data: Optional[str] =
     from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
     if done_data:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Fatto", callback_data=done_data)]])
-    bot = Bot(token=tg.bot_token())
+    bot = tg.shared_bot()
     for mode in ("Markdown", None):
         try:
             await bot.send_message(chat_id=collab["telegram_chat_id"], text=text, reply_markup=kb, **({"parse_mode": mode} if mode else {}))
@@ -9431,7 +9444,7 @@ async def _todo_reminders(now_utc: Optional[datetime] = None) -> int:
     today = now_local.date().isoformat()
     tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
     sent = 0
-    for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(5000):
+    for t in await db.job_todos.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(None):
         if not (t.get("collaborator_id") or t.get("assignee_user_id")) or not t.get("due_date") or t.get("kind") in ("materiale", "attesa"):
             continue
         kind = "before" if t["due_date"] == tomorrow else "due" if t["due_date"] == today else "late"
@@ -9969,7 +9982,7 @@ async def _milestone_reminders(now_utc: Optional[datetime] = None) -> int:
     today = now_local.date().isoformat()
     tomorrow = (now_local.date() + timedelta(days=1)).isoformat()
     sent = 0
-    for m in await db.job_milestones.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(5000):
+    for m in await db.job_milestones.find({"done": False, "due_date": {"$lte": tomorrow}, "reminders_off": {"$ne": True}}, {"_id": 0}).to_list(None):
         kind = "before" if m["due_date"] == tomorrow else "due" if m["due_date"] == today else "late"
         if (m.get("reminded") or {}).get(kind) == m["due_date"]:
             continue
@@ -10540,6 +10553,7 @@ SURVEY_STATES = ("nuova", "sopralluogo")
 DOC_MAX_BYTES = 15 * 1024 * 1024
 
 
+@_tick_cached
 async def _commessa_ctx(commessa_id: str) -> Optional[tuple]:
     """(clienti list, commessa sub-item, client item, view) of a commessa, whoever asks."""
     sub = await db.collection_sub_items.find_one({"id": commessa_id}, {"_id": 0, "embedding": 0})
@@ -11006,7 +11020,7 @@ async def _ask_value_choice(clienti: dict, view: dict, quote_id: str, value: flo
                  InlineKeyboardButton(f"Tieni {jl._eur(budget)}", callback_data=f"qv:{quote_id}:keep")]]
         if new_works:
             rows.append([InlineKeyboardButton(f"Aggiungi: {jl._eur(float(budget) + value)}", callback_data=f"qv:{quote_id}:add")])
-        await Bot(token=tg.bot_token()).send_message(chat_id=owner["telegram_chat_id"], reply_markup=InlineKeyboardMarkup(rows),
+        await tg.shared_bot().send_message(chat_id=owner["telegram_chat_id"], reply_markup=InlineKeyboardMarkup(rows),
                                                      text=f"⚖️ Nuovo preventivo per «{view['title']}» — {view['client_name']}: {jl._eur(value)}. "
                                                           f"Il valore della commessa è {jl._eur(budget)}. "
                                                           + ("Ha lavori nuovi rispetto al preventivo di prima: lo sostituisco, lo aggiungo al valore "
@@ -11106,7 +11120,7 @@ async def _quote_followups(now_utc: Optional[datetime] = None) -> int:
     now = now_utc or datetime.now(timezone.utc)
     today = now.astimezone(LOCAL_TZ).date()
     sent = 0
-    for q in await db.job_quotes.find({"status": "confirmed", "outcome": {"$in": [None, "in_attesa"]}}, {"_id": 0, "data_b64": 0}).to_list(2000):
+    for q in await db.job_quotes.find({"status": "confirmed", "outcome": {"$in": [None, "in_attesa"]}}, {"_id": 0, "data_b64": 0}).to_list(None):
         ctx = await _commessa_ctx(q["commessa_id"])
         if not ctx or vx.norm_stato(ctx[3]["stato"]) != "preventivo inviato":
             continue
@@ -11134,7 +11148,7 @@ async def _quote_followups(now_utc: Optional[datetime] = None) -> int:
                                         InlineKeyboardButton("❌ Perso", callback_data=f"qo:{view['id']}:perso"),
                                         InlineKeyboardButton("⏳ In attesa", callback_data=f"qo:{view['id']}:in_attesa")]])
             days = (today - date.fromisoformat(q["confirmed_at"][:10])).days
-            await Bot(token=tg.bot_token()).send_message(
+            await tg.shared_bot().send_message(
                 chat_id=owner["telegram_chat_id"], reply_markup=kb,
                 text=(f"📄 Il preventivo v{q.get('version')} di «{view['title']}» — {view['client_name']} è senza esito da {days} giorni"
                       + (f" (offerta valida fino al {_short_it_date(validity)})" if validity else "") + ". Com'è andata?"))
@@ -12310,7 +12324,7 @@ async def _waiting_followups(now_utc: Optional[datetime] = None) -> int:
         return 0
     today = now_local.date().isoformat()
     sent = 0
-    for wait in await db.job_waits.find({"status": {"$in": list(WAIT_OPEN)}}, {"_id": 0}).to_list(2000):
+    for wait in await db.job_waits.find({"status": {"$in": list(WAIT_OPEN)}}, {"_id": 0}).to_list(None):
         work_t = await db.job_todos.find_one({"id": wait["work_todo_id"]}, {"_id": 0})
         if not work_t or work_t.get("done"):
             await db.job_waits.update_one({"id": wait["id"]}, {"$set": {"status": "fatto" if work_t else "tolto",
@@ -12564,7 +12578,7 @@ async def _plan_followups(now_utc: Optional[datetime] = None) -> int:
         return 0
     today = now_local.date().isoformat()
     sent = 0
-    for a in await db.job_activities.find({"status": {"$in": ["pianificata", "confermata", "in_corso"]}, "date": {"$lt": today}}, {"_id": 0}).to_list(2000):
+    for a in await db.job_activities.find({"status": {"$in": ["pianificata", "confermata", "in_corso"]}, "date": {"$lt": today}}, {"_id": 0}).to_list(None):
         if (a.get("followup") or {}).get("date") == a["date"]:
             continue
         await db.job_activities.update_one({"id": a["id"]}, {"$set": {"followup": {"date": a["date"], "at": datetime.now(timezone.utc).isoformat()}}})
@@ -12762,6 +12776,7 @@ def _g1_kb(activity_id: str):
                                  [InlineKeyboardButton("➕ Aggiungi da ricordare", callback_data=f"aca:{activity_id}")]])
 
 
+@_tick_cached
 async def _admin_of(view_or_clienti_owner: Optional[str]) -> Optional[User]:
     od = await db.users.find_one({"user_id": view_or_clienti_owner}, {"_id": 0}) if view_or_clienti_owner else None
     return User(**od) if od else None
@@ -12774,7 +12789,7 @@ async def _activity_notifications(now_utc: Optional[datetime] = None) -> int:
     today = now.astimezone(LOCAL_TZ).date()
     tomorrow = today + timedelta(days=1)
     sent = 0
-    acts = await db.job_activities.find({"status": {"$in": list(ACTIVITY_OPEN)}, "date": {"$in": [today.isoformat(), tomorrow.isoformat()]}}, {"_id": 0}).to_list(2000)
+    acts = await db.job_activities.find({"status": {"$in": list(ACTIVITY_OPEN)}, "date": {"$in": [today.isoformat(), tomorrow.isoformat()]}}, {"_id": 0}).to_list(None)
     for a in acts:
         ctx = await _commessa_ctx(a["commessa_id"])
         if not ctx or vx.norm_stato(ctx[3]["stato"]) != vx.WORKING_STATO:
@@ -12855,7 +12870,7 @@ async def _daily_site_summary(now_utc: Optional[datetime] = None) -> int:
     today = now.astimezone(LOCAL_TZ).date()
     day = today.isoformat()
     sent = 0
-    for coll in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
+    async for coll in db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}):
         owner = await db.users.find_one({"user_id": coll.get("user_id")}, {"_id": 0})
         if not owner or not owner.get("telegram_chat_id") or owner.get("site_summary_on") == day:
             continue
@@ -13536,7 +13551,7 @@ async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
     settings_of: dict = {}
     # one person, one reminder: a collaborator of more than one firm has a record per firm on the same chat
     by_chat: dict = {}
-    for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}, "reminded_on": {"$ne": today}}, {"_id": 0}).to_list(2000):
+    for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}, "reminded_on": {"$ne": today}}, {"_id": 0}).to_list(None):
         by_chat.setdefault(c["telegram_chat_id"], []).append(c)
     import collab_telegram as ctg
     for chat_recs in by_chat.values():
@@ -13572,7 +13587,7 @@ async def _collab_remind_due(now_utc: Optional[datetime] = None) -> int:
             from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
             kb = InlineKeyboardMarkup([[InlineKeyboardButton(ctg._label(v), callback_data=f"clc:{v['id']}")]
                                        for _o, _cl, v in targets[:8]])
-            await Bot(token=tg.bot_token()).send_message(
+            await tg.shared_bot().send_message(
                 chat_id=c["telegram_chat_id"], reply_markup=kb,
                 text=f"Ciao {c.get('first_name', '')}, cosa avete fatto oggi? Scegli la commessa e raccontamelo, anche a voce.")
             sent += 1
@@ -13631,18 +13646,6 @@ async def _geo_backfill(clienti: dict, limit: int = 200) -> int:
     finally:
         _GEO_RUNNING.discard(clienti["id"])
     return done
-
-
-async def _geo_backfill_loop():
-    """Every 10 minutes: the coordinates of the new or changed addresses of every Clienti list."""
-    await asyncio.sleep(90)
-    while True:
-        try:
-            for cl in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
-                await _geo_backfill(cl, limit=100)
-        except Exception:
-            logger.exception("coordinates loop iteration failed")
-        await asyncio.sleep(600)
 
 
 async def _nearby_search(current: User, origin: dict, radius_km: Optional[float] = None, flt: Optional[str] = None,
@@ -13879,6 +13882,7 @@ def _user_worker(udoc: dict, owner_user_id: Optional[str] = None) -> dict:
             "telegram_chat_id": udoc.get("telegram_chat_id"), "is_user": True}
 
 
+@_tick_cached
 async def _worker_of(worker_id: Optional[str]) -> Optional[dict]:
     """Who a work session belongs to: a collaborator, or an app user."""
     if not worker_id:
@@ -13894,7 +13898,7 @@ async def _tg_send(chat_id, text: str, kb=None) -> bool:
     if not chat_id or not tg.bot_token():
         return False
     from telegram import Bot
-    bot = Bot(token=tg.bot_token())
+    bot = tg.shared_bot()
     for mode in ("Markdown", None):
         try:
             await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, **({"parse_mode": mode} if mode else {}))
@@ -14164,7 +14168,7 @@ async def _presence_forgotten(now_utc: Optional[datetime] = None) -> int:
     now = now_utc or datetime.now(timezone.utc)
     limit = (now - timedelta(hours=sp.FORGOTTEN_HOURS)).isoformat()
     n = 0
-    for s_ in await db.work_sessions.find({"end_at": None, "start_at": {"$lt": limit}}, {"_id": 0}).to_list(500):
+    for s_ in await db.work_sessions.find({"end_at": None, "start_at": {"$lt": limit}}, {"_id": 0}).to_list(None):
         await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"end_at": s_["start_at"], "forgotten": True}})
         n += 1
         c = await _worker_of(s_["collaborator_id"])
@@ -14354,7 +14358,7 @@ async def _presence_late_check(now_utc: Optional[datetime] = None) -> int:
     now = now_utc or datetime.now(timezone.utc)
     asked = 0
     late_at = {}
-    for s_ in await db.work_sessions.find({"end_at": None}, {"_id": 0}).to_list(1000):
+    for s_ in await db.work_sessions.find({"end_at": None}, {"_id": 0}).to_list(None):
         own = s_.get("owner_user_id")
         if own not in late_at:
             od = await db.users.find_one({"user_id": own}, {"_id": 0, "presence_late_at": 1}) or {}
@@ -14449,7 +14453,7 @@ async def _presence_day_note(now_utc: Optional[datetime] = None) -> int:
     now = now_utc or datetime.now(timezone.utc)
     asked = 0
     q = {"end_at": {"$lte": (now - PRESENCE_NOTE_AFTER).isoformat(), "$gte": (now - timedelta(hours=12)).isoformat()}}
-    for s_ in await db.work_sessions.find(q, {"_id": 0}).to_list(1000):
+    for s_ in await db.work_sessions.find(q, {"_id": 0}).to_list(None):
         if s_.get("note_asked") or s_.get("forgotten") or s_.get("orphan") or not s_.get("log_id"):
             continue
         await db.work_sessions.update_one({"id": s_["id"]}, {"$set": {"note_asked": True}})
@@ -14757,7 +14761,7 @@ DAY_PIN_AT = "06:00"
 
 async def _day_pin_send(chat_id, text: str, kb) -> Optional[int]:
     from telegram import Bot
-    bot = Bot(token=tg.bot_token())
+    bot = tg.shared_bot()
     msg = await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     await bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
     return msg.message_id
@@ -14765,13 +14769,13 @@ async def _day_pin_send(chat_id, text: str, kb) -> Optional[int]:
 
 async def _day_pin_edit(chat_id, message_id: int, text: str, kb) -> None:
     from telegram import Bot
-    await Bot(token=tg.bot_token()).edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML",
+    await tg.shared_bot().edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML",
                                                       reply_markup=kb, disable_web_page_preview=True)
 
 
 async def _day_pin_unpin(chat_id, message_id: int) -> None:
     from telegram import Bot
-    await Bot(token=tg.bot_token()).unpin_chat_message(chat_id=chat_id, message_id=message_id)
+    await tg.shared_bot().unpin_chat_message(chat_id=chat_id, message_id=message_id)
 
 
 async def _collab_day_items(collab: dict, day: str) -> list:
@@ -14901,7 +14905,7 @@ async def _collab_day_briefs(now_utc: Optional[datetime] = None) -> int:
     now_l = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
     day = now_l.date().isoformat()
     n = 0
-    for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}}, {"_id": 0}).to_list(2000):
+    for c in await db.collaborators.find({"status": "active", "telegram_chat_id": {"$ne": None}}, {"_id": 0}).to_list(None):
         if (c.get("day_pin") or {}).get("date") == day:
             continue
         try:
@@ -14968,7 +14972,7 @@ async def _user_day_briefs(now_utc: Optional[datetime] = None) -> int:
     now_l = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
     day = now_l.date().isoformat()
     users = set()
-    for a in await db.job_activities.find({"date": day, "status": {"$ne": "annullata"}}, {"_id": 0, "assignees": 1}).to_list(2000):
+    for a in await db.job_activities.find({"date": day, "status": {"$ne": "annullata"}}, {"_id": 0, "assignees": 1}).to_list(None):
         users |= {p["id"] for p in a.get("assignees") or [] if p["type"] == "user"}
     n = 0
     for uid in users:
@@ -14999,31 +15003,25 @@ def _day_pin_touch(*collab_ids) -> None:
 _DAY_PIN_TASKS: set = set()
 
 
-async def _collab_reminder_loop():
-    while True:
-        try:
-            if tg.bot_token():
-                await _collab_remind_due()
-                await _milestone_reminders()
-                await _collab_day_briefs()
-                await _todo_reminders()
-                await _material_reminders()
-                await _material_expired()
-                await _waiting_followups()
-                await _plan_followups()
-                await _presence_forgotten()
-                await _presence_late_check()
-                await _presence_day_note()
-                await _client_weekly_updates()
-                await _archive_retry()
-                await _quote_followups()
-                await _activity_notifications()
-                await _user_day_briefs()
-                await _daily_site_summary()
-                await _weekly_programme()
-        except Exception:
-            logger.exception("collaborator reminder loop iteration failed")
-        await asyncio.sleep(300)
+async def _geo_backfill_tick():
+    """Every 10 minutes: the coordinates of the new or changed addresses of every Clienti list."""
+    async for cl in db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}):
+        await _geo_backfill(cl, limit=100)
+
+
+# The jobs every 5 minutes (reminders, presences, briefs, summaries, follow-ups): each one runs on its own (see
+# jobs.py), so a slow one never delays the others, and only with the bot configured.
+FIVE_MINUTE_JOBS = ("_collab_remind_due", "_milestone_reminders", "_collab_day_briefs", "_todo_reminders", "_material_reminders",
+                    "_material_expired", "_waiting_followups", "_plan_followups", "_presence_forgotten", "_presence_late_check",
+                    "_presence_day_note", "_client_weekly_updates", "_archive_retry", "_quote_followups", "_activity_notifications",
+                    "_user_day_briefs", "_daily_site_summary", "_weekly_programme")
+
+
+def _with_bot(name: str):
+    async def run():
+        if tg.bot_token():
+            await _in_tick(globals()[name])
+    return run
 
 
 # ---- THE CLIENT'S WEEKLY PROGRESS (Telegram): the client links once, from the invitation the
@@ -15196,7 +15194,7 @@ async def _client_weekly_updates(now_utc: Optional[datetime] = None) -> int:
     now = (now_utc or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
     today = now.date().isoformat()
     done = 0
-    for clienti in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
+    async for clienti in db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}):
         owner_doc = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
         if not owner_doc:
             continue
@@ -15232,7 +15230,7 @@ async def _weekly_programme(now_utc: Optional[datetime] = None) -> int:
     loc = now.astimezone(LOCAL_TZ)
     today = loc.date()
     sent = 0
-    for clienti in await db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}).to_list(2000):
+    async for clienti in db.collections.find({"system_key": vx.CLIENTI_KEY}, {"_id": 0}):
         owner = await db.users.find_one({"user_id": clienti.get("user_id")}, {"_id": 0})
         if not owner or owner.get("week_programme_on") == today.isoformat():
             continue
@@ -17734,7 +17732,7 @@ async def _send_telegram_text(chat_id, text: str) -> bool:
     if not chat_id or not tg.bot_token() or not text:
         return False
     from telegram import Bot
-    bot = Bot(token=tg.bot_token())
+    bot = tg.shared_bot()
     ok = True
     for i in range(0, len(text), 3900):
         chunk = text[i:i + 3900]
@@ -18247,29 +18245,23 @@ async def _ensure_weekly_jobs_action(user: User) -> None:
     })
 
 
-async def _scheduled_actions_loop():
+async def _scheduled_actions_tick():
     """Every 30s: runs every enabled action whose next_run_at has come. The next run is
     moved forward BEFORE executing (a compare-and-set on next_run_at, so a run is never
     picked up twice), always computed from now: if the server was off at the scheduled
     moment, a missed action runs once on restart instead of once per missed occurrence."""
-    await asyncio.sleep(20)
-    while True:
+    now = datetime.now(timezone.utc)
+    async for a in db.scheduled_actions.find({"enabled": True, "next_run_at": {"$ne": None, "$lte": _dt_iso(now)}}, {"_id": 0}):
         try:
-            now = datetime.now(timezone.utc)
-            due = await db.scheduled_actions.find(
-                {"enabled": True, "next_run_at": {"$ne": None, "$lte": _dt_iso(now)}}, {"_id": 0},
-            ).to_list(200)
-            for a in due:
-                nxt = sa.next_run_after(a["schedule"], now)
-                upd = {"next_run_at": _dt_iso(nxt)}
-                if nxt is None:
-                    upd["enabled"] = False  # one-off action: done
-                claimed = await db.scheduled_actions.update_one({"id": a["id"], "next_run_at": a["next_run_at"]}, {"$set": upd})
-                if claimed.modified_count:
-                    await _execute_scheduled_action(a, scheduled_for=a["next_run_at"])
+            nxt = sa.next_run_after(a["schedule"], now)
+            upd = {"next_run_at": _dt_iso(nxt)}
+            if nxt is None:
+                upd["enabled"] = False  # one-off action: done
+            claimed = await db.scheduled_actions.update_one({"id": a["id"], "next_run_at": a["next_run_at"]}, {"$set": upd})
+            if claimed.modified_count:
+                await _execute_scheduled_action(a, scheduled_for=a["next_run_at"])
         except Exception:
-            logger.exception("scheduled actions loop iteration failed")
-        await asyncio.sleep(30)
+            logger.exception("scheduled action %s failed", a.get("id"))
 
 
 # ============ SUGGERIMENTI "PER TE" (striscia sopra la chat, mobile) ============
@@ -18648,13 +18640,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def start_services():
+    """Indexes (every copy); then, where the jobs run (ROLE all or worker - see jobs.py), the migrations, the
+    periodic jobs (each on its own, one copy at a time) and the Telegram bot (on one copy, the leader)."""
+    failed = await db_indexes.ensure_indexes(db)
+    if failed:
+        logger.warning("%s indexes not created", failed)
+    if not jobs.runs_jobs():
+        logger.info("ROLE=api: requests only - the periodic jobs and the Telegram bot run on the worker")
+        return
     # ===== Organizations: every account already in gets one (see _migrate_tenants) =====
     try:
         await _migrate_tenants()
     except Exception:
         logger.exception("organizations migration failed")
-    asyncio.create_task(_geo_backfill_loop())
-    asyncio.create_task(_todo_reminders_loop())
     try:
         await _migrate_commesse()
         await _migrate_weekly_actions()
@@ -18663,9 +18661,6 @@ async def start_services():
     except Exception:
         logger.exception("commesse migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)
-        await db.job_logs.create_index([("commessa_id", 1), ("date", -1)])
-        await db.job_logs.create_index([("user_id", 1), ("date", -1)])
-        await db.job_logs.create_index([("org_id", 1), ("date", -1)])
         await db.job_logs.create_index([("client_id", 1), ("author_user_id", 1)], sparse=True)   # an entry sent again offline
         await db.router_shadow.create_index("at_dt", expireAfterSeconds=60 * 86400)   # the router's shadow: 60 days
         await db.router_shadow.create_index([("user_id", 1), ("at", -1)])
@@ -18688,50 +18683,23 @@ async def start_services():
         await db.work_reports.create_index([("commessa_id", 1)])
     except Exception:
         logger.exception("job diary indexes failed")
-    try:
-        asyncio.create_task(tg.start_polling())
-    except Exception:
-        logger.exception("failed to start telegram polling")
-    try:
-        asyncio.create_task(_reminders_loop())
-    except Exception:
-        logger.exception("failed to start reminders loop")
-    try:
-        asyncio.create_task(_exact_reminders_loop())
-    except Exception:
-        logger.exception("failed to start exact reminders loop")
-    try:
-        asyncio.create_task(_daily_summary_loop())
-    except Exception:
-        logger.exception("failed to start daily summary loop")
-    try:
-        asyncio.create_task(_collab_reminder_loop())
-    except Exception:
-        logger.exception("failed to start collaborator reminder loop")
-    try:
-        asyncio.create_task(_daily_news_loop())
-    except Exception:
-        logger.exception("failed to start daily news loop")
-    try:
-        asyncio.create_task(_news_cleanup_loop())
-    except Exception:
-        logger.exception("failed to start news cleanup loop")
-    try:
-        asyncio.create_task(_usage_aggregation_loop())
-    except Exception:
-        logger.exception("failed to start usage aggregation loop")
-    try:
-        asyncio.create_task(_scheduled_actions_loop())
-    except Exception:
-        logger.exception("failed to start scheduled actions loop")
-    try:
-        asyncio.create_task(_task_series_loop())
-    except Exception:
-        logger.exception("failed to start task series loop")
-    try:
-        asyncio.create_task(_conversation_cleanup_loop())
-    except Exception:
-        logger.exception("failed to start conversation cleanup loop")
+
+    J = lambda name, period, fn, first=0, max_run=1800: jobs.every(db, name, period, lambda: _in_tick(fn), first, max_run)
+    J("geo_backfill", 600, _geo_backfill_tick, 90)
+    J("todo_step_reminders", 600, _todo_step_reminders, 120)
+    J("task_reminders", 30 * 60, _reminders_tick, 30)
+    J("exact_reminders", 60, _exact_reminders_tick, 15)
+    J("daily_summary", 5 * 60, _daily_summary_tick, 45)
+    for name in FIVE_MINUTE_JOBS:
+        J(name.strip("_"), 5 * 60, _with_bot(name), 60)
+    J("daily_news", 5 * 60, _daily_news_tick, 75)
+    J("news_cleanup", 6 * 3600, _cleanup_old_news, 90)
+    J("usage_aggregation", 3600, _usage_aggregation_tick, 120)
+    J("scheduled_actions", 30, _scheduled_actions_tick, 20, max_run=600)
+    J("task_series", 6 * 3600, _task_series_tick, 30)
+    J("conversation_cleanup", 6 * 3600, _cleanup_old_conversations, 60)
+    # Telegram allows one copy to read the bot's messages: the leader (another takes over if it stops)
+    jobs.as_leader(db, "telegram_polling", tg.start_polling)
 
 
 def _snooze_keyboard(task_id: str):
@@ -18743,45 +18711,42 @@ def _snooze_keyboard(task_id: str):
     ]])
 
 
-async def _reminders_loop():
+async def _reminders_tick():
     """Every 30 min: for each task with due_date == tomorrow (user local ≈ UTC ok for MVP) and reminder_sent!=True,
     send a Telegram message to the connected user (if any) and mark reminder_sent."""
     from datetime import date as _date
-    while True:
+    if not tg.bot_token():
+        return
+    today = _date.today()
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    # find candidates
+    cursor = db.tasks.find(
+        {"due_date": tomorrow, "$or": [{"reminder_sent": {"$exists": False}}, {"reminder_sent": False}]},
+        {"_id": 0},
+    )
+    async for t in cursor:
+        user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
+        if not user or not user.get("telegram_chat_id") or not await nprefs.wants(db, t["user_id"], "task_reminder", "telegram"):
+            await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True}})
+            continue
         try:
-            today = _date.today()
-            tomorrow = (today + timedelta(days=1)).isoformat()
-            # find candidates
-            cursor = db.tasks.find(
-                {"due_date": tomorrow, "$or": [{"reminder_sent": {"$exists": False}}, {"reminder_sent": False}]},
-                {"_id": 0},
+            from telegram import Bot
+            bot = tg.shared_bot()
+            time_part = f" alle {t.get('due_time')}" if t.get("due_time") else ""
+            notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
+            text = (
+                f"⏰ Promemoria mAIPAL\n\n"
+                f"Domani ({tomorrow}{time_part}) hai in scadenza:\n"
+                f"📌 *{t.get('title','(senza titolo)')}*\n"
+                f"{t.get('description','') or ''}"
+                f"{notes_line}\n\n"
+                f"Priorità: {t.get('priority','media')}"
             )
-            async for t in cursor:
-                user = await db.users.find_one({"user_id": t["user_id"]}, {"_id": 0})
-                if not user or not user.get("telegram_chat_id") or not await nprefs.wants(db, t["user_id"], "task_reminder", "telegram"):
-                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True}})
-                    continue
-                try:
-                    from telegram import Bot
-                    bot = Bot(token=tg.bot_token())
-                    time_part = f" alle {t.get('due_time')}" if t.get("due_time") else ""
-                    notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
-                    text = (
-                        f"⏰ Promemoria mAIPAL\n\n"
-                        f"Domani ({tomorrow}{time_part}) hai in scadenza:\n"
-                        f"📌 *{t.get('title','(senza titolo)')}*\n"
-                        f"{t.get('description','') or ''}"
-                        f"{notes_line}\n\n"
-                        f"Priorità: {t.get('priority','media')}"
-                    )
-                    await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
-                    await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True, "reminder_sent_at": datetime.now(timezone.utc).isoformat()}})
-                    logger.info(f"reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
-                except Exception:
-                    logger.exception("failed to send reminder")
+            await bot.send_message(chat_id=user["telegram_chat_id"], text=text, parse_mode="Markdown", reply_markup=_snooze_keyboard(t["id"]))
+            await db.tasks.update_one({"id": t["id"]}, {"$set": {"reminder_sent": True, "reminder_sent_at": datetime.now(timezone.utc).isoformat()}})
+            logger.info(f"reminder sent for task {t['id']} to chat {user['telegram_chat_id']}")
         except Exception:
-            logger.exception("reminders loop iteration failed")
-        await asyncio.sleep(30 * 60)
+            logger.exception("failed to send reminder")
 
 
 async def _kb_reminder_enrichment(user_id: str, task: dict, org_id: Optional[str] = None) -> str:
@@ -18888,7 +18853,7 @@ async def _exact_reminders_tick(now: Optional[datetime] = None) -> None:
             continue
         try:
             from telegram import Bot
-            bot = Bot(token=tg.bot_token())
+            bot = tg.shared_bot()
             minutes_left = max(0, round((due_dt - now).total_seconds() / 60))
             notes_line = f"\n📝 {t['notes']}" if t.get("notes") else ""
             text = (
@@ -18930,15 +18895,6 @@ async def _exact_reminders_tick(now: Optional[datetime] = None) -> None:
             logger.exception("failed to send exact reminder")
 
 
-async def _exact_reminders_loop():
-    while True:
-        try:
-            await _exact_reminders_tick()
-        except Exception:
-            logger.exception("exact reminders loop iteration failed")
-        await asyncio.sleep(60)
-
-
 PRIORITY_ORDER = {"alta": 0, "media": 1, "bassa": 2, None: 3}
 PRIORITY_EMOJI = {"alta": "🔴", "media": "🟠", "bassa": "⚪️", None: "⚪️"}
 
@@ -18963,7 +18919,7 @@ def _todo_lines(open_todos: list[dict]) -> list[str]:
 async def _send_telegram(chat_id: str, lines: list[str], log_label: str):
     try:
         from telegram import Bot
-        await Bot(token=tg.bot_token()).send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+        await tg.shared_bot().send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
         logger.info(f"{log_label} sent to {chat_id}")
     except Exception:
         logger.exception(f"{log_label} send failed")
@@ -19085,55 +19041,6 @@ async def _send_week_concluded_recap(user: dict, week_start_utc_iso: str):
     await _send_telegram(user["telegram_chat_id"], lines, "week-concluded recap")
 
 
-async def _daily_summary_loop():
-    """Every 5 min, per user with a linked Telegram chat:
-    - Every morning at their configured summary_time (default 07:00, editable in
-      Impostazioni): the daily recap (today's tasks + open to-dos) - except on Monday,
-      when it's replaced by a week-ahead recap (everything due Mon-Sun this week).
-    - Every evening at a fixed 21:00 Europe/Rome: an evening look-back recap (completed
-      today + still open) - except on Friday, when it's replaced by a week-concluded
-      recap (completed this week + still open)."""
-    while True:
-        try:
-            now = datetime.now(timezone.utc)
-            now_local = now.astimezone(LOCAL_TZ)
-            local_date = now_local.date()
-            today = local_date.isoformat()
-            monday = local_date - timedelta(days=local_date.weekday())
-            sunday = monday + timedelta(days=6)
-            week_start_utc_iso = _time_str_to_today_utc("00:00", monday).isoformat()
-            today_start_utc_iso = _time_str_to_today_utc("00:00", local_date).isoformat()
-            evening_target_utc = _time_str_to_today_utc("21:00", local_date)
-
-            async for user in db.users.find({"telegram_chat_id": {"$exists": True}}, {"_id": 0}):
-                # ---- Morning slot: daily recap, or Monday's week-ahead recap ----
-                if user.get("daily_summary_date") != today:
-                    target_utc = _time_str_to_today_utc(user.get("summary_time") or "07:00", local_date)
-                    if now >= target_utc:
-                        try:
-                            if local_date.weekday() == 0:
-                                await _send_week_ahead_recap(user, today, sunday.isoformat())
-                            else:
-                                await _send_daily_morning_recap(user, today)
-                            await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
-                        except Exception:
-                            logger.exception("morning recap failed")
-
-                # ---- Evening slot: daily recap, or Friday's week-concluded recap ----
-                if user.get("evening_summary_date") != today and now >= evening_target_utc:
-                    try:
-                        if local_date.weekday() == 4:
-                            await _send_week_concluded_recap(user, week_start_utc_iso)
-                        else:
-                            await _send_daily_evening_recap(user, today, today_start_utc_iso)
-                        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"evening_summary_date": today}})
-                    except Exception:
-                        logger.exception("evening recap failed")
-        except Exception:
-            logger.exception("daily/weekly loop iteration failed")
-        await asyncio.sleep(5 * 60)
-
-
 async def _news_source_preferences(user_id: str) -> dict:
     """Learns which news sources the user tends to like/dislike from past feedback, so
     future searches can be steered toward (or away from) them. Disliked news are deleted
@@ -19214,7 +19121,7 @@ async def _run_daily_news_for_user(user: dict, today: str):
     if user.get("telegram_chat_id") and await nprefs.wants(db, user["user_id"], "news", "telegram"):
         try:
             from telegram import Bot
-            bot = Bot(token=tg.bot_token())
+            bot = tg.shared_bot()
             lines = ["🗞️ *Le tue news di oggi*", ""]
             for it in docs[:6]:
                 lines.append(f"• *{it['title']}*")
@@ -19303,19 +19210,87 @@ async def _compute_usage_daily(target_date: str):
         await db.usage_daily.bulk_write(ops, ordered=False)
 
 
-async def _usage_aggregation_loop():
+DAILY_PARALLEL = int(os.environ.get("DAILY_PARALLEL", "8"))   # users served together by the morning/evening jobs
+
+
+async def _for_each_parallel(items, fn, limit: int) -> None:
+    """fn(item) for every item, at most `limit` at a time (the morning and evening jobs: thousands of users)."""
+    sem = asyncio.Semaphore(max(1, limit))
+    async def one(x):
+        async with sem:
+            try:
+                await fn(x)
+            except Exception:
+                logger.exception("per-user job failed")
+    batch = []
+    async for x in items:
+        batch.append(asyncio.create_task(one(x)))
+        if len(batch) >= 500:
+            await asyncio.gather(*batch)
+            batch = []
+    if batch:
+        await asyncio.gather(*batch)
+
+
+async def _daily_summary_tick():
+    """Every 5 min, per user with a linked Telegram chat:
+    - Every morning at their configured summary_time (default 07:00, editable in
+      Impostazioni): the daily recap (today's tasks + open to-dos) - except on Monday,
+      when it's replaced by a week-ahead recap (everything due Mon-Sun this week).
+    - Every evening at a fixed 21:00 Europe/Rome: an evening look-back recap (completed
+      today + still open) - except on Friday, when it's replaced by a week-concluded
+      recap (completed this week + still open).
+    Only the users due now are read; several are served together."""
+    if not tg.bot_token():   # (the recaps go on Telegram)
+        return
+    now = datetime.now(timezone.utc)
+    now_local = now.astimezone(LOCAL_TZ)
+    local_date = now_local.date()
+    today = local_date.isoformat()
+    monday = local_date - timedelta(days=local_date.weekday())
+    sunday = monday + timedelta(days=6)
+    week_start_utc_iso = _time_str_to_today_utc("00:00", monday).isoformat()
+    today_start_utc_iso = _time_str_to_today_utc("00:00", local_date).isoformat()
+    evening_target_utc = _time_str_to_today_utc("21:00", local_date)
+    evening = now >= evening_target_utc
+
+    async def one(user):
+        # ---- Morning slot: daily recap, or Monday's week-ahead recap ----
+        if user.get("daily_summary_date") != today:
+            target_utc = _time_str_to_today_utc(user.get("summary_time") or "07:00", local_date)
+            if now >= target_utc:
+                try:
+                    if local_date.weekday() == 0:
+                        await _send_week_ahead_recap(user, today, sunday.isoformat())
+                    else:
+                        await _send_daily_morning_recap(user, today)
+                    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"daily_summary_date": today}})
+                except Exception:
+                    logger.exception("morning recap failed")
+        # ---- Evening slot: daily recap, or Friday's week-concluded recap ----
+        if user.get("evening_summary_date") != today and evening:
+            try:
+                if local_date.weekday() == 4:
+                    await _send_week_concluded_recap(user, week_start_utc_iso)
+                else:
+                    await _send_daily_evening_recap(user, today, today_start_utc_iso)
+                await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"evening_summary_date": today}})
+            except Exception:
+                logger.exception("evening recap failed")
+
+    due = {"telegram_chat_id": {"$exists": True}, "$or": [{"daily_summary_date": {"$ne": today}}]
+           + ([{"evening_summary_date": {"$ne": today}}] if evening else [])}
+    await _for_each_parallel(db.users.find(due, {"_id": 0}), one, DAILY_PARALLEL)
+
+
+async def _usage_aggregation_tick():
     """Every hour: recomputes usage_daily for yesterday and today (Europe/Rome). Today's
     row is necessarily partial and gets overwritten again on every run until the day rolls
     over; yesterday is recomputed once more after midnight to catch anything that landed
     between the loop's last pass and the day boundary."""
-    while True:
-        try:
-            today_local = datetime.now(timezone.utc).astimezone(LOCAL_TZ).date()
-            await _compute_usage_daily((today_local - timedelta(days=1)).isoformat())
-            await _compute_usage_daily(today_local.isoformat())
-        except Exception:
-            logger.exception("usage aggregation loop iteration failed")
-        await asyncio.sleep(60 * 60)
+    today_local = datetime.now(timezone.utc).astimezone(LOCAL_TZ).date()
+    await _compute_usage_daily((today_local - timedelta(days=1)).isoformat())
+    await _compute_usage_daily(today_local.isoformat())
 
 
 NEWS_KEEP_DAYS = 5
@@ -19335,6 +19310,28 @@ async def _remember_disliked_sources(q: dict):
                                                  {"$inc": {"dislikes": n}}, upsert=True)
 
 
+NEWS_PARALLEL = int(os.environ.get("NEWS_PARALLEL", "4"))   # users whose news are prepared together (web search + AI)
+
+
+async def _daily_news_tick():
+    """Every 5 min: for each user, once local time reaches their configured news_time
+    (default 08:00, editable in Impostazioni) and today's news haven't gone out yet,
+    searches the web for news matching their profile and stores + sends them - several
+    users together (one after the other, thousands of users would take hours)."""
+    now = datetime.now(timezone.utc)
+    local_date = now.astimezone(LOCAL_TZ).date()
+    today = local_date.isoformat()
+
+    async def one(user):
+        if now < _time_str_to_today_utc(user.get("news_time"), local_date):
+            return
+        try:
+            await _run_daily_news_for_user(user, today)
+        except Exception:
+            logger.exception(f"daily news generation failed for {user.get('user_id')}")
+    await _for_each_parallel(db.users.find({"news_date": {"$ne": today}}, {"_id": 0}), one, NEWS_PARALLEL)
+
+
 async def _cleanup_old_news() -> int:
     """News the user didn't give a thumbs up to go away NEWS_KEEP_DAYS days after they
     arrived; the liked ones stay. A thumbs down is still remembered (per source) so the
@@ -19346,41 +19343,6 @@ async def _cleanup_old_news() -> int:
     if res.deleted_count:
         logger.info(f"news cleanup: {res.deleted_count} news older than {NEWS_KEEP_DAYS} days without a like deleted")
     return res.deleted_count
-
-
-async def _news_cleanup_loop():
-    """Every 6 hours (and shortly after start-up)."""
-    await asyncio.sleep(90)
-    while True:
-        try:
-            await _cleanup_old_news()
-        except Exception:
-            logger.exception("news cleanup failed")
-        await asyncio.sleep(6 * 3600)
-
-
-async def _daily_news_loop():
-    """Every 5 min: for each user, once local time reaches their configured news_time
-    (default 08:00, editable in Impostazioni) and today's news haven't gone out yet,
-    searches the web for news matching their profile and stores + sends them."""
-    while True:
-        try:
-            now = datetime.now(timezone.utc)
-            local_date = now.astimezone(LOCAL_TZ).date()
-            today = local_date.isoformat()
-            async for user in db.users.find({}, {"_id": 0}):
-                if user.get("news_date") == today:
-                    continue
-                target_utc = _time_str_to_today_utc(user.get("news_time"), local_date)
-                if now < target_utc:
-                    continue
-                try:
-                    await _run_daily_news_for_user(user, today)
-                except Exception:
-                    logger.exception(f"daily news generation failed for {user.get('user_id')}")
-        except Exception:
-            logger.exception("daily news loop iteration failed")
-        await asyncio.sleep(5 * 60)
 
 
 @app.on_event("shutdown")
