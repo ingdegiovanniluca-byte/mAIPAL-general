@@ -874,3 +874,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 /* inside a commessa's diary the bottom menu goes away (only the commessa chat's round button stays, in the "+" place) */
 body.hide-bottom-dock [data-bottom-dock] { display: none !important; }
+
+/* To Do detail: the top (title and photo) stays still and the rows scroll under it; in a very short window
+   (a phone turned sideways) everything scrolls together, or the top alone would fill the screen */
+@media (max-height: 560px) {
+  .todo-detail { overflow-y: auto !important; display: block !important; }
+  .todo-detail-scroll { overflow: visible !important; -webkit-mask-image: none !important; mask-image: none !important; }
+}

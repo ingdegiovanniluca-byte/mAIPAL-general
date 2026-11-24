@@ -269,9 +269,11 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
     t.due_date && <span key="d" className={late ? "text-[#FFB3A3]" : ""}>{late ? "scaduto il" : "entro il"} {dayLabel(t.due_date)}{t.reminder ? " · promemoria" : ""}</span>].filter(Boolean);
 
   return createPortal(
-    <motion.div layoutScroll className="fixed inset-0 z-[65] overflow-y-auto overscroll-contain" data-testid="todo-detail" role="dialog" aria-label={t.title}
+    // the top (back, title, the photo) stays still; only what is under it scrolls, when it doesn't fit.
+    // (a very short window - a phone turned sideways - scrolls all of it: the top alone would fill it)
+    <div className="todo-detail fixed inset-0 z-[65] flex flex-col overflow-hidden" data-testid="todo-detail" role="dialog" aria-label={t.title}
       style={{ fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif", background: "linear-gradient(165deg, #B9A3B3 0%, #A64A80 30%, #93306C 52%, #C85A33 76%, #BDB1BB 100%)" }}>
-      <div className="mx-auto w-full max-w-[640px] px-5 pb-12" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
+      <div className="relative z-10 shrink-0 mx-auto w-full max-w-[640px] px-5 pb-2" data-testid="todo-detail-top" style={{ paddingTop: "max(18px, env(safe-area-inset-top))" }}>
         {/* top: back, and everything else in ⋯ */}
         <div className="flex items-center gap-2.5 pt-2">
           <button type="button" onClick={onClose} aria-label="Indietro" data-testid="todo-back"
@@ -351,9 +353,13 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           {coverBusy && <div className="absolute inset-0 bg-black/30 flex items-center justify-center text-white"><Loader2 size={22} className="animate-spin" /></div>}
         </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickCover} data-testid="todo-cover-file" />
+      </div>
 
+      <motion.div layoutScroll className="todo-detail-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain" data-testid="todo-detail-scroll"
+        style={{ WebkitMaskImage: "linear-gradient(to bottom, transparent 0, #000 16px)", maskImage: "linear-gradient(to bottom, transparent 0, #000 16px)" }}>
+      <div className="mx-auto w-full max-w-[640px] px-5" style={{ paddingBottom: "max(48px, calc(env(safe-area-inset-bottom) + 24px))" }}>
         {/* the rows, no boxes: what on the left, its content on the right */}
-        <div className="mt-8 grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-7 items-start">
+        <div className="mt-6 grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-7 items-start">
           <RowLabel title="Avvio" sub="Stato" />
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[14px] text-white pt-px" data-testid="todo-start">
             <label className="relative cursor-pointer">
@@ -406,6 +412,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           </div>
         </div>
       </div>
+      </motion.div>
 
       {suggest && (
         <GlassBottomSheet onClose={() => setSuggest(null)} testid="todo-suggest-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[520px] md:-translate-x-1/2 md:bottom-8">
@@ -436,7 +443,7 @@ export default function TodoDetail({ todo: initial, onClose, onUpdated }) {
           )}
         </GlassBottomSheet>
       )}
-    </motion.div>,
+    </div>,
     document.body,
   );
 }
