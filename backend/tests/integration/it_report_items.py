@@ -132,5 +132,22 @@ async def main():
     # without report_list_id, an instruction naming the list still gets the section
     block2 = await server._gather_report_data(u, "per ogni cliente della lista Clienti dimmi l'ultima nota", None)
     assert "Luca Verdi — nessuna informazione salvata" in block2
+    # the reported bug: a client whose commessa's diary is written every week was "without information for over a month" -
+    # the diary's lines are linked to the commessa (and so to the client) and don't write the client's name
+    db.collections.docs[-1]["system_sub_map"] = {"titolo": "titolo"}
+    db.collection_sub_items.docs.append({"id": "s1", "collection_id": "cc", "item_id": "i2", "data": {"titolo": "Bagno"},
+                                         "created_at": ago(120)})
+    db.job_logs.docs += [{"id": "l1", "commessa_id": "s1", "user_id": "u9", "date": (now - timedelta(days=3)).date().isoformat(),
+                          "created_at": ago(3), "text": "posati i sanitari, 6 ore"},
+                         {"id": "l2", "commessa_id": "s1", "user_id": "u1", "date": (now - timedelta(days=40)).date().isoformat(),
+                          "created_at": ago(40), "text": "demolizione"}]
+    db.work_reports.docs.append({"id": "w1", "client_item_id": "i1", "commessa_id": None, "template_name": "Rapporto di intervento",
+                                 "summary": "sostituito il miscelatore", "created_at": ago(8)})
+    db.job_quotes.docs.append({"id": "q1", "commessa_id": "s1", "version": 1, "created_at": ago(60), "status": "confirmed"})
+    block3 = await server._gather_report_data(u, doc["report_instruction"], None, doc["report_list_id"])
+    line = next(x for x in block3.splitlines() if x.startswith("• Luca Verdi"))
+    assert "4 informazioni salvate" in line and "3 giorni fa" in line and "diario della commessa «Bagno»" in line, line
+    line = next(x for x in block3.splitlines() if x.startswith("• Anna Bianchi"))
+    assert "8 giorni fa" in line and "report «Rapporto di intervento»" in line, line   # her report counts too
     print("ALL OK")
 asyncio.run(main())

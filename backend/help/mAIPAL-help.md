@@ -510,6 +510,7 @@ Le azioni programmate sono comandi che mAIPAL esegue da solo, con la cadenza che
 - **Crearle**: dalla chat con l'agente **Azioni** ("Ogni lunedì alle 8 mandami su Telegram i task della settimana", "Ogni venerdì all'una di notte svuota gli iscritti della lista Lezioni Pilates"). Prima di attivarla, mAIPAL ti mostra cosa farà.
 - **Nella sezione**: una casella per azione, con il titolo e sotto quando si ripete. Il **pallino** a sinistra la attiva o la mette in pausa. Toccando la casella si apre la sua scheda: cosa fa, la prossima esecuzione, l'ultimo risultato, **Esegui ora** (senza cambiare la programmazione) ed elimina.
 - Da Telegram: `/azione <comando>` per crearne una, `/azioni` per l'elenco.
+- **Riepiloghi per ogni elemento di una lista** ("ogni lunedì dimmi i clienti senza informazioni salvate da più di un mese"): per ogni elemento conta tutto quello salvato su di lui, cioè note, documenti, diario e task che lo nominano. Per un cliente conta anche quello che sta sulle sue **commesse**: l'apertura della commessa, ogni voce del **diario di commessa** (di chiunque del team, anche se non scrive il nome del cliente), i report e i preventivi. Un cliente con il diario di commessa aggiornato non risulta quindi "fermo".
 - Per gli artigiani (amministratori) è già pronta l'azione **Report settimanale cantieri** (ogni venerdì alle 18 su Telegram): vedi Diario di commessa.
 
 ## Fitness

@@ -17761,6 +17761,43 @@ def _report_list_for(colls: list, name: str, instruction: str) -> Optional[dict]
     return None
 
 
+async def _item_linked_records(coll: dict, item_ids: list) -> dict:
+    """{item id: [(day, kind, text)]}: what is saved on an element through its sub-elements - for a client, its commesse:
+    their opening, every line of their diary (by anyone of the team), their reports and quotes."""
+    out: dict = {}
+    if not item_ids:
+        return out
+    subs = await db.collection_sub_items.find({"collection_id": coll["id"], "item_id": {"$in": item_ids}},
+                                              {"_id": 0, "embedding": 0}).to_list(10000)
+    smap = coll.get("system_sub_map") or {}
+    owner = {sb["id"]: sb["item_id"] for sb in subs}
+    title = {sb["id"]: (_sysval(sb.get("data"), smap, "titolo") if smap else "") or "commessa" for sb in subs}
+    def add(item_id, day, kind, text):
+        if item_id:
+            out.setdefault(item_id, []).append((day, kind, (text or "").strip() or kind))
+    for sb in subs:
+        add(sb["item_id"], retrieval._local_day(sb.get("created_at")), f"commessa «{title[sb['id']]}» aperta", title[sb["id"]])
+    ids = list(owner)
+    if ids:
+        for lg in await db.job_logs.find({"commessa_id": {"$in": ids}}, {"_id": 0, "commessa_id": 1, "date": 1, "created_at": 1,
+                                                                          "text": 1, "kind": 1}).to_list(50000):
+            add(owner.get(lg["commessa_id"]), retrieval._local_day(lg.get("date") or lg.get("created_at")),
+                f"diario della commessa «{title.get(lg['commessa_id'])}»", lg.get("text"))
+        for q in await db.job_quotes.find({"commessa_id": {"$in": ids}}, {"_id": 0, "commessa_id": 1, "created_at": 1, "version": 1}).to_list(5000):
+            add(owner.get(q["commessa_id"]), retrieval._local_day(q.get("created_at")), f"preventivo della commessa «{title.get(q['commessa_id'])}»",
+                f"preventivo v{q.get('version') or 1}")
+    seen_reports = set()
+    for r in await db.work_reports.find({"$or": [{"client_item_id": {"$in": item_ids}}, {"commessa_id": {"$in": ids or ["-"]}}]},
+                                        {"_id": 0, "id": 1, "client_item_id": 1, "commessa_id": 1, "template_name": 1, "summary": 1,
+                                         "created_at": 1, "updated_at": 1}).to_list(5000):
+        if r.get("id") in seen_reports:
+            continue
+        seen_reports.add(r.get("id"))
+        add(r.get("client_item_id") or owner.get(r.get("commessa_id")), retrieval._local_day(r.get("updated_at") or r.get("created_at")),
+            f"report «{r.get('template_name') or 'report'}»", r.get("summary"))
+    return out
+
+
 async def _list_items_with_kb(user: User, coll: dict, today) -> List[str]:
     """For every element of a list: what is saved about it in the knowledge base (notes,
     documents, diary, tasks) and when the latest piece was saved - computed here, so "i
@@ -17776,6 +17813,7 @@ async def _list_items_with_kb(user: User, coll: dict, today) -> List[str]:
     for t in await db.tasks.find(_visible_query(user), {"_id": 0, "title": 1, "notes": 1, "description": 1, "created_at": 1}).to_list(3000):
         records.append((retrieval._local_day(t.get("created_at")), "task", " ".join(x for x in (t.get("title"), t.get("description"), t.get("notes")) if x)))
     prepared = [(d, k, txt, txt.lower(), retrieval._tokens(txt)) for d, k, txt in records if txt]
+    linked = await _item_linked_records(coll, [it["id"] for it in items])
     out = [f"--- Elementi della lista «{coll['name']}» ({len(items)}) con le informazioni salvate su ciascuno nella knowledge base "
            f"(oggi è {retrieval.format_it_date(today.isoformat())}) ---"]
     for it in items[:400]:
@@ -17787,6 +17825,7 @@ async def _list_items_with_kb(user: User, coll: dict, today) -> List[str]:
         words = [w for w in retrieval._tokens(low) if len(w) >= 3]
         hits = [(d, k, txt) for d, k, txt, tl, toks in prepared
                 if low in tl or (len(words) >= 2 and all(w in toks for w in words))]
+        hits += linked.get(it["id"], [])   # what is saved ON it: its commesse's diary, reports, quotes (they rarely write its name)
         if not hits:
             out.append(f"• {display} — nessuna informazione salvata")
             continue
