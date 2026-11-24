@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Search, Mic, Square, Camera, Loader2, Clock, Package, AlertTriangle, Trash2, Pencil, X, Plus, MapPin, Phone, Mail,
   NotebookPen, MessageCircle, Send, ChevronRight, ChevronDown, RefreshCw, CalendarDays, CircleDot, FileText, Check, Briefcase, Activity,
-  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload, Hash } from "lucide-react";
+  UserRound, HardHat, Euro, Flag, Contact, ListChecks, Copy, Users, Upload, Hash, ClipboardList, Download } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
@@ -1375,6 +1375,9 @@ function QuoteSheet({ commessa, proposal, onClose, onSaved }) {
 
 // ===== Pianificazione: the planned activities - when, who (and whether they confirmed), what to bring
 // a question to the commessa's chat: "?" at the end, or how a question starts; anything else is something to record
+// "fammi il report di sopralluogo", "genera il SAL": the commessa chat's Report
+const REPORT_RX = /\b(?:fa(?:i|mmi|re)|genera(?:mi)?|prepara(?:mi)?|crea(?:mi)?|scrivi(?:mi)?|voglio)\b[^.?!]{0,40}\b(?:report|verbale|sal|rapporto)\b/i;
+const newDraftId = () => "rdr_" + newClientId().replace(/[^0-9a-f]/gi, "").toLowerCase().slice(0, 24).padEnd(12, "0");
 const QUESTION_RX = /\?\s*$|^(che\s+cosa|cosa|cos'|quando|dove|chi|come|quale|quali|qual|quanto|quanti|quante|perch[eé]|mi\s+dici|dimmi|sai|c'è|ci\s+sono|abbiamo|hai|ha|hanno|com'è|elenca|mostrami|riassumi|fammi)\b/i;
 const ACT_CATEGORIES = [["materiali", "Materiali"], ["attrezzi", "Attrezzi"], ["dpi", "DPI"], ["documenti", "Documenti"]];
 const ACT_STATUS = { pianificata: ["Pianificata", "#F2C14E"], confermata: ["Confermata", "#7FC8F8"], in_corso: ["In corso", "#C9A7F5"],
@@ -2566,6 +2569,10 @@ function ClientCard({ client, commesse, total, active, open, onToggle, onOpen })
 // diary and reports; "Scrivi nel diario" saves what was done (with photos).
 function CommessaChat({ commessa, onClose, onSaved }) {
   const [mode, setMode] = useState("ask");
+  // Report: a report of THIS commessa, from the messages (text, voice, photos) written here, made on «Genera report»
+  const [rep, setRep] = useState({ draftId: null, convId: null, reportId: null, version: 1 });
+  // the "Installa mAIPAL" banner (browser only) sits where the chat's send button is: away while the chat is open
+  useEffect(() => { document.body.classList.add("commessa-chat-open"); return () => document.body.classList.remove("commessa-chat-open"); }, []);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [photos, setPhotos] = useState([]);
@@ -2725,12 +2732,78 @@ function CommessaChat({ commessa, onClose, onSaved }) {
     await keepDiaryEntry({ client_id: clientId || newClientId(), text: body, images, commessa_id: commessa.id, label: body.slice(0, 80) });
     setMessages((ms) => [...ms, { role: "assistant", content: "⏳ Senza rete: l'ho salvata sul telefono. La invio da sola appena torna il segnale.", saved: true }]);
   };
+  const showReport = (data) => {
+    setRep((r) => ({ ...r, draftId: data.draft?.id || r.draftId, convId: data.conv_id || r.convId,
+      reportId: data.report?.id || r.reportId, version: data.report?.version || r.version }));
+    setMessages((ms) => [
+      ...ms.map((m) => (m.repAsk || m.repGen ? { ...m, repAsk: null, repGen: false } : m)),
+      ...(data.reply ? [{ role: "assistant", mode: "report", content: data.reply, repAsk: data.ask?.kind === "type" ? data.ask : null,
+        repGen: !data.report && !data.ask && (data.draft?.messages || 0) > 0 }] : []),
+      ...(data.report ? [{ role: "assistant", mode: "report", content: data.report_text || `✅ Report generato: ${data.report.template_name}`,
+        reportId: data.report.id, version: data.report.version || 1 }] : []),
+    ]);
+    if (data.report) onSaved?.();
+  };
+  const sendReport = async (body, images) => {
+    const draftId = rep.draftId || newDraftId();
+    if (!rep.draftId) setRep((r) => ({ ...r, draftId }));
+    const { text: plain } = untag(body);
+    const clientId = newClientId();
+    if (rep.reportId) {   // after the report: a change to it (a new version), photos added too
+      if (navigator.onLine === false) { setMessages((ms) => [...ms, { role: "assistant", mode: "report", content: "Senza rete: la modifica del report mandala quando torna il segnale." }]); return; }
+      const r = await api.post(`/work/reports/${rep.reportId}/revise`, { text: plain, images, conv_id: rep.convId });
+      const changed = (r.data.changed || []).length > 0;
+      if (changed) setRep((x) => ({ ...x, version: r.data.version }));
+      setMessages((ms) => [...ms, { role: "assistant", mode: "report", content: r.data.message, ...(changed ? { reportId: r.data.id, version: r.data.version } : {}) }]);
+      if (changed) onSaved?.();
+      return;
+    }
+    const keep = async () => {
+      await keepDiaryEntry({ kind: "report", client_id: clientId, text: plain, images, draft_id: draftId, conv_id: rep.convId,
+        commessa_id: commessa.id, label: (plain || "Foto per il report").slice(0, 80) });
+      setMessages((ms) => [...ms, { role: "assistant", mode: "report", content: "⏳ Senza rete: l'ho tenuto sul telefono. Lo aggiungo al report da solo appena torna il segnale." }]);
+    };
+    if (navigator.onLine === false) { await keep(); return; }
+    try {
+      const r = await api.post("/work/report-chat", { draft_id: draftId, text: plain, images, commessa_id: commessa.id, conv_id: rep.convId,
+        client_id: clientId, written_at: new Date().toISOString() });
+      showReport(r.data);
+    } catch (e) {
+      if (isNetworkError(e)) await keep(); else throw e;
+    }
+  };
+  const reportAct = async (label, call) => {
+    if (busy) return;
+    if (navigator.onLine === false) { toast.error("Senza rete: scegli quando torna il segnale"); return; }
+    setMessages((ms) => [...ms, { role: "user", content: label, mode: "report" }]);
+    setBusy(true);
+    try { showReport((await call()).data); }
+    catch (e) { setMessages((ms) => [...ms, { role: "assistant", mode: "report", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]); }
+    finally { setBusy(false); }
+  };
+  const newReport = () => {
+    setRep({ draftId: null, convId: null, reportId: null, version: 1 });
+    setMode("report");
+    setMessages((ms) => [...ms.map((m) => ({ ...m, repAsk: null, repGen: false })),
+      { role: "assistant", mode: "report", content: `📝 Nuovo report di «${commessa.title}»: dimmi che report è e cosa scriverci, anche in più messaggi, a voce o con foto.` }]);
+  };
+
   const send = async () => {
-    const body = text.trim() || (mode === "diary" && photos.length ? "Foto dal cantiere" : "");
-    if (!body || busy) return;
-    const images = mode === "diary" ? photos : [];
-    setMessages((ms) => [...ms, { role: "user", content: images.length ? `${body}\n📷 ${images.length} foto` : body, mode }]);
+    const body = text.trim() || ((mode === "diary" || mode === "report") && photos.length ? (mode === "report" ? "" : "Foto dal cantiere") : "");
+    if ((!body && !(mode === "report" && photos.length)) || busy) return;
+    // "fammi il report di sopralluogo" written in Chiedi or Diario: it's the Report
+    const toReport = mode === "report" || REPORT_RX.test(body);
+    if (toReport && mode !== "report") setMode("report");
+    const images = mode === "diary" || mode === "report" ? photos : [];
+    setMessages((ms) => [...ms, { role: "user", content: images.length ? `${body}${body ? "\n" : ""}📷 ${images.length} foto` : body, mode: toReport ? "report" : mode }]);
     setText(""); setPhotos([]);
+    if (toReport) {
+      setBusy(true);
+      try { await sendReport(body, images); }
+      catch (e) { setMessages((ms) => [...ms, { role: "assistant", mode: "report", content: "⚠️ " + (e.response?.data?.detail || "Qualcosa è andato storto") }]); }
+      finally { setBusy(false); }
+      return;
+    }
     // in "Chiedi" a message that is not a question (an entry, a job for tomorrow) goes to the diary by itself
     const asDiary = mode === "diary" || !QUESTION_RX.test(body.trim());
     if (asDiary && navigator.onLine === false) { await keepOffline(untag(body).text, images); return; }
@@ -2740,7 +2813,7 @@ function CommessaChat({ commessa, onClose, onSaved }) {
       if (asDiary) {
         await saveEntry(body, images, null, null, clientId);
       } else {
-        const history = messages.filter((m) => m.mode !== "diary" && !m.saved).slice(-8).map((m) => ({ role: m.role, content: m.content }));
+        const history = messages.filter((m) => m.mode !== "diary" && m.mode !== "report" && !m.saved).slice(-8).map((m) => ({ role: m.role, content: m.content }));
         const r = await api.post(`/jobs/commesse/${commessa.id}/ask`, { question: untag(body).text, history });
         setMessages((ms) => [...ms, { role: "assistant", content: r.data.answer, offerSave: r.data.is_entry ? body : null }]);
       }
@@ -2792,6 +2865,30 @@ function CommessaChat({ commessa, onClose, onSaved }) {
                   <button onClick={() => answerSolve(i, p, false)} className="text-xs px-3 py-1.5 rounded-full bg-white/15 text-white">È ancora aperto</button>
                 </div>
               ))}
+              {m.repAsk && (
+                <div className="mt-1.5 flex flex-wrap gap-2" data-testid="chat-report-types">
+                  {m.repAsk.options.map((o) => (
+                    <button key={o.key} onClick={() => reportAct(o.name, () => api.post(`/work/report-chat/${rep.draftId}/set`, { report_type: o.key }))} disabled={busy}
+                      data-testid={`chat-report-type-${o.key}`} className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white disabled:opacity-50">{o.name}</button>
+                  ))}
+                </div>
+              )}
+              {m.repGen && (
+                <button onClick={() => reportAct("Genera report", () => api.post("/work/report-chat", { draft_id: rep.draftId, generate: true, commessa_id: commessa.id, conv_id: rep.convId }))}
+                  disabled={busy} data-testid="chat-report-generate"
+                  className="mt-1.5 inline-flex items-center gap-1.5 h-9 px-4 rounded-full text-[13px] font-semibold bg-white text-[#403A3C] disabled:opacity-50">
+                  <ClipboardList size={14} /> Genera report
+                </button>
+              )}
+              {m.reportId && (
+                <div className="mt-1.5 flex flex-wrap gap-2">
+                  <a href={`${API}/work/reports/${m.reportId}/download${m.version > 1 ? `?v=${m.version}` : ""}`} data-testid="chat-report-download"
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white">
+                    <Download size={12} /> Scarica il report{m.version > 1 ? ` (versione ${m.version})` : ""}
+                  </a>
+                  <button onClick={newReport} data-testid="chat-report-new" className="text-xs px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-white">Nuovo report</button>
+                </div>
+              )}
               {m.offerSave && (
                 <button onClick={() => { setBusy(true); saveEntry(m.offerSave, [], i).catch((e) => toast.error(e.response?.data?.detail || "Errore")).finally(() => setBusy(false)); }}
                   disabled={busy} data-testid="chat-save-entry"
@@ -2808,7 +2905,8 @@ function CommessaChat({ commessa, onClose, onSaved }) {
         onSaved={() => { setQuote(null); setMessages((ms) => [...ms, { role: "assistant", content: "✅ Preventivo salvato: lo trovi nella sezione Preventivo e nel diario." }]); onSaved?.(); }} />}
       <div className="flex items-center gap-2 mb-2">
         {modeBtn("ask", MessageCircle, "Chiedi")}
-        {modeBtn("diary", NotebookPen, "Scrivi nel diario")}
+        {modeBtn("diary", NotebookPen, "Diario")}
+        {modeBtn("report", ClipboardList, "Report")}
         <button onClick={onClose} title="Chiudi la chat" aria-label="Chiudi la chat" data-testid="commessa-chat-close"
           className="ml-auto h-9 w-9 rounded-full flex items-center justify-center bg-white/25 text-white hover:bg-white/30"><X size={16} /></button>
       </div>
@@ -2835,7 +2933,9 @@ function CommessaChat({ commessa, onClose, onSaved }) {
           )}
           <textarea ref={taRef} value={text} onChange={onType} rows={1} data-testid="commessa-chat-text"
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia(`(min-width: ${MOBILE_BREAKPOINT}px)`).matches) { e.preventDefault(); send(); } }}
-            placeholder={mode === "ask" ? `Chiedi su «${commessa.title}»: ore, materiali, cosa manca… (@ per taggare)` : "Cosa avete fatto? Ore, materiali, problemi… (@ per taggare)"}
+            placeholder={mode === "ask" ? `Chiedi su «${commessa.title}»: ore, materiali, cosa manca… (@ per taggare)`
+              : mode === "report" ? (rep.reportId ? "Cosa cambiare nel report? (o una foto da aggiungere)" : "Che report è (sopralluogo, SAL…) e cosa scriverci: rilievi, misure, foto…")
+              : "Cosa avete fatto? Ore, materiali, problemi… (@ per taggare)"}
             className="w-full bg-transparent border-0 outline-none resize-none text-[15px] leading-relaxed py-1 text-white placeholder:text-white/70 no-scrollbar" />
           {photos.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-1">
@@ -2849,8 +2949,8 @@ function CommessaChat({ commessa, onClose, onSaved }) {
           )}
           <div className="mt-auto pt-1 flex items-center gap-1">
             <span className="flex-1" />
-            {mode === "diary" && (
-              <button onClick={() => fileRef.current?.click()} title="Foto" aria-label="Foto" className="p-2 rounded-full text-white/90 hover:bg-white/15">
+            {(mode === "diary" || mode === "report") && (
+              <button onClick={() => fileRef.current?.click()} title="Foto" aria-label="Foto" data-testid="commessa-chat-photo" className="p-2 rounded-full text-white/90 hover:bg-white/15">
                 <Camera size={19} />
               </button>
             )}
@@ -2860,7 +2960,7 @@ function CommessaChat({ commessa, onClose, onSaved }) {
               <FileText size={19} />
             </button>
             <input ref={docRef} type="file" accept={DOC_ACCEPT} hidden data-testid="commessa-chat-doc-file" onChange={(e) => { sendDoc(e.target.files?.[0]); e.target.value = ""; }} />
-            <button onClick={send} disabled={busy || recording || transcribing || (!text.trim() && !(mode === "diary" && photos.length))}
+            <button onClick={send} disabled={busy || recording || transcribing || (!text.trim() && !((mode === "diary" || mode === "report") && photos.length))}
               data-testid="commessa-chat-send" title="Invia" aria-label="Invia"
               style={{ background: "rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)" }}
               className="h-10 w-10 rounded-[10px] flex items-center justify-center text-white disabled:opacity-60">

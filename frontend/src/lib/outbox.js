@@ -89,6 +89,7 @@ export function flushOutbox() {
           if (!text && !(e.kind === "report" && e.images?.length)) { await tx(ENTRIES, "readwrite", (s) => s.delete(e.client_id)); continue; }
           if (e.kind === "report") {   // the report's chat: added to its report (and to its conversation in the Cronologia)
             const r = await api.post("/work/report-chat", { draft_id: e.draft_id, text, images: e.images || [], conv_id: e.conv_id || undefined,
+              commessa_id: e.commessa_id || undefined,
               client_id: e.client_id, written_at: e.written_at });
             await tx(ENTRIES, "readwrite", (s) => s.delete(e.client_id));
             sent += 1;

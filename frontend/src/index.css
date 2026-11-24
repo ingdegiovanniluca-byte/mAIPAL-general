@@ -881,3 +881,6 @@ body.hide-bottom-dock [data-bottom-dock] { display: none !important; }
   .todo-detail { overflow-y: auto !important; display: block !important; }
   .todo-detail-scroll { overflow: visible !important; -webkit-mask-image: none !important; mask-image: none !important; }
 }
+
+/* the commessa's chat open: the install banner would cover its send button */
+body.commessa-chat-open [data-testid="install-banner"] { display: none !important; }

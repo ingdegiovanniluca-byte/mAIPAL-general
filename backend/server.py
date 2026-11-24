@@ -6507,6 +6507,7 @@ class ReportChatPayload(BaseModel):
     client_id: Optional[str] = None  # the message's own id: sent twice (offline, then again), kept once
     written_at: Optional[str] = None
     images: List[str] = []            # photos (data URIs): in the report's "Documentazione fotografica"
+    commessa_id: Optional[str] = None # the report made from a commessa's own chat: that commessa, never asked nor changed
 
 
 class ReportChatSet(BaseModel):
@@ -6743,7 +6744,7 @@ async def _report_answer(current: User, d: dict, user_text: str, reply: str, ask
     if rep:
         out.append({"content": _work_report_lines(rep), "reportId": rep.get("id"), "reportKind": "work", "reportVersion": rep.get("version") or 1})
     await _report_conv_write(current, cid, user_text, out)
-    return {**view, "conv_id": cid}
+    return {**view, "conv_id": cid, "report_text": _work_report_lines(rep) if rep else None}
 
 
 _DRAFT_ID = re.compile(r"^rdr_[0-9a-f]{8,32}$")
@@ -6761,6 +6762,9 @@ async def report_chat(payload: ReportChatPayload, current: User = Depends(get_cu
                                       and not await db.report_drafts.find_one({"id": payload.draft_id}, {"_id": 1})) else f"rdr_{uuid.uuid4().hex[:12]}"
         d = {"id": new_id, "user_id": current.user_id, "messages": [], "report_type": None, "commessa_id": None,
              "no_commessa": False, "status": "open", "created_at": datetime.now(timezone.utc).isoformat()}
+        if payload.commessa_id:   # from the commessa's diary: only for it
+            await _commessa_or_404(current, payload.commessa_id, write=False)
+            d.update(commessa_id=payload.commessa_id, commessa_locked=True)
         await db.report_drafts.insert_one(dict(d))
     if payload.client_id:
         d["client_ids"] = [*(d.get("client_ids") or []), payload.client_id][-200:]
@@ -6775,7 +6779,7 @@ async def report_chat(payload: ReportChatPayload, current: User = Depends(get_cu
         return await _report_answer(current, d, shown, reply, ask, rep, payload.conv_id)
     if not text and not photo_ids:
         raise HTTPException(status_code=400, detail="Scrivi o detta cosa mettere nel report")
-    if text and _asks_commesse(text):
+    if text and _asks_commesse(text) and not d.get("commessa_locked"):
         ask, reply = await _commesse_asked(current, text)
         return await _report_answer(current, d, shown, reply, ask, conv_id=payload.conv_id)
     reply, ask = await _report_draft_step(current, d, text, payload.written_at, photo_ids)
@@ -6794,6 +6798,8 @@ async def report_chat_set(draft_id: str, payload: ReportChatSet, current: User =
         if payload.report_type not in types:
             raise HTTPException(status_code=400, detail="Tipo di report non valido")
         upd["report_type"], shown = payload.report_type, types[payload.report_type]
+    if (payload.commessa_id or payload.no_commessa) and d.get("commessa_locked"):
+        raise HTTPException(status_code=400, detail="Questo report è della commessa da cui l'hai aperto")
     if payload.commessa_id:
         await _commessa_or_404(current, payload.commessa_id, write=False)
         upd.update(commessa_id=payload.commessa_id, no_commessa=False)

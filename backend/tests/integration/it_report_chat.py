@@ -481,6 +481,30 @@ async def main():
     assert r["version"] == 2 and "aggiunta 1 foto" in r["message"] and len(r["photo_ids"]) == 3, r["message"]
     n, xml = docx_photos(DOCX[-1])
     assert n == 4, n
+    # 9) from the commessa's diary (its chat, Report): only that commessa - never asked, never changed, no commesse listed
+    r = await chat(draft_id="rdr_aaaabbbbcccc", text="fammi il SAL: posati i sanitari", commessa_id="s2", conv_id=None)
+    d9 = r["draft"]
+    assert d9["id"] == "rdr_aaaabbbbcccc" and d9["commessa"]["title"] == "Bagno" and d9["report_type"] == "sal" and not r["ask"], r
+    assert r["conv_id"]
+    r = await chat(draft_id=d9["id"], text="quali commesse attive ha Rossi?")   # here a line of the report, not a listing
+    assert not r["ask"] and r["draft"]["messages"] == 2 and r["draft"]["commessa"]["title"] == "Bagno", r
+    try:
+        await server.report_chat_set(d9["id"], server.ReportChatSet(commessa_id="s1"), me); assert False
+    except HTTPException as e:
+        assert e.status_code == 400
+    try:
+        await server.report_chat_set(d9["id"], server.ReportChatSet(no_commessa=True), me); assert False
+    except HTTPException as e:
+        assert e.status_code == 400
+    REPORTS.clear()
+    r = await chat(draft_id=d9["id"], generate=True)
+    assert r["report"] and r["report"]["commessa_id"] == "s2" and r["report_text"].startswith("✅ Report generato"), r
+    assert REPORTS[-1][1] == "Clienti / Mario Rossi / 2026-002 – Bagno / Report", REPORTS
+    # a commessa the user can't reach: refused
+    try:
+        await chat(text="fammi il SAL", commessa_id="s_nope"); assert False
+    except HTTPException as e:
+        assert e.status_code == 404
     print("ALL OK")
 
 asyncio.run(main())
