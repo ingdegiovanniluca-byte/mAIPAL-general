@@ -14,7 +14,7 @@ import segno
 ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 CODE_LEN = 12
 KINDS = {"attrezzo": "Attrezzo", "cantiere": "Cantiere", "punto": "Punto informativo", "altro": "Altro"}
-VISIBILITY = {"org": "Tutta l'organizzazione", "admins": "Solo amministratori"}
+VISIBILITY = {"public": "Pubblico: chiunque lo scansioni", "org": "Tutta l'organizzazione", "admins": "Solo amministratori"}
 MAX_TITLE, MAX_TEXT, MAX_LINKS, MAX_LINK_LABEL, MAX_URL = 120, 5000, 10, 80, 1000
 
 

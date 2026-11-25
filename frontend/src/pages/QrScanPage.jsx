@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { QrCode, BookOpen, Pencil, ExternalLink } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
+import { QrCode, BookOpen, Pencil, ExternalLink, Lock } from "lucide-react";
 import PageBackground from "@/components/PageBackground";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 
-/* A QR label scanned with the phone (APP/q/<code>): what it shows, for who is in the organization that made it.
-   Not logged in: the login first, then back here. Anyone else gets "not found" - the same as a wrong code. */
+/* A QR label scanned with the phone (APP/q/<code>).
+   - Who is in the organization that made it: everything (also a private one), with the commessa's diary and, for the
+     administrator, Modifica.
+   - Anyone else - logged in elsewhere or with no account: a public QR's content (only what was written for it);
+     a private one "not available", the same as a wrong code, with the login for who is in the organization. */
 export const AFTER_LOGIN_KEY = "maipal.afterLogin";
 
 export function rememberAfterLogin(path) {
@@ -22,27 +25,42 @@ export default function QrScanPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState(null);
   const [error, setError] = useState(null);
+  const [reserved, setReserved] = useState(false);   // not public and not logged in: maybe the organization's
 
   useEffect(() => {
-    if (!user) return;
-    setQ(null); setError(null);
-    api.get(`/qr/scan/${encodeURIComponent(code)}`)
-      .then((r) => setQ(r.data))
-      .catch((e) => setError(e.response?.data?.detail || "Non riesco ad aprire questo QR: controlla la connessione e riprova."));
-  }, [user, code]);
+    if (loading) return;
+    setQ(null); setError(null); setReserved(false);
+    const enc = encodeURIComponent(code);
+    const failed = (e) => e.response?.data?.detail || "Non riesco ad aprire questo QR: controlla la connessione e riprova.";
+    const publicOne = (fallback) => api.get(`/qr/public/${enc}`).then((r) => setQ(r.data)).catch((e) => {
+      if (e.response?.status === 404 && !user) setReserved(true); else setError(fallback || failed(e));
+    });
+    if (!user) { publicOne(); return; }
+    api.get(`/qr/scan/${enc}`).then((r) => setQ(r.data)).catch((e) => {
+      // not of my organization: maybe a public one (a supplier's, a site's sign)
+      if (e.response?.status === 404) publicOne(failed(e)); else setError(failed(e));
+    });
+  }, [user, loading, code]);
+
+  const login = () => { rememberAfterLogin(`/q/${code}`); navigate("/"); };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="kicker">caricamento…</div></div>;
-  if (!user) {
-    rememberAfterLogin(`/q/${code}`);
-    return <Navigate to="/" replace />;
-  }
 
   return (
     <div className="font-poppins min-h-screen w-full relative">
       <PageBackground />
       <div className="relative z-10 w-full max-w-[560px] mx-auto px-4 pt-8 pb-12 flex flex-col gap-4 text-white">
-        <button type="button" onClick={() => navigate("/dashboard")} className="self-start text-xs text-white/70">mAIPAL</button>
-        {error ? (
+        <button type="button" onClick={() => navigate(user ? "/dashboard" : "/")} className="self-start text-xs text-white/70">mAIPAL</button>
+        {reserved ? (
+          <div className="card-soft p-6 flex flex-col gap-3" data-testid="qr-scan-reserved">
+            <div className="flex items-center gap-2 font-semibold"><Lock size={17} /> QR riservato</div>
+            <p className="text-sm text-white/80 leading-relaxed">
+              Questo QR non è pubblico: lo vede solo chi fa parte dell'organizzazione che l'ha creato. Se ne fai parte, accedi con il tuo account mAIPAL.
+            </p>
+            <button type="button" onClick={login} data-testid="qr-scan-login"
+              className="self-start h-10 px-5 rounded-full bg-white/85 text-[#7A2A5C] text-sm font-semibold">Accedi</button>
+          </div>
+        ) : error ? (
           <div className="card-soft p-6" data-testid="qr-scan-error">
             <div className="flex items-center gap-2 font-semibold"><QrCode size={18} /> QR</div>
             <p className="mt-2 text-sm text-white/80 leading-relaxed">{error}</p>

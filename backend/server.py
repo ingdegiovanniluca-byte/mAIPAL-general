@@ -44,6 +44,7 @@ import jobs
 import db_indexes
 import search_index
 import qr_tags as qr
+import time
 import embeddings as emb
 import retrieval
 import news_service
@@ -18681,7 +18682,7 @@ class QrPayload(BaseModel):
     text: Optional[str] = None
     links: Optional[List[dict]] = None
     commessa_id: Optional[str] = None          # "" = not linked to a commessa
-    visibility: Optional[Literal["org", "admins"]] = None
+    visibility: Optional[Literal["public", "org", "admins"]] = None
     active: Optional[bool] = None
 
 
@@ -18802,6 +18803,42 @@ async def scan_qr(code: str, current: User = Depends(get_current_user)):
     out = await _qr_public(current, doc)
     out["can_edit"] = admin
     return out
+
+
+# A public QR, scanned by anyone (no login): only what the administrator wrote for it - title, text, links, the day
+# it was updated - never the commessa, the client or who changed it. A private, turned-off or missing QR: the same
+# answer, so nothing is learned about the organization's labels. Wrong codes from one address are limited.
+QR_PUBLIC_UNAVAILABLE = "Questo QR non è disponibile oppure è riservato all'organizzazione che l'ha creato."
+_QR_MISSES: Dict[str, list] = {}
+QR_MAX_MISSES, QR_MISS_WINDOW_S = 30, 600
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("cf-connecting-ip") or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    return fwd or (request.client.host if request.client else "?")
+
+
+@api_router.get("/qr/public/{code}")
+async def scan_public_qr(code: str, request: Request):
+    ip = _client_ip(request)
+    now = time.monotonic()
+    misses = [t for t in _QR_MISSES.get(ip, []) if now - t < QR_MISS_WINDOW_S]
+    if len(misses) >= QR_MAX_MISSES:
+        raise HTTPException(status_code=429, detail="Troppi codici non validi: riprova tra qualche minuto.")
+    c = qr.norm_code(code)
+    doc = await db.qr_codes.find_one({"code": c, "visibility": "public", "active": True}, {"_id": 0}) if c else None
+    if not doc:
+        misses.append(now)
+        _QR_MISSES[ip] = misses
+        if len(_QR_MISSES) > 10000:   # (old addresses forgotten)
+            for k in [k for k, v in _QR_MISSES.items() if not v or now - v[-1] > QR_MISS_WINDOW_S]:
+                _QR_MISSES.pop(k, None)
+        raise HTTPException(status_code=404, detail=QR_PUBLIC_UNAVAILABLE)
+    await db.qr_codes.update_one({"id": doc["id"], "code": c}, {"$inc": {"scans": 1, "public_scans": 1},
+                                                              "$set": {"last_scan_at": datetime.now(timezone.utc).isoformat()}})
+    return {"public": True, "title": doc.get("title"), "kind": doc.get("kind"), "kind_label": qr.KINDS.get(doc.get("kind"), "Altro"),
+            "text": doc.get("text") or "", "links": doc.get("links") or [], "updated_at": doc.get("updated_at"),
+            "code_label": qr.code_label(c)}
 
 
 @api_router.get("/qr/{qr_id}")

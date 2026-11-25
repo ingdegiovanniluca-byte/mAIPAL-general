@@ -118,6 +118,31 @@ async def main():
     server._commessa_access = access
     await fails(server.update_qr(q["id"], P(commessa_id="s_other"), admin), 404)
 
+    # public: anyone who scans it (no login), only what was written for it; private / off / missing: the same answer
+    import server as srv
+    class Req:
+        def __init__(s, ip): s.headers = {"cf-connecting-ip": ip}; s.client = None
+    await server.update_qr(q["id"], P(commessa_id=""), admin)
+    db.qr_codes.docs[0]["commessa_id"] = "s1"          # (linked to a commessa: never shown publicly)
+    private_msg = await fails(server.scan_public_qr(q["code"], Req("1.1.1.1")), 404)
+    assert private_msg == await fails(server.scan_public_qr("ZZZZZZZZZZZZ", Req("1.1.1.1")), 404)
+    await server.update_qr(q["id"], P(visibility="public"), admin)
+    pub = await server.scan_public_qr(q["code_label"], Req("1.1.1.1"))
+    assert pub["text"] == "Cancello: codice 7788" and pub["title"] == "Cantiere Rossi · ingresso" and pub["public"] is True
+    assert not {"commessa", "commessa_id", "id", "code", "updated_by_name", "last_scan_by_name", "tenant_id", "scans"} & set(pub)
+    assert db.qr_codes.docs[0]["public_scans"] == 1
+    assert (await server.scan_qr(q["code"], worker))["can_edit"] is False                 # the organization: the full view
+    await fails(server.scan_qr(q["code"], other), 404)                                     # (another org: the public view)
+    await server.update_qr(q["id"], P(active=False), admin)
+    assert await fails(server.scan_public_qr(q["code"], Req("1.1.1.1")), 404) == private_msg
+    await server.update_qr(q["id"], P(active=True, visibility="org"), admin)
+    # wrong codes from one address: limited
+    srv._QR_MISSES.clear()
+    for _ in range(srv.QR_MAX_MISSES):
+        await fails(server.scan_public_qr("ZZZZZZZZZZZZ", Req("9.9.9.9")), 404)
+    await fails(server.scan_public_qr(q["code"], Req("9.9.9.9")), 429)
+    await fails(server.scan_public_qr("ZZZZZZZZZZZZ", Req("8.8.8.8")), 404)          # another address: not affected
+
     # a new code: the old label stops working, the content stays
     q3 = await server.regenerate_qr_code(q["id"], admin)
     assert q3["code"] != q["code"] and q3["text"] == "Cancello: codice 7788"

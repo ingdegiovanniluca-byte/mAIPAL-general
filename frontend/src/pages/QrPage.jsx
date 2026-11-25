@@ -11,6 +11,13 @@ import { useAuth } from "@/auth/AuthContext";
 
 const FIELD = "h-10 w-full min-w-0 rounded-xl bg-white/10 px-3 text-sm text-white placeholder:text-white/40 outline-none";
 const KINDS = [["cantiere", "Cantiere"], ["attrezzo", "Attrezzo"], ["punto", "Punto informativo"], ["altro", "Altro"]];
+const VISIBILITY = [["public", "Pubblico"], ["org", "Solo organizzazione"], ["admins", "Solo amministratori"]];
+const VISIBILITY_NOTE = {
+  public: "Chiunque lo scansioni lo vede, anche senza account (clienti, fornitori, visitatori): non scrivere codici o dati riservati. Commessa e cliente non vengono mostrati.",
+  org: "Lo vede solo chi è nella tua organizzazione, dopo l'accesso a mAIPAL. Per tutti gli altri il QR non esiste.",
+  admins: "Lo vedono solo gli amministratori della tua organizzazione.",
+};
+const VISIBILITY_SHORT = { public: "Pubblico: lo vede chiunque lo scansioni", org: "Lo vede tutta l'organizzazione", admins: "Lo vedono solo gli amministratori" };
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const when = (iso) => {
   if (!iso) return "";
@@ -40,7 +47,7 @@ function QrTile({ q, onOpen }) {
       <span className="flex-1 min-w-0">
         <span className="block text-[13px] font-semibold text-white leading-tight truncate" data-testid="qr-tile-title">{q.title}</span>
         <span className="block text-[11px] text-white/60 leading-tight mt-0.5 truncate">
-          {q.kind_label}{q.commessa ? ` · ${q.commessa.title}` : ""} · {q.code_label}{q.active ? "" : " · disattivato"}
+          {q.kind_label}{q.visibility === "public" ? " · pubblico" : ""}{q.commessa ? ` · ${q.commessa.title}` : ""} · {q.code_label}{q.active ? "" : " · disattivato"}
         </span>
       </span>
       <ChevronRight size={14} className="shrink-0 text-white/45" />
@@ -129,7 +136,8 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
       </div>
       <div className="flex flex-col gap-1.5">
         <span className="kicker">Chi lo vede quando lo scansiona</span>
-        <Chips options={[["org", "Tutta l'organizzazione"], ["admins", "Solo amministratori"]]} value={visibility} onChange={setVisibility} testid="qr-visibility" />
+        <Chips options={VISIBILITY} value={visibility} onChange={setVisibility} testid="qr-visibility" />
+        <span className="text-[11px] text-white/60 leading-snug" data-testid="qr-visibility-note">{VISIBILITY_NOTE[visibility]}</span>
       </div>
       <div className="flex gap-2 justify-end">
         {onCancel && <button type="button" onClick={onCancel} onMouseDown={(e) => e.preventDefault()} className="h-10 px-4 rounded-full text-sm text-white/80 bg-white/10">Annulla</button>}
@@ -172,14 +180,13 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
   });
 
   return (
-    // (pb-20: room to scroll the last buttons above the bottom bar and the install banner)
-    <div className="flex flex-col gap-4 pb-20" data-testid="qr-detail">
+    <div className="flex flex-col gap-4" data-testid="qr-detail">
       <div className="card-soft p-4 flex flex-col sm:flex-row gap-4 items-center sm:items-start">
         <div className="bg-white rounded-2xl p-2 shrink-0">
           <img src={q.images.svg} alt={`QR ${q.code_label}`} width={168} height={168} data-testid="qr-image" />
         </div>
         <div className="flex-1 min-w-0 flex flex-col gap-2 w-full">
-          <div className="text-[11px] text-white/60">{q.kind_label}{q.active ? "" : " · disattivato"}</div>
+          <div className="text-[11px] text-white/60">{q.kind_label}{q.visibility === "public" ? " · pubblico" : ""}{q.active ? "" : " · disattivato"}</div>
           <div className="font-mono text-base tracking-wider text-white" data-testid="qr-code-label">{q.code_label}</div>
           <div className="text-[11px] text-white/55 break-all">{q.url}</div>
           <div className="text-[11px] text-white/55">
@@ -208,7 +215,7 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
               {q.links.map((l, i) => <a key={i} href={l.url} target="_blank" rel="noopener noreferrer" className="text-sm text-white underline underline-offset-2 break-all">{l.label}</a>)}
             </div>
           )}
-          <div className="text-[11px] text-white/55">{q.visibility === "admins" ? "Lo vedono solo gli amministratori" : "Lo vede tutta l'organizzazione"} · aggiornato {when(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""}</div>
+          <div className="text-[11px] text-white/55" data-testid="qr-visibility-view">{VISIBILITY_SHORT[q.visibility] || VISIBILITY_SHORT.org} · aggiornato {when(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""}</div>
         </div>
       )}
 
@@ -268,7 +275,8 @@ export default function QrPage() {
 
   if (creating || openId) {
     return (
-      <div className="w-full settings-page" data-testid={creating ? "qr-new" : "qr-open"}>
+      // (pb-20: room to scroll the last buttons above the bottom bar and the install banner)
+      <div className="w-full settings-page pb-20" data-testid={creating ? "qr-new" : "qr-open"}>
         <button onClick={() => setParams({})} data-testid="qr-back" className="flex items-center gap-1.5 text-sm text-white/70 mb-4">
           <ArrowLeft size={16} /> QR
         </button>
@@ -299,9 +307,9 @@ export default function QrPage() {
         <div className="card-soft p-6" data-testid="qr-empty">
           <div className="font-semibold text-white">Nessun QR</div>
           <p className="mt-2 text-sm text-white/75 leading-relaxed">
-            Crea un QR da attaccare in cantiere o su un attrezzo: scansionandolo, chi è nella tua organizzazione vede le informazioni che scrivi qui
-            (referente, accessi, avvisi, link a planimetrie e schede). Le puoi cambiare quando vuoi senza ristampare l'etichetta; per chi non è
-            dell'organizzazione il QR non mostra niente.
+            Crea un QR da attaccare in cantiere o su un attrezzo: scansionandolo, si vedono le informazioni che scrivi qui (referente, accessi,
+            avvisi, link a planimetrie e schede). Le puoi cambiare quando vuoi senza ristampare l'etichetta. Scegli tu se è privato (solo chi è
+            nella tua organizzazione) o pubblico (chiunque lo scansioni, per esempio un cartello per i clienti o i visitatori).
           </p>
           <button onClick={() => setParams({ new: "1" })} className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-full bg-white/85 text-[#7A2A5C]">
             <Plus size={14} /> Crea il primo QR

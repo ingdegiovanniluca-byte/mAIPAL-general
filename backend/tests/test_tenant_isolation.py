@@ -17,6 +17,7 @@ import isolation_scan  # noqa: E402
 
 # reviewed on 2026-11-24 with the probe: each verifies the user's access before the flagged query
 REVIEWED = {
+    "scan_public_qr",   # public QR: only visibility "public" + active, and only the text the administrator wrote for it
     "add_milestone_action", "admin_delete_team", "admin_regenerate_team_code", "admin_rename_team", "create_commessa_folder",
     "decide_client_draft", "delete_activity_item", "delete_collaborator", "delete_collection", "delete_commessa_link",
     "delete_equipment", "delete_job_contact", "delete_job_log", "delete_job_photo", "delete_job_todo", "delete_lesson_type",
