@@ -4567,6 +4567,7 @@ def _push_collab_entry(owner: User, log: dict, author: dict) -> None:
 async def _delete_job_diaries(commessa_ids: list) -> None:
     if commessa_ids:
         await db.job_logs.delete_many({"commessa_id": {"$in": commessa_ids}})
+        await db.job_doc_chunks.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_photos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_todos.delete_many({"commessa_id": {"$in": commessa_ids}})
         await db.job_waits.delete_many({"commessa_id": {"$in": commessa_ids}})
@@ -11162,6 +11163,37 @@ async def _quote_followups(now_utc: Optional[datetime] = None) -> int:
     return sent
 
 
+DOC_SEARCH_MAX_CHARS = 300_000   # (a document's text searched: about 150 pages)
+
+
+async def _save_doc_chunks(log: dict, text: str) -> int:
+    """The full text of a document sent on a commessa, in pieces searchable by Cerca (job_doc_chunks): the diary's
+    entry shows only its short description. Same visibility as the entry (who wrote it, their organization);
+    the meaning of each piece is computed by the worker a moment later."""
+    parts = _chunk_text((text or "")[:DOC_SEARCH_MAX_CHARS])
+    docs = [{"id": f"jdc_{uuid.uuid4().hex[:12]}", "log_id": log["id"], "user_id": log.get("user_id"), "org_id": log.get("org_id"),
+             "commessa_id": log.get("commessa_id"), "client_name": log.get("client_name"), "commessa_title": log.get("commessa_title"),
+             "date": log.get("date"), "doc_name": log.get("doc_name"), "i": i, "n": len(parts), "text": p,
+             "created_at": log.get("created_at") or datetime.now(timezone.utc).isoformat()} for i, p in enumerate(parts)]
+    if docs:
+        await db.job_doc_chunks.insert_many(docs)
+    await db.job_logs.update_one({"id": log["id"]}, {"$set": {"doc_chunked": True}})
+    return len(docs)
+
+
+async def _migrate_job_doc_chunks() -> int:
+    """The documents sent on a commessa before their text was searchable: their pieces, from the text kept
+    with the entry (the first 20,000 characters)."""
+    n = 0
+    async for lg in db.job_logs.find({"doc_name": {"$exists": True}, "doc_chunked": {"$ne": True}}, {"_id": 0, "embedding": 0}):
+        if lg.get("doc_text") and lg.get("id"):
+            await _save_doc_chunks(lg, lg["doc_text"])
+            n += 1
+    if n:
+        logger.info(f"commessa documents made searchable: {n}")
+    return n
+
+
 async def _ingest_commessa_document(current: User, commessa_id: str, name: str, contents: bytes, content_type: Optional[str],
                                     hint: Optional[str] = None, caption: str = "", channel: str = "web") -> dict:
     """A document (pdf, Office, a photo of a sheet) sent on a commessa by the administrator or a
@@ -11203,6 +11235,10 @@ async def _ingest_commessa_document(current: User, commessa_id: str, name: str, 
            "embedding": None, "doc_name": name, "doc_text": text[:20000], "kind_phase": phase, **({"section": "sopralluogo"} if survey else {})}
     await db.job_logs.insert_one(log)
     log.pop("_id", None)
+    try:
+        await _save_doc_chunks(log, text)
+    except Exception:
+        logger.exception("commessa document: pieces for the search not saved")
     arc = await _archive_commessa_bytes(current.user_id, clienti, sub, view, phase, contents, ext or "bin", content_type,
                                         description=caption or doc.get("description", "")[:60], meta={"log_id": log["id"]})
     await db.job_logs.update_one({"id": log["id"]}, {"$set": {"doc_archive": {"path": arc.get("path"), "link": arc.get("link"), "status": arc.get("status")}}})
@@ -15819,6 +15855,7 @@ async def delete_job_log(log_id: str, current: User = Depends(get_current_user))
     if not log.get("kind") and not mine and not _is_org_admin(current):
         raise HTTPException(status_code=403, detail="Questa nota l'ha scritta un altro: può eliminarla solo chi l'ha scritta o un amministratore.")
     await db.job_logs.delete_one({"id": log_id})
+    await db.job_doc_chunks.delete_many({"log_id": log_id})
     await db.job_photos.delete_many({"log_id": log_id})
     if not log.get("kind") and not mine:
         ctx = await _commessa_ctx(log["commessa_id"])
@@ -18659,6 +18696,10 @@ async def start_services():
         await _migrate_weekly_actions()
         await _migrate_list_values()
         await _migrate_added_quotes()
+        try:
+            await _migrate_job_doc_chunks()
+        except Exception:
+            logger.exception("commessa documents' pieces not created")
     except Exception:
         logger.exception("commesse migration failed")
     try:   # the diario di commessa is read by commessa and day (page, chat, totals)
@@ -18699,8 +18740,8 @@ async def start_services():
     J("scheduled_actions", 30, _scheduled_actions_tick, 20, max_run=600)
     J("task_series", 6 * 3600, _task_series_tick, 30)
     J("conversation_cleanup", 6 * 3600, _cleanup_old_conversations, 60)
-    if search_index.configured():   # the search index: what changed in the last minute (the first time, everything)
-        J("search_index_sync", 60, lambda: search_index.sync_tick(db), 40, 1800)
+    # the meaning of what was saved / changed in the last minute, and the search index (the first time, everything)
+    J("search_index_sync", 60, lambda: search_index.sync_tick(db), 40, 1800)
     # Telegram allows one copy to read the bot's messages: the leader (another takes over if it stops)
     jobs.as_leader(db, "telegram_polling", tg.start_polling)
 

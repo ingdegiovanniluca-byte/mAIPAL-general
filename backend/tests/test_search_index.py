@@ -118,6 +118,7 @@ RECORDS = [   # every kind of record of org A, as it is in the index
     {"source": "todo", "user_id": "ua2", "org_id": "oa"}, {"source": "journal", "user_id": "ua2", "org_id": "oa"},
     {"source": "vet_report", "user_id": "ua2"}, {"source": "work_report", "user_id": "ua2", "org_id": "oa"},
     {"source": "job_log", "user_id": "ua2", "org_id": "oa"}, {"source": "collection_item", "collection_id": "la"},
+    {"source": "job_doc", "user_id": "ua2", "org_id": "oa"},
 ]
 
 
@@ -127,10 +128,11 @@ def test_permission_filter_never_matches_another_organization():
     # and a colleague in org A sees just what the app shows them (shared with the org), not a private task / to-do
     a2 = six.perm_filter("ua3", "oa", "ta", ["la"], everything=True)
     seen = {(r["source"], r.get("visibility"), r.get("tenant_kb")) for r in RECORDS if _flt(r, a2)}
-    assert seen == {("kb", None, "ta"), ("task", "org", None), ("job_log", None, None), ("collection_item", None, None)}
+    assert seen == {("kb", None, "ta"), ("task", "org", None), ("job_log", None, None), ("collection_item", None, None),
+                    ("job_doc", None, None)}
     # a user without an organization: only their own
     solo = six.perm_filter("ua2", None, None, [], everything=True)
-    assert {r["source"] for r in RECORDS if _flt(r, solo)} == {"kb", "task", "todo", "journal", "vet_report", "work_report", "job_log"}
+    assert {r["source"] for r in RECORDS if _flt(r, solo)} == {"kb", "task", "todo", "journal", "vet_report", "work_report", "job_log", "job_doc"}
     # only notes / documents when the search is about them
     assert {r["source"] for r in RECORDS if _flt(r, six.perm_filter("ua2", "oa", "ta", ["la"], everything=False))} == {"kb"}
 
@@ -174,7 +176,7 @@ class _Coll:
 class _DB:
     def __init__(self, **cols):
         for n in ("kb_chunks", "tasks", "todos", "journal_entries", "vet_reports", "work_reports", "job_logs", "collections",
-                  "collection_items", "collection_sub_items", "users", "job_economics", "job_contacts"):
+                  "collection_items", "collection_sub_items", "users", "job_economics", "job_contacts", "job_doc_chunks"):
             setattr(self, n, _Coll(cols.get(n)))
 
 
@@ -258,3 +260,73 @@ def test_commessa_totals_count_every_entry_of_a_long_diary(monkeypatch):
     out = asyncio.run(retrieval.retrieve(db, "ua", "quante voci ha il diario della commessa Bagno di Rossi?", scope="all", org_id="oa"))
     summary = next(c["display"] for c in out if c["source"] == "summary")
     assert "40 voci" in summary, summary
+
+
+# ---------------------------------------------------------------- the full text of the documents of a commessa
+def _doc_world():
+    """A 12-page survey PDF sent on org A's commessa: its entry in the diary says only "Sopralluogo impianto"; the boiler's
+    power is on the 7th piece. Plus: a piece whose entry was deleted, and org B's document."""
+    entry = {"id": "jd1", "user_id": "ua", "org_id": "oa", "commessa_id": "ca", "commessa_title": "Bagno", "client_name": "Rossi",
+             "date": "2026-10-02", "text": "📎 sopralluogo.pdf\nSopralluogo impianto", "doc_name": "sopralluogo.pdf"}
+    pieces = [{"id": f"p{i}", "log_id": "jd1", "user_id": "ua", "org_id": "oa", "commessa_id": "ca", "i": i, "n": 12,
+               "created_at": "2026-10-02T09:00:00+00:00", "embedding": _vec(i + 20),
+               "text": ("Generatore esistente: caldaia murale potenza nominale 24 kW, canna fumaria in acciaio." if i == 6
+                        else f"Rilievo stanza {i}: pareti intonacate, pavimento in gres, nessuna infiltrazione.")} for i in range(12)]
+    pieces.append({"id": "gone1", "log_id": "deleted", "user_id": "ua", "org_id": "oa", "i": 0, "n": 1, "created_at": "2026-09-01",
+                   "text": "caldaia potenza 99 kW documento cancellato", "embedding": _vec(3)})
+    pieces.append({"id": "pb", "log_id": "jdb", "user_id": "ub", "org_id": "ob", "i": 0, "n": 1, "created_at": "2026-10-03",
+                   "text": "caldaia potenza 35 kW impresa B", "embedding": _vec(4)})
+    logs = [entry, {"id": "jdb", "user_id": "ub", "org_id": "ob", "commessa_id": "cb", "date": "2026-10-03", "text": "doc", "doc_name": "b.pdf"}]
+    return _DB(job_logs=logs, job_doc_chunks=pieces, users=[{"user_id": "ua", "tenant_id": "ta"}])
+
+
+def test_detail_inside_a_commessa_document_is_found(monkeypatch):
+    async def q(text): return _vec(1)
+    monkeypatch.setattr(retrieval.emb, "embed_query", q)
+    out = asyncio.run(retrieval.retrieve(_doc_world(), "ua", "che potenza ha la caldaia dei Rossi?", scope="all", org_id="oa"))
+    shown = " ".join(c["display"] for c in out)
+    assert "24 kW" in shown and "«sopralluogo.pdf», parte 7 di 12" in shown and "Rossi · Bagno" in shown
+    assert "99 kW" not in shown, "a piece of a deleted entry is not shown"
+    assert "35 kW" not in shown, "another organization's document is not shown"
+
+
+def test_document_piece_found_through_the_index_only_if_visible(monkeypatch):
+    db = _doc_world()
+    monkeypatch.setattr(retrieval, "RECENT_DOCS_INDEXED", 2)          # only 2 recent pieces read: the 7th comes from the index
+    _with_index(monkeypatch, {"job_doc": ["p6", "pb", "gone1"]})
+    out = asyncio.run(retrieval.retrieve(db, "ua", "potenza caldaia", scope="all", org_id="oa"))
+    shown = " ".join(c["display"] for c in out)
+    assert "24 kW" in shown and "35 kW" not in shown and "99 kW" not in shown
+
+
+def test_meaning_is_computed_after_saving_also_without_the_index(monkeypatch):
+    """Without SEARCH_INDEX_URL the worker still computes the meaning of what was saved (no wait at the next question)."""
+    from pymongo import UpdateOne
+
+    class C:
+        def __init__(self, docs): self.docs = docs; self.writes = []
+        def find(self, q, proj=None):
+            class Cur:
+                def __init__(s, d): s.d = d
+                def limit(s, n): return s
+                async def to_list(s, n): return [dict(x) for x in s.d]
+            return Cur([d for d in self.docs if d.get("ix_h") is None])
+        async def bulk_write(self, ops, ordered=True):
+            for op in ops:
+                for d in self.docs:
+                    if d["_id"] == op._filter["_id"] and (op._filter.get("ix_d") is None or d.get("ix_d") == op._filter["ix_d"]):
+                        d.update(op._doc["$set"])
+        async def find_one(self, q): return None
+        async def update_one(self, *a, **k): pass
+        async def delete_many(self, q): pass
+
+    logs = C([{"_id": 1, "id": "j1", "user_id": "u", "text": "posata caldaia", "date": "2026-11-20"}])
+    empty = {n: C([]) for n in six.TRACKED if n != "job_logs"}
+    raw = _RawDB(job_logs=logs, search_index_state=C([]), search_index_gone=C([]), **empty)
+    async def embed(texts): return [_vec(5) for _ in texts]
+    monkeypatch.setattr(six, "_index", None)
+    monkeypatch.delenv("SEARCH_INDEX_URL", raising=False)
+    import embeddings
+    monkeypatch.setattr(embeddings, "embed_texts", embed)
+    stats = asyncio.run(six.sync_tick(raw, budget_s=10))
+    assert stats["job_logs"] == 1 and logs.docs[0]["embedding"] == _vec(5) and logs.docs[0]["ix_h"]

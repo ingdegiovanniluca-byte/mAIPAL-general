@@ -82,6 +82,47 @@ async def main():
     await sync_all(db)
     assert await six.index().count() == 10099
     assert "QW9911" in await found(db, "ua", "oa", "codice QW9911")
+
+    # the full text of a document sent on a commessa: a detail on page 7 (the entry shows only a short description)
+    import server
+    server.db = db
+    pages = [f"Pagina {i}: rilievo delle stanze, pareti intonacate e pavimenti in gres. " * 12 for i in range(12)]
+    pages[7] = "Locale tecnico: caldaia murale a condensazione, potenza 24 kW, matricola PQ5521, canna fumaria in acciaio."
+    entry = {"id": "jdoc1", "user_id": "ua", "org_id": "oa", "commessa_id": "oac1", "commessa_title": "Lavoro 1", "client_name": "Cliente 1",
+             "date": date.today().isoformat(), "text": "📎 sopralluogo.pdf\nSopralluogo impianto termico", "doc_name": "sopralluogo.pdf",
+             "created_at": datetime.now(timezone.utc).isoformat(), "hours": [], "materials": [], "problems": []}
+    await db.job_logs.insert_one(dict(entry))
+    n = await server._save_doc_chunks(entry, "\n\n".join(pages))
+    assert n > 5, n
+    st = await six.sync_tick(db, budget_s=60)
+    assert st["job_doc_chunks"] == n, st
+    q2 = "che potenza ha la caldaia del Cliente 1? matricola PQ5521"
+    assert "PQ5521" in await found(db, "ua", "oa", q2)
+    assert "PQ5521" not in await found(db, "ub", "ob", q2)
+    # the entry deleted (as the app does): its pieces leave the search and the index
+    await db.job_logs.delete_one({"id": "jdoc1"})
+    await db.job_doc_chunks.delete_many({"log_id": "jdoc1"})
+    st = await six.sync_tick(db, budget_s=60)
+    assert st["gone"] == n + 1, st
+    assert "PQ5521" not in await found(db, "ua", "oa", q2)
+    # a document sent before this version (only the entry, with its text): made searchable at the worker's start
+    await raw.job_logs.insert_one({"id": "jold", "user_id": "ua", "org_id": "oa", "commessa_id": "oac2", "date": "2025-03-01",
+                                   "text": "📎 vecchio.pdf", "doc_name": "vecchio.pdf", "doc_text": "Contatore gas matricola GH7781 nel vano scala."})
+    assert await server._migrate_job_doc_chunks() == 1 and await server._migrate_job_doc_chunks() == 0
+    await six.sync_tick(db, budget_s=60)
+    assert "GH7781" in await found(db, "ua", "oa", "matricola GH7781")
+
+    # without the index: the worker still computes the meaning of what is saved; turned on again, it is filled again
+    url = os.environ.pop("SEARCH_INDEX_URL"); six._index = None
+    await db.job_logs.insert_one({"id": "jnew", "user_id": "ua", "org_id": "oa", "date": date.today().isoformat(), "text": "posato vaso"})
+    await six.sync_tick(db, budget_s=60)
+    assert (await raw.job_logs.find_one({"id": "jnew"}))["embedding"], "meaning computed without the index"
+    assert (await raw[six.STATE].find_one({"_id": "main"}))["mode"] == "embed"
+    os.environ["SEARCH_INDEX_URL"] = url; six._index = None
+    await sync_all(db)
+    assert await six.index().count() == await raw.job_logs.count_documents({}) + await raw.kb_chunks.count_documents({}) \
+        + await raw.job_doc_chunks.count_documents({})
+
     await cli.drop_database("it_search_index")
     await six.index().drop()
     print("ALL OK")

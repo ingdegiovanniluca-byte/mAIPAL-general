@@ -772,6 +772,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recs: 
             await _reply(update, f"Sono passati più di {COLLAB_UNDO_MINUTES} minuti: non si annulla più, ma puoi correggerla con ✏️ Correggi.")
             return
         await db.job_logs.delete_one({"id": log["id"]})
+        await db.job_doc_chunks.delete_many({"log_id": log["id"]})
         await db.job_photos.delete_many({"log_id": log["id"]})
         shared = [c for t in await db.job_todos.find({"from_log_id": log["id"]}, {"_id": 0, "shared_with": 1}).to_list(50)
                   for c in t.get("shared_with") or []]

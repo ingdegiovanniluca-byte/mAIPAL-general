@@ -436,14 +436,32 @@ def item_candidate(it: dict, coll: Optional[dict]) -> Optional[dict]:
             "day": day}
 
 
+def job_doc_candidate(ch: dict, entry: Optional[dict] = None) -> Optional[dict]:
+    """A piece of the full text of a document sent on a commessa (entry = its diary entry, for the current
+    client / commessa / day; without it, what the piece was saved with)."""
+    txt = (ch.get("text") or "").strip()
+    if not txt:
+        return None
+    e = entry or ch
+    where = " · ".join(x for x in (e.get("client_name"), e.get("commessa_title")) if x)
+    name = e.get("doc_name") or ch.get("doc_name") or "documento"
+    part = f", parte {ch.get('i', 0) + 1} di {ch['n']}" if (ch.get("n") or 1) > 1 else ""
+    display = f"[Documento di commessa «{name}»{part} · {e.get('date', '')}] {where}: {txt[:1500]}"
+    return {"text": f"{name} {where} {txt}", "display": display, "source": "job_doc",
+            "meta": {"id": ch.get("id"), "log_id": ch.get("log_id"), "commessa_id": ch.get("commessa_id"), "date": e.get("date")},
+            "embedding": ch.get("embedding"), "day": _local_day(e.get("date"))}
+
+
 CANDIDATE = {"kb": kb_candidate, "task": task_candidate, "todo": todo_candidate, "journal": journal_candidate,
-             "vet_report": vet_candidate, "work_report": work_candidate, "job_log": job_log_candidate}
+             "vet_report": vet_candidate, "work_report": work_candidate, "job_log": job_log_candidate,
+             "job_doc": job_doc_candidate}
 
 # How many records are read per question. Without the search index these are hard limits (the older
 # records are not searched); with it, only the latest ones are read and the index brings the rest.
-KB_CAP, LOGS_CAP = 5000, 3000
+KB_CAP, LOGS_CAP, DOCS_CAP = 5000, 3000, 3000
 RECENT_KB_INDEXED = int(os.environ.get("SEARCH_RECENT_KB", "800"))
 RECENT_LOGS_INDEXED = int(os.environ.get("SEARCH_RECENT_LOGS", "500"))
+RECENT_DOCS_INDEXED = int(os.environ.get("SEARCH_RECENT_DOCS", "400"))   # pieces of commessa documents
 
 
 def _owned_or_shared_q(user_id: str, org_id: Optional[str], query_field: str = "user_id") -> dict:
@@ -552,14 +570,33 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
 
         # diario di commessa (artigiano): the team's entries, with hours/materials/problems
         job_q = {"$or": [{"user_id": user_id}, {"org_id": org_id}]} if org_id else {"user_id": user_id}
-        job_logs_all = await db.job_logs.find(job_q, {"_id": 0}).sort("date", -1).to_list(log_cap)
+        no_text = {"_id": 0, "doc_text": 0}   # (a document's text: searched in its pieces, below)
+        job_logs_all = await db.job_logs.find(job_q, no_text).sort("date", -1).to_list(log_cap)
         job_logs_cut = len(job_logs_all) >= log_cap
         _cap_note("job_log", job_logs_all, log_cap)
-        job_logs_all = await _with_hits("job_log", db.job_logs, job_q, job_logs_all)
+        job_logs_all = await _with_hits("job_log", db.job_logs, job_q, job_logs_all, proj=no_text)
         for lg in job_logs_all:
             cand = job_log_candidate(lg)
             if cand:
                 candidates.append(cand)
+
+        # the full text of the documents sent on the commesse (quotes aside), in pieces: shown only while
+        # their diary entry exists and is visible to this user (same filter as the entries above)
+        chunks_coll = getattr(db, "job_doc_chunks", None)
+        if chunks_coll is not None:
+            doc_cap = RECENT_DOCS_INDEXED if use_index else DOCS_CAP
+            chunks = await chunks_coll.find(job_q, {"_id": 0}).sort("created_at", -1).to_list(doc_cap)
+            _cap_note("job_doc", chunks, doc_cap)
+            chunks = await _with_hits("job_doc", chunks_coll, job_q, chunks)
+            if chunks:
+                log_ids = list({c.get("log_id") for c in chunks if c.get("log_id")})
+                entries = {e["id"]: e for e in await db.job_logs.find(
+                    {"$and": [job_q, {"id": {"$in": log_ids}}]},
+                    {"_id": 0, "id": 1, "client_name": 1, "commessa_title": 1, "date": 1, "doc_name": 1}).to_list(len(log_ids))}
+                for ch in chunks:
+                    cand = job_doc_candidate(ch, entries[ch["log_id"]]) if ch.get("log_id") in entries else None
+                    if cand:
+                        candidates.append(cand)
 
     # ---- Liste ----
     extra_scan: List[dict] = []  # list sub-elements, searched by name only (no embedding cost)
@@ -693,6 +730,7 @@ async def retrieve(db, user_id: str, query: str, limit: int = 8, scope: str = "k
                     "task": db.tasks, "todo": db.todos, "journal": db.journal_entries,
                     "collection_item": db.collection_items, "collection_sub_item": db.collection_sub_items,
                     "vet_report": db.vet_reports, "work_report": db.work_reports, "job_log": db.job_logs,
+                    "job_doc": getattr(db, "job_doc_chunks", None),
                 }
                 for c, e in zip(non_kb, await emb.embed_texts([c["text"] for c in non_kb])):
                     c["embedding"] = e

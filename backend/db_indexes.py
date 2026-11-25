@@ -112,8 +112,15 @@ INDEXES: Tuple[Tuple[str, list, dict], ...] = (
     ("kb_chunks", [("tenant_kb", A), ("created_at", D)], {"sparse": True}),
     # the search index (search_index.py): the records still to index, the deleted ones to remove
     *((c, [("ix_h", A)], {}) for c in ("kb_chunks", "tasks", "todos", "journal_entries", "vet_reports", "work_reports",
-                                         "job_logs", "collection_items")),
+                                         "job_logs", "collection_items", "job_doc_chunks")),
     ("search_index_gone", [("at", A)], {"expireAfterSeconds": 30 * 86400}),
+    # the pieces of the documents sent on a commessa (searchable by Cerca)
+    ("job_doc_chunks", [("id", A)], {}),
+    ("job_doc_chunks", [("log_id", A)], {}),
+    ("job_doc_chunks", [("commessa_id", A)], {}),
+    ("job_doc_chunks", [("user_id", A), ("created_at", D)], {}),
+    ("job_doc_chunks", [("org_id", A), ("created_at", D)], {}),
+    ("job_logs", [("doc_name", A)], {"sparse": True}),
     ("kb_chunks", [("doc_id", A)], {}),
     ("kb_chunks", [("chunk_id", A)], {}),
     ("kb_documents", [("doc_id", A)], {}),

@@ -203,7 +203,13 @@ di diario per domanda, e quelli più vecchi non vengono cercati (ora il log lo s
 - **Passare a un altro indice** (un altro server, o MongoDB Atlas Vector Search in cloud): si imposta
   `SEARCH_INDEX_URL` sul nuovo indice e si fa `--rebuild`; per Atlas serve una classe con gli stessi metodi di
   `QdrantIndex` in `backend/search_index.py`. Il resto dell'app non cambia.
-- **Disattivarlo**: `SEARCH_INDEX_URL=` (vuoto) nel `.env`. Se poi lo riattivi, fai `--rebuild`.
-- Variabili: `SEARCH_RECENT_KB` e `SEARCH_RECENT_LOGS` (record più recenti letti da MongoDB per domanda quando
-  l'indice è completo, predefiniti 800 e 500).
+- **Disattivarlo**: `SEARCH_INDEX_URL=` (vuoto) nel `.env`. Se lo riattivi, il worker se ne accorge e lo riempie di nuovo.
+- Variabili: `SEARCH_RECENT_KB`, `SEARCH_RECENT_LOGS` e `SEARCH_RECENT_DOCS` (record più recenti letti da MongoDB
+  per domanda quando l'indice è completo, predefiniti 800, 500 e 400).
+- **Significato calcolato al salvataggio**: il worker calcola il significato (embedding) di ogni record nuovo o
+  modificato entro un minuto, anche **senza** indice, così una domanda non lo aspetta più. La prima volta lo fa per
+  tutti i record che non l'hanno ancora: con molti dati il worker resta impegnato per un po' (in background).
+- **Documenti di commessa**: il testo completo (fino a circa 150 pagine) è salvato a pezzi in `job_doc_chunks` e cercato
+  da Cerca, con la stessa visibilità della voce di diario. I documenti caricati prima di questa versione vengono resi
+  ricercabili all'avvio del worker, dal testo che era già salvato (i primi 20.000 caratteri).
 - Prova con MongoDB e Qdrant veri: `backend/tests/integration/it_search_index.py` (istruzioni in testa al file).

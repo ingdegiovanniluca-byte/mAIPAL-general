@@ -9,7 +9,9 @@ history of an organization and not only the latest records read in memory (retri
   same permission filter as always, so a record of another user or organization never comes in
   through the index, even if the index were wrong.
 - Kept up to date by the worker (sync_tick, every minute): a write to one of the tracked collections
-  marks the record (TrackedDB, wrapped around the server's database), the worker indexes it.
+  marks the record (TrackedDB, wrapped around the server's database), the worker computes its meaning
+  (embedding, saved on the record) and indexes it. Without the index the worker still computes the meaning,
+  so a question never waits for it.
 
 Configured by SEARCH_INDEX_URL (e.g. http://qdrant:6333; optional SEARCH_INDEX_API_KEY). Not set:
 no index, the search works as before (the latest records only)."""
@@ -43,6 +45,8 @@ TRACKED = {
     "job_logs": ("job_log", "id", ("text", "hours", "hours_pending", "hours_replaced_by", "materials", "problems",
                                    "client_name", "commessa_title")),
     "collection_items": ("collection_item", "id", ("data",)),
+    # the full text of the documents sent on a commessa, in pieces (the diary's entry has only its description)
+    "job_doc_chunks": ("job_doc", "id", ("text",)),
 }
 SOURCE_COLL = {v[0]: k for k, v in TRACKED.items()}
 MARKS = ("ix_h", "ix_d")     # ix_h: indexed (hash of what was indexed); ix_d: changed since (a token)
@@ -178,7 +182,7 @@ def perm_filter(user_id: str, org_id: Optional[str], tenant_id: Optional[str], c
         should += [
             src(["task"], mine, {"must": [_m("org_id", org_id), _m("visibility", "org")]} if org_id else None),
             src(["todo", "journal", "vet_report", "work_report"], mine),
-            src(["job_log"], mine, _m("org_id", org_id) if org_id else None),
+            src(["job_log", "job_doc"], mine, _m("org_id", org_id) if org_id else None),
         ]
         if coll_ids:
             should.append(src(["collection_item"], {"key": "collection_id", "match": {"any": list(coll_ids)}}))
@@ -280,8 +284,9 @@ async def _sync_coll(raw, coll_name: str, idx, deadline: float, batch: int = 200
                 h = "-"
             # only if not changed again meanwhile (ix_d is the token of the last change)
             marks.append(UpdateOne({"_id": d["_id"], "ix_d": d.get("ix_d")}, {"$set": {"ix_h": h}}))
-        await idx.upsert(points)
-        await idx.delete(drop)
+        if idx is not None:
+            await idx.upsert(points)
+            await idx.delete(drop)
         await coll.bulk_write(marks, ordered=False)
         done += len(docs)
     return done
@@ -306,20 +311,30 @@ async def mark_all(raw) -> None:
 
 
 async def sync_tick(db, budget_s: float = 240.0) -> dict:
-    """The worker's job: index what changed; the first time, everything (a bit each minute)."""
+    """The worker's job, every minute: the meaning (embedding) of every new or changed searchable record, computed
+    after it is saved - not while someone waits for an answer - and, with the index, the index kept up to date
+    (the first time, everything, a bit each minute). Without SEARCH_INDEX_URL: only the meaning."""
     idx = index()
-    if idx is None:
-        return {}
     raw = getattr(db, "_raw", db)
     deadline = time.monotonic() + budget_s
-    if await idx.ensure():
-        await raw[STATE].update_one({"_id": "main"}, {"$set": {"ready": False, "created_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-        await mark_all(raw)
-        logger.info("search index created: indexing every record")
-    stats = {"gone": await _sync_gone(raw, idx, deadline)}
+    st = await raw[STATE].find_one({"_id": "main"}) or {}
+    prev = st.get("mode") or ("index" if st else None)   # (before modes: there was only the index)
+    if idx is not None:
+        created = await idx.ensure()
+        if created or prev != "index":   # a new / empty index, or one that missed the changes made without it
+            await raw[STATE].update_one({"_id": "main"}, {"$set": {"ready": False, "mode": "index",
+                                                                  "created_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+            await mark_all(raw)
+            logger.info("search index: indexing every record")
+        stats = {"gone": await _sync_gone(raw, idx, deadline)}
+    else:
+        if prev != "embed":
+            await raw[STATE].update_one({"_id": "main"}, {"$set": {"ready": False, "mode": "embed"}}, upsert=True)
+        await raw[GONE].delete_many({})   # (nothing to remove them from)
+        stats = {}
     for name in TRACKED:
         stats[name] = await _sync_coll(raw, name, idx, deadline)
-    if time.monotonic() < deadline:   # went through everything: the index is complete
+    if idx is not None and time.monotonic() < deadline:   # went through everything: the index is complete
         st = await raw[STATE].find_one({"_id": "main"}) or {}
         if not st.get("ready"):
             await raw[STATE].update_one({"_id": "main"}, {"$set": {"ready": True, "ready_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
@@ -444,8 +459,8 @@ class _TrackedColl:
 
 
 def track(raw):
-    """The database to use in the server: tracked when the index is configured, else as it is."""
-    return TrackedDB(raw) if configured() else raw
+    """The database to use in the server: the searchable records' changes are seen (for their meaning and the index)."""
+    return TrackedDB(raw)
 
 
 class TrackedDB:
