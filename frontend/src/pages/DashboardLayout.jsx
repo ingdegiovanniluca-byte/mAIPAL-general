@@ -4,7 +4,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
   LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
-  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, ChevronsLeft, LayoutDashboard,
+  Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, ChevronsLeft, LayoutDashboard, QrCode,
 } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
 import { toast } from "sonner";
@@ -33,6 +33,7 @@ const NAV_ITEMS = [
   { to: "/dashboard/liste", label: "Liste", testid: "tab-liste", icon: List },
   { to: "/dashboard/documents", label: "Documenti", testid: "tab-documents", icon: FileText },
   { to: "/dashboard/azioni", label: "Azioni", testid: "tab-azioni", icon: Repeat },
+  { to: "/dashboard/qr", label: "QR", testid: "tab-qr", adminOnly: true, icon: QrCode },
   { to: "/dashboard/fitness", label: "Fitness", testid: "tab-fitness", vertical: "fitness", icon: Dumbbell },
   { to: "/dashboard/settings", label: "Impostazioni", testid: "tab-settings", icon: Settings },
 ];

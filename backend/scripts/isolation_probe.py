@@ -74,7 +74,7 @@ B = {"tenant": "ten_B", "org": "org_B", "admin": "uB0"}
 import verticals as vx
 fields, fmap = vx.merge_system_fields([], vx.CLIENTI_FIELDS)
 subs_f, smap = vx.merge_system_fields([], vx.COMMESSA_FIELDS)
-IDS = dict(commessa_id="sA", collection_id="cA", item_id="iA", sub_id="sA", log_id="lA", photo_id="phA", activity_id="actA",
+IDS = dict(qr_id="qrA", code="QRAAAAAAAAAA", commessa_id="sA", collection_id="cA", item_id="iA", sub_id="sA", log_id="lA", photo_id="phA", activity_id="actA",
            quote_id="qA", ms_id="msA", collab_id="colA", report_id="wrA", entry_id="jA", conv_id="convA", action_id="saA",
            tpl_id="mtA", template_id="wtA", step_id="stA", link_id="lnkA", lesson_id="lsA", exercise_id="exA", eq_id="eqA",
            type_id="ltA", draft_id="rdr_aaaaaaaaaaaa", doc_id="docA", contact_id="ctA", client_id="clA", xid="xA", extra_id="xA",
@@ -83,7 +83,7 @@ IDS = dict(commessa_id="sA", collection_id="cA", item_id="iA", sub_id="sA", log_
            series_id="serA", report_draft_id="rdr_aaaaaaaaaaaa", client_item_id="iA", hint_commessa_id="sA", list_id="cA",
            report_list_id="cA", target_collection_id="cA", attachment_doc_ids=["docA"], doc_ids=["docA"], extra_ids=["xA"],
            log_ids=["lA"], todo_ids=["jtA"], ids=["stA"])
-A_IDS = {"sA", "sA2", "cA", "cA2", "iA", "iA2", "lA", "phA", "actA", "aitA", "qA", "msA", "colA", "wrA", "jA", "convA", "saA", "mtA", "wtA",
+A_IDS = {"qrA", "qrvA", "sA", "sA2", "cA", "cA2", "iA", "iA2", "lA", "phA", "actA", "aitA", "qA", "msA", "colA", "wrA", "jA", "convA", "saA", "mtA", "wtA",
          "vtA", "stA", "lnkA", "lsA", "exA", "eqA", "ltA", "rdr_aaaaaaaaaaaa", "docA", "ctA", "clA", "xA", "devA", "org_A", "ten_A",
          "uA0", "uA1", "tdA", "tA", "jtA", "serA", "chA", "nA", "waitA", "linkA", "rphA", "arcA"}
 
@@ -172,6 +172,10 @@ def seed_docs():
         "exercises": [{"id": "exA", "owner_key": "org_A", "name": f"Esercizio {MARK}"}],
         "fitness_equipment": [{"id": "eqA", "owner_key": "org_A", "name": f"Attrezzo {MARK}", "qty": 1}],
         "lesson_types": [{"id": "ltA", "owner_key": "org_A", "name": f"Tipo {MARK}"}],
+        "qr_codes": [{"id": "qrA", "code": "QRAAAAAAAAAA", "tenant_id": "ten_A", "owner_user_id": a0, "title": f"QR {MARK}", "kind": "cantiere",
+                      "text": f"codice cancello {MARK}", "links": [], "commessa_id": "sA", "visibility": "org", "active": True,
+                      "created_at": iso(NOW), "updated_at": iso(NOW), "scans": 0}],
+        "qr_code_versions": [{"id": "qrvA", "qr_id": "qrA", "tenant_id": "ten_A", "before": {"text": f"prima {MARK}"}, "edited_at": iso(NOW)}],
         "lesson_templates": [{"id": "lsA", "owner_key": "org_A", "user_id": a0, "name": f"Lezione {MARK}", "exercises": []}],
         "watch_devices": [{"device_id": "devA", "user_id": a0, "name": f"orologio {MARK}"}],
         "team_invites": [{"org_id": "org_A", "email": "invitato.alfax@ex.it", "invited_by": a0}],

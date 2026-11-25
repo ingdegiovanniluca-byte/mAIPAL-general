@@ -1,5 +1,5 @@
-import React from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import React, { useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import LoginPage from "@/pages/LoginPage";
@@ -17,6 +17,8 @@ import CollectionsPage from "@/pages/CollectionsPage";
 import FitnessPage from "@/pages/FitnessPage";
 import ActionsPage from "@/pages/ActionsPage";
 import TodayPage from "@/pages/TodayPage";
+import QrPage from "@/pages/QrPage";
+import QrScanPage, { AFTER_LOGIN_KEY } from "@/pages/QrScanPage";
 
 function Protected({ children, requireOnboard = true }) {
   const { user, loading } = useAuth();
@@ -24,6 +26,19 @@ function Protected({ children, requireOnboard = true }) {
   if (!user) return <Navigate to="/" replace />;
   if (requireOnboard && !user.onboarded) return <Navigate to="/onboarding" replace />;
   return children;
+}
+
+// Back to where the user was going before the login (a QR scanned while logged out), for an hour.
+function AfterLogin() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!user || !user.onboarded) return;
+    let target = null;
+    try { target = JSON.parse(localStorage.getItem(AFTER_LOGIN_KEY) || "null"); localStorage.removeItem(AFTER_LOGIN_KEY); } catch { /* blocked */ }
+    if (target?.path?.startsWith("/q/") && Date.now() - (target.at || 0) < 3600 * 1000) navigate(target.path, { replace: true });
+  }, [user, navigate]);
+  return null;
 }
 
 // Diario: for an artigiano it is the diario di commessa
@@ -52,7 +67,9 @@ function AppRouter() {
         <Route path="team" element={<Navigate to="/dashboard/settings" replace />} />
         <Route path="admin" element={<Navigate to="/dashboard/settings" replace />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="qr" element={<QrPage />} />
       </Route>
+      <Route path="/q/:code" element={<QrScanPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -63,6 +80,7 @@ export default function App() {
     <BrowserRouter basename={process.env.PUBLIC_URL || undefined}>
       <AuthProvider>
         <AppRouter />
+        <AfterLogin />
         <Toaster position="bottom-right" richColors />
       </AuthProvider>
     </BrowserRouter>

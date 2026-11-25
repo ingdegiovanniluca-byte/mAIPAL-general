@@ -507,6 +507,18 @@ Documenti è la tua **base di conoscenza**: tutto quello che hai caricato con Sa
   - **Tocca** la cartella per l'elenco dei suoi documenti, dal più recente; tocca un documento per la sua scheda (argomento, parole chiave, anteprima, **Apri su Drive**, **Elimina**). Con la freccia in alto (o il tasto indietro) torni alle cartelle.
   - Il **+** apre la chat con **Salva** per aggiungere un documento: l'argomento lo sceglie mAIPAL.
 
+## QR
+<!-- id: qr · path: /dashboard/qr · verticale: tutti -->
+I **QR** sono etichette da attaccare in cantiere, su un attrezzo o in un punto (quadro elettrico, locale caldaia). Scansionandolo con il telefono, chi è nella tua organizzazione vede le informazioni che l'amministratore ha scritto. Per chi non è dell'organizzazione il QR non mostra niente.
+- **Chi li gestisce**: la sezione QR la vede solo l'amministratore. Gli altri del team aprono il QR scansionandolo.
+- **Crearne uno**: tocca **+**, dai un nome ("Cantiere Rossi · ingresso", "Trapano Hilti 2"), scegli il tipo (Cantiere, Attrezzo, Punto informativo, Altro), la commessa se c'è, il testo da mostrare (referente, accessi, avvisi) e i link utili (planimetrie, schede, cartella Drive).
+- **Cambiare il contenuto**: apri il QR e tocca **Modifica**. L'etichetta stampata resta la stessa: chi la scansiona vede subito il testo nuovo. In **Modifiche** trovi chi ha cambiato cosa e il testo di prima.
+- **Stampare**: **Stampa 5 cm** o **3 cm** apre l'etichetta pronta da stampare (anche su foglio adesivo), con il nome e il codice breve sotto il QR; **PNG** la scarica come immagine. Meglio etichette resistenti all'acqua.
+- **Chi lo vede**: tutta l'organizzazione, oppure solo gli amministratori (per esempio per codici riservati).
+- **Scansionare**: con la fotocamera del telefono. Se non sei entrato in mAIPAL ti chiede l'accesso e poi apre il QR. Se l'etichetta è rovinata, scrivi il codice stampato sotto (es. K7P3-XQ9M-2TRA) nel campo «Codice stampato» della sezione QR.
+- **Etichetta persa o copiata**: **Nuovo codice** fa smettere di funzionare quella vecchia (il contenuto resta); ristampa quella nuova. **Disattiva** la ferma finché non la riattivi; **Elimina** la cancella.
+- Se un QR è collegato a una commessa, chi lo scansiona ha anche il pulsante per aprire il diario di quella commessa.
+
 ## Azioni
 <!-- id: azioni · path: /dashboard/azioni · verticale: tutti -->
 Le azioni programmate sono comandi che mAIPAL esegue da solo, con la cadenza che scegli, finché non le fermi.

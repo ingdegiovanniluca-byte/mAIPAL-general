@@ -121,6 +121,12 @@ INDEXES: Tuple[Tuple[str, list, dict], ...] = (
     ("job_doc_chunks", [("user_id", A), ("created_at", D)], {}),
     ("job_doc_chunks", [("org_id", A), ("created_at", D)], {}),
     ("job_logs", [("doc_name", A)], {"sparse": True}),
+    # QR of the organizations
+    ("qr_codes", [("code", A)], {"unique": True}),
+    ("qr_codes", [("id", A)], {}),
+    ("qr_codes", [("tenant_id", A), ("updated_at", D)], {}),
+    ("qr_code_versions", [("qr_id", A), ("edited_at", D)], {}),
+    ("qr_scans", [("qr_id", A), ("at", D)], {}),
     ("kb_chunks", [("doc_id", A)], {}),
     ("kb_chunks", [("chunk_id", A)], {}),
     ("kb_documents", [("doc_id", A)], {}),

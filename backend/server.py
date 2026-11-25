@@ -43,6 +43,7 @@ import telegram_bot as tg
 import jobs
 import db_indexes
 import search_index
+import qr_tags as qr
 import embeddings as emb
 import retrieval
 import news_service
@@ -18663,6 +18664,197 @@ async def dispatch_agents(payload: AgentDispatchPayload, current: User = Depends
     for p in parts[:6]:
         results.append(await _run_sub_agent(current, p["agent"], p["text"], payload.text, source, conv_id=f"agents_{uuid.uuid4().hex[:8]}"))
     return {"main": main, "results": results}
+
+
+# ======================================================================================
+# QR of the organization: labels for tools, sites and info points (qr_tags.py). The administrator creates
+# them and changes what they show at any time (the printed label stays the same); who is in the organization
+# opens them by scanning. For anyone else a code doesn't exist (the same answer as a wrong code).
+# ======================================================================================
+QR_ADMIN_ONLY = "I QR li crea e li modifica l'amministratore della tua organizzazione."
+QR_NOT_FOUND = "Questo QR non esiste o non è della tua organizzazione."
+
+
+class QrPayload(BaseModel):
+    title: Optional[str] = None
+    kind: Optional[str] = None
+    text: Optional[str] = None
+    links: Optional[List[dict]] = None
+    commessa_id: Optional[str] = None          # "" = not linked to a commessa
+    visibility: Optional[Literal["org", "admins"]] = None
+    active: Optional[bool] = None
+
+
+def _qr_scope(current: User) -> dict:
+    """The organization's QR (an account outside any organization: its own)."""
+    if current.tenant_id:
+        return {"tenant_id": current.tenant_id}
+    return {"tenant_id": None, "owner_user_id": current.user_id}
+
+
+def _require_qr_admin(current: User) -> None:
+    if not _is_org_admin(current):
+        raise HTTPException(status_code=403, detail=QR_ADMIN_ONLY)
+
+
+async def _qr_or_404(current: User, qr_id: str) -> dict:
+    doc = await db.qr_codes.find_one({"id": qr_id, **_qr_scope(current)}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="QR non trovato")
+    return doc
+
+
+async def _qr_commessa(current: User, commessa_id: Optional[str]) -> Optional[dict]:
+    """The commessa a QR points to, as this user sees it (None if they can't)."""
+    if not commessa_id:
+        return None
+    acc = await _commessa_access(current, commessa_id)
+    if not acc:
+        return None
+    v = _commessa_view(acc["sub"], acc["client"], acc["clienti"])
+    return {"id": v["id"], "title": v["title"], "client_name": v.get("client_name") or "", "address": v.get("address") or ""}
+
+
+async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
+    out = {k: doc.get(k) for k in ("id", "code", "title", "kind", "text", "links", "visibility", "active", "created_at",
+                                   "updated_at", "updated_by_name", "scans", "last_scan_at", "last_scan_by_name")}
+    out["code_label"] = qr.code_label(doc["code"])
+    out["url"] = qr.link(doc["code"])
+    out["kind_label"] = qr.KINDS.get(doc.get("kind"), "Altro")
+    out["commessa"] = await _qr_commessa(current, doc.get("commessa_id"))
+    out["commessa_id"] = doc.get("commessa_id") or ""
+    if full:
+        out["images"] = qr.images(doc["code"])
+    return out
+
+
+async def _qr_fields(current: User, p: QrPayload, base: Optional[dict] = None) -> dict:
+    """What the administrator wrote, checked: a title, a known kind, plain text, web links, a commessa they reach."""
+    upd = {}
+    if p.title is not None or base is None:
+        title = (p.title or "").strip()[:qr.MAX_TITLE]
+        if not title:
+            raise HTTPException(status_code=400, detail="Scrivi un nome per il QR (es. «Trapano Hilti 2» o «Cantiere Rossi - ingresso»)")
+        upd["title"] = title
+    if p.kind is not None or base is None:
+        upd["kind"] = p.kind if p.kind in qr.KINDS else "altro"
+    if p.text is not None:
+        upd["text"] = qr.clean_text(p.text)
+    if p.links is not None:
+        try:
+            upd["links"] = qr.clean_links(p.links)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if p.commessa_id is not None:
+        if p.commessa_id and not await _commessa_access(current, p.commessa_id):
+            raise HTTPException(status_code=404, detail="Commessa non trovata")
+        upd["commessa_id"] = p.commessa_id or None
+    if p.visibility is not None:
+        upd["visibility"] = p.visibility
+    if p.active is not None:
+        upd["active"] = bool(p.active)
+    return upd
+
+
+async def _unique_qr_code() -> str:
+    for _ in range(10):
+        code = qr.new_code()
+        if not await db.qr_codes.find_one({"code": code}, {"_id": 1}):
+            return code
+    raise HTTPException(status_code=500, detail="Codice non generato, riprova")
+
+
+@api_router.get("/qr")
+async def list_qr(current: User = Depends(get_current_user)):
+    _require_qr_admin(current)
+    docs = await db.qr_codes.find(_qr_scope(current), {"_id": 0}).sort("updated_at", -1).to_list(None)
+    return {"qr": [await _qr_public(current, d) for d in docs], "kinds": qr.KINDS, "visibility": qr.VISIBILITY}
+
+
+@api_router.post("/qr")
+async def create_qr(payload: QrPayload, current: User = Depends(get_current_user)):
+    _require_qr_admin(current)
+    fields = await _qr_fields(current, payload)
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {"id": f"qr_{uuid.uuid4().hex[:12]}", "code": await _unique_qr_code(), **_qr_scope(current), "owner_user_id": current.user_id,
+           "text": "", "links": [], "commessa_id": None, "visibility": "org", "active": True, **fields,
+           "created_at": now, "created_by": current.user_id, "updated_at": now, "updated_by_name": _first_name(current.name), "scans": 0}
+    await db.qr_codes.insert_one(doc)
+    return await _qr_public(current, doc, full=True)
+
+
+@api_router.get("/qr/scan/{code}")
+async def scan_qr(code: str, current: User = Depends(get_current_user)):
+    """A label scanned (or its code typed) by someone of the organization: what it shows."""
+    c = qr.norm_code(code)
+    doc = await db.qr_codes.find_one({"code": c, **_qr_scope(current)}, {"_id": 0}) if c else None
+    if not doc:
+        raise HTTPException(status_code=404, detail=QR_NOT_FOUND)
+    admin = _is_org_admin(current)
+    if not doc.get("active", True) and not admin:
+        raise HTTPException(status_code=410, detail="Questo QR è stato disattivato dall'amministratore.")
+    if doc.get("visibility") == "admins" and not admin:
+        raise HTTPException(status_code=403, detail="Il contenuto di questo QR lo vedono solo gli amministratori.")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.qr_codes.update_one({"id": doc["id"], **_qr_scope(current)}, {"$inc": {"scans": 1}, "$set": {
+        "last_scan_at": now, "last_scan_by": current.user_id, "last_scan_by_name": _first_name(current.name)}})
+    await db.qr_scans.insert_one({"qr_id": doc["id"], **_qr_scope(current), "user_id": current.user_id, "at": now})
+    out = await _qr_public(current, doc)
+    out["can_edit"] = admin
+    return out
+
+
+@api_router.get("/qr/{qr_id}")
+async def get_qr(qr_id: str, current: User = Depends(get_current_user)):
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    out = await _qr_public(current, doc, full=True)
+    out["versions"] = await db.qr_code_versions.find({"qr_id": qr_id, **_qr_scope(current)}, {"_id": 0}).sort("edited_at", -1).to_list(20)
+    return out
+
+
+@api_router.patch("/qr/{qr_id}")
+async def update_qr(qr_id: str, payload: QrPayload, current: User = Depends(get_current_user)):
+    """A change of what the QR shows (the label stays the same): the previous content is kept in its history."""
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    upd = await _qr_fields(current, payload, base=doc)
+    changed = {k: v for k, v in upd.items() if doc.get(k) != v}
+    if not changed:
+        return await get_qr(qr_id, current)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current),
+                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active")},
+                                          "changed": sorted(changed), "edited_at": now, "edited_by": current.user_id,
+                                          "edited_by_name": _first_name(current.name)})
+    await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$set": {**changed, "updated_at": now,
+                                                                              "updated_by_name": _first_name(current.name)}})
+    return await get_qr(qr_id, current)
+
+
+@api_router.post("/qr/{qr_id}/new-code")
+async def regenerate_qr_code(qr_id: str, current: User = Depends(get_current_user)):
+    """A label lost or copied: a new code - the old label stops working, the content stays."""
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    now = datetime.now(timezone.utc).isoformat()
+    code = await _unique_qr_code()
+    await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current),
+                                          "before": {"code": qr.code_label(doc["code"])}, "changed": ["code"], "edited_at": now,
+                                          "edited_by": current.user_id, "edited_by_name": _first_name(current.name)})
+    await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$set": {"code": code, "updated_at": now,
+                                                                              "updated_by_name": _first_name(current.name)}})
+    return await get_qr(qr_id, current)
+
+
+@api_router.delete("/qr/{qr_id}")
+async def delete_qr(qr_id: str, current: User = Depends(get_current_user)):
+    _require_qr_admin(current)
+    await _qr_or_404(current, qr_id)
+    await db.qr_codes.delete_one({"id": qr_id, **_qr_scope(current)})
+    await db.qr_code_versions.delete_many({"qr_id": qr_id, **_qr_scope(current)})
+    await db.qr_scans.delete_many({"qr_id": qr_id, **_qr_scope(current)})
+    return {"ok": True}
 
 
 app.include_router(api_router)
