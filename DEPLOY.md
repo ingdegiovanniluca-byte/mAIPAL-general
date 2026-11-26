@@ -212,4 +212,4 @@ di diario per domanda, e quelli più vecchi non vengono cercati (ora il log lo s
 - **Documenti di commessa**: il testo completo (fino a circa 150 pagine) è salvato a pezzi in `job_doc_chunks` e cercato
   da Cerca, con la stessa visibilità della voce di diario. I documenti caricati prima di questa versione vengono resi
   ricercabili all'avvio del worker, dal testo che era già salvato (i primi 20.000 caratteri).
-- Prova con MongoDB e Qdrant veri: `backend/tests/integration/it_search_index.py` (istruzioni in testa al file).
+- Prova con MongoDB e Qdrant veri: `backend/tests/integration/live_search_index.py` (istruzioni in testa al file).

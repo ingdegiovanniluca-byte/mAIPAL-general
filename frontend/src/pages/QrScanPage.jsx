@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText, MapPin, Loader2 } from "lucide-react";
+import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText, MapPin, Loader2, Box } from "lucide-react";
 import PageBackground from "@/components/PageBackground";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
@@ -10,6 +10,9 @@ import { useAuth } from "@/auth/AuthContext";
      administrator, Modifica.
    - Anyone else - logged in elsewhere or with no account: a public QR's content (only what was written for it);
      a private one "not available", the same as a wrong code, with the login for who is in the organization. */
+// The augmented reality: its own bundle (three.js, the readers), loaded only when opened.
+const QrArViewer = React.lazy(() => import("@/components/QrArViewer"));
+
 export const AFTER_LOGIN_KEY = "maipal.afterLogin";
 
 export function rememberAfterLogin(path) {
@@ -43,6 +46,7 @@ export default function QrScanPage() {
   const [place, setPlace] = useState(null);          // it opens only in one place: why not yet (ask the position, too far...)
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState(null);
+  const [arOpen, setArOpen] = useState(false);
 
   const load = React.useCallback((geo) => {
     setError(null); setReserved(false);
@@ -165,6 +169,12 @@ export default function QrScanPage() {
               <div className="text-[11px] text-white/55">Aggiornato il {day(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""} · <span className="whitespace-nowrap">{q.code_label}</span></div>
             </div>
             <div className="flex flex-wrap gap-2">
+              {q.ar && (
+                <button type="button" onClick={() => setArOpen(true)} data-testid="qr-scan-ar"
+                  className="h-10 px-4 rounded-full bg-white/85 text-[#7A2A5C] text-sm font-semibold inline-flex items-center gap-1.5">
+                  <Box size={15} /> Vedi in realtà aumentata
+                </button>
+              )}
               {q.commessa && (
                 <button type="button" onClick={() => navigate(`/dashboard/journal?commessa=${q.commessa.id}`)} data-testid="qr-scan-diary"
                   className="h-10 px-4 rounded-full bg-white/85 text-[#7A2A5C] text-sm font-semibold inline-flex items-center gap-1.5">
@@ -181,6 +191,11 @@ export default function QrScanPage() {
           </>
         )}
       </div>
+      {arOpen && q?.ar && (
+        <React.Suspense fallback={<div className="fixed inset-0 z-[100] bg-black flex items-center justify-center text-white text-sm">Carico la realtà aumentata…</div>}>
+          <QrArViewer ar={q.ar} onClose={() => setArOpen(false)} />
+        </React.Suspense>
+      )}
     </div>
   );
 }

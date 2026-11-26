@@ -4,7 +4,7 @@
 - whatever the index returns, a record of another user / organization never reaches the answer: retrieval
   reads it again from MongoDB with the usual permission filter;
 - an old record, beyond the latest ones read, is found through the index.
-The same against a real MongoDB + Qdrant: tests/integration/it_search_index.py."""
+The same against a real MongoDB + Qdrant: tests/integration/live_search_index.py."""
 import asyncio
 import os
 import sys

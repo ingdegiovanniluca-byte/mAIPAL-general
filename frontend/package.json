@@ -42,6 +42,8 @@
     "embla-carousel-react": "8.6.0",
     "framer-motion": "11.18.0",
     "input-otp": "1.4.2",
+    "js-aruco2": "2.0.0",
+    "jsqr": "1.4.0",
     "lodash": "4.18.1",
     "lucide-react": "0.516.0",
     "maplibre-gl": "4.7.1",

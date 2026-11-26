@@ -176,11 +176,19 @@ export default function DashboardLayout() {
   useEffect(() => {
     const isField = (el) => el && (el.tagName === "TEXTAREA" ||
       (el.tagName === "INPUT" && !["checkbox", "radio", "button", "submit", "range", "file"].includes(el.type)));
-    const onFocusIn = (e) => { if (isField(e.target)) setKeyboardOpen(true); };
-    const onFocusOut = (e) => { if (isField(e.target)) setKeyboardOpen(false); };
+    // Leaving a field: the bottom bar comes back a moment later - at once, it moved the page while a tap on a
+    // button was still on its way (the tap that took the focus away), and the tap landed on the bar instead.
+    let later = null;
+    const onFocusIn = (e) => { if (isField(e.target)) { clearTimeout(later); setKeyboardOpen(true); } };
+    const onFocusOut = (e) => {
+      if (!isField(e.target)) return;
+      clearTimeout(later);
+      later = setTimeout(() => { if (!isField(document.activeElement)) setKeyboardOpen(false); }, 350);
+    };
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
     return () => {
+      clearTimeout(later);
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
     };

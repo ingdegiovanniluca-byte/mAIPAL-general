@@ -1,6 +1,6 @@
-"""The search index against a real MongoDB and a real Qdrant (run by hand, e.g. with docker):
+"""The search index against a real MongoDB and a real Qdrant - run by hand (not with the other tests: it needs them running), e.g. with docker:
     docker run -d -p 27017:27017 mongo:7 ; docker run -d -p 6333:6333 qdrant/qdrant:v1.13.6
-    IT_MONGO_URL=mongodb://localhost:27017 SEARCH_INDEX_URL=http://localhost:6333 python tests/integration/it_search_index.py
+    IT_MONGO_URL=mongodb://localhost:27017 SEARCH_INDEX_URL=http://localhost:6333 python tests/integration/live_search_index.py
 Uses its own database and index ("it_search_index"), dropped first. Checks: an organization with more records than
 the latest ones read finds its oldest fact only with the index; another organization asking the same never sees it;
 a change and a deletion reach the index at the next sync; the index rebuilt from scratch gives the same."""

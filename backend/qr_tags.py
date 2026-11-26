@@ -47,6 +47,12 @@ def images(code: str) -> dict:
     return {"svg": q.svg_data_uri(scale=10, border=2, dark="#111111"), "png": q.png_data_uri(scale=12, border=2, dark="#111111")}
 
 
+def modules(code: str) -> int:
+    """How many modules (squares) a side of the QR has, without its white margin: with the printed size, the size of
+    the QR itself, for the augmented reality."""
+    return segno.make(link(code), error="q", micro=False).symbol_size(border=0)[0]
+
+
 def clean_links(links) -> List[dict]:
     """Links shown on the label's page: only http(s) (never javascript: or others), with a label."""
     out = []

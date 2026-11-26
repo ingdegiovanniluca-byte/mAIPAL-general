@@ -219,6 +219,41 @@ async def main():
     await server.delete_qr(q_other["id"], admin)
     assert o["files"][0]["id"] not in fs.store.files and len(fs.store.files) == 7   # (q: 5 on it + 2 taken off, in its history)
 
+    # ---- augmented reality: a 3D model (GLB) or a photo of the QR, shown on the label ----
+    import struct
+    js = b'{"asset":{"version":"2.0"},"scenes":[{"nodes":[]}]}'
+    js += b" " * (-len(js) % 4)
+    glb = b"glTF" + struct.pack("<II", 2, 12 + 8 + len(js)) + struct.pack("<II", len(js), 0x4E4F534A) + js
+    aq = await server.create_qr(P(title="Impianto sotto traccia"), admin)
+    await fails(server.upload_qr_file(aq["id"], UploadFile(io.BytesIO(glb[:-4]), filename="tubi.glb"), admin), 400)    # length wrong
+    await fails(server.upload_qr_file(aq["id"], UploadFile(io.BytesIO(b"glTF" + struct.pack("<II", 1, 12)), filename="v1.glb"), admin), 400)
+    d = await server.upload_qr_file(aq["id"], UploadFile(io.BytesIO(glb), filename="Tubi bagno.GLTF"), admin)
+    mfile = d["files"][0]
+    assert (mfile["kind"], mfile["name"]) == ("model", "Tubi bagno.glb")
+    d = None
+    def sized_glb(n):   # a valid GLB of n bytes (a JSON chunk of 8 bytes, then filler)
+        return b"glTF" + struct.pack("<II", 2, n) + struct.pack("<II", 8, 0x4E4F534A) + b"0" * (n - 20)
+    d = await server.upload_qr_file(aq["id"], UploadFile(io.BytesIO(sized_glb(fs.MAX_UPLOAD_BYTES + 100)), filename="big.glb"), admin)
+    assert d["files"][-1]["size"] > fs.MAX_UPLOAD_BYTES                     # a model may be over 10 MB...
+    await server.remove_qr_file(aq["id"], d["files"][-1]["id"], admin)
+    await fails(server.upload_qr_file(aq["id"], UploadFile(io.BytesIO(sized_glb(fs.MAX_MODEL_BYTES + 100)), filename="huge.glb"), admin), 400)  # ...not over 25
+    # AR settings: only with a model / photo of the QR; clamped values; out without
+    await fails(server.update_qr(aq["id"], P(ar={"on": True, "file_id": "nope"}), admin), 400)
+    d = await server.update_qr(aq["id"], P(ar={"on": True, "file_id": mfile["id"], "label": "frame", "label_cm": 10,
+                                               "offset_cm": [0, -30, 5], "rot_deg": [90, 0, 400], "scale": 1}), admin)
+    ar = d["ar"]
+    assert ar["kind"] == "model" and ar["label"] == "frame" and ar["offset_cm"] == [0, -30, 5] and ar["rot_deg"] == [90, 0, 360]
+    assert ar["url"] == f"qr/{aq['id']}/files/{mfile['id']}" and ar["qr_modules"] >= 21
+    seen = await server.scan_qr(aq["code"], worker)
+    assert seen["ar"]["url"] == f"qr/scan/{aq['code']}/files/{mfile['id']}"
+    resp = await server.scan_qr_file(aq["code"], mfile["id"], worker)
+    assert resp.media_type == "model/gltf-binary" and resp.body == glb and resp.headers["x-content-type-options"] == "nosniff"
+    await fails(server.update_qr(aq["id"], P(ar={"on": True, "file_id": mfile["id"], "label_cm": 0.5}), admin), 400)
+    assert (await server.get_qr(aq["id"], admin))["versions"][0]["changed"] == ["ar"]
+    d = await server.remove_qr_file(aq["id"], mfile["id"], admin)       # its model taken off: no AR
+    assert d["ar"] is None and db.qr_codes.docs[-1].get("ar") is None
+    await server.delete_qr(aq["id"], admin)
+
     # ---- a QR that opens only in one place (within the radius of the phone's position) ----
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     await fails(server.create_qr(P(title="x", place={"on": True}), admin), 400)

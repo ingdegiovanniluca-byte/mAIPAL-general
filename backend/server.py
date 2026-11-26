@@ -18686,6 +18686,7 @@ class QrPayload(BaseModel):
     visibility: Optional[Literal["public", "org", "admins"]] = None
     active: Optional[bool] = None
     place: Optional[dict] = None               # {"on", "lat", "lon", "radius_m", "label"}: opened only there
+    ar: Optional[dict] = None                  # the augmented reality: {"on", "file_id", "label", "label_cm", "offset_cm", "rot_deg", "scale", "width_cm"}
 
 
 def _qr_scope(current: User) -> dict:
@@ -18724,6 +18725,7 @@ async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
     out["code_label"] = qr.code_label(doc["code"])
     out["url"] = qr.link(doc["code"])
     out["files"] = _qr_files_out(doc, f"qr/{doc['id']}")
+    out["ar"] = _qr_ar_out(doc, f"qr/{doc['id']}")
     out["kind_label"] = qr.KINDS.get(doc.get("kind"), "Altro")
     out["commessa"] = await _qr_commessa(current, doc.get("commessa_id"))
     out["commessa_id"] = doc.get("commessa_id") or ""
@@ -18759,7 +18761,51 @@ async def _qr_fields(current: User, p: QrPayload, base: Optional[dict] = None) -
         upd["active"] = bool(p.active)
     if p.place is not None:
         upd["place"] = _qr_clean_place(p.place)
+    if p.ar is not None:
+        upd["ar"] = _qr_clean_ar(p.ar, (base or {}).get("files") or [])
     return upd
+
+
+QR_AR_LABELS = {"qr": "Il QR (etichetta normale)", "frame": "Etichetta AR (QR con 4 riquadri agli angoli)"}
+
+
+def _qr_clean_ar(ar: dict, files: list) -> Optional[dict]:
+    """What appears on the label in augmented reality: a 3D model (GLB) or a photo of the QR, where and how big
+    (centimeters and degrees, from the center of the label). None: no augmented reality."""
+    if not isinstance(ar, dict) or not ar.get("on"):
+        return None
+    f = next((x for x in files if x.get("id") == ar.get("file_id")), None)
+    if not f or f.get("kind") not in ("model", "image"):
+        raise HTTPException(status_code=400, detail="Scegli il modello 3D (GLB) o la foto da mostrare in realtà aumentata: caricali prima tra i file del QR")
+    def nums(v, n, lo, hi):
+        try:
+            out = [float(x) for x in (v or [0] * n)][:n]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Posizione o rotazione non valida")
+        out += [0.0] * (n - len(out))
+        return [round(max(lo, min(hi, x)), 2) for x in out]
+    label = ar.get("label") if ar.get("label") in QR_AR_LABELS else "qr"
+    try:
+        label_cm = float(ar.get("label_cm") or (10 if label == "frame" else 5))
+        scale = float(ar.get("scale") or 1)
+        width_cm = float(ar.get("width_cm") or 20)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Misure non valide")
+    if not 2 <= label_cm <= 60:
+        raise HTTPException(status_code=400, detail="L'etichetta va da 2 a 60 cm")
+    return {"on": True, "file_id": f["id"], "kind": f["kind"], "label": label, "label_cm": round(label_cm, 1),
+            "offset_cm": nums(ar.get("offset_cm"), 3, -2000, 2000), "rot_deg": nums(ar.get("rot_deg"), 3, -360, 360),
+            "scale": round(max(0.001, min(1000.0, scale)), 3), "width_cm": round(max(1.0, min(2000.0, width_cm)), 1)}
+
+
+def _qr_ar_out(doc: dict, base: str, token: Optional[str] = None) -> Optional[dict]:
+    """The augmented reality of the QR for the app: the settings, the file's address (from where it was asked) and the
+    QR's own size in modules (to know how big its squares are on the printed label)."""
+    ar = doc.get("ar") or {}
+    if not ar.get("on") or not any(f.get("id") == ar.get("file_id") for f in doc.get("files") or []):
+        return None
+    url = f"{base}/files/{ar['file_id']}" + (f"?pass={token}" if token else "")
+    return {**ar, "url": url, "qr_modules": qr.modules(doc["code"]), "code": doc["code"]}
 
 
 QR_RADII = (50, 100, 250, 500, 1000)
@@ -18926,6 +18972,7 @@ async def scan_qr(code: str, current: User = Depends(get_current_user), request:
     out["can_edit"] = admin
     token = await _qr_pass(doc, current.user_id) if (doc.get("place") or {}).get("on") else None
     out["files"] = _with_pass(_qr_files_out(doc, f"qr/scan/{doc['code']}"), token)
+    out["ar"] = _qr_ar_out(doc, f"qr/scan/{doc['code']}", token)
     if problem:
         out["place_note"] = "Sei fuori dal posto in cui si apre questo QR: lo vedi perché sei amministratore."
     return out
@@ -18966,7 +19013,8 @@ async def scan_public_qr(code: str, request: Request):
                                                               "$set": {"last_scan_at": datetime.now(timezone.utc).isoformat()}})
     return {"public": True, "title": doc.get("title"), "kind": doc.get("kind"), "kind_label": qr.KINDS.get(doc.get("kind"), "Altro"),
             "text": doc.get("text") or "", "links": doc.get("links") or [], "updated_at": doc.get("updated_at"),
-            "code_label": qr.code_label(c), "files": _with_pass(_qr_files_out(doc, f"qr/public/{c}"), token)}
+            "code_label": qr.code_label(c), "files": _with_pass(_qr_files_out(doc, f"qr/public/{c}"), token),
+            "ar": _qr_ar_out(doc, f"qr/public/{c}", token)}
 
 
 async def _qr_public_doc(code: str, ip: str) -> dict:
@@ -19015,7 +19063,7 @@ async def update_qr(qr_id: str, payload: QrPayload, current: User = Depends(get_
         return await get_qr(qr_id, current)
     now = datetime.now(timezone.utc).isoformat()
     await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current),
-                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place")},
+                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place", "ar")},
                                           "changed": sorted(changed), "edited_at": now, "edited_by": current.user_id,
                                           "edited_by_name": _first_name(current.name)})
     await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$set": {**changed, "updated_at": now,
@@ -19050,9 +19098,9 @@ def _qr_files_out(doc: dict, base: str) -> list:
 
 def _qr_file_name(name: str, kind: str) -> str:
     base = os.path.basename((name or "").replace("\\", "/")).strip()
-    base = re.sub(r"[\x00-\x1f<>:\"|?*]", "", base)[:100] or ("documento" if kind == "pdf" else "foto")
+    base = re.sub(r"[\x00-\x1f<>:\"|?*]", "", base)[:100] or {"pdf": "documento", "model": "modello"}.get(kind, "foto")
     stem = base.rsplit(".", 1)[0] if "." in base else base
-    return f"{stem or 'file'}.{'pdf' if kind == 'pdf' else 'jpg'}"
+    return f"{stem or 'file'}.{ {'pdf': 'pdf', 'model': 'glb'}.get(kind, 'jpg') }"
 
 
 async def _qr_file_response(doc: dict, file_id: str, public: bool = False, older: Optional[dict] = None) -> Response:
@@ -19066,7 +19114,8 @@ async def _qr_file_response(doc: dict, file_id: str, public: bool = False, older
                "Cache-Control": f"{'public' if public else 'private'}, max-age=300"}
     if f.get("kind") != "pdf":
         headers["Content-Security-Policy"] = "default-src 'none'"
-    return Response(content=data, media_type="application/pdf" if f.get("kind") == "pdf" else "image/jpeg", headers=headers)
+    media = {"pdf": "application/pdf", "model": "model/gltf-binary"}.get(f.get("kind"), "image/jpeg")
+    return Response(content=data, media_type=media, headers=headers)
 
 
 async def _qr_add_file(current: User, doc: dict, data: bytes, name: str) -> dict:
@@ -19074,12 +19123,15 @@ async def _qr_add_file(current: User, doc: dict, data: bytes, name: str) -> dict
         raise HTTPException(status_code=400, detail=f"Un QR può avere al massimo {QR_MAX_FILES} file: togline uno prima")
     if not data:
         raise HTTPException(status_code=400, detail="Il file è vuoto")
-    if len(data) > fstore.MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="Il file supera i 10 MB")
     try:
         kind = fstore.kind_of(data, name, None)
+        if len(data) > (fstore.MAX_MODEL_BYTES if kind == "model" else fstore.MAX_UPLOAD_BYTES):
+            raise HTTPException(status_code=400, detail="Il modello 3D supera i 25 MB: alleggeriscilo (meno poligoni, texture più piccole)"
+                                if kind == "model" else "Il file supera i 10 MB")
         entry = {"kind": kind}
-        if kind == "pdf":
+        if kind == "model":
+            fstore.check_glb(data)
+        elif kind == "pdf":
             entry["pages"] = await asyncio.wait_for(asyncio.to_thread(fstore.check_pdf, data), timeout=30)
         else:
             data, entry["width"], entry["height"] = await asyncio.wait_for(
@@ -19104,7 +19156,7 @@ async def upload_qr_file(qr_id: str, file: UploadFile = File(...), current: User
     """A photo or a PDF on the QR (from the phone: the gallery, the camera, the files)."""
     _require_qr_admin(current)
     doc = await _qr_or_404(current, qr_id)
-    data = await file.read(fstore.MAX_UPLOAD_BYTES + 1)
+    data = await file.read(fstore.MAX_MODEL_BYTES + 1)
     return await _qr_add_file(current, doc, data, file.filename or "")
 
 
@@ -19150,8 +19202,9 @@ async def remove_qr_file(qr_id: str, file_id: str, current: User = Depends(get_c
     if not f:
         raise HTTPException(status_code=404, detail="File non trovato")
     now = datetime.now(timezone.utc).isoformat()
+    off_ar = {"ar": None} if (doc.get("ar") or {}).get("file_id") == file_id else {}   # (what was shown in AR: no more AR)
     await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$pull": {"files": {"id": file_id}},
-                                                                     "$set": {"updated_at": now, "updated_by_name": _first_name(current.name)}})
+                                                                     "$set": {"updated_at": now, "updated_by_name": _first_name(current.name), **off_ar}})
     await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current), "before": {},
                                           "changed": ["files"], "file_removed": {k: f.get(k) for k in ("id", "name", "kind")},
                                           "edited_at": now, "edited_by": current.user_id, "edited_by_name": _first_name(current.name)})

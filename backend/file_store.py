@@ -8,6 +8,7 @@ import io
 from typing import Optional, Tuple
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_MODEL_BYTES = 25 * 1024 * 1024      # a 3D model (GLB) for the augmented reality
 IMAGE_MAX_DIM = 2400
 
 
@@ -45,15 +46,30 @@ def image_to_jpeg(data: bytes, downscale) -> Tuple[bytes, int, int]:
         raise BadFile("L'immagine non si apre: prova con una foto JPG o PNG")
 
 
+def check_glb(data: bytes) -> None:
+    """A 3D model in GLB (binary glTF 2.0): its header and its declared length must match."""
+    import struct
+    if len(data) < 20 or data[:4] != b"glTF":
+        raise BadFile("Il modello 3D deve essere un file GLB (glTF binario)")
+    version, length = struct.unpack("<II", data[4:12])
+    if version != 2 or length != len(data):
+        raise BadFile("Il file GLB non è valido o è incompleto: esportalo di nuovo in glTF 2.0 binario (.glb)")
+    chunk_len, chunk_type = struct.unpack("<II", data[12:20])
+    if chunk_type != 0x4E4F534A or 20 + chunk_len > len(data):   # (the first chunk: the JSON describing the scene)
+        raise BadFile("Il file GLB non è valido")
+
+
 def kind_of(data: bytes, filename: str, content_type: Optional[str]) -> str:
-    """'pdf' or 'image' from the content (the name and the declared type are not trusted alone)."""
+    """'pdf', 'image' or 'model' (GLB) from the content (the name and the declared type are not trusted alone)."""
     if data.startswith(b"%PDF-"):
         return "pdf"
+    if data[:4] == b"glTF":
+        return "model"
     head = data[:16]
     if head.startswith(b"\xff\xd8\xff") or head.startswith(b"\x89PNG") or head[4:12] in (b"ftypheic", b"ftypheix", b"ftypmif1", b"ftyphevc") \
             or (head.startswith(b"RIFF") and data[8:12] == b"WEBP") or head.startswith(b"GIF8"):
         return "image"
-    raise BadFile("Si possono allegare solo foto (JPG, PNG, HEIC) e PDF")
+    raise BadFile("Si possono allegare solo foto (JPG, PNG, HEIC), PDF e modelli 3D GLB")
 
 
 class GridFSStore:
@@ -86,9 +102,11 @@ class MemoryStore:
     """(tests)"""
     def __init__(self):
         self.files = {}
+        self.n = 0
 
     async def put(self, db, data, filename, metadata):
-        fid = f"{len(self.files) + 1:024x}"
+        self.n += 1
+        fid = f"{self.n:024x}"
         self.files[fid] = (data, filename, metadata)
         return fid
 
