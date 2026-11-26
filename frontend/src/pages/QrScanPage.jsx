@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { QrCode, BookOpen, Pencil, ExternalLink, Lock } from "lucide-react";
+import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText } from "lucide-react";
 import PageBackground from "@/components/PageBackground";
-import { api } from "@/lib/api";
+import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 
 /* A QR label scanned with the phone (APP/q/<code>).
@@ -85,6 +85,26 @@ export default function QrScanPage() {
                     <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
                       className="h-11 px-4 rounded-xl bg-white/15 text-sm font-medium flex items-center justify-between gap-2">
                       <span className="truncate">{l.label}</span><ExternalLink size={15} className="shrink-0 text-white/70" />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {q.files?.some((f) => f.kind === "image") && (
+                <div className={`grid gap-2 ${q.files.filter((f) => f.kind === "image").length > 1 ? "grid-cols-2" : "grid-cols-1"}`} data-testid="qr-scan-photos">
+                  {q.files.filter((f) => f.kind === "image").map((f) => (
+                    <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer" className="aspect-[4/3] rounded-xl overflow-hidden bg-white/10">
+                      <img src={`${API}/${f.url}`} alt={f.name} className="h-full w-full object-cover" />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {q.files?.some((f) => f.kind === "pdf") && (
+                <div className="flex flex-col gap-2" data-testid="qr-scan-pdfs">
+                  {q.files.filter((f) => f.kind === "pdf").map((f) => (
+                    <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer"
+                      className="h-12 px-4 rounded-xl bg-white/15 text-sm font-medium flex items-center gap-2.5">
+                      <FileText size={17} className="shrink-0" /><span className="flex-1 truncate">{f.name}</span>
+                      <span className="text-[11px] text-white/60 shrink-0">{f.pages} pag.</span>
                     </a>
                   ))}
                 </div>

@@ -17,6 +17,9 @@ sys.path.insert(0, BACKEND)
 os.chdir(BACKEND)
 os.environ.setdefault("OPENAI_API_KEY", "x")
 import server, telegram_bot as tg
+import file_store as _fs
+server.fstore.store = _fs.MemoryStore()            # (A's file on its QR: its bytes carry the marker)
+server.fstore.store.files["fA"] = (b"%PDF-1.4 ALFAX", "doc.pdf", {"qr_id": "qrA"})
 import httpx
 from fastapi.routing import APIRoute
 import llm_integrations as li
@@ -74,7 +77,7 @@ B = {"tenant": "ten_B", "org": "org_B", "admin": "uB0"}
 import verticals as vx
 fields, fmap = vx.merge_system_fields([], vx.CLIENTI_FIELDS)
 subs_f, smap = vx.merge_system_fields([], vx.COMMESSA_FIELDS)
-IDS = dict(qr_id="qrA", code="QRAAAAAAAAAA", commessa_id="sA", collection_id="cA", item_id="iA", sub_id="sA", log_id="lA", photo_id="phA", activity_id="actA",
+IDS = dict(qr_id="qrA", code="QRAAAAAAAAAA", file_id="fA", commessa_id="sA", collection_id="cA", item_id="iA", sub_id="sA", log_id="lA", photo_id="phA", activity_id="actA",
            quote_id="qA", ms_id="msA", collab_id="colA", report_id="wrA", entry_id="jA", conv_id="convA", action_id="saA",
            tpl_id="mtA", template_id="wtA", step_id="stA", link_id="lnkA", lesson_id="lsA", exercise_id="exA", eq_id="eqA",
            type_id="ltA", draft_id="rdr_aaaaaaaaaaaa", doc_id="docA", contact_id="ctA", client_id="clA", xid="xA", extra_id="xA",
@@ -83,7 +86,7 @@ IDS = dict(qr_id="qrA", code="QRAAAAAAAAAA", commessa_id="sA", collection_id="cA
            series_id="serA", report_draft_id="rdr_aaaaaaaaaaaa", client_item_id="iA", hint_commessa_id="sA", list_id="cA",
            report_list_id="cA", target_collection_id="cA", attachment_doc_ids=["docA"], doc_ids=["docA"], extra_ids=["xA"],
            log_ids=["lA"], todo_ids=["jtA"], ids=["stA"])
-A_IDS = {"qrA", "qrvA", "sA", "sA2", "cA", "cA2", "iA", "iA2", "lA", "phA", "actA", "aitA", "qA", "msA", "colA", "wrA", "jA", "convA", "saA", "mtA", "wtA",
+A_IDS = {"qrA", "qrvA", "fA", "sA", "sA2", "cA", "cA2", "iA", "iA2", "lA", "phA", "actA", "aitA", "qA", "msA", "colA", "wrA", "jA", "convA", "saA", "mtA", "wtA",
          "vtA", "stA", "lnkA", "lsA", "exA", "eqA", "ltA", "rdr_aaaaaaaaaaaa", "docA", "ctA", "clA", "xA", "devA", "org_A", "ten_A",
          "uA0", "uA1", "tdA", "tA", "jtA", "serA", "chA", "nA", "waitA", "linkA", "rphA", "arcA"}
 
@@ -174,6 +177,7 @@ def seed_docs():
         "lesson_types": [{"id": "ltA", "owner_key": "org_A", "name": f"Tipo {MARK}"}],
         "qr_codes": [{"id": "qrA", "code": "QRAAAAAAAAAA", "tenant_id": "ten_A", "owner_user_id": a0, "title": f"QR {MARK}", "kind": "cantiere",
                       "text": f"codice cancello {MARK}", "links": [], "commessa_id": "sA", "visibility": "org", "active": True,
+                      "files": [{"id": "fA", "name": f"doc {MARK}.pdf", "kind": "pdf", "pages": 1, "size": 9}],
                       "created_at": iso(NOW), "updated_at": iso(NOW), "scans": 0}],
         "qr_code_versions": [{"id": "qrvA", "qr_id": "qrA", "tenant_id": "ten_A", "before": {"text": f"prima {MARK}"}, "edited_at": iso(NOW)}],
         "lesson_templates": [{"id": "lsA", "owner_key": "org_A", "user_id": a0, "name": f"Lezione {MARK}", "exercises": []}],

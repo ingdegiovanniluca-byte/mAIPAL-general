@@ -44,6 +44,7 @@ import jobs
 import db_indexes
 import search_index
 import qr_tags as qr
+import file_store as fstore
 import time
 import embeddings as emb
 import retrieval
@@ -18721,6 +18722,7 @@ async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
                                    "updated_at", "updated_by_name", "scans", "last_scan_at", "last_scan_by_name")}
     out["code_label"] = qr.code_label(doc["code"])
     out["url"] = qr.link(doc["code"])
+    out["files"] = _qr_files_out(doc, f"qr/{doc['id']}")
     out["kind_label"] = qr.KINDS.get(doc.get("kind"), "Altro")
     out["commessa"] = await _qr_commessa(current, doc.get("commessa_id"))
     out["commessa_id"] = doc.get("commessa_id") or ""
@@ -18784,9 +18786,8 @@ async def create_qr(payload: QrPayload, current: User = Depends(get_current_user
     return await _qr_public(current, doc, full=True)
 
 
-@api_router.get("/qr/scan/{code}")
-async def scan_qr(code: str, current: User = Depends(get_current_user)):
-    """A label scanned (or its code typed) by someone of the organization: what it shows."""
+async def _qr_scanned(current: User, code: str) -> dict:
+    """The organization's QR with this code, if this user may open it."""
     c = qr.norm_code(code)
     doc = await db.qr_codes.find_one({"code": c, **_qr_scope(current)}, {"_id": 0}) if c else None
     if not doc:
@@ -18796,13 +18797,28 @@ async def scan_qr(code: str, current: User = Depends(get_current_user)):
         raise HTTPException(status_code=410, detail="Questo QR è stato disattivato dall'amministratore.")
     if doc.get("visibility") == "admins" and not admin:
         raise HTTPException(status_code=403, detail="Il contenuto di questo QR lo vedono solo gli amministratori.")
+    return doc
+
+
+@api_router.get("/qr/scan/{code}")
+async def scan_qr(code: str, current: User = Depends(get_current_user)):
+    """A label scanned (or its code typed) by someone of the organization: what it shows."""
+    doc = await _qr_scanned(current, code)
+    admin = _is_org_admin(current)
     now = datetime.now(timezone.utc).isoformat()
     await db.qr_codes.update_one({"id": doc["id"], **_qr_scope(current)}, {"$inc": {"scans": 1}, "$set": {
         "last_scan_at": now, "last_scan_by": current.user_id, "last_scan_by_name": _first_name(current.name)}})
     await db.qr_scans.insert_one({"qr_id": doc["id"], **_qr_scope(current), "user_id": current.user_id, "at": now})
     out = await _qr_public(current, doc)
     out["can_edit"] = admin
+    out["files"] = _qr_files_out(doc, f"qr/scan/{doc['code']}")
     return out
+
+
+@api_router.get("/qr/scan/{code}/files/{file_id}")
+async def scan_qr_file(code: str, file_id: str, current: User = Depends(get_current_user)):
+    doc = await _qr_scanned(current, code)
+    return await _qr_file_response(doc, file_id)
 
 
 # A public QR, scanned by anyone (no login): only what the administrator wrote for it - title, text, links, the day
@@ -18821,6 +18837,17 @@ def _client_ip(request: Request) -> str:
 @api_router.get("/qr/public/{code}")
 async def scan_public_qr(code: str, request: Request):
     ip = _client_ip(request)
+    doc = await _qr_public_doc(code, ip)
+    c = doc["code"]
+    await db.qr_codes.update_one({"id": doc["id"], "code": c}, {"$inc": {"scans": 1, "public_scans": 1},
+                                                              "$set": {"last_scan_at": datetime.now(timezone.utc).isoformat()}})
+    return {"public": True, "title": doc.get("title"), "kind": doc.get("kind"), "kind_label": qr.KINDS.get(doc.get("kind"), "Altro"),
+            "text": doc.get("text") or "", "links": doc.get("links") or [], "updated_at": doc.get("updated_at"),
+            "code_label": qr.code_label(c), "files": _qr_files_out(doc, f"qr/public/{c}")}
+
+
+async def _qr_public_doc(code: str, ip: str) -> dict:
+    """A public, active QR by its code - else the one answer for everything, and the miss counted for this address."""
     now = time.monotonic()
     misses = [t for t in _QR_MISSES.get(ip, []) if now - t < QR_MISS_WINDOW_S]
     if len(misses) >= QR_MAX_MISSES:
@@ -18834,11 +18861,13 @@ async def scan_public_qr(code: str, request: Request):
             for k in [k for k, v in _QR_MISSES.items() if not v or now - v[-1] > QR_MISS_WINDOW_S]:
                 _QR_MISSES.pop(k, None)
         raise HTTPException(status_code=404, detail=QR_PUBLIC_UNAVAILABLE)
-    await db.qr_codes.update_one({"id": doc["id"], "code": c}, {"$inc": {"scans": 1, "public_scans": 1},
-                                                              "$set": {"last_scan_at": datetime.now(timezone.utc).isoformat()}})
-    return {"public": True, "title": doc.get("title"), "kind": doc.get("kind"), "kind_label": qr.KINDS.get(doc.get("kind"), "Altro"),
-            "text": doc.get("text") or "", "links": doc.get("links") or [], "updated_at": doc.get("updated_at"),
-            "code_label": qr.code_label(c)}
+    return doc
+
+
+@api_router.get("/qr/public/{code}/files/{file_id}")
+async def scan_public_qr_file(code: str, file_id: str, request: Request):
+    doc = await _qr_public_doc(code, _client_ip(request))
+    return await _qr_file_response(doc, file_id, public=True)
 
 
 @api_router.get("/qr/{qr_id}")
@@ -18884,10 +18913,148 @@ async def regenerate_qr_code(qr_id: str, current: User = Depends(get_current_use
     return await get_qr(qr_id, current)
 
 
+# ---- files attached to a QR (photos, PDF): opened with the QR's own visibility ----
+QR_MAX_FILES = 5
+
+
+def _qr_files_out(doc: dict, base: str) -> list:
+    """The QR's files, each with the address to open it from where it was asked (admin / scan / public)."""
+    return [{**{k: f.get(k) for k in ("id", "name", "kind", "size", "pages", "width", "height", "created_at")},
+             "url": f"{base}/files/{f['id']}"} for f in doc.get("files") or []]
+
+
+def _qr_file_name(name: str, kind: str) -> str:
+    base = os.path.basename((name or "").replace("\\", "/")).strip()
+    base = re.sub(r"[\x00-\x1f<>:\"|?*]", "", base)[:100] or ("documento" if kind == "pdf" else "foto")
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    return f"{stem or 'file'}.{'pdf' if kind == 'pdf' else 'jpg'}"
+
+
+async def _qr_file_response(doc: dict, file_id: str, public: bool = False, older: Optional[dict] = None) -> Response:
+    """A file of the QR (older: files taken off it, by id - for the administrator's history only)."""
+    f = next((x for x in doc.get("files") or [] if x.get("id") == file_id), None) or (older or {}).get(file_id)
+    data = await fstore.store.get(db, file_id) if f else None
+    if not data:
+        raise HTTPException(status_code=404, detail="File non trovato")
+    from urllib.parse import quote
+    headers = {"X-Content-Type-Options": "nosniff", "Content-Disposition": f"inline; filename*=UTF-8''{quote(f.get('name') or 'file')}",
+               "Cache-Control": f"{'public' if public else 'private'}, max-age=300"}
+    if f.get("kind") != "pdf":
+        headers["Content-Security-Policy"] = "default-src 'none'"
+    return Response(content=data, media_type="application/pdf" if f.get("kind") == "pdf" else "image/jpeg", headers=headers)
+
+
+async def _qr_add_file(current: User, doc: dict, data: bytes, name: str) -> dict:
+    if len(doc.get("files") or []) >= QR_MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"Un QR può avere al massimo {QR_MAX_FILES} file: togline uno prima")
+    if not data:
+        raise HTTPException(status_code=400, detail="Il file è vuoto")
+    if len(data) > fstore.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Il file supera i 10 MB")
+    try:
+        kind = fstore.kind_of(data, name, None)
+        entry = {"kind": kind}
+        if kind == "pdf":
+            entry["pages"] = await asyncio.wait_for(asyncio.to_thread(fstore.check_pdf, data), timeout=30)
+        else:
+            data, entry["width"], entry["height"] = await asyncio.wait_for(
+                asyncio.to_thread(fstore.image_to_jpeg, data, _downscale_image_bytes), timeout=30)
+    except fstore.BadFile as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=400, detail="Il file è troppo complesso da leggere")
+    now = datetime.now(timezone.utc).isoformat()
+    entry.update({"name": _qr_file_name(name, kind), "size": len(data), "created_at": now, "by_name": _first_name(current.name)})
+    entry["id"] = await fstore.store.put(db, data, entry["name"], {"qr_id": doc["id"], **_qr_scope(current)})
+    await db.qr_codes.update_one({"id": doc["id"], **_qr_scope(current)}, {"$push": {"files": entry},
+                                                                         "$set": {"updated_at": now, "updated_by_name": _first_name(current.name)}})
+    await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": doc["id"], **_qr_scope(current), "before": {},
+                                          "changed": ["files"], "file_added": {k: entry[k] for k in ("id", "name", "kind")},
+                                          "edited_at": now, "edited_by": current.user_id, "edited_by_name": _first_name(current.name)})
+    return await get_qr(doc["id"], current)
+
+
+@api_router.post("/qr/{qr_id}/files")
+async def upload_qr_file(qr_id: str, file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    """A photo or a PDF on the QR (from the phone: the gallery, the camera, the files)."""
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    data = await file.read(fstore.MAX_UPLOAD_BYTES + 1)
+    return await _qr_add_file(current, doc, data, file.filename or "")
+
+
+class QrPhotoPayload(BaseModel):
+    photo_id: str
+
+
+async def _qr_commessa_for_photos(current: User, doc: dict) -> str:
+    if not doc.get("commessa_id"):
+        raise HTTPException(status_code=400, detail="Collega prima il QR a una commessa")
+    await _commessa_or_404(current, doc["commessa_id"], write=False)
+    return doc["commessa_id"]
+
+
+@api_router.get("/qr/{qr_id}/commessa-photos")
+async def qr_commessa_photos(qr_id: str, current: User = Depends(get_current_user)):
+    """The photos of the commessa the QR is linked to, to attach one without uploading it again."""
+    _require_qr_admin(current)
+    cid = await _qr_commessa_for_photos(current, await _qr_or_404(current, qr_id))
+    photos = await db.job_photos.find({"commessa_id": cid}, {"_id": 0, "id": 1, "created_at": 1}).sort("created_at", -1).to_list(60)
+    return [{"id": p["id"], "created_at": p.get("created_at"), "url": f"jobs/photos/{p['id']}"} for p in photos]
+
+
+@api_router.post("/qr/{qr_id}/files/from-photo")
+async def add_qr_file_from_photo(qr_id: str, payload: QrPhotoPayload, current: User = Depends(get_current_user)):
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    cid = await _qr_commessa_for_photos(current, doc)
+    ph = await db.job_photos.find_one({"id": payload.photo_id, "commessa_id": cid}, {"_id": 0})
+    if not ph or not ph.get("data_b64"):
+        raise HTTPException(status_code=404, detail="Foto non trovata")
+    import base64 as _b64
+    day = (ph.get("created_at") or "")[:10]
+    return await _qr_add_file(current, doc, _b64.b64decode(ph["data_b64"]), f"Foto {day}.jpg")
+
+
+@api_router.delete("/qr/{qr_id}/files/{file_id}")
+async def remove_qr_file(qr_id: str, file_id: str, current: User = Depends(get_current_user)):
+    """Taken off the QR (who scans it no longer sees it); kept in the history of its changes."""
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    f = next((x for x in doc.get("files") or [] if x.get("id") == file_id), None)
+    if not f:
+        raise HTTPException(status_code=404, detail="File non trovato")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$pull": {"files": {"id": file_id}},
+                                                                     "$set": {"updated_at": now, "updated_by_name": _first_name(current.name)}})
+    await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current), "before": {},
+                                          "changed": ["files"], "file_removed": {k: f.get(k) for k in ("id", "name", "kind")},
+                                          "edited_at": now, "edited_by": current.user_id, "edited_by_name": _first_name(current.name)})
+    return await get_qr(qr_id, current)
+
+
+@api_router.get("/qr/{qr_id}/files/{file_id}")
+async def get_qr_file(qr_id: str, file_id: str, current: User = Depends(get_current_user)):
+    """(administrator) a file of the QR - also one taken off, from the history."""
+    _require_qr_admin(current)
+    doc = await _qr_or_404(current, qr_id)
+    old = {}
+    async for v in db.qr_code_versions.find({"qr_id": qr_id, **_qr_scope(current)}, {"_id": 0, "file_added": 1, "file_removed": 1}):
+        for x in (v.get("file_added"), v.get("file_removed")):
+            if x and x.get("id") == file_id:
+                old[file_id] = x
+    return await _qr_file_response(doc, file_id, older=old)
+
+
 @api_router.delete("/qr/{qr_id}")
 async def delete_qr(qr_id: str, current: User = Depends(get_current_user)):
     _require_qr_admin(current)
-    await _qr_or_404(current, qr_id)
+    doc = await _qr_or_404(current, qr_id)
+    fids = {f["id"] for f in doc.get("files") or []}
+    async for v in db.qr_code_versions.find({"qr_id": qr_id, **_qr_scope(current)}, {"_id": 0, "file_added": 1, "file_removed": 1}):
+        fids |= {x["id"] for x in (v.get("file_added"), v.get("file_removed")) if x}
+    for fid in fids:
+        await fstore.store.delete(db, fid)
     await db.qr_codes.delete_one({"id": qr_id, **_qr_scope(current)})
     await db.qr_code_versions.delete_many({"qr_id": qr_id, **_qr_scope(current)})
     await db.qr_scans.delete_many({"qr_id": qr_id, **_qr_scope(current)})

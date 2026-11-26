@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check } from "lucide-react";
-import { api } from "@/lib/api";
+import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2 } from "lucide-react";
+import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 
 /* QR (administrator): the organization's labels for tools, sites and info points. The label holds only a link
@@ -24,7 +24,7 @@ const when = (iso) => {
   const d = new Date(iso);
   return `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
-const CHANGED = { title: "nome", kind: "tipo", text: "testo", links: "link", commessa_id: "commessa", visibility: "chi lo vede", active: "attivo", code: "codice" };
+const CHANGED = { files: "file", title: "nome", kind: "tipo", text: "testo", links: "link", commessa_id: "commessa", visibility: "chi lo vede", active: "attivo", code: "codice" };
 
 function Chips({ options, value, onChange, testid }) {
   return (
@@ -152,6 +152,97 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
   );
 }
 
+const sizeLabel = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`);
+const MAX_FILES = 5;
+
+/* The photos and PDFs on the QR: who scans it sees them (with the QR's own visibility). From the phone (gallery,
+   camera, files) or, for a QR linked to a commessa, one of its photos. */
+function QrFiles({ q, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [photos, setPhotos] = useState(null);   // the commessa's photos, when the picker is open
+  const input = useRef(null);
+  const files = q.files || [];
+  const upload = async (list) => {
+    const all = Array.from(list || []);
+    const picked = all.slice(0, MAX_FILES - files.length);
+    if (all.length > picked.length) toast.error(`Al massimo ${MAX_FILES} file per QR`);
+    if (!picked.length) return;
+    setBusy(true);
+    let last = null;
+    for (const f of picked) {
+      const fd = new FormData();
+      fd.append("file", f, f.name);
+      try { last = (await api.post(`/qr/${q.id}/files`, fd)).data; }
+      catch (e) { toast.error(`${f.name}: ${e.response?.data?.detail || "non caricato"}`); }
+    }
+    if (last) { onChanged(last); toast.success(picked.length > 1 ? "File aggiunti" : "File aggiunto"); }
+    setBusy(false);
+    if (input.current) input.current.value = "";
+  };
+  const remove = (f) => toast(`Togliere «${f.name}» dal QR? Resta nello storico delle modifiche.`, {
+    action: { label: "Togli", onClick: async () => {
+      try { onChanged((await api.delete(`/qr/${q.id}/files/${f.id}`)).data); toast.success("File tolto"); }
+      catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    } }, cancel: { label: "Annulla", onClick: () => {} }, duration: 8000 });
+  const openPhotos = async () => {
+    if (photos) { setPhotos(null); return; }
+    try { setPhotos((await api.get(`/qr/${q.id}/commessa-photos`)).data); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  const addPhoto = async (p) => {
+    setBusy(true);
+    try { onChanged((await api.post(`/qr/${q.id}/files/from-photo`, { photo_id: p.id })).data); setPhotos(null); toast.success("Foto aggiunta"); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="card-soft p-4 flex flex-col gap-3" data-testid="qr-files">
+      <div className="flex items-center justify-between gap-2">
+        <span className="kicker">Foto e PDF ({files.length}/{MAX_FILES})</span>
+        {busy && <Loader2 size={15} className="animate-spin text-white/70" />}
+      </div>
+      {files.map((f) => (
+        <div key={f.id} className="flex items-center gap-3" data-testid="qr-file">
+          <a href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer" className="shrink-0">
+            {f.kind === "image"
+              ? <img src={`${API}/${f.url}`} alt="" className="h-12 w-12 rounded-xl object-cover bg-white/10" />
+              : <span className="h-12 w-12 rounded-xl bg-white/15 flex items-center justify-center"><FileText size={20} /></span>}
+          </a>
+          <a href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
+            <span className="block text-sm text-white truncate">{f.name}</span>
+            <span className="block text-[11px] text-white/55">{f.kind === "pdf" ? `PDF · ${f.pages} ${f.pages === 1 ? "pagina" : "pagine"} · ` : "Foto · "}{sizeLabel(f.size)}</span>
+          </a>
+          <button type="button" onClick={() => remove(f)} aria-label={`Togli ${f.name}`} data-testid="qr-file-remove"
+            className="h-9 w-9 shrink-0 rounded-full bg-white/10 flex items-center justify-center text-white/80"><X size={15} /></button>
+        </div>
+      ))}
+      {files.length < MAX_FILES && (
+        <div className="flex flex-wrap gap-2">
+          <input ref={input} type="file" accept="image/*,application/pdf,.pdf" multiple hidden onChange={(e) => upload(e.target.files)} data-testid="qr-file-input" />
+          <button type="button" disabled={busy} onClick={() => input.current?.click()} data-testid="qr-file-upload"
+            className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"><Upload size={14} /> Carica foto o PDF</button>
+          {q.commessa && (
+            <button type="button" disabled={busy} onClick={openPhotos} data-testid="qr-file-from-commessa"
+              className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"><ImageIcon size={14} /> Foto della commessa</button>
+          )}
+        </div>
+      )}
+      {photos && (photos.length ? (
+        <div className="grid grid-cols-4 gap-2" data-testid="qr-commessa-photos">
+          {photos.map((p) => (
+            <button key={p.id} type="button" disabled={busy} onClick={() => addPhoto(p)} className="aspect-square rounded-xl overflow-hidden bg-white/10">
+              <img src={`${API}/${p.url}`} alt="" className="h-full w-full object-cover" loading="lazy" />
+            </button>
+          ))}
+        </div>
+      ) : <div className="text-xs text-white/55">La commessa non ha foto.</div>)}
+      <div className="text-[11px] text-white/55 leading-snug">
+        Foto (JPG, PNG, HEIC) e PDF fino a 10 MB. Li vede chi può aprire il QR{q.visibility === "public" ? ": è pubblico, quindi chiunque lo scansioni" : ""}. Alle foto viene tolta la posizione GPS.
+      </div>
+    </div>
+  );
+}
+
 function QrDetail({ id, commesse, onChanged, onDeleted }) {
   const [q, setQ] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -219,6 +310,8 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
         </div>
       )}
 
+      <QrFiles q={q} onChanged={set} />
+
       <div className="card-soft p-4 flex flex-col gap-3">
         <button type="button" onClick={() => setShowHistory((v) => !v)} className="flex items-center justify-between text-left" data-testid="qr-history-toggle">
           <span className="kicker">Modifiche ({q.versions?.length || 0})</span>
@@ -226,7 +319,7 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
         </button>
         {showHistory && (q.versions?.length ? q.versions.map((v) => (
           <div key={v.id} className="text-xs text-white/75" data-testid="qr-version">
-            {when(v.edited_at)}{v.edited_by_name ? ` · ${v.edited_by_name}` : ""} · {(v.changed || []).map((c) => CHANGED[c] || c).join(", ")}
+            {when(v.edited_at)}{v.edited_by_name ? ` · ${v.edited_by_name}` : ""} · {v.file_added ? `aggiunto «${v.file_added.name}»` : v.file_removed ? <>tolto <a href={`${API}/qr/${q.id}/files/${v.file_removed.id}`} target="_blank" rel="noopener noreferrer" className="underline">«{v.file_removed.name}»</a></> : (v.changed || []).map((c) => CHANGED[c] || c).join(", ")}
             {v.before?.text !== undefined && (v.changed || []).includes("text") && (
               <div className="mt-1 pl-2 border-l border-white/20 text-white/55 whitespace-pre-wrap break-words">{v.before.text || "(vuoto)"}</div>
             )}
