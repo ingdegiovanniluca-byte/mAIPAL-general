@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText } from "lucide-react";
+import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText, MapPin, Loader2 } from "lucide-react";
 import PageBackground from "@/components/PageBackground";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
@@ -17,6 +17,20 @@ export function rememberAfterLogin(path) {
 }
 
 const IT_MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+// The phone's position (for a QR that opens only in one place): -> {lat, lon, acc} or an error message.
+export function phonePosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error("Questo browser non dà la posizione del telefono.")); return; }
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, acc: Math.round(p.coords.accuracy || 9999) }),
+      (e) => reject(new Error(e.code === 1
+        ? "Hai negato la posizione: consentila a questo sito nelle impostazioni del browser (o del telefono) e riprova."
+        : "Non riesco a leggere la posizione: attiva il GPS e riprova, meglio all'aperto.")),
+      // (maximumAge 0: always a fresh one - walking to the place, a remembered one would still be "too far")
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
+}
+
 const day = (iso) => { if (!iso) return ""; const d = new Date(iso); return `${d.getDate()} ${IT_MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
 
 export default function QrScanPage() {
@@ -26,21 +40,47 @@ export default function QrScanPage() {
   const [q, setQ] = useState(null);
   const [error, setError] = useState(null);
   const [reserved, setReserved] = useState(false);   // not public and not logged in: maybe the organization's
+  const [place, setPlace] = useState(null);          // it opens only in one place: why not yet (ask the position, too far...)
+  const [locating, setLocating] = useState(false);
+  const [geoError, setGeoError] = useState(null);
 
-  useEffect(() => {
-    if (loading) return;
-    setQ(null); setError(null); setReserved(false);
+  const load = React.useCallback((geo) => {
+    setError(null); setReserved(false);
     const enc = encodeURIComponent(code);
-    const failed = (e) => e.response?.data?.detail || "Non riesco ad aprire questo QR: controlla la connessione e riprova.";
-    const publicOne = (fallback) => api.get(`/qr/public/${enc}`).then((r) => setQ(r.data)).catch((e) => {
+    const opts = geo ? { headers: { "X-Geo": `${geo.lat},${geo.lon},${geo.acc}` } } : undefined;
+    const failed = (e) => (typeof e.response?.data?.detail === "string" && e.response.data.detail) || "Non riesco ad aprire questo QR: controlla la connessione e riprova.";
+    const got = (r) => { setPlace(null); setQ(r.data); };
+    const placeNeeded = (e) => { if (e.response?.status === 428 && e.response?.data?.detail?.code === "place") { setQ(null); setPlace(e.response.data.detail); return true; } return false; };
+    const publicOne = (fallback) => api.get(`/qr/public/${enc}`, opts).then(got).catch((e) => {
+      if (placeNeeded(e)) return;
       if (e.response?.status === 404 && !user) setReserved(true); else setError(fallback || failed(e));
     });
-    if (!user) { publicOne(); return; }
-    api.get(`/qr/scan/${enc}`).then((r) => setQ(r.data)).catch((e) => {
+    if (!user) return publicOne();
+    return api.get(`/qr/scan/${enc}`, opts).then(got).catch((e) => {
+      if (placeNeeded(e)) return;
       // not of my organization: maybe a public one (a supplier's, a site's sign)
       if (e.response?.status === 404) publicOne(failed(e)); else setError(failed(e));
     });
-  }, [user, loading, code]);
+  }, [code, user]);
+
+  const locate = React.useCallback(async () => {
+    setLocating(true); setGeoError(null);
+    try { await load(await phonePosition()); }
+    catch (e) { setGeoError(e.message); }
+    finally { setLocating(false); }
+  }, [load]);
+
+  useEffect(() => {
+    if (loading) return;
+    setQ(null); setPlace(null);
+    load();
+  }, [loading, load]);
+
+  // the position already allowed for this site: no need to tap
+  useEffect(() => {
+    if (place?.reason !== "need" || !navigator.permissions?.query) return;
+    navigator.permissions.query({ name: "geolocation" }).then((st) => { if (st.state === "granted") locate(); }).catch(() => {});
+  }, [place?.reason]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = () => { rememberAfterLogin(`/q/${code}`); navigate("/"); };
 
@@ -51,7 +91,19 @@ export default function QrScanPage() {
       <PageBackground />
       <div className="relative z-10 w-full max-w-[560px] mx-auto px-4 pt-8 pb-12 flex flex-col gap-4 text-white">
         <button type="button" onClick={() => navigate(user ? "/dashboard" : "/")} className="self-start text-xs text-white/70">mAIPAL</button>
-        {reserved ? (
+        {place ? (
+          <div className="card-soft p-6 flex flex-col gap-3" data-testid="qr-scan-place">
+            <div className="flex items-center gap-2 font-semibold"><MapPin size={17} /> Si apre solo sul posto</div>
+            <p className="text-sm text-white/85 leading-relaxed" data-testid="qr-scan-place-msg">{place.message}</p>
+            {geoError && <p className="text-sm text-white/80 leading-relaxed" data-testid="qr-scan-geo-error">{geoError}</p>}
+            <button type="button" onClick={locate} disabled={locating} data-testid="qr-scan-locate"
+              className="self-start h-10 px-5 rounded-full bg-white/85 text-[#7A2A5C] text-sm font-semibold inline-flex items-center gap-2 disabled:opacity-70">
+              {locating ? <Loader2 size={15} className="animate-spin" /> : <MapPin size={15} />}
+              {place.reason === "need" ? "Usa la mia posizione" : "Riprova"}
+            </button>
+            <p className="text-[11px] text-white/55 leading-snug">La posizione serve solo a controllare la distanza da questo posto e non viene salvata: per chi è dell'organizzazione resta solo la distanza.</p>
+          </div>
+        ) : reserved ? (
           <div className="card-soft p-6 flex flex-col gap-3" data-testid="qr-scan-reserved">
             <div className="flex items-center gap-2 font-semibold"><Lock size={17} /> QR riservato</div>
             <p className="text-sm text-white/80 leading-relaxed">
@@ -78,6 +130,7 @@ export default function QrScanPage() {
                   {q.commessa.address ? <div className="text-white/65 text-xs mt-0.5">{q.commessa.address}</div> : null}
                 </div>
               )}
+              {q.place_note ? <div className="text-xs text-white/70 bg-white/10 rounded-xl px-3 py-2" data-testid="qr-scan-place-note">{q.place_note}</div> : null}
               {q.text ? <div className="text-[15px] whitespace-pre-wrap break-words leading-relaxed" data-testid="qr-scan-text">{q.text}</div> : null}
               {q.links?.length > 0 && (
                 <div className="flex flex-col gap-2">

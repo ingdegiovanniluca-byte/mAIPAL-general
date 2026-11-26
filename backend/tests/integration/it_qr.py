@@ -130,7 +130,9 @@ async def main():
     # public: anyone who scans it (no login), only what was written for it; private / off / missing: the same answer
     import server as srv
     class Req:
-        def __init__(s, ip): s.headers = {"cf-connecting-ip": ip}; s.client = None
+        def __init__(s, ip, geo=None, pass_=None):
+            s.headers = {"cf-connecting-ip": ip, **({"x-geo": geo} if geo else {})}; s.client = None
+            s.query_params = {"pass": pass_} if pass_ else {}
     await server.update_qr(q["id"], P(commessa_id=""), admin)
     db.qr_codes.docs[0]["commessa_id"] = "s1"          # (linked to a commessa: never shown publicly)
     private_msg = await fails(server.scan_public_qr(q["code"], Req("1.1.1.1")), 404)
@@ -216,6 +218,57 @@ async def main():
     await fails(server.add_qr_file_from_photo(q["id"], server.QrPhotoPayload(photo_id="ph9"), admin), 404)   # another commessa's
     await server.delete_qr(q_other["id"], admin)
     assert o["files"][0]["id"] not in fs.store.files and len(fs.store.files) == 7   # (q: 5 on it + 2 taken off, in its history)
+
+    # ---- a QR that opens only in one place (within the radius of the phone's position) ----
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    await fails(server.create_qr(P(title="x", place={"on": True}), admin), 400)
+    await fails(server.create_qr(P(title="x", place={"on": True, "lat": 46.5, "lon": 11.35, "radius_m": 5}), admin), 400)
+    assert (await server.create_qr(P(title="ovunque", place={"on": False}), admin))["place"] is None
+    gq = await server.create_qr(P(title="Locale tecnico", text="Codice armadio 1234", visibility="org",
+                                  place={"on": True, "lat": 46.5, "lon": 11.35, "radius_m": 100, "label": "Cantiere Rossi"}), admin)
+    assert gq["place"] == {"on": True, "lat": 46.5, "lon": 11.35, "radius_m": 100, "label": "Cantiere Rossi"}
+    gfile = (await server.upload_qr_file(gq["id"], UploadFile(io.BytesIO(pdf), filename="schema.pdf"), admin))["files"][0]["id"]
+    gc = gq["code"]
+    need = await fails(server.scan_qr(gc, worker, Req("1.1.1.1")), 428)
+    assert need["reason"] == "need" and "Cantiere Rossi" in need["message"] and "Codice" not in str(need)
+    far = await fails(server.scan_qr(gc, worker, Req("1.1.1.1", "46.51,11.35,10")), 428)
+    assert far["reason"] == "far" and 1050 < far["distance_m"] < 1200 and "1,1 km" in far["message"], far
+    assert (await fails(server.scan_qr(gc, worker, Req("1.1.1.1", "46.5003,11.35,800")), 428))["reason"] == "imprecise"
+    assert (await fails(server.scan_qr(gc, worker, Req("1.1.1.1", "46.5,11.35,abc")), 428))["reason"] == "need"
+    here = await server.scan_qr(gc, worker, Req("1.1.1.1", "46.5003,11.35,15"))          # ~33 m away
+    assert here["text"] == "Codice armadio 1234" and "place_note" not in here
+    assert db.qr_scans.docs[-1]["distance_m"] == 33 and "lat" not in db.qr_scans.docs[-1]   # (how far, not where)
+    url = here["files"][0]["url"]; token = url.split("?pass=")[1]
+    assert url.startswith(f"qr/scan/{gc}/files/{gfile}?pass=")
+    await fails(server.scan_qr_file(gc, gfile, worker, Req("1.1.1.1")), 403)                  # no pass: no file
+    assert (await server.scan_qr_file(gc, gfile, worker, Req("1.1.1.1", pass_=token))).body == pdf
+    # a pass is for its QR only, and expires
+    other_q = await server.create_qr(P(title="altro", place={"on": True, "lat": 46.5, "lon": 11.35, "radius_m": 100}), admin)
+    ofile = (await server.upload_qr_file(other_q["id"], UploadFile(io.BytesIO(pdf), filename="o.pdf"), admin))["files"][0]["id"]
+    await fails(server.scan_qr_file(other_q["code"], ofile, worker, Req("1.1.1.1", pass_=token)), 403)
+    next(p_ for p_ in db.qr_passes.docs if p_["token"] == token)["until"] = _dt.now(_tz.utc) - _td(seconds=1)
+    await fails(server.scan_qr_file(gc, gfile, worker, Req("1.1.1.1", pass_=token)), 403)
+    # the administrator: anywhere (to manage it), told so
+    adm = await server.scan_qr(gc, admin, Req("1.1.1.1"))
+    assert adm["text"] and adm["place_note"] and (await server.scan_qr_file(gc, gfile, admin, Req("1.1.1.1"))).body == pdf
+    # public and in one place: who has no account too, only there; the place's name not shown to them
+    await server.update_qr(gq["id"], P(visibility="public"), admin)
+    pneed = await fails(server.scan_public_qr(gc, Req("5.5.5.5")), 428)
+    assert pneed["reason"] == "need" and pneed["label"] == "" and "Cantiere Rossi" not in pneed["message"]
+    await fails(server.scan_public_qr(gc, Req("5.5.5.5", "45.0,9.0,10")), 428)
+    pub_here = await server.scan_public_qr(gc, Req("5.5.5.5", "46.5,11.3501,10"))
+    ptok = pub_here["files"][0]["url"].split("?pass=")[1]
+    await fails(server.scan_public_qr_file(gc, gfile, Req("5.5.5.5")), 403)
+    assert (await server.scan_public_qr_file(gc, gfile, Req("5.5.5.5", pass_=ptok))).body == pdf
+    # turned off: anywhere again; the change is in the history
+    d = await server.update_qr(gq["id"], P(place={"on": False}), admin)
+    assert d["place"] is None and d["versions"][0]["changed"] == ["place"] and d["versions"][0]["before"]["place"]["label"] == "Cantiere Rossi"
+    assert (await server.scan_qr(gc, worker, Req("1.1.1.1")))["text"] == "Codice armadio 1234"
+    for x in (gq, other_q):
+        await server.delete_qr(x["id"], admin)
+    for x in list(db.qr_codes.docs):
+        if x["title"] == "ovunque":
+            await server.delete_qr(x["id"], admin)
 
     # a new code: the old label stops working, the content stays
     q3 = await server.regenerate_qr_code(q["id"], admin)

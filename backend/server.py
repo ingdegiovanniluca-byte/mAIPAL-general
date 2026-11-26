@@ -18685,6 +18685,7 @@ class QrPayload(BaseModel):
     commessa_id: Optional[str] = None          # "" = not linked to a commessa
     visibility: Optional[Literal["public", "org", "admins"]] = None
     active: Optional[bool] = None
+    place: Optional[dict] = None               # {"on", "lat", "lon", "radius_m", "label"}: opened only there
 
 
 def _qr_scope(current: User) -> dict:
@@ -18719,7 +18720,7 @@ async def _qr_commessa(current: User, commessa_id: Optional[str]) -> Optional[di
 
 async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
     out = {k: doc.get(k) for k in ("id", "code", "title", "kind", "text", "links", "visibility", "active", "created_at",
-                                   "updated_at", "updated_by_name", "scans", "last_scan_at", "last_scan_by_name")}
+                                   "updated_at", "updated_by_name", "scans", "last_scan_at", "last_scan_by_name", "place")}
     out["code_label"] = qr.code_label(doc["code"])
     out["url"] = qr.link(doc["code"])
     out["files"] = _qr_files_out(doc, f"qr/{doc['id']}")
@@ -18756,7 +18757,28 @@ async def _qr_fields(current: User, p: QrPayload, base: Optional[dict] = None) -
         upd["visibility"] = p.visibility
     if p.active is not None:
         upd["active"] = bool(p.active)
+    if p.place is not None:
+        upd["place"] = _qr_clean_place(p.place)
     return upd
+
+
+QR_RADII = (50, 100, 250, 500, 1000)
+
+
+def _qr_clean_place(pl: dict) -> Optional[dict]:
+    """Where the QR opens: a point and a radius (None: anywhere)."""
+    if not isinstance(pl, dict) or not pl.get("on"):
+        return None
+    try:
+        lat, lon = float(pl.get("lat")), float(pl.get("lon"))
+        radius = int(pl.get("radius_m") or 100)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Scegli il luogo: la tua posizione, quella della commessa o un indirizzo")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat == 0 and lon == 0):
+        raise HTTPException(status_code=400, detail="Posizione non valida")
+    if not 20 <= radius <= 5000:
+        raise HTTPException(status_code=400, detail="La distanza va da 20 m a 5 km")
+    return {"on": True, "lat": round(lat, 6), "lon": round(lon, 6), "radius_m": radius, "label": str(pl.get("label") or "").strip()[:80]}
 
 
 async def _unique_qr_code() -> str:
@@ -18765,6 +18787,30 @@ async def _unique_qr_code() -> str:
         if not await db.qr_codes.find_one({"code": code}, {"_id": 1}):
             return code
     raise HTTPException(status_code=500, detail="Codice non generato, riprova")
+
+
+class QrPlaceLookup(BaseModel):
+    address: Optional[str] = None
+    commessa_id: Optional[str] = None
+
+
+@api_router.post("/qr/place-lookup")
+async def qr_place_lookup(payload: QrPlaceLookup, current: User = Depends(get_current_user)):
+    """(administrator) the coordinates of an address, or of a commessa's site, for a QR that opens only there."""
+    _require_qr_admin(current)
+    if payload.commessa_id:
+        acc = await _commessa_access(current, payload.commessa_id)
+        if not acc:
+            raise HTTPException(status_code=404, detail="Commessa non trovata")
+        view = _commessa_view(acc["sub"], acc["client"], acc["clienti"])
+        geo = await _commessa_geo(payload.commessa_id, view)
+        if not geo:
+            raise HTTPException(status_code=404, detail="La commessa non ha un indirizzo con una posizione: scrivilo o usa la tua posizione")
+        return {"lat": geo["lat"], "lon": geo["lon"], "label": view.get("title") or ""}
+    found = await sp.geocode(payload.address or "")
+    if not found:
+        raise HTTPException(status_code=404, detail="Indirizzo non trovato: aggiungi il comune (es. «Via Roma 5, Bolzano»)")
+    return {"lat": found["lat"], "lon": found["lon"], "label": (payload.address or "").strip()[:80]}
 
 
 @api_router.get("/qr")
@@ -18800,24 +18846,97 @@ async def _qr_scanned(current: User, code: str) -> dict:
     return doc
 
 
+# ---- a QR that opens only in one place: the phone's position (sent by the app, X-Geo: "lat,lon,accuracy") must be
+# within the radius. The position comes from the phone, so it is a deterrent, not a lock: who fakes the GPS gets in.
+# Its files are opened with a pass given with the content (30 minutes), as an image or a PDF can't send the position.
+QR_MAX_ACCURACY_M = 300
+QR_PASS_MINUTES = 30
+
+
+def _qr_geo(request: Optional[Request]) -> Optional[dict]:
+    raw = (request.headers.get("x-geo") if request is not None else None) or ""
+    try:
+        lat, lon, *rest = [float(x) for x in raw.split(",")]
+        acc = rest[0] if rest else 9999.0
+    except ValueError:
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return {"lat": lat, "lon": lon, "acc": max(0.0, acc)}
+
+
+def _qr_place_problem(doc: dict, geo: Optional[dict], public: bool) -> Optional[dict]:
+    """None when the QR may be opened here, else why not (for the app: ask the position, too far, imprecise)."""
+    pl = doc.get("place") or {}
+    if not pl.get("on"):
+        return None
+    radius = int(pl.get("radius_m") or 100)
+    where = "" if public or not pl.get("label") else f" ({pl['label']})"
+    dist_txt = lambda m: f"{m / 1000:.1f} km".replace(".", ",") if m >= 1000 else f"{m} m"
+    base = {"code": "place", "radius_m": radius, "label": "" if public else pl.get("label") or ""}
+    if not geo:
+        return {**base, "reason": "need", "message": f"Questo QR si apre solo sul posto{where}, entro {dist_txt(radius)}: serve la posizione del telefono."}
+    if geo["acc"] > QR_MAX_ACCURACY_M:
+        return {**base, "reason": "imprecise", "message": "La posizione del telefono è troppo imprecisa: attiva il GPS (posizione precisa) e riprova all'aperto."}
+    d = sp.distance_m(geo, pl)
+    if d - min(geo["acc"], 100) > radius:
+        return {**base, "reason": "far", "distance_m": d,
+                "message": f"Sei a {dist_txt(d)} dal posto{where}: questo QR si apre solo entro {dist_txt(radius)}."}
+    return None
+
+
+async def _qr_pass(doc: dict, who: str) -> str:
+    token = secrets.token_urlsafe(24)
+    await db.qr_passes.insert_one({"token": token, "qr_id": doc["id"], "who": who,
+                                   "until": datetime.now(timezone.utc) + timedelta(minutes=QR_PASS_MINUTES)})
+    return token
+
+
+async def _qr_pass_ok(doc: dict, token: Optional[str]) -> bool:
+    if not token:
+        return False
+    p = await db.qr_passes.find_one({"token": token, "qr_id": doc["id"]}, {"_id": 0})
+    until = (p or {}).get("until")
+    if until is not None and until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    return bool(p) and until is not None and until > datetime.now(timezone.utc)
+
+
+def _with_pass(files: list, token: Optional[str]) -> list:
+    return [{**f, "url": f"{f['url']}?pass={token}"} for f in files] if token else files
+
+
 @api_router.get("/qr/scan/{code}")
-async def scan_qr(code: str, current: User = Depends(get_current_user)):
+async def scan_qr(code: str, current: User = Depends(get_current_user), request: Request = None):
     """A label scanned (or its code typed) by someone of the organization: what it shows."""
     doc = await _qr_scanned(current, code)
     admin = _is_org_admin(current)
+    geo = _qr_geo(request)
+    problem = _qr_place_problem(doc, geo, public=False)
+    if problem and not admin:   # (the administrator opens it anywhere, to manage it)
+        raise HTTPException(status_code=428, detail=problem)
     now = datetime.now(timezone.utc).isoformat()
     await db.qr_codes.update_one({"id": doc["id"], **_qr_scope(current)}, {"$inc": {"scans": 1}, "$set": {
         "last_scan_at": now, "last_scan_by": current.user_id, "last_scan_by_name": _first_name(current.name)}})
-    await db.qr_scans.insert_one({"qr_id": doc["id"], **_qr_scope(current), "user_id": current.user_id, "at": now})
+    scan = {"qr_id": doc["id"], **_qr_scope(current), "user_id": current.user_id, "at": now}
+    if (doc.get("place") or {}).get("on") and geo:
+        scan["distance_m"] = sp.distance_m(geo, doc["place"])   # (only how far, not where)
+    await db.qr_scans.insert_one(scan)
     out = await _qr_public(current, doc)
     out["can_edit"] = admin
-    out["files"] = _qr_files_out(doc, f"qr/scan/{doc['code']}")
+    token = await _qr_pass(doc, current.user_id) if (doc.get("place") or {}).get("on") else None
+    out["files"] = _with_pass(_qr_files_out(doc, f"qr/scan/{doc['code']}"), token)
+    if problem:
+        out["place_note"] = "Sei fuori dal posto in cui si apre questo QR: lo vedi perché sei amministratore."
     return out
 
 
 @api_router.get("/qr/scan/{code}/files/{file_id}")
-async def scan_qr_file(code: str, file_id: str, current: User = Depends(get_current_user)):
+async def scan_qr_file(code: str, file_id: str, current: User = Depends(get_current_user), request: Request = None):
     doc = await _qr_scanned(current, code)
+    if (doc.get("place") or {}).get("on") and not _is_org_admin(current) \
+            and not await _qr_pass_ok(doc, request.query_params.get("pass") if request is not None else None):
+        raise HTTPException(status_code=403, detail="Apri il QR sul posto per vedere i suoi file.")
     return await _qr_file_response(doc, file_id)
 
 
@@ -18839,11 +18958,15 @@ async def scan_public_qr(code: str, request: Request):
     ip = _client_ip(request)
     doc = await _qr_public_doc(code, ip)
     c = doc["code"]
+    problem = _qr_place_problem(doc, _qr_geo(request), public=True)
+    if problem:
+        raise HTTPException(status_code=428, detail=problem)
+    token = await _qr_pass(doc, f"ip:{ip}") if (doc.get("place") or {}).get("on") else None
     await db.qr_codes.update_one({"id": doc["id"], "code": c}, {"$inc": {"scans": 1, "public_scans": 1},
                                                               "$set": {"last_scan_at": datetime.now(timezone.utc).isoformat()}})
     return {"public": True, "title": doc.get("title"), "kind": doc.get("kind"), "kind_label": qr.KINDS.get(doc.get("kind"), "Altro"),
             "text": doc.get("text") or "", "links": doc.get("links") or [], "updated_at": doc.get("updated_at"),
-            "code_label": qr.code_label(c), "files": _qr_files_out(doc, f"qr/public/{c}")}
+            "code_label": qr.code_label(c), "files": _with_pass(_qr_files_out(doc, f"qr/public/{c}"), token)}
 
 
 async def _qr_public_doc(code: str, ip: str) -> dict:
@@ -18867,6 +18990,8 @@ async def _qr_public_doc(code: str, ip: str) -> dict:
 @api_router.get("/qr/public/{code}/files/{file_id}")
 async def scan_public_qr_file(code: str, file_id: str, request: Request):
     doc = await _qr_public_doc(code, _client_ip(request))
+    if (doc.get("place") or {}).get("on") and not await _qr_pass_ok(doc, request.query_params.get("pass")):
+        raise HTTPException(status_code=403, detail="Apri il QR sul posto per vedere i suoi file.")
     return await _qr_file_response(doc, file_id, public=True)
 
 
@@ -18890,7 +19015,7 @@ async def update_qr(qr_id: str, payload: QrPayload, current: User = Depends(get_
         return await get_qr(qr_id, current)
     now = datetime.now(timezone.utc).isoformat()
     await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current),
-                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active")},
+                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place")},
                                           "changed": sorted(changed), "edited_at": now, "edited_by": current.user_id,
                                           "edited_by_name": _first_name(current.name)})
     await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$set": {**changed, "updated_at": now,

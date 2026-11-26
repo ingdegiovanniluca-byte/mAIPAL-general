@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2 } from "lucide-react";
+import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
+import { phonePosition } from "@/pages/QrScanPage";
 
 /* QR (administrator): the organization's labels for tools, sites and info points. The label holds only a link
    with a code: what it shows is written here and can be changed at any time without printing it again. Only who
@@ -24,13 +25,17 @@ const when = (iso) => {
   const d = new Date(iso);
   return `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
-const CHANGED = { files: "file", title: "nome", kind: "tipo", text: "testo", links: "link", commessa_id: "commessa", visibility: "chi lo vede", active: "attivo", code: "codice" };
+const CHANGED = { place: "luogo", files: "file", title: "nome", kind: "tipo", text: "testo", links: "link", commessa_id: "commessa", visibility: "chi lo vede", active: "attivo", code: "codice" };
+
+// A button of the editor tapped while typing: the field keeps the focus, so the keyboard closing doesn't bring the
+// bottom bar under the finger and swallow the tap (see "Crea QR").
+const keepFocus = (e) => e.preventDefault();
 
 function Chips({ options, value, onChange, testid }) {
   return (
     <div className="flex flex-wrap gap-2" data-testid={testid}>
       {options.map(([k, label]) => (
-        <button key={k} type="button" onClick={() => onChange(k)} aria-pressed={value === k} data-testid={`${testid}-${k}`}
+        <button key={k} type="button" onClick={() => onChange(k)} onMouseDown={keepFocus} aria-pressed={value === k} data-testid={`${testid}-${k}`}
           className={`h-8 px-3 rounded-full text-xs font-medium transition-colors ${value === k ? "bg-white/55 text-[#7A2A5C]" : "bg-white/12 text-white/85 border border-white/15"}`}>
           {label}
         </button>
@@ -47,7 +52,7 @@ function QrTile({ q, onOpen }) {
       <span className="flex-1 min-w-0">
         <span className="block text-[13px] font-semibold text-white leading-tight truncate" data-testid="qr-tile-title">{q.title}</span>
         <span className="block text-[11px] text-white/60 leading-tight mt-0.5 truncate">
-          {q.kind_label}{q.visibility === "public" ? " · pubblico" : ""}{q.commessa ? ` · ${q.commessa.title}` : ""} · {q.code_label}{q.active ? "" : " · disattivato"}
+          {q.kind_label}{q.visibility === "public" ? " · pubblico" : ""}{q.place?.on ? " · solo sul posto" : ""}{q.commessa ? ` · ${q.commessa.title}` : ""} · {q.code_label}{q.active ? "" : " · disattivato"}
         </span>
       </span>
       <ChevronRight size={14} className="shrink-0 text-white/45" />
@@ -70,6 +75,76 @@ function printLabel(q, cm) {
   w.document.close();
 }
 
+const RADII = [[50, "50 m"], [100, "100 m"], [250, "250 m"], [500, "500 m"], [1000, "1 km"]];
+const radiusLabel = (m) => (m >= 1000 ? `${(m / 1000).toString().replace(".", ",")} km` : `${m} m`);
+const mapLink = (p) => `https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=18/${p.lat}/${p.lon}`;
+
+/* Where the QR opens: anywhere, or only within a distance of a point (the admin's position now, the commessa's
+   site, an address). Checked against the phone's position when it is scanned. */
+function QrPlace({ place, setPlace, commessaId }) {
+  const [busy, setBusy] = useState(null);
+  const [address, setAddress] = useState("");
+  const on = !!place?.on;
+  const set = (x) => setPlace({ radius_m: 100, label: "", ...(place || {}), ...x, on: true });
+  const mine = async () => {
+    setBusy("me");
+    try {
+      const p = await phonePosition();
+      set({ lat: +p.lat.toFixed(6), lon: +p.lon.toFixed(6) });
+      if (p.acc > 100) toast.message(`Posizione presa con una precisione di ${p.acc} m: se puoi, riprova all'aperto`);
+    } catch (e) { toast.error(e.message); }
+    finally { setBusy(null); }
+  };
+  const lookup = async (body, what) => {
+    setBusy(what);
+    try { const r = await api.post("/qr/place-lookup", body); set({ lat: r.data.lat, lon: r.data.lon, label: (place?.label || r.data.label || "").slice(0, 80) }); }
+    catch (e) { toast.error(e.response?.data?.detail || "Posizione non trovata"); }
+    finally { setBusy(null); }
+  };
+  return (
+    <div className="flex flex-col gap-2" data-testid="qr-place">
+      <span className="kicker">Dove si apre</span>
+      <Chips options={[["any", "Ovunque"], ["here", "Solo in un luogo"]]} value={on ? "here" : "any"} testid="qr-place-mode"
+        onChange={(v) => (v === "here" ? set({}) : setPlace({ ...(place || {}), on: false }))} />
+      {on && (
+        <div className="flex flex-col gap-2.5 rounded-xl bg-white/[0.07] p-3">
+          <div className="text-sm text-white" data-testid="qr-place-point">
+            {place.lat != null
+              ? <>📍 {place.label ? `${place.label} · ` : ""}<span className="text-white/70">{place.lat.toFixed(5)}, {place.lon.toFixed(5)}</span> · <a href={mapLink(place)} target="_blank" rel="noopener noreferrer" className="underline">mappa</a></>
+              : <span className="text-white/70">Scegli il luogo:</span>}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={mine} disabled={!!busy} data-testid="qr-place-mine" onMouseDown={keepFocus}
+              className="h-8 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60">
+              {busy === "me" ? <Loader2 size={13} className="animate-spin" /> : <MapPin size={13} />} La mia posizione</button>
+            {commessaId && (
+              <button type="button" onClick={() => lookup({ commessa_id: commessaId }, "job")} disabled={!!busy} data-testid="qr-place-commessa" onMouseDown={keepFocus}
+                className="h-8 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60">
+                {busy === "job" ? <Loader2 size={13} className="animate-spin" /> : null} Cantiere della commessa</button>
+            )}
+          </div>
+          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (address.trim()) lookup({ address }, "addr"); }}>
+            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Oppure un indirizzo (via, numero, comune)"
+              className={FIELD} data-testid="qr-place-address" />
+            <button type="submit" disabled={!!busy || !address.trim()} data-testid="qr-place-search"
+              className="h-10 px-3 shrink-0 rounded-xl bg-white/15 text-xs font-medium disabled:opacity-50">{busy === "addr" ? <Loader2 size={13} className="animate-spin" /> : "Cerca"}</button>
+          </form>
+          <input value={place.label || ""} onChange={(e) => set({ label: e.target.value })} maxLength={80} placeholder="Nome del luogo (facoltativo, es. Cantiere Rossi)"
+            className={FIELD} data-testid="qr-place-label" />
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-white/60">Entro</span>
+            <Chips options={RADII} value={place.radius_m || 100} onChange={(r) => set({ radius_m: r })} testid="qr-place-radius" />
+          </div>
+          <div className="text-[11px] text-white/55 leading-snug">
+            Chi lo scansiona deve essere entro {radiusLabel(place.radius_m || 100)}: il telefono chiede la posizione. Gli amministratori lo aprono ovunque.
+            La posizione la dà il telefono e si può falsificare: è un filtro in più, non usarlo come unica protezione per dati riservati.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function QrEditor({ initial, commesse, onSaved, onCancel }) {
   const [title, setTitle] = useState(initial?.title || "");
   const [kind, setKind] = useState(initial?.kind || "cantiere");
@@ -77,12 +152,15 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
   const [links, setLinks] = useState(initial?.links?.length ? initial.links : []);
   const [commessaId, setCommessaId] = useState(initial?.commessa_id || "");
   const [visibility, setVisibility] = useState(initial?.visibility || "org");
+  const [place, setPlace] = useState(initial?.place || null);
   const [busy, setBusy] = useState(false);
   const setLink = (i, k, v) => setLinks((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
 
   const save = async () => {
+    if (place?.on && place.lat == null) { toast.error("Scegli il luogo in cui si apre il QR, o metti «Ovunque»"); return; }
     setBusy(true);
-    const body = { title, kind, text, links: links.filter((l) => (l.url || "").trim()), commessa_id: commessaId, visibility };
+    const body = { title, kind, text, links: links.filter((l) => (l.url || "").trim()), commessa_id: commessaId, visibility,
+      place: place?.on ? place : { on: false } };
     try {
       const r = initial?.id ? await api.patch(`/qr/${initial.id}`, body) : await api.post("/qr", body);
       toast.success(initial?.id ? "Contenuto aggiornato: l'etichetta stampata resta la stessa" : "QR creato");
@@ -128,7 +206,7 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
           </div>
         ))}
         {links.length < 10 && (
-          <button type="button" onClick={() => setLinks((xs) => [...xs, { label: "", url: "" }])} data-testid="qr-add-link"
+          <button type="button" onClick={() => setLinks((xs) => [...xs, { label: "", url: "" }])} data-testid="qr-add-link" onMouseDown={keepFocus}
             className="self-start inline-flex items-center gap-1.5 text-xs font-medium text-white/85 px-3 h-8 rounded-full bg-white/10">
             <Link2 size={13} /> Aggiungi un link
           </button>
@@ -139,6 +217,7 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
         <Chips options={VISIBILITY} value={visibility} onChange={setVisibility} testid="qr-visibility" />
         <span className="text-[11px] text-white/60 leading-snug" data-testid="qr-visibility-note">{VISIBILITY_NOTE[visibility]}</span>
       </div>
+      <QrPlace place={place} setPlace={setPlace} commessaId={commessaId} />
       <div className="flex gap-2 justify-end">
         {onCancel && <button type="button" onClick={onCancel} onMouseDown={(e) => e.preventDefault()} className="h-10 px-4 rounded-full text-sm text-white/80 bg-white/10">Annulla</button>}
         {/* (onMouseDown: the field keeps the focus, so the keyboard closing doesn't bring the bottom bar under the finger
@@ -304,6 +383,12 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
           {q.links?.length > 0 && (
             <div className="flex flex-col gap-1">
               {q.links.map((l, i) => <a key={i} href={l.url} target="_blank" rel="noopener noreferrer" className="text-sm text-white underline underline-offset-2 break-all">{l.label}</a>)}
+            </div>
+          )}
+          {q.place?.on && (
+            <div className="text-xs text-white/80 inline-flex items-center gap-1.5 flex-wrap" data-testid="qr-place-view">
+              <MapPin size={13} /> Si apre solo entro {radiusLabel(q.place.radius_m)} da {q.place.label || "questo punto"} ·
+              <a href={mapLink(q.place)} target="_blank" rel="noopener noreferrer" className="underline">mappa</a>
             </div>
           )}
           <div className="text-[11px] text-white/55" data-testid="qr-visibility-view">{VISIBILITY_SHORT[q.visibility] || VISIBILITY_SHORT.org} · aggiornato {when(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""}</div>

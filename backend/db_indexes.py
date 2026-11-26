@@ -127,6 +127,8 @@ INDEXES: Tuple[Tuple[str, list, dict], ...] = (
     ("qr_codes", [("tenant_id", A), ("updated_at", D)], {}),
     ("qr_code_versions", [("qr_id", A), ("edited_at", D)], {}),
     ("qr_scans", [("qr_id", A), ("at", D)], {}),
+    ("qr_passes", [("token", A)], {}),
+    ("qr_passes", [("until", A)], {"expireAfterSeconds": 0}),
     ("kb_chunks", [("doc_id", A)], {}),
     ("kb_chunks", [("chunk_id", A)], {}),
     ("kb_documents", [("doc_id", A)], {}),
