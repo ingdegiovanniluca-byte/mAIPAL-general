@@ -152,3 +152,129 @@ export function markerCorners(id, S) {
 export function frameQrCorners(S, modules) {
   return qrCorners((FRAME.qrTo - FRAME.qrFrom) * S, modules);
 }
+
+// ---------------------------------------------------------------- steadiness: the pose, filtered
+/* The "One Euro" filter (Casiez et al. 2012), the usual one for AR and pointers: strong smoothing while the value is
+   still (the label at rest: no shaking), light when it moves fast (the object follows without lagging behind).
+   minCutoff: how much it smooths at rest (lower = steadier); beta: how quickly it lets go when moving. */
+export class OneEuro {
+  constructor(minCutoff = 1, beta = 0, dCutoff = 1) {
+    Object.assign(this, { minCutoff, beta, dCutoff, x: null, dx: 0, t: null });
+  }
+  static alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  reset() { this.x = null; this.dx = 0; this.t = null; }
+  filter(x, tMs) {
+    if (this.x === null) { this.x = x; this.t = tMs; return x; }
+    const dt = Math.max(1e-3, (tMs - this.t) / 1000);
+    this.dx += OneEuro.alpha(this.dCutoff, dt) * ((x - this.x) / dt - this.dx);
+    this.x += OneEuro.alpha(this.minCutoff + this.beta * Math.abs(this.dx), dt) * (x - this.x);
+    this.t = tMs;
+    return this.x;
+  }
+}
+
+/* The label's pose filtered: position (cm) and rotation (quaternion) each through One Euro filters; then a small
+   dead zone - while the label is still, changes under ~1.5 mm / ~0.4° are not shown (the last shimmer of the
+   readings), as soon as it really moves the object follows. */
+export class PoseFilter {
+  constructor({ posCutoff = 0.7, posBeta = 0.08, rotCutoff = 0.7, rotBeta = 2.5, deadCm = 0.15, deadDeg = 0.4 } = {}) {
+    this.p = [0, 1, 2].map(() => new OneEuro(posCutoff, posBeta, 1));
+    this.q = [0, 1, 2, 3].map(() => new OneEuro(rotCutoff, rotBeta, 1));
+    Object.assign(this, { deadCm, deadDeg, lastQ: null, shown: null });
+  }
+  reset() { this.p.forEach((f) => f.reset()); this.q.forEach((f) => f.reset()); this.lastQ = null; this.shown = null; }
+  /** pos [x,y,z], quat [x,y,z,w], time ms -> {pos, quat} to show */
+  filter(pos, quat, tMs) {
+    let q = quat;
+    if (this.lastQ && q[0] * this.lastQ[0] + q[1] * this.lastQ[1] + q[2] * this.lastQ[2] + q[3] * this.lastQ[3] < 0) q = q.map((v) => -v);   // (same rotation, other sign)
+    this.lastQ = q;
+    const fp = pos.map((v, i) => this.p[i].filter(v, tMs));
+    let fq = q.map((v, i) => this.q[i].filter(v, tMs));
+    const n = Math.hypot(...fq) || 1;
+    fq = fq.map((v) => v / n);
+    if (this.shown) {
+      const dPos = Math.hypot(fp[0] - this.shown.pos[0], fp[1] - this.shown.pos[1], fp[2] - this.shown.pos[2]);
+      const d = Math.abs(fq[0] * this.shown.quat[0] + fq[1] * this.shown.quat[1] + fq[2] * this.shown.quat[2] + fq[3] * this.shown.quat[3]);
+      const dDeg = (2 * Math.acos(Math.min(1, d)) * 180) / Math.PI;
+      if (dPos < this.deadCm && dDeg < this.deadDeg) return this.shown;
+    }
+    this.shown = { pos: fp, quat: fq };
+    return this.shown;
+  }
+}
+
+// ---------------------------------------------------------------- sub-pixel corners
+/* The markers' corners as read by js-aruco2 are whole pixels (a polygon around the black square): half a pixel of
+   error, frame after frame, is what makes the object shake. Each side of the square is found again with sub-pixel
+   precision - along it, the strongest change from dark to light across it (a parabola through the 3 best samples) -
+   a straight line is fitted through those points, and the corners are where the lines meet. */
+function lum(data, w, h, x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  if (x0 < 0 || y0 < 0 || x0 + 1 >= w || y0 + 1 >= h) return null;
+  const fx = x - x0, fy = y - y0;
+  const g = (xx, yy) => { const o = (yy * w + xx) * 4; return 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2]; };
+  return (g(x0, y0) * (1 - fx) + g(x0 + 1, y0) * fx) * (1 - fy) + (g(x0, y0 + 1) * (1 - fx) + g(x0 + 1, y0 + 1) * fx) * fy;
+}
+
+function fitLine(pts) {
+  // total least squares: the line through the centroid along the main direction -> [nx, ny, c] with nx*x + ny*y = c
+  const n = pts.length, mx = pts.reduce((s, p) => s + p[0], 0) / n, my = pts.reduce((s, p) => s + p[1], 0) / n;
+  let sxx = 0, sxy = 0, syy = 0;
+  pts.forEach(([x, y]) => { sxx += (x - mx) ** 2; sxy += (x - mx) * (y - my); syy += (y - my) ** 2; });
+  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);          // direction of the line
+  const nx = -Math.sin(ang), ny = Math.cos(ang);
+  return [nx, ny, nx * mx + ny * my];
+}
+
+/** corners: 4 [x, y] clockwise around a dark square on a light ground (top-left, top-right, bottom-right, bottom-left
+    as seen); data: RGBA of the frame (w x h). -> refined corners, or the same ones when a side can't be found well. */
+export function refineQuad(corners, data, w, h, { samples = 12, reach = 2.5, step = 0.25 } = {}) {
+  const lines = [];
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4];
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+    if (len < 8) return corners;
+    const nx = -dy / len, ny = dx / len;                     // across the side
+    const pts = [];
+    for (let s = 1; s <= samples; s++) {
+      const t = 0.12 + (0.76 * s) / (samples + 1);           // (away from the corners)
+      const px = a[0] + dx * t, py = a[1] + dy * t;
+      let best = -1, bestAt = 0, prof = [];
+      for (let d = -reach; d <= reach + 1e-9; d += step) {
+        const l1 = lum(data, w, h, px + nx * (d - step), py + ny * (d - step)), l2 = lum(data, w, h, px + nx * (d + step), py + ny * (d + step));
+        if (l1 === null || l2 === null) { prof = null; break; }
+        const gr = l1 - l2;   // light outside, dark inside (corners clockwise: +d is towards the inside)
+        prof.push(gr);
+        if (gr > best) { best = gr; bestAt = prof.length - 1; }
+      }
+      if (!prof || best < 20 || bestAt === 0 || bestAt === prof.length - 1) continue;   // (no clear edge here)
+      const [g0, g1, g2] = [prof[bestAt - 1], prof[bestAt], prof[bestAt + 1]];
+      const den = g0 - 2 * g1 + g2;
+      const off = den ? (0.5 * (g0 - g2)) / den : 0;
+      const d = -reach + (bestAt + off) * step;
+      pts.push([px + nx * d, py + ny * d]);
+    }
+    if (pts.length < samples / 2) return corners;
+    lines.push(fitLine(pts));
+  }
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    const [a1, b1, c1] = lines[(i + 3) % 4], [a2, b2, c2] = lines[i];   // corner i: where side i-1 and side i meet
+    const det = a1 * b2 - a2 * b1;
+    if (Math.abs(det) < 1e-6) return corners;
+    const p = [(c1 * b2 - c2 * b1) / det, (a1 * c2 - a2 * c1) / det];
+    if (Math.hypot(p[0] - corners[i][0], p[1] - corners[i][1]) > 3) return corners;   // (too far: something else)
+    out.push(p);
+  }
+  return out;
+}
+
+/** The QR's 3 big squares (finder patterns: 7 x 7 modules, dark ring on light ground) in label cm, clockwise corners
+    each: their sides are long straight edges, better than the QR's own corners to know the QR's tilt. */
+export function finderSquares(qrWorldCorners, modules) {
+  const [tl, tr, , bl] = qrWorldCorners;
+  const at = (u, v) => [tl[0] + ((tr[0] - tl[0]) * u) / modules + ((bl[0] - tl[0]) * v) / modules,
+                        tl[1] + ((tr[1] - tl[1]) * u) / modules + ((bl[1] - tl[1]) * v) / modules];
+  const sq = (u, v) => [at(u, v), at(u + 7, v), at(u + 7, v + 7), at(u, v + 7)];
+  return [sq(0, 0), sq(modules - 7, 0), sq(0, modules - 7)];
+}

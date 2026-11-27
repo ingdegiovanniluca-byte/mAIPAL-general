@@ -52,3 +52,37 @@ test("the AR label's layout: 4 markers in the corners, the QR in the middle", ()
   const q = frameQrCorners(10, 33);
   expect(q[1][0] - q[0][0]).toBeCloseTo((5.6 * 33) / 37, 5);   // the QR's own size, without its margin
 });
+
+import { PoseFilter, refineQuad } from "./arPose";
+
+test("the pose filter keeps a label at rest still, and follows it when it moves", () => {
+  const f = new PoseFilter();
+  let shown;
+  const seeded = (i) => Math.sin(i * 12.9898) * 43758.5453 % 1;   // (repeatable noise)
+  for (let i = 0; i < 60; i++) shown = f.filter([1 + 0.05 * seeded(i), 2, 40 + 0.08 * seeded(i + 7)], [0, 0, 0, 1], i * 33);
+  const atRest = shown.pos.slice();
+  for (let i = 60; i < 70; i++) shown = f.filter([1 + 0.05 * seeded(i), 2, 40], [0, 0, 0, 1], i * 33);
+  expect(shown.pos).toEqual(atRest);                       // the reading's shimmer is not shown
+  for (let i = 70; i < 100; i++) shown = f.filter([1 + (i - 70) * 0.5, 2, 40], [0, 0, 0, 1], i * 33);   // 15 cm/s
+  expect(Math.abs(shown.pos[0] - (1 + 29 * 0.5))).toBeLessThan(2);   // close behind it
+});
+
+test("a square's corners are found again to a quarter of a pixel (whole pixels as read)", () => {
+  const w = 120, h = 100, data = new Uint8ClampedArray(w * h * 4);
+  const sq = [[30.3, 20.6], [90.7, 24.2], [86.1, 80.4], [27.4, 76.8]];   // a dark quadrilateral, true corners
+  const inside = (x, y) => [0, 1, 2, 3].every((i) => {
+    const [a, b] = [sq[i], sq[(i + 1) % 4]];
+    return (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]) >= 0;
+  });
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let c = 0;
+    for (let sy = 0; sy < 4; sy++) for (let sx = 0; sx < 4; sx++) c += inside(x + (sx + 0.5) / 4, y + (sy + 0.5) / 4) ? 1 : 0;
+    const v = 230 - (c / 16) * 200, o = (y * w + x) * 4;
+    data[o] = data[o + 1] = data[o + 2] = v; data[o + 3] = 255;
+  }
+  const rough = sq.map(([x, y]) => [Math.round(x), Math.round(y)]);   // whole pixels, as read
+  const fine = refineQuad(rough, data, w, h);
+  // (a pixel's value stands for its center: the true corner X is at X - 0.5 in pixel coordinates)
+  fine.forEach((p, i) => expect(Math.hypot(p[0] - (sq[i][0] - 0.5), p[1] - (sq[i][1] - 0.5))).toBeLessThan(0.25));
+  expect(rough.some((p, i) => Math.hypot(p[0] - (sq[i][0] - 0.5), p[1] - (sq[i][1] - 0.5)) > 0.3)).toBe(true);   // (and the rough ones were not)
+});

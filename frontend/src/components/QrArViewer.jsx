@@ -5,7 +5,7 @@ import jsQR from "jsqr";
 import aruco from "js-aruco2";
 import { X, Loader2 } from "lucide-react";
 import { API } from "@/lib/api";
-import { homography, poseFromHomography, focalPx, reprojectionError, labelMatrix, qrCorners, markerCorners, frameQrCorners } from "@/lib/arPose";
+import { homography, poseFromHomography, focalPx, reprojectionError, labelMatrix, qrCorners, markerCorners, frameQrCorners, PoseFilter, refineQuad, finderSquares, project } from "@/lib/arPose";
 
 /* Augmented reality on a QR label: the camera, the label found in each frame (its QR's corners - mode "qr" - or
    also the 4 squares in its corners - mode "frame", steadier), and the QR's 3D model or photo drawn on it, so it
@@ -111,11 +111,17 @@ export default function QrArViewer({ ar, onClose }) {
       const markers = ar.label === "frame" ? new aruco.AR.Detector({ dictionaryName: "ARUCO_MIP_36h12", maxHammingDistance: 2 }) : null;
       const S = ar.label_cm, mods = ar.qr_modules || 29;
       const qrWorld = ar.label === "frame" ? frameQrCorners(S, mods) : qrCorners(S, mods);
+      const finders = finderSquares(qrWorld, mods);
       const code = (ar.code || "").toUpperCase();
       let lastSeen = 0, frameNo = 0;
       const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+      // the QR alone: a small square, its tilt is read less surely -> the rotation smoothed more, a wider dead zone
+      const steady = new PoseFilter(ar.label === "frame" ? { posBeta: 0.35, rotBeta: 9 } : { posBeta: 0.35, rotCutoff: 0.3, rotBeta: 5, deadCm: 0.25, deadDeg: 1.2 });
       const sPos = new THREE.Vector3(), sQuat = new THREE.Quaternion();
-      let smoothed = false;
+      const hist = (debug.hist = []);   // (for the tests: how much the label's center and a point 20 cm out of it move)
+      const tip = (mat) => [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 20)].map((v) => {
+        const c = v.applyMatrix4(mat).project(camera); return [((c.x + 1) / 2) * vw, ((1 - c.y) / 2) * vh];
+      });
 
       const step = () => {
         if (stopped) return;
@@ -128,19 +134,41 @@ export default function QrArViewer({ ar, onClose }) {
         const world = [], image = [];
         // the QR: every frame in mode "qr"; in mode "frame" every 4th (more points when it is near enough to be read -
         // the 4 squares alone are enough, and they hold from farther away than the QR can be read)
-        if (!markers || frameNo % 4 === 1) {
-          const q = jsQR(img.data, det.width, det.height, { inversionAttempts: "dontInvert" });
-          if (q && (q.data || "").toUpperCase().replace(/[\s-]/g, "").includes(code)) {
-            const L = q.location;
-            [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].forEach((c, i) => { world.push(qrWorld[i]); image.push([c.x / k, c.y / k]); });
-          }
-        }
+        let fromMarkers = [];
         if (markers) {
           const best = {};   // one per id (0-3): the surest reading
           for (const m of markers.detectImage(det.width, det.height, img.data)) {
             if (m.id <= 3 && (!best[m.id] || m.hammingDistance < best[m.id].hammingDistance)) best[m.id] = m;
           }
-          Object.values(best).forEach((m) => markerCorners(m.id, S).forEach((p, i) => { world.push(p); image.push([m.corners[i].x / k, m.corners[i].y / k]); }));
+          fromMarkers = Object.values(best);
+        }
+        // the same kind of points every frame: the squares when at least 2 are seen (8+ corners, steadier); the QR's
+        // corners only without them - mixing the two now and then made the object jump at each change
+        if (fromMarkers.length >= 2) {
+          fromMarkers.forEach((m) => {
+            const sub = refineQuad(m.corners.map((c) => [c.x, c.y]), img.data, det.width, det.height);   // (sub-pixel)
+            markerCorners(m.id, S).forEach((p, i) => { world.push(p); image.push([sub[i][0] / k, sub[i][1] / k]); });
+          });
+        } else {
+          const q = jsQR(img.data, det.width, det.height, { inversionAttempts: "dontInvert" });
+          if (q && (q.data || "").toUpperCase().replace(/[\s-]/g, "").includes(code)) {
+            const L = q.location;
+            const rough = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].map((c) => [c.x, c.y]);
+            // the 3 big squares' sides found again to the sub-pixel (12 points): steadier than the 4 rough corners
+            const H0 = homography(qrWorld, rough);
+            let refined = 0;
+            if (H0) {
+              finders.forEach((sq) => {
+                const guess = sq.map((p) => project(H0, p));
+                const sub = refineQuad(guess, img.data, det.width, det.height, { reach: 3 });
+                if (sub !== guess) { refined++; sq.forEach((p, i) => { world.push(p); image.push([sub[i][0] / k, sub[i][1] / k]); }); }
+              });
+            }
+            if (refined < 2) {   // (not found well enough: the QR's corners as read)
+              world.length = 0; image.length = 0;
+              rough.forEach((c, i) => { world.push(qrWorld[i]); image.push([c[0] / k, c[1] / k]); });
+            }
+          }
         }
         const now = performance.now();
         let found = false;
@@ -152,20 +180,16 @@ export default function QrArViewer({ ar, onClose }) {
             found = true;
             lastSeen = now;
             debug.detections++;
-            debug.source = markers && world.length > 4 ? "markers" : "qr";
+            debug.source = fromMarkers.length >= 2 ? "markers" : "qr";
             debug.err = err;
             debug.points = world.length;
             const m = new THREE.Matrix4().fromArray(labelMatrix(pose));
             m.decompose(pos, quat, scl);
-            if (!smoothed) { sPos.copy(pos); sQuat.copy(quat); smoothed = true; }
-            else {
-              // steadier with more points (the frame label) - quicker to follow when it moves a lot
-              const jump = sPos.distanceTo(pos) / Math.max(1, pos.length());
-              const a = Math.min(1, (markers ? 0.55 : 0.35) + jump * 4);
-              sPos.lerp(pos, a);
-              sQuat.slerp(quat, a);
-            }
+            const shown = steady.filter(pos.toArray(), quat.toArray(), now);
+            sPos.fromArray(shown.pos);
+            sQuat.fromArray(shown.quat);
             anchor.matrix.compose(sPos, sQuat, new THREE.Vector3(1, 1, 1));
+            if (hist.length < 400) hist.push({ raw: tip(m), shown: tip(anchor.matrix) });
             anchor.matrixWorldNeedsUpdate = true;
             // (for the tests: where the label's center is drawn, in video pixels)
             const c = new THREE.Vector3(0, 0, 0).applyMatrix4(anchor.matrix).project(camera);
@@ -174,7 +198,7 @@ export default function QrArViewer({ ar, onClose }) {
           }
         }
         const visible = found || now - lastSeen < LOST_MS;
-        if (!visible) smoothed = false;
+        if (!visible) steady.reset();
         anchor.visible = visible;
         debug.tracked = visible;
         setState((s) => (s === "error" ? s : visible ? "tracking" : "searching"));
