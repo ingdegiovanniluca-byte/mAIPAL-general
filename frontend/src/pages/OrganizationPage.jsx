@@ -3,13 +3,11 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { Users, LogOut, KeyRound, Loader2, Check } from "lucide-react";
 import { toast } from "sonner";
-import { Field, Input, Select, PRIMARY, SECONDARY } from "@/components/FormFields";
+import { Field, Input, Select, PRIMARY, SECONDARY, GroupTitle } from "@/components/FormFields";
 
 // a team's card (the Profilo's style); the small title above a group of cards
 export const teamCard = "card-soft p-5";
-export function GroupTitle({ children }) {
-  return <div className="text-[13px] font-semibold text-white mb-2 mt-1">{children}</div>;
-}
+export { GroupTitle };
 export function MembersCount({ n }) {
   return (
     <span className="shrink-0 inline-flex items-center gap-1 text-xs text-white/70" data-testid="team-members-count" title={`${n} ${n === 1 ? "membro" : "membri"}`}>

@@ -50,3 +50,7 @@ export const DANGER = SECONDARY.replace("text-white/90", "text-red-300");
 // a small square button (in a row of a list: remove, copy...) and a button inside a field, on its right
 export const ICON_BTN = "h-9 w-9 shrink-0 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center text-white/75 disabled:opacity-50";
 export const INLINE_BTN = "absolute right-1.5 top-1/2 -translate-y-1/2 h-8 px-3 rounded-lg bg-white/85 text-[#7A2A5C] text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1";
+// the small title above a card (the Profilo's sections)
+export function GroupTitle({ children, testid }) {
+  return <div className="text-[13px] font-semibold text-white mb-2 mt-1" data-testid={testid}>{children}</div>;
+}

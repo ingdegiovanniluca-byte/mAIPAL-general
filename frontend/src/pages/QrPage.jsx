@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Layers, Maximize2, SlidersHorizontal } from "lucide-react";
+import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Layers, Maximize2, SlidersHorizontal, Pencil, History, Power } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { phonePosition } from "@/pages/QrScanPage";
-import { Field, Input, Select, PRIMARY, SECONDARY } from "@/components/FormFields";
+import { Field, Input, Select, PRIMARY, SECONDARY, DANGER, GroupTitle } from "@/components/FormFields";
+import { StatTiles, StatTile } from "@/components/StatTiles";
 
 // The augmented reality (three.js and the readers): loaded only when tried.
 const QrArViewer = React.lazy(() => import("@/components/QrArViewer"));
@@ -276,10 +277,7 @@ function QrFiles({ q, onChanged }) {
   };
   return (
     <div className="card-soft p-5 flex flex-col gap-4" data-testid="qr-files">
-      <div className="flex items-center justify-between gap-2">
-        <span className="kicker">Foto e PDF ({files.length}/{MAX_FILES})</span>
-        {busy && <Loader2 size={15} className="animate-spin text-white/70" />}
-      </div>
+      {busy && <div className="flex items-center gap-2 text-[12px] text-white/70"><Loader2 size={15} className="animate-spin" /> Carico…</div>}
       {files.map((f) => (
         <div key={f.id} className="flex items-center gap-3" data-testid="qr-file">
           <a href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer" className="shrink-0">
@@ -391,7 +389,6 @@ function QrAr({ q, onChanged }) {
   );
   return (
     <div className="card-soft p-5 flex flex-col gap-4" data-testid="qr-ar-settings">
-      <span className="kicker">Realtà aumentata</span>
       {!candidates.length ? (
         <div className="text-xs text-white/65 leading-snug">Carica tra i file del QR un modello 3D (<b>GLB</b>, fino a 25 MB) o una foto: chi scansiona il QR lo vedrà appoggiato sull'etichetta, e lo seguirà se l'etichetta si sposta.</div>
       ) : (
@@ -468,11 +465,22 @@ function QrAr({ q, onChanged }) {
   );
 }
 
+// a value of the QR shown (not edited): its label above, the value under it, rows split by thin lines
+function InfoRow({ label, children, testid }) {
+  return (
+    <div className="py-3 border-t border-white/10 first:border-t-0 first:pt-0" data-testid={testid}>
+      <div className="text-[12px] text-white/60">{label}</div>
+      <div className="text-sm text-white mt-0.5 break-words">{children}</div>
+    </div>
+  );
+}
+
 function QrDetail({ id, commesse, onChanged, onDeleted }) {
   const [q, setQ] = useState(null);
   const [editing, setEditing] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [printCm, setPrintCm] = useState(5);
   const load = async () => {
     try { const r = await api.get(`/qr/${id}`); setQ(r.data); }
     catch (e) { toast.error(e.response?.data?.detail || "QR non trovato"); }
@@ -494,80 +502,119 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
     try { await api.delete(`/qr/${q.id}`); toast.success("QR eliminato"); onDeleted(q.id); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   });
+  const copyLink = () => { navigator.clipboard?.writeText(q.url); toast.success("Link copiato"); };
+  const versions = q.versions || [];
 
   return (
-    <div className="flex flex-col gap-4" data-testid="qr-detail">
-      <div className="card-soft p-4 flex flex-col sm:flex-row gap-4 items-center sm:items-start">
-        <div className="bg-white rounded-2xl p-2 shrink-0">
-          <img src={q.images.svg} alt={`QR ${q.code_label}`} width={168} height={168} data-testid="qr-image" />
+    <div className="flex flex-col gap-3" data-testid="qr-detail">
+      {/* first of all: the QR, with what identifies it and how to print it */}
+      <div className="card-soft p-5 flex flex-col gap-4">
+        <div className="flex flex-col items-center gap-3">
+          <div className="bg-white rounded-2xl p-2.5 shadow-sm">
+            <img src={q.images.svg} alt={`QR ${q.code_label}`} width={196} height={196} data-testid="qr-image" />
+          </div>
+          <div className="text-center min-w-0 w-full">
+            <div className="text-lg font-semibold text-white leading-tight break-words" data-testid="qr-title-view">{q.title}</div>
+            <div className="font-mono text-[15px] tracking-wider text-white/85 mt-1" data-testid="qr-code-label">{q.code_label}</div>
+            <div className="flex flex-wrap justify-center gap-1.5 mt-2">
+              <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-white/80">{q.kind_label}</span>
+              <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-white/80">{q.visibility === "public" ? "Pubblico" : q.visibility === "admins" ? "Solo amministratori" : "Organizzazione"}</span>
+              {q.place?.on && <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-white/80">Solo sul posto</span>}
+              {!q.active && <span className="text-[11px] px-2.5 py-1 rounded-full bg-amber-300/15 border border-amber-300/30 text-amber-100" data-testid="qr-inactive">Disattivato</span>}
+            </div>
+          </div>
         </div>
-        <div className="flex-1 min-w-0 flex flex-col gap-2 w-full">
-          <div className="text-[11px] text-white/60">{q.kind_label}{q.visibility === "public" ? " · pubblico" : ""}{q.active ? "" : " · disattivato"}</div>
-          <div className="font-mono text-base tracking-wider text-white" data-testid="qr-code-label">{q.code_label}</div>
-          <div className="text-[11px] text-white/55 break-all">{q.url}</div>
-          <div className="text-[11px] text-white/55">
-            {q.scans ? `Scansionato ${q.scans} ${q.scans === 1 ? "volta" : "volte"}${q.last_scan_at ? ` · ultima ${when(q.last_scan_at)}${q.last_scan_by_name ? ` (${q.last_scan_by_name})` : ""}` : ""}` : "Non ancora scansionato"}
+        <div className="border-t border-white/10 pt-4">
+          <StatTiles testid="qr-stats">
+            <StatTile label="Scansioni" value={q.scans || 0} testid="qr-stat-scans" />
+            <StatTile label="Foto e PDF" value={(q.files || []).length} testid="qr-stat-files" />
+            <StatTile label="Modifiche" value={versions.length} testid="qr-stat-versions" />
+          </StatTiles>
+          <div className="text-[11px] text-white/55 mt-3" data-testid="qr-last-scan">
+            {q.last_scan_at ? `Ultima scansione ${when(q.last_scan_at)}${q.last_scan_by_name ? ` · ${q.last_scan_by_name}` : ""}` : "Non ancora scansionato"}
           </div>
-          <div className="flex flex-wrap gap-2 mt-1">
-            <button type="button" onClick={() => printLabel(q, 5)} data-testid="qr-print" className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5"><Printer size={14} /> Stampa 5 cm</button>
-            <button type="button" onClick={() => printLabel(q, 3)} className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5"><Printer size={14} /> 3 cm</button>
-            <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5"><Download size={14} /> PNG</a>
-          </div>
+        </div>
+        <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+          <Field label="Stampa l'etichetta">
+            <Select icon={Maximize2} value={printCm} onChange={setPrintCm} testid="qr-print-size" options={[[3, "Lato 3 cm"], [5, "Lato 5 cm"], [8, "Lato 8 cm"]]} />
+          </Field>
+          <button type="button" onClick={() => printLabel(q, printCm)} data-testid="qr-print" className={`${PRIMARY} px-5`}><Printer size={15} /> Stampa</button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" className={SECONDARY}><Download size={15} /> Scarica PNG</a>
+          <button type="button" onClick={copyLink} data-testid="qr-copy-link" className={SECONDARY} title={q.url}><Link2 size={15} /> Copia il link</button>
         </div>
       </div>
 
+      <div className="pt-2"><GroupTitle>Contenuto</GroupTitle></div>
       {editing ? (
         <QrEditor initial={q} commesse={commesse} onCancel={() => setEditing(false)} onSaved={(d) => { set(d); setEditing(false); }} />
       ) : (
-        <div className="card-soft p-4 flex flex-col gap-3" data-testid="qr-content">
-          <div className="flex items-center justify-between gap-2">
-            <span className="kicker">Cosa mostra</span>
-            <button type="button" onClick={() => setEditing(true)} data-testid="qr-edit" className="h-8 px-3 rounded-full bg-white/85 text-[#7A2A5C] text-xs font-semibold">Modifica</button>
-          </div>
-          {q.commessa && <div className="text-sm text-white/85">Commessa: <span className="font-semibold">{q.commessa.title}</span>{q.commessa.client_name ? ` · ${q.commessa.client_name}` : ""}</div>}
-          <div className="text-sm text-white whitespace-pre-wrap break-words leading-relaxed" data-testid="qr-text-view">{q.text || <span className="text-white/50">Nessun testo</span>}</div>
+        <div className="card-soft p-5" data-testid="qr-content">
+          <InfoRow label="Cosa mostra" testid="qr-text-view">
+            {q.text ? <span className="whitespace-pre-wrap leading-relaxed">{q.text}</span> : <span className="text-white/50">Nessun testo</span>}
+          </InfoRow>
           {q.links?.length > 0 && (
-            <div className="flex flex-col gap-1">
-              {q.links.map((l, i) => <a key={i} href={l.url} target="_blank" rel="noopener noreferrer" className="text-sm text-white underline underline-offset-2 break-all">{l.label}</a>)}
-            </div>
+            <InfoRow label="Link">
+              <div className="flex flex-col gap-1">
+                {q.links.map((l, i) => <a key={i} href={l.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 break-all">{l.label}</a>)}
+              </div>
+            </InfoRow>
           )}
-          {q.place?.on && (
-            <div className="text-xs text-white/80 inline-flex items-center gap-1.5 flex-wrap" data-testid="qr-place-view">
-              <MapPin size={13} /> Si apre solo entro {radiusLabel(q.place.radius_m)} da {q.place.label || "questo punto"} ·
-              <a href={mapLink(q.place)} target="_blank" rel="noopener noreferrer" className="underline">mappa</a>
-            </div>
-          )}
-          <div className="text-[11px] text-white/55" data-testid="qr-visibility-view">{VISIBILITY_SHORT[q.visibility] || VISIBILITY_SHORT.org} · aggiornato {when(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""}</div>
+          {q.commessa && <InfoRow label="Commessa">{q.commessa.title}{q.commessa.client_name ? ` · ${q.commessa.client_name}` : ""}</InfoRow>}
+          <InfoRow label="Chi lo vede" testid="qr-visibility-view">{VISIBILITY_SHORT[q.visibility] || VISIBILITY_SHORT.org}</InfoRow>
+          <InfoRow label="Dove si apre" testid="qr-place-view">
+            {q.place?.on ? <>Solo entro {radiusLabel(q.place.radius_m)} da {q.place.label || "questo punto"} · <a href={mapLink(q.place)} target="_blank" rel="noopener noreferrer" className="underline">mappa</a></> : "Ovunque"}
+          </InfoRow>
+          <InfoRow label="Aspetto">{q.style === "maipal" ? "mAIPAL" : "Classico"}</InfoRow>
+          <div className="text-[11px] text-white/55 pt-3 border-t border-white/10">Aggiornato {when(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""}</div>
+          <button type="button" onClick={() => setEditing(true)} data-testid="qr-edit" className={`${PRIMARY} w-full mt-4`}><Pencil size={15} /> Modifica il contenuto</button>
         </div>
       )}
 
+      <div className="pt-2"><GroupTitle>Foto e PDF ({(q.files || []).length}/{MAX_FILES})</GroupTitle></div>
       <QrFiles q={q} onChanged={set} />
+      <div className="pt-2"><GroupTitle>Realtà aumentata</GroupTitle></div>
       <QrAr key={`${q.id}-${(q.files || []).length}-${q.ar?.file_id || ""}`} q={q} onChanged={set} />
 
-      <div className="card-soft p-4 flex flex-col gap-3">
-        <button type="button" onClick={() => setShowHistory((v) => !v)} className="flex items-center justify-between text-left" data-testid="qr-history-toggle">
-          <span className="kicker">Modifiche ({q.versions?.length || 0})</span>
-          {showHistory ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+      <div className="pt-2"><GroupTitle>Gestione</GroupTitle></div>
+      <div className="card-soft p-5 flex flex-col gap-4">
+        <button type="button" onClick={() => setShowHistory((v) => !v)} aria-expanded={showHistory} className="w-full flex items-center gap-3 text-left" data-testid="qr-history-toggle">
+          <History size={17} className="shrink-0 text-white/60" />
+          <span className="flex-1 min-w-0">
+            <span className="block text-sm font-medium text-white">Modifiche ({versions.length})</span>
+            <span className="block text-[12px] text-white/55 mt-0.5">Chi ha cambiato cosa, con il testo di prima.</span>
+          </span>
+          <ChevronDown size={17} className={`shrink-0 text-white/60 transition-transform ${showHistory ? "rotate-180" : ""}`} />
         </button>
-        {showHistory && (q.versions?.length ? q.versions.map((v) => (
-          <div key={v.id} className="text-xs text-white/75" data-testid="qr-version">
-            {when(v.edited_at)}{v.edited_by_name ? ` · ${v.edited_by_name}` : ""} · {v.file_added ? `aggiunto «${v.file_added.name}»` : v.file_removed ? <>tolto <a href={`${API}/qr/${q.id}/files/${v.file_removed.id}`} target="_blank" rel="noopener noreferrer" className="underline">«{v.file_removed.name}»</a></> : (v.changed || []).map((c) => CHANGED[c] || c).join(", ")}
-            {v.before?.text !== undefined && (v.changed || []).includes("text") && (
-              <div className="mt-1 pl-2 border-l border-white/20 text-white/55 whitespace-pre-wrap break-words">{v.before.text || "(vuoto)"}</div>
-            )}
+        {showHistory && (versions.length ? (
+          <div className="-mt-1">
+            {versions.map((v) => (
+              <div key={v.id} className="py-2.5 border-t border-white/10 first:border-t-0 text-[13px] text-white/85" data-testid="qr-version">
+                <div className="text-[11px] text-white/55">{when(v.edited_at)}{v.edited_by_name ? ` · ${v.edited_by_name}` : ""}</div>
+                {v.file_added ? `Aggiunto «${v.file_added.name}»` : v.file_removed ? <>Tolto <a href={`${API}/qr/${q.id}/files/${v.file_removed.id}`} target="_blank" rel="noopener noreferrer" className="underline">«{v.file_removed.name}»</a></> : capFirst((v.changed || []).map((c) => (c === "active" && v.before?.active !== undefined ? (v.before.active ? "disattivato" : "riattivato") : CHANGED[c] || c)).join(", "))}
+                {v.before?.text !== undefined && (v.changed || []).includes("text") && (
+                  <div className="mt-1 pl-2 border-l border-white/20 text-white/55 whitespace-pre-wrap break-words">{v.before.text || "(vuoto)"}</div>
+                )}
+              </div>
+            ))}
           </div>
-        )) : <div className="text-xs text-white/55">Nessuna modifica</div>)}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={busy} onClick={() => act(() => api.patch(`/qr/${q.id}`, { active: !q.active }), q.active ? "QR disattivato" : "QR riattivato")}
-          data-testid="qr-toggle-active" className="h-9 px-3 rounded-full bg-white/10 text-xs font-medium text-white/85">{q.active ? "Disattiva" : "Riattiva"}</button>
-        <button type="button" disabled={busy} onClick={newCode} data-testid="qr-new-code" className="h-9 px-3 rounded-full bg-white/10 text-xs font-medium text-white/85 inline-flex items-center gap-1.5"><RefreshCw size={13} /> Nuovo codice</button>
-        <button type="button" disabled={busy} onClick={remove} data-testid="qr-delete" className="h-9 px-3 rounded-full bg-white/10 text-xs font-medium text-white/85 inline-flex items-center gap-1.5"><Trash2 size={13} /> Elimina</button>
+        ) : <div className="text-[12px] text-white/55 -mt-1">Nessuna modifica</div>)}
+        <div className="border-t border-white/10" />
+        <Field label="Stato" hint={q.active ? "Attivo: chi lo scansiona vede il contenuto." : "Disattivato: chi lo scansiona non vede niente, finché non lo riattivi."}>
+          <Select icon={Power} value={q.active ? "on" : "off"} testid="qr-toggle-active" options={[["on", "Attivo"], ["off", "Disattivato"]]}
+            onChange={(v) => (v === "on") !== q.active && act(() => api.patch(`/qr/${q.id}`, { active: v === "on" }), v === "on" ? "QR riattivato" : "QR disattivato")} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" disabled={busy} onClick={newCode} data-testid="qr-new-code" className={SECONDARY}><RefreshCw size={15} /> Nuovo codice</button>
+          <button type="button" disabled={busy} onClick={remove} data-testid="qr-delete" className={DANGER}><Trash2 size={15} /> Elimina</button>
+        </div>
       </div>
     </div>
   );
 }
+
+const capFirst = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
 
 export default function QrPage() {
   const { user } = useAuth();
