@@ -5,18 +5,49 @@ import { Plus, Mail, Trash2, Copy, RefreshCw, Loader2, Users, KeyRound, Check, X
 import { useAuth } from "@/auth/AuthContext";
 import OrganizationPage, { teamCard, GroupTitle, PersonRow } from "@/pages/OrganizationPage";
 import { Field, Input, INPUT, PRIMARY, SECONDARY } from "@/components/FormFields";
+import { StatTiles, StatTile } from "@/components/StatTiles";
 
 /* Impostazioni > Team. Everyone sees their own team (or joins one with a code); the admin also
    creates the teams ("Nuovo team") and manages them: name, code, members, invitations. */
 export default function TeamPanel() {
   const { user } = useAuth();
-  if (user?.role !== "admin") return <OrganizationPage />;
+  const [org, setOrg] = useState(null);
+  if (user?.role !== "admin") {
+    return (
+      <div className="space-y-3">
+        <TeamStats org={org} />
+        <OrganizationPage onOrg={setOrg} />
+      </div>
+    );
+  }
   return <TeamsAdmin />;
+}
+
+// on top: how many teams (created in the organization, for its administrator) and how many you are in
+function TeamStats({ org, created }) {
+  const teams = org?.teams || [];
+  const activeMembers = (org?.members || []).length;
+  return (
+    <div className={teamCard} data-testid="team-stats">
+      <StatTiles>
+        {created ? <StatTile label="Team creati" value={created.length} testid="team-stat-created" />
+          : <StatTile label="Membri" value={activeMembers} testid="team-stat-members" />}
+        <StatTile label="Fai parte di" value={teams.length} testid="team-stat-mine" />
+        {created ? <StatTile label="Inviti inviati" value={created.reduce((n, t) => n + (t.invites || []).length, 0)} testid="team-stat-sent" />
+          : <StatTile label="Inviti" value={(org?.invites || []).length} testid="team-stat-invites" />}
+      </StatTiles>
+      <div className="text-[11px] text-white/55 mt-4">
+        {created ? "Team creati nell'organizzazione, quelli di cui fai parte, inviti in attesa di risposta."
+          : `Membri del team attivo${org?.name ? ` «${org.name}»` : ""}, team di cui fai parte, inviti ricevuti.`}
+      </div>
+    </div>
+  );
 }
 
 function TeamsAdmin() {
   const { refresh } = useAuth();
   const [teams, setTeams] = useState(null);
+  const [org, setOrg] = useState(null);
   const [mine, setMine] = useState(0);   // reloads "your teams" when the admin changes them
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -44,8 +75,9 @@ function TeamsAdmin() {
 
   return (
     <div data-testid="teams-admin" className="space-y-3">
-      <GroupTitle>Il tuo team</GroupTitle>
-      <OrganizationPage reloadKey={mine} />
+      <TeamStats org={org} created={teams || []} />
+      <div className="pt-2"><GroupTitle>Il tuo team</GroupTitle></div>
+      <OrganizationPage reloadKey={mine} onOrg={setOrg} />
       <div className="pt-3"><GroupTitle>Gestisci i team</GroupTitle></div>
       {creating ? (
         <div className={teamCard} data-testid="new-team-sheet">

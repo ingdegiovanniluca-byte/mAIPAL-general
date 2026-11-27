@@ -41,7 +41,7 @@ export function PersonRow({ m, me, children }) {
 // già in un altro team), i tuoi team con quello attivo (le liste, le commesse e i task condivisi
 // "con il team" sono del team attivo: lo cambi qui), i membri del team attivo e, per chi ha un
 // codice, l'ingresso con il codice. La creazione dei team è dell'amministratore (components/TeamPanel).
-export default function OrganizationPage({ reloadKey = 0 }) {
+export default function OrganizationPage({ reloadKey = 0, onOrg }) {
   const { user, refresh } = useAuth();
   const [org, setOrg] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -52,6 +52,7 @@ export default function OrganizationPage({ reloadKey = 0 }) {
     try {
       const r = await api.get("/org");
       setOrg(r.data);
+      onOrg?.(r.data);   // (the page's indicators)
     } catch {
       toast.error("Errore nel caricamento del team");
     } finally {
