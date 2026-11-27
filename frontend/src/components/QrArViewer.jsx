@@ -160,7 +160,8 @@ export default function QrArViewer({ ar, onClose }) {
             if (H0) {
               finders.forEach((sq) => {
                 const guess = sq.map((p) => project(H0, p));
-                const sub = refineQuad(guess, img.data, det.width, det.height, { reach: 3 });
+                // (the mAIPAL QR's squares have 3 rounded corners: only the straight middle of their sides)
+                const sub = refineQuad(guess, img.data, det.width, det.height, ar.style === "maipal" ? { reach: 3, samples: 10, span: [0.22, 0.78] } : { reach: 3 });
                 if (sub !== guess) { refined++; sq.forEach((p, i) => { world.push(p); image.push([sub[i][0] / k, sub[i][1] / k]); }); }
               });
             }

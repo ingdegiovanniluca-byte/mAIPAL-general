@@ -219,6 +219,20 @@ async def main():
     await server.delete_qr(q_other["id"], admin)
     assert o["files"][0]["id"] not in fs.store.files and len(fs.store.files) == 7   # (q: 5 on it + 2 taken off, in its history)
 
+    # ---- the look: new QRs in the mAIPAL style (the logo's shape and colors, error correction H); one without a style
+    # (made before) stays classic - its label is already printed; changed: new images, recorded
+    sq = await server.create_qr(P(title="Stile"), admin)
+    assert sq["style"] == "maipal" and sq["images"]["svg"].startswith("data:image/svg+xml;base64,")
+    import base64 as _b64
+    svg = _b64.b64decode(sq["images"]["svg"].split(",")[1]).decode()
+    assert "#007E9A" in svg and "#B9006C" in svg and "data:image/png;base64," in svg       # (the logo's colors, the logo)
+    assert qr.modules(sq["code"], "maipal") > qr.modules(sq["code"], "classic")            # (H: more modules than Q)
+    old_doc = next(x for x in db.qr_codes.docs if x["id"] == sq["id"]); old_doc.pop("style")
+    assert (await server.get_qr(sq["id"], admin))["style"] == "classic"
+    d = await server.update_qr(sq["id"], P(style="maipal"), admin)
+    assert d["style"] == "maipal" and d["versions"][0]["changed"] == ["style"] and d["images"]["svg"] == sq["images"]["svg"]
+    await server.delete_qr(sq["id"], admin)
+
     # ---- augmented reality: a 3D model (GLB) or a photo of the QR, shown on the label ----
     import struct
     js = b'{"asset":{"version":"2.0"},"scenes":[{"nodes":[]}]}'

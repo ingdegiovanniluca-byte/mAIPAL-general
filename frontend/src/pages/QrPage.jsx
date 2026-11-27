@@ -156,6 +156,7 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
   const [commessaId, setCommessaId] = useState(initial?.commessa_id || "");
   const [visibility, setVisibility] = useState(initial?.visibility || "org");
   const [place, setPlace] = useState(initial?.place || null);
+  const [style, setStyle] = useState(initial?.style || "maipal");
   const [busy, setBusy] = useState(false);
   const setLink = (i, k, v) => setLinks((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
 
@@ -163,7 +164,7 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
     if (place?.on && place.lat == null) { toast.error("Scegli il luogo in cui si apre il QR, o metti «Ovunque»"); return; }
     setBusy(true);
     const body = { title, kind, text, links: links.filter((l) => (l.url || "").trim()), commessa_id: commessaId, visibility,
-      place: place?.on ? place : { on: false } };
+      place: place?.on ? place : { on: false }, style };
     try {
       const r = initial?.id ? await api.patch(`/qr/${initial.id}`, body) : await api.post("/qr", body);
       toast.success(initial?.id ? "Contenuto aggiornato: l'etichetta stampata resta la stessa" : "QR creato");
@@ -221,6 +222,14 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
         <span className="text-[11px] text-white/60 leading-snug" data-testid="qr-visibility-note">{VISIBILITY_NOTE[visibility]}</span>
       </div>
       <QrPlace place={place} setPlace={setPlace} commessaId={commessaId} />
+      <div className="flex flex-col gap-1.5" data-testid="qr-style-box">
+        <span className="kicker">Aspetto del QR</span>
+        <Chips options={[["maipal", "mAIPAL"], ["classic", "Classico"]]} value={style} onChange={setStyle} testid="qr-style" />
+        <span className="text-[11px] text-white/60 leading-snug">{style === "maipal"
+          ? "Con la forma e i colori del logo mAIPAL e il logo al centro: si legge come un QR normale."
+          : "Bianco e nero, il più semplice: si legge anche stampato molto piccolo o sbiadito."}
+          {initial?.id && initial.style !== style ? " Cambiando aspetto ristampa l'etichetta: quella vecchia si legge ancora, ma per la realtà aumentata va usata la nuova." : ""}</span>
+      </div>
       <div className="flex gap-2 justify-end">
         {onCancel && <button type="button" onClick={onCancel} onMouseDown={(e) => e.preventDefault()} className="h-10 px-4 rounded-full text-sm text-white/80 bg-white/10">Annulla</button>}
         {/* (onMouseDown: the field keeps the focus, so the keyboard closing doesn't bring the bottom bar under the finger

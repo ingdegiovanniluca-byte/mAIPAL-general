@@ -18686,6 +18686,7 @@ class QrPayload(BaseModel):
     visibility: Optional[Literal["public", "org", "admins"]] = None
     active: Optional[bool] = None
     place: Optional[dict] = None               # {"on", "lat", "lon", "radius_m", "label"}: opened only there
+    style: Optional[Literal["maipal", "classic"]] = None   # how the QR is drawn (the printed label's look)
     ar: Optional[dict] = None                  # the augmented reality: {"on", "file_id", "label", "label_cm", "offset_cm", "rot_deg", "scale", "width_cm"}
 
 
@@ -18722,6 +18723,7 @@ async def _qr_commessa(current: User, commessa_id: Optional[str]) -> Optional[di
 async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
     out = {k: doc.get(k) for k in ("id", "code", "title", "kind", "text", "links", "visibility", "active", "created_at",
                                    "updated_at", "updated_by_name", "scans", "last_scan_at", "last_scan_by_name", "place")}
+    out["style"] = doc.get("style") or "classic"
     out["code_label"] = qr.code_label(doc["code"])
     out["url"] = qr.link(doc["code"])
     out["files"] = _qr_files_out(doc, f"qr/{doc['id']}")
@@ -18730,7 +18732,7 @@ async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
     out["commessa"] = await _qr_commessa(current, doc.get("commessa_id"))
     out["commessa_id"] = doc.get("commessa_id") or ""
     if full:
-        out["images"] = qr.images(doc["code"])
+        out["images"] = qr.images(doc["code"], doc.get("style") or "classic")
     return out
 
 
@@ -18763,6 +18765,8 @@ async def _qr_fields(current: User, p: QrPayload, base: Optional[dict] = None) -
         upd["place"] = _qr_clean_place(p.place)
     if p.ar is not None:
         upd["ar"] = _qr_clean_ar(p.ar, (base or {}).get("files") or [])
+    if p.style is not None:
+        upd["style"] = p.style
     return upd
 
 
@@ -18805,7 +18809,8 @@ def _qr_ar_out(doc: dict, base: str, token: Optional[str] = None) -> Optional[di
     if not ar.get("on") or not any(f.get("id") == ar.get("file_id") for f in doc.get("files") or []):
         return None
     url = f"{base}/files/{ar['file_id']}" + (f"?pass={token}" if token else "")
-    return {**ar, "url": url, "qr_modules": qr.modules(doc["code"]), "code": doc["code"]}
+    style = doc.get("style") or "classic"
+    return {**ar, "url": url, "qr_modules": qr.modules(doc["code"], style), "code": doc["code"], "style": style}
 
 
 QR_RADII = (50, 100, 250, 500, 1000)
@@ -18863,7 +18868,7 @@ async def qr_place_lookup(payload: QrPlaceLookup, current: User = Depends(get_cu
 async def list_qr(current: User = Depends(get_current_user)):
     _require_qr_admin(current)
     docs = await db.qr_codes.find(_qr_scope(current), {"_id": 0}).sort("updated_at", -1).to_list(None)
-    return {"qr": [await _qr_public(current, d) for d in docs], "kinds": qr.KINDS, "visibility": qr.VISIBILITY}
+    return {"qr": [await _qr_public(current, d) for d in docs], "kinds": qr.KINDS, "visibility": qr.VISIBILITY, "styles": qr.STYLES}
 
 
 @api_router.post("/qr")
@@ -18872,7 +18877,7 @@ async def create_qr(payload: QrPayload, current: User = Depends(get_current_user
     fields = await _qr_fields(current, payload)
     now = datetime.now(timezone.utc).isoformat()
     doc = {"id": f"qr_{uuid.uuid4().hex[:12]}", "code": await _unique_qr_code(), **_qr_scope(current), "owner_user_id": current.user_id,
-           "text": "", "links": [], "commessa_id": None, "visibility": "org", "active": True, **fields,
+           "text": "", "links": [], "commessa_id": None, "visibility": "org", "active": True, "style": "maipal", **fields,
            "created_at": now, "created_by": current.user_id, "updated_at": now, "updated_by_name": _first_name(current.name), "scans": 0}
     await db.qr_codes.insert_one(doc)
     return await _qr_public(current, doc, full=True)
@@ -19063,7 +19068,7 @@ async def update_qr(qr_id: str, payload: QrPayload, current: User = Depends(get_
         return await get_qr(qr_id, current)
     now = datetime.now(timezone.utc).isoformat()
     await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current),
-                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place", "ar")},
+                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place", "ar", "style")},
                                           "changed": sorted(changed), "edited_at": now, "edited_by": current.user_id,
                                           "edited_by_name": _first_name(current.name)})
     await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$set": {**changed, "updated_at": now,

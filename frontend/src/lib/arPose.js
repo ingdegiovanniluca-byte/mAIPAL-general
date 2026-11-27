@@ -227,8 +227,10 @@ function fitLine(pts) {
 }
 
 /** corners: 4 [x, y] clockwise around a dark square on a light ground (top-left, top-right, bottom-right, bottom-left
-    as seen); data: RGBA of the frame (w x h). -> refined corners, or the same ones when a side can't be found well. */
-export function refineQuad(corners, data, w, h, { samples = 12, reach = 2.5, step = 0.25 } = {}) {
+    as seen); data: RGBA of the frame (w x h); span: the part of each side to read (a square with rounded corners - the
+    mAIPAL QR's - only its straight middle). -> refined corners (where the straight sides meet), or the same ones when
+    a side can't be found well. */
+export function refineQuad(corners, data, w, h, { samples = 12, reach = 2.5, step = 0.25, span = [0.12, 0.88] } = {}) {
   const lines = [];
   for (let i = 0; i < 4; i++) {
     const a = corners[i], b = corners[(i + 1) % 4];
@@ -237,7 +239,7 @@ export function refineQuad(corners, data, w, h, { samples = 12, reach = 2.5, ste
     const nx = -dy / len, ny = dx / len;                     // across the side
     const pts = [];
     for (let s = 1; s <= samples; s++) {
-      const t = 0.12 + (0.76 * s) / (samples + 1);           // (away from the corners)
+      const t = span[0] + ((span[1] - span[0]) * s) / (samples + 1);   // (away from the corners - from rounded ones too)
       const px = a[0] + dx * t, py = a[1] + dy * t;
       let best = -1, bestAt = 0, prof = [];
       for (let d = -reach; d <= reach + 1e-9; d += step) {
