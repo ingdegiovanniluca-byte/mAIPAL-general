@@ -137,7 +137,7 @@ export default function SettingsPage() {
     const r = await api.get("/integrations/status");
     setStatus(r.data);
     api.get("/watch/devices").then((w) => setWatches(w.data || [])).catch(() => {});
-    api.get("/report-logo").then((r) => setLogo(r.data)).catch(() => {});
+    api.get("/org-logo").then((r) => setLogo(r.data)).catch(() => {});
   };
 
   useEffect(() => {
@@ -336,10 +336,10 @@ export default function SettingsPage() {
     </Section>
   );
   // the organization's logo, for its administrator: on top of the reports generated
-  const secLogo = (mode) => (logo?.can_edit ? (
-    <Section mode={mode} id="report-logo" testid="report-logo-card" icon={ImageIcon} title="Logo nei report" defaultOpen
-      subtitle={mode === "bare" ? null : "Il logo dell'organizzazione in alto su ogni pagina dei report che generi."}>
-      <ReportLogoPanel logo={logo} setLogo={setLogo} />
+  const secOrgLogo = (mode) => (logo?.can_edit ? (
+    <Section mode={mode} id="org-logo" testid="org-logo-card" icon={ImageIcon} title="Logo organizzazione" defaultOpen
+      subtitle={mode === "bare" ? null : "Il logo usato nei report e nei documenti generati per l'organizzazione."}>
+      <OrgLogoPanel logo={logo} setLogo={setLogo} />
     </Section>
   ) : null);
   const secVertical = (mode) => (
@@ -606,8 +606,8 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-3">
             {panel === "profile" && <>{secProfile("bare")}{logo?.can_edit && <div className="pt-3">
-              <div className="text-[13px] font-semibold text-white mb-1">Logo nei report</div>
-              {secLogo("bare")}</div>}</>}
+              <div className="text-[13px] font-semibold text-white mb-1">Logo organizzazione</div>
+              {secOrgLogo("bare")}</div>}</>}
             {panel === "vertical" && secVertical("bare")}
             {panel === "links" && <>{secGoogle("static")}{secMicrosoft("static")}{secTargets("static")}{secTelegram("static")}{secWatch("static")}</>}
             {panel === "notifications" && secNotifications("bare")}
@@ -660,7 +660,7 @@ export default function SettingsPage() {
 
       <div className="mt-8 space-y-4">
         {secProfile()}
-        {secLogo()}
+        {secOrgLogo()}
         {secVertical()}
         {secGoogle()}
         {secMicrosoft()}
@@ -745,7 +745,7 @@ function TimeField({ icon: Icon = Clock, testid, value, onChange }) {
 }
 
 // The organization's logo on the reports: shown on white (as on the page), uploaded, replaced, removed, used or not.
-function ReportLogoPanel({ logo, setLogo }) {
+function OrgLogoPanel({ logo, setLogo }) {
   const [busy, setBusy] = useState(false);
   const input = useRef(null);
   const run = async (fn, ok) => {
@@ -758,40 +758,40 @@ function ReportLogoPanel({ logo, setLogo }) {
     if (!f) return;
     const fd = new FormData();
     fd.append("file", f, f.name);
-    run(() => api.post("/report-logo", fd), "Logo salvato");
+    run(() => api.post("/org-logo", fd), "Logo salvato");
     if (input.current) input.current.value = "";
   };
-  const remove = () => toast("Togliere il logo? I report già generati restano come sono.", {
-    action: { label: "Togli", onClick: () => run(() => api.delete("/report-logo"), "Logo tolto") },
+  const remove = () => toast("Togliere il logo? I documenti già generati restano come sono.", {
+    action: { label: "Togli", onClick: () => run(() => api.delete("/org-logo"), "Logo tolto") },
     cancel: { label: "Annulla", onClick: () => {} }, duration: 8000 });
   return (
-    <div className="flex flex-col gap-4" data-testid="report-logo">
-      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/*" hidden onChange={(e) => upload(e.target.files?.[0])} data-testid="report-logo-input" />
+    <div className="flex flex-col gap-4" data-testid="org-logo">
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/*" hidden onChange={(e) => upload(e.target.files?.[0])} data-testid="org-logo-input" />
       {logo.has ? (
-        <div className="h-24 rounded-xl bg-white flex items-center justify-center px-4" data-testid="report-logo-preview">
-          <img src={`${API}/report-logo/image?v=${encodeURIComponent(logo.v)}`} alt="Logo dell'organizzazione" className="max-h-16 max-w-full object-contain" />
+        <div className="h-24 rounded-xl bg-white flex items-center justify-center px-4" data-testid="org-logo-preview">
+          <img src={`${API}/org-logo/image?v=${encodeURIComponent(logo.v)}`} alt="Logo organizzazione" className="max-h-16 max-w-full object-contain" />
         </div>
       ) : (
-        <button type="button" onClick={() => input.current?.click()} disabled={busy} data-testid="report-logo-empty"
+        <button type="button" onClick={() => input.current?.click()} disabled={busy} data-testid="org-logo-empty"
           className="h-24 rounded-xl border border-dashed border-white/30 text-[13px] text-white/75 flex flex-col items-center justify-center gap-1.5">
           {busy ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />} Carica il logo
         </button>
       )}
       {logo.has && (
-        <Field label="Nei report" hint={logo.use_in_reports ? "In alto a sinistra su ogni pagina dei report generati da te e dal tuo team." : "Il logo resta salvato, ma i report escono senza."}>
-          <Select icon={FileText} value={logo.use_in_reports ? "on" : "off"} testid="report-logo-use"
+        <Field label="Nei documenti" hint={logo.use_in_documents ? "In alto su ogni pagina dei report e dei documenti generati da te e dal tuo team." : "Il logo resta salvato, ma report e documenti escono senza."}>
+          <Select icon={FileText} value={logo.use_in_documents ? "on" : "off"} testid="org-logo-use"
             options={[["on", "Usa il logo"], ["off", "Non usarlo"]]}
-            onChange={(v) => run(() => api.patch("/report-logo", { use_in_reports: v === "on" }), v === "on" ? "I report useranno il logo" : "I report escono senza logo")} />
+            onChange={(v) => run(() => api.patch("/org-logo", { use_in_documents: v === "on" }), v === "on" ? "Report e documenti useranno il logo" : "Report e documenti escono senza logo")} />
         </Field>
       )}
       {logo.has && (
         <div className="grid grid-cols-2 gap-3">
-          <button type="button" onClick={() => input.current?.click()} disabled={busy} data-testid="report-logo-replace" className={SECONDARY}>
+          <button type="button" onClick={() => input.current?.click()} disabled={busy} data-testid="org-logo-replace" className={SECONDARY}>
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} Sostituisci</button>
-          <button type="button" onClick={remove} disabled={busy} data-testid="report-logo-remove" className={SECONDARY}><Trash2 size={15} /> Togli</button>
+          <button type="button" onClick={remove} disabled={busy} data-testid="org-logo-remove" className={SECONDARY}><Trash2 size={15} /> Togli</button>
         </div>
       )}
-      <span className="text-[11px] text-white/55 leading-snug -mt-1">PNG o JPG, meglio con lo sfondo trasparente. I report già generati non cambiano.</span>
+      <span className="text-[11px] text-white/55 leading-snug -mt-1">PNG o JPG, meglio con lo sfondo trasparente. I documenti già generati non cambiano.</span>
     </div>
   );
 }

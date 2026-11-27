@@ -396,7 +396,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
 
 ## Report di lavoro
 <!-- id: report-lavoro · verticale: artigiano -->
-L'agente **Report** genera report in Word, con lo spazio per le firme. Se l'amministratore ha caricato il **logo dell'organizzazione** (Impostazioni → Profilo → Logo nei report), è in alto su ogni pagina.
+L'agente **Report** genera report in Word, con lo spazio per le firme. Se l'amministratore ha caricato il **logo dell'organizzazione** (Impostazioni → Profilo → Logo organizzazione), è in alto su ogni pagina.
 
 **Come funziona la chat del Report**
 - Non ci sono pulsanti da scegliere prima: scrivi o detta, anche in **più messaggi** (scritti o vocali), cosa mettere nel report. Ogni messaggio viene annotato e mAIPAL ti risponde con il tipo di report e la commessa che ha capito.
@@ -554,7 +554,7 @@ La sezione Fitness (per istruttori e studi) ha quattro parti: Lezioni, Esercizi,
 <!-- id: impostazioni · path: /dashboard/settings · verticale: tutti -->
 Dalle Impostazioni (popup del profilo → Impostazioni, o dal menu) gestisci:
 - **Profilo**: foto, professione, settore, ambito di utilizzo (lavoro, vita privata, tempo libero: puoi accenderne più di uno), interessi, tono delle risposte (dal menu), indirizzi di casa e lavoro, orario delle news e del riepilogo del mattino. Ricorda di toccare **Salva profilo**.
-- **Logo nei report** (solo amministratori, sotto il Profilo): carica il logo dell'organizzazione (PNG o JPG, meglio con lo sfondo trasparente). Da **Nei report** scegli **Usa il logo** o **Non usarlo**; con **Sostituisci** e **Togli** lo cambi o lo elimini. Quando è attivo, tutti i report Word generati da te e dal tuo team (sopralluogo, intervento, SAL, report di commessa, varianti, referti) hanno il logo in alto a sinistra su ogni pagina. I report già generati non cambiano; una nuova revisione di un report usa il logo di adesso. Un'altra organizzazione non vede mai il tuo logo.
+- **Logo organizzazione** (solo amministratori, sotto il Profilo): carica il logo dell'organizzazione (PNG o JPG, meglio con lo sfondo trasparente). Viene usato nei report e nei documenti generati per l'organizzazione. Da **Nei documenti** scegli **Usa il logo** o **Non usarlo**; con **Sostituisci** e **Togli** lo cambi o lo elimini. Quando è attivo, i report Word generati da te e dal tuo team (sopralluogo, intervento, SAL, report di commessa, varianti, referti) hanno il logo in alto a sinistra su ogni pagina. I documenti già generati non cambiano; una nuova revisione di un report usa il logo di adesso. Un'altra organizzazione non vede mai il tuo logo.
 - **Verticale**: il tuo settore (Veterinario, Fitness, Artigiano); quello scelto è evidenziato con la spunta. Cambia gli agenti e le sezioni dedicate.
 - **Google Workspace**: collega Drive (cartella mAIPAL per file e allegati) e Calendar (eventi dai task).
 - **Microsoft**: collega OneDrive e Outlook.

@@ -1060,9 +1060,10 @@ async def _tenant_view(current: User) -> Optional[dict]:
     return out
 
 
-# ============ THE ORGANIZATION'S LOGO (on the reports) ============
-# One per organization (an account outside any organization: its own), set by its administrator; when "use in the
-# reports" is on, every report generated (sopralluogo, intervento, commessa, referto) carries it on top of each page.
+# ============ THE ORGANIZATION'S LOGO ============
+# One per organization (an account outside any organization: its own), set by its administrator; when "use it in the
+# documents" is on, the reports and the documents generated for the organization (sopralluogo, intervento, commessa,
+# referto, ...) carry it on top of each page.
 
 def _logo_where(current: User) -> tuple:
     return (db.tenants, {"id": current.tenant_id}) if current.tenant_id else (db.users, {"user_id": current.user_id})
@@ -1070,38 +1071,42 @@ def _logo_where(current: User) -> tuple:
 
 async def _logo_info(current: User) -> dict:
     coll, q = _logo_where(current)
-    return ((await coll.find_one(q, {"_id": 0, "report_logo": 1})) or {}).get("report_logo") or {}
+    d = await coll.find_one(q, {"_id": 0, "org_logo": 1, "report_logo": 1}) or {}
+    if d.get("org_logo"):
+        return d["org_logo"]
+    old = d.get("report_logo") or {}   # (its first name, for a few minutes)
+    return {**{k: v for k, v in old.items() if k != "use_in_reports"}, "use_in_documents": old.get("use_in_reports", True)} if old else {}
 
 
-async def _report_logo(current: User) -> Optional[bytes]:
-    """The logo to put on a report now (None: no logo, or not to be used)."""
+async def _org_logo_bytes(current: User) -> Optional[bytes]:
+    """The logo to put on a report or document now (None: no logo, or not to be used)."""
     info = await _logo_info(current)
-    if not (info.get("file_id") and info.get("use_in_reports", True)):
+    if not (info.get("file_id") and info.get("use_in_documents", True)):
         return None
     try:
         return await fstore.store.get(db, info["file_id"])
     except Exception:
-        logger.exception("report logo not read")
+        logger.exception("organization logo not read")
         return None
 
 
 def _logo_out(info: dict, can_edit: bool) -> dict:
-    return {"has": bool(info.get("file_id")), "use_in_reports": bool(info.get("use_in_reports", True)) if info.get("file_id") else False,
+    return {"has": bool(info.get("file_id")), "use_in_documents": bool(info.get("use_in_documents", True)) if info.get("file_id") else False,
             "width": info.get("width"), "height": info.get("height"), "v": info.get("updated_at") or "", "can_edit": can_edit}
 
 
-def _require_logo_admin(current: User) -> None:
+def _require_org_logo_admin(current: User) -> None:
     if not _is_org_admin(current):
         raise HTTPException(status_code=403, detail="Il logo dell'organizzazione lo imposta l'amministratore")
 
 
-@api_router.get("/report-logo")
-async def get_report_logo(current: User = Depends(get_current_user)):
+@api_router.get("/org-logo")
+async def get_org_logo(current: User = Depends(get_current_user)):
     return _logo_out(await _logo_info(current), _is_org_admin(current))
 
 
-@api_router.get("/report-logo/image")
-async def get_report_logo_image(current: User = Depends(get_current_user)):
+@api_router.get("/org-logo/image")
+async def get_org_logo_image(current: User = Depends(get_current_user)):
     info = await _logo_info(current)
     data = await fstore.store.get(db, info["file_id"]) if info.get("file_id") else None
     if not data:
@@ -1110,9 +1115,9 @@ async def get_report_logo_image(current: User = Depends(get_current_user)):
                     headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"})
 
 
-@api_router.post("/report-logo")
-async def upload_report_logo(file: UploadFile = File(...), current: User = Depends(get_current_user)):
-    _require_logo_admin(current)
+@api_router.post("/org-logo")
+async def upload_org_logo(file: UploadFile = File(...), current: User = Depends(get_current_user)):
+    _require_org_logo_admin(current)
     data = await file.read(fstore.LOGO_MAX_BYTES + 1)
     try:
         png, w, h = await asyncio.wait_for(asyncio.to_thread(fstore.logo_png, data), timeout=30)
@@ -1121,38 +1126,38 @@ async def upload_report_logo(file: UploadFile = File(...), current: User = Depen
     except asyncio.TimeoutError:
         raise HTTPException(status_code=400, detail="L'immagine del logo non si apre: prova con un PNG o un JPG")
     old = await _logo_info(current)
-    fid = await fstore.store.put(db, png, "logo.png", {"kind": "report_logo", "tenant_id": current.tenant_id, "user_id": current.user_id})
-    info = {"file_id": fid, "width": w, "height": h, "use_in_reports": old.get("use_in_reports", True) if old.get("file_id") else True,
+    fid = await fstore.store.put(db, png, "logo.png", {"kind": "org_logo", "tenant_id": current.tenant_id, "user_id": current.user_id})
+    info = {"file_id": fid, "width": w, "height": h, "use_in_documents": old.get("use_in_documents", True) if old.get("file_id") else True,
             "updated_at": datetime.now(timezone.utc).isoformat(), "updated_by": current.user_id}
     coll, q = _logo_where(current)
-    await coll.update_one(q, {"$set": {"report_logo": info}})
+    await coll.update_one(q, {"$set": {"org_logo": info}, "$unset": {"report_logo": ""}})
     if old.get("file_id"):
         await fstore.store.delete(db, old["file_id"])
     return _logo_out(info, True)
 
 
-class ReportLogoPatch(BaseModel):
-    use_in_reports: bool
+class OrgLogoPatch(BaseModel):
+    use_in_documents: bool
 
 
-@api_router.patch("/report-logo")
-async def patch_report_logo(payload: ReportLogoPatch, current: User = Depends(get_current_user)):
-    _require_logo_admin(current)
+@api_router.patch("/org-logo")
+async def patch_org_logo(payload: OrgLogoPatch, current: User = Depends(get_current_user)):
+    _require_org_logo_admin(current)
     info = await _logo_info(current)
     if not info.get("file_id"):
         raise HTTPException(status_code=400, detail="Carica prima il logo")
-    info = {**info, "use_in_reports": payload.use_in_reports}
+    info = {**info, "use_in_documents": payload.use_in_documents}
     coll, q = _logo_where(current)
-    await coll.update_one(q, {"$set": {"report_logo.use_in_reports": payload.use_in_reports}})
+    await coll.update_one(q, {"$set": {"org_logo": info}, "$unset": {"report_logo": ""}})
     return _logo_out(info, True)
 
 
-@api_router.delete("/report-logo")
-async def delete_report_logo(current: User = Depends(get_current_user)):
-    _require_logo_admin(current)
+@api_router.delete("/org-logo")
+async def delete_org_logo(current: User = Depends(get_current_user)):
+    _require_org_logo_admin(current)
     info = await _logo_info(current)
     coll, q = _logo_where(current)
-    await coll.update_one(q, {"$unset": {"report_logo": ""}})
+    await coll.update_one(q, {"$unset": {"org_logo": "", "report_logo": ""}})
     if info.get("file_id"):
         await fstore.store.delete(db, info["file_id"])
     return _logo_out({}, True)
@@ -6096,7 +6101,7 @@ async def _generate_vet_report(current: User, text: str, visit_type: str, patien
 
     patient_name = (patient.get("data", {}).get("nome") if patient else None) or None
     docx_title = f"Referto - {template_name}"
-    docx_bytes = vet_reports.build_docx(docx_title, patient_name, interpreted["sections"], logo=await _report_logo(current))
+    docx_bytes = vet_reports.build_docx(docx_title, patient_name, interpreted["sections"], logo=await _org_logo_bytes(current))
     fname = f"{docx_title} - {patient_name or 'generico'} - {datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.docx"
 
     drive_link = None
@@ -6531,7 +6536,7 @@ async def _generate_work_report(current: User, text: str, report_type: str = "so
         org = await db.organizations.find_one({"id": current.org_id}, {"_id": 0, "name": 1})
         company = (org or {}).get("name") or ""
     docx_bytes = work_reports.build_docx(template_name, client_name or None, commessa_title or None, sections, company=company, photos=photos,
-                                         doc_info=doc_info, logo=await _report_logo(current))
+                                         doc_info=doc_info, logo=await _org_logo_bytes(current))
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {client_name or 'senza cliente'} - {stamp}.docx".replace("/", "-")
 
@@ -7166,7 +7171,7 @@ async def _generate_commessa_report(current: User, payload: CommessaReportPayloa
     docx_bytes = work_reports.build_docx(template_name, view["client_name"] or None, view["title"] or None, sections, company=company,
                                          doc_info=_report_doc_info({"report_type": "commessa", "doc_code": doc_code, "version": 1,
                                                                     "created_at": created_iso, "doc_commessa": doc_commessa}),
-                                         logo=await _report_logo(current))
+                                         logo=await _org_logo_bytes(current))
     stamp = datetime.now(work_reports.LOCAL_TZ).strftime("%Y%m%d_%H%M")
     fname = f"{template_name} - {view['client_name'] or view['title']} - {stamp}.docx".replace("/", "-")
     _sub_doc = await db.collection_sub_items.find_one({"id": view["id"]}, {"_id": 0}) or {"id": view["id"]}
@@ -7325,7 +7330,7 @@ async def _revise_work_report(current: User, report_id: str, instruction: str, c
     doc_info = _report_doc_info({**rep, "version": version, "updated_at": now_iso,
                                  "revisions": (rep.get("revisions") or []) + [{"changed": changed, "photos_added": len(new_photos), "at": now_iso}]})
     docx_bytes = work_reports.build_docx(rep["template_name"], client_name or None, rep.get("commessa_title") or None, sections,
-                                         company=rep.get("company") or "", photos=photos, doc_info=doc_info, logo=await _report_logo(current))
+                                         company=rep.get("company") or "", photos=photos, doc_info=doc_info, logo=await _org_logo_bytes(current))
     base_name = re.sub(r"( - v\d+)?\.docx$", "", rep.get("docx_filename") or rep["template_name"])
     fname = f"{base_name} - v{version}.docx"
     path = rep.get("drive_path") or ([vx.CLIENTI_NAME, rep["client_name"]] + ([rep["commessa_title"]] if rep.get("commessa_title") else [])
@@ -11802,7 +11807,7 @@ async def make_variant(commessa_id: str, payload: VariantPayload, current: User 
     docx_bytes = work_reports.build_docx(name, view["client_name"] or None, view["title"] or None, sections, company=company,
                                          doc_info=_report_doc_info({"report_type": "variante", "doc_code": doc_code, "version": 1,
                                                                     "created_at": created_iso, "doc_commessa": doc_commessa}),
-                                         logo=await _report_logo(current))
+                                         logo=await _org_logo_bytes(current))
     fname = an.file_name("preventivo", today, "variante", "docx", version=n)
     folder, subs = _commessa_archive_place(clienti, sub, view, "preventivo")
     link, drive_folder, tg_sent = await _deliver_work_report(current, docx_bytes, fname, folder, subs, f"📄 {name} — {view['title']}")
