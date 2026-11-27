@@ -92,3 +92,6 @@ frontend/node_modules/.cache/default-development/0.pack
 
 # the administrators allowed in (stands for the subscriptions): local to each server
 backend/data/access/org_admins.txt
+
+# backups of the data (scripts/backup-maipal.*): they hold the database and the keys - never in the repository
+backup/
