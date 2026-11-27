@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Mail, ShieldCheck, UserPlus, Pause, Play, Building2, UserCog, X, ChevronDown, Clock } from "lucide-react";
+import { Loader2, Mail, ShieldCheck, UserPlus, Pause, Play, Building2, UserCog, X, ChevronDown, Clock, MoreHorizontal, UserMinus } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Field, Input, Select, INPUT, PRIMARY } from "@/components/FormFields";
+import { Field, Input, Select, INPUT, PRIMARY, ICON_BTN } from "@/components/FormFields";
+import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
 import { StatTiles, StatTile } from "@/components/StatTiles";
 import { teamCard as card, GroupTitle, PersonRow } from "@/pages/OrganizationPage";
 import IosSwitch from "@/components/IosSwitch";
@@ -13,7 +14,37 @@ import IosSwitch from "@/components/IosSwitch";
    the plan allows) administrators, suspended or removed - and the sharing rules. Nothing of
    another organization is ever shown here. */
 
-const ICON_BTN = "h-9 w-9 shrink-0 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center text-white/75 disabled:opacity-50";
+// a person's actions (administrator, suspend, remove): in a menu, so the name keeps the whole row
+function MemberMenu({ m, busy, canAdmin, onAdmin, onSuspend, onRemove }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef(null), panel = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const out = (e) => { if (!btn.current?.contains(e.target) && !panel.current?.contains(e.target)) setOpen(false); };
+    const esc = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", out);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", out); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const pick = (fn) => () => { setOpen(false); fn(); };
+  return (
+    <>
+      <button ref={btn} type="button" disabled={busy} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
+        aria-label={`Azioni per ${m.name || m.email}`} data-testid="org-member-menu" className={ICON_BTN}>
+        <MoreHorizontal size={16} />
+      </button>
+      {open && (
+        <GlassMenu anchorRef={btn} panelRef={panel} testid="org-member-actions" width={292}>
+          {canAdmin && <GlassMenuItem icon={ShieldCheck} testid="org-member-admin" onClick={pick(onAdmin)}
+            label={m.role === "admin" ? "Togli i diritti di amministratore" : "Rendi amministratore"} />}
+          <GlassMenuItem icon={m.suspended ? Play : Pause} testid="org-member-suspend" onClick={pick(onSuspend)}
+            label={m.suspended ? "Riattiva" : "Sospendi"} />
+          <GlassMenuItem icon={UserMinus} testid="org-member-remove" onClick={pick(onRemove)} danger label="Togli dall'organizzazione" />
+        </GlassMenu>
+      )}
+    </>
+  );
+}
 
 // a rule: what it does on the left, the switch on the right
 function Rule({ on, onChange, title, sub, testid }) {
@@ -179,27 +210,12 @@ export default function AdminPage() {
           <div key={m.user_id} data-testid="org-member">
             <PersonRow m={{ ...m, email: `${m.email} · ${roleOf(m)}${m.suspended ? " · sospeso" : ""}` }} me={m.user_id === user?.user_id}>
               {!m.owner && (
-                <div className="flex gap-1.5 shrink-0">
-                  {(canMoreAdmins || m.role === "admin") && (
-                    <button type="button" disabled={busy} title={m.role === "admin" ? "Togli i diritti di amministratore" : "Rendi amministratore"}
-                      aria-label={m.role === "admin" ? "Togli i diritti di amministratore" : "Rendi amministratore"} aria-pressed={m.role === "admin"}
-                      onClick={() => run(() => api.patch(`/tenant/users/${m.user_id}`, { role: m.role === "admin" ? "user" : "admin" }))}
-                      className={`${ICON_BTN} ${m.role === "admin" ? "!bg-white/30 !text-white" : ""}`} data-testid="org-member-admin">
-                      <ShieldCheck size={15} />
-                    </button>
-                  )}
-                  <button type="button" disabled={busy} title={m.suspended ? "Riattiva" : "Sospendi (non accede più, i dati restano)"} aria-label={m.suspended ? "Riattiva" : "Sospendi"}
-                    onClick={() => run(() => api.patch(`/tenant/users/${m.user_id}`, { suspended: !m.suspended }), m.suspended ? "Riattivato" : "Sospeso")}
-                    className={ICON_BTN} data-testid="org-member-suspend">
-                    {m.suspended ? <Play size={14} /> : <Pause size={14} />}
-                  </button>
-                  <button type="button" disabled={busy} title="Togli dall'organizzazione" aria-label="Togli dall'organizzazione"
-                    onClick={() => confirm(`Togliere ${m.name || m.email} dall'organizzazione? Non potrà più accedere.`, "Togli",
-                      () => run(() => api.delete(`/tenant/users/${m.user_id}`), "Tolto dall'organizzazione"))}
-                    className={ICON_BTN} data-testid="org-member-remove">
-                    <X size={14} />
-                  </button>
-                </div>
+                <MemberMenu m={m} busy={busy} canAdmin={canMoreAdmins || m.role === "admin"}
+                  onAdmin={() => run(() => api.patch(`/tenant/users/${m.user_id}`, { role: m.role === "admin" ? "user" : "admin" }),
+                    m.role === "admin" ? "Non è più amministratore" : "Ora è amministratore")}
+                  onSuspend={() => run(() => api.patch(`/tenant/users/${m.user_id}`, { suspended: !m.suspended }), m.suspended ? "Riattivato" : "Sospeso")}
+                  onRemove={() => confirm(`Togliere ${m.name || m.email} dall'organizzazione? Non potrà più accedere.`, "Togli",
+                    () => run(() => api.delete(`/tenant/users/${m.user_id}`), "Tolto dall'organizzazione"))} />
               )}
             </PersonRow>
           </div>
@@ -220,9 +236,6 @@ export default function AdminPage() {
             ))}
           </div>
         )}
-        <div className="text-[11px] text-white/50 mt-3 flex items-center gap-1.5 flex-wrap">
-          <ShieldCheck size={12} /> amministratore · <Pause size={11} /> sospendi · <X size={12} /> togli
-        </div>
       </div>
 
       <div className="pt-2"><GroupTitle>Regole di condivisione</GroupTitle></div>

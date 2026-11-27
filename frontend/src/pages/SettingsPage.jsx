@@ -2,15 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, API } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2, Bell, Loader2, Upload, Image as ImageIcon, FileText } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2, Bell, Loader2, Upload, Image as ImageIcon, FileText, Mail, KeyRound, X } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import TeamPanel from "@/components/TeamPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import AdminPage from "@/pages/AdminPage";
 import CollaboratorsPanel from "@/components/CollaboratorsPanel";
-import { Field, Input as FormInput, Select, PRIMARY, SECONDARY, INPUT } from "@/components/FormFields";
+import { Field, Input as FormInput, Select, PRIMARY, SECONDARY, INPUT, ICON_BTN, INLINE_BTN, DANGER } from "@/components/FormFields";
+import IosSwitch from "@/components/IosSwitch";
 
 // the value saved stays the same ("Gestione tempo libero"): only the label shown is shorter
 const VERTICALS = ["Lavoro", "Vita privata", "Gestione tempo libero"];
@@ -375,100 +375,84 @@ export default function SettingsPage() {
       </div>
     </Section>
   );
+  // a cloud account (Google, Microsoft): what it is for, the account linked, one wide button
+  const cloudBody = ({ key, st, what, name, onConnect, onDisconnect, howTo }) => (
+    <div className="flex flex-col gap-4">
+      <div className="text-[13px] text-white/65 leading-snug">{what}</div>
+      {st?.connected && (
+        <Field label="Account collegato">
+          <div className="relative" data-testid={`${key}-account`}>
+            <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
+            <div className={`${INPUT} pl-10 pr-3.5 flex items-center truncate`}>{st.email || "collegato"}</div>
+          </div>
+        </Field>
+      )}
+      {!st?.configured && (
+        <div className="text-[12px] text-white/65 leading-snug rounded-xl bg-white/[0.06] border border-white/10 px-3.5 py-3">{howTo}</div>
+      )}
+      {st?.connected ? (
+        <button data-testid={`${key}-disconnect`} onClick={onDisconnect} className={`${DANGER} w-full`}>
+          <Unlink size={15} /> Scollega
+        </button>
+      ) : (
+        <button data-testid={`${key}-connect`} onClick={onConnect} disabled={!st?.configured} className={`${PRIMARY} w-full`}>
+          <Link2 size={15} /> Collega {name}
+        </button>
+      )}
+    </div>
+  );
   const secGoogle = (mode) => (
     <Section mode={mode} id="google" testid="google-card" icon={Cloud} title="Google Workspace"
       badge={<>{status.google.connected && <ConnectedBadge />}{!status.google.configured && <NotConfiguredBadge />}</>}>
-      <div className="text-sm text-white/60">
-        {orgArchive ? "Calendar: eventi dai task con scadenza. (I file vanno nell'archivio dell'organizzazione.)"
-          : <>Drive: cartella <code className="text-black">mAIPAL</code> per file/allegati. Calendar: eventi dai task con scadenza.</>}
-      </div>
-      {status.google.connected && status.google.email && (
-        <div className="kicker mt-2">connesso come · {status.google.email}</div>
-      )}
-      {!status.google.configured && (
-        <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
-          <b>Come attivare:</b> l'amministratore deve creare un OAuth Client su
-          {" "}<a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google Cloud Console</a>{" "}
-          con scope <code>drive.file</code> + <code>calendar.events</code> e impostare <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.
-        </div>
-      )}
-      <div className="mt-4 flex gap-2">
-        {status.google.connected ? (
-          <button data-testid="google-disconnect" onClick={disconnectGoogle} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
-            <Unlink size={14} /> Scollega
-          </button>
-        ) : (
-          <button data-testid="google-connect" onClick={connectGoogle} disabled={!status.google.configured} className="pill-btn">
-            Collega Google Workspace →
-          </button>
-        )}
-      </div>
+      {cloudBody({ key: "google", st: status.google, name: "Google",
+        what: orgArchive ? "Calendar: eventi dai task con scadenza. I file vanno nell'archivio dell'organizzazione."
+          : "Drive: i file e gli allegati nella cartella mAIPAL. Calendar: eventi dai task con scadenza.",
+        onConnect: connectGoogle, onDisconnect: disconnectGoogle,
+        howTo: <><b>Come attivarlo:</b> l'amministratore crea un OAuth Client su <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="underline">Google Cloud Console</a> con
+          gli scope <code>drive.file</code> e <code>calendar.events</code> e imposta <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.</> })}
     </Section>
   );
   const secMicrosoft = (mode) => (
     <Section mode={mode} id="microsoft" testid="microsoft-card" icon={Cloudy} title="Microsoft · OneDrive e Outlook"
       badge={<>{status.microsoft?.connected && <ConnectedBadge />}{!status.microsoft?.configured && <NotConfiguredBadge />}</>}>
-      <div className="text-sm text-white/60">
-        {orgArchive ? "Calendario di Outlook: eventi dai task con scadenza. (I file vanno nell'archivio dell'organizzazione.)"
-          : <>OneDrive: i file vanno nella cartella dell'app (<code className="text-black">Apps/mAIPAL</code>). Calendario di Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.</>}
-      </div>
-      {status.microsoft?.connected && status.microsoft?.email && (
-        <div className="kicker mt-2">connesso come · {status.microsoft.email}</div>
-      )}
-      {!status.microsoft?.configured && (
-        <div className="text-xs text-white/60 mt-3 bg-white/10 rounded-xl p-3">
-          <b>Come attivare:</b> l'amministratore registra l'app su
-          {" "}<a href="https://entra.microsoft.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Microsoft Entra</a>{" "}
-          e imposta <code>MS_CLIENT_ID</code> / <code>MS_CLIENT_SECRET</code> nel file .env (guida in DEPLOY.md).
-        </div>
-      )}
-      <div className="mt-4 flex gap-2">
-        {status.microsoft?.connected ? (
-          <button data-testid="microsoft-disconnect" onClick={disconnectMicrosoft} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
-            <Unlink size={14} /> Scollega
-          </button>
-        ) : (
-          <button data-testid="microsoft-connect" onClick={connectMicrosoft} disabled={!status.microsoft?.configured} className="pill-btn">
-            Collega account Microsoft →
-          </button>
-        )}
-      </div>
+      {cloudBody({ key: "microsoft", st: status.microsoft, name: "Microsoft",
+        what: orgArchive ? "Calendario di Outlook: eventi dai task con scadenza. I file vanno nell'archivio dell'organizzazione."
+          : "OneDrive: i file nella cartella dell'app (Apps/mAIPAL). Outlook: eventi dai task con scadenza. Account personali (outlook.com, hotmail) e di lavoro.",
+        onConnect: connectMicrosoft, onDisconnect: disconnectMicrosoft,
+        howTo: <><b>Come attivarlo:</b> l'amministratore registra l'app su <a href="https://entra.microsoft.com" target="_blank" rel="noreferrer" className="underline">Microsoft Entra</a> e
+          imposta <code>MS_CLIENT_ID</code> / <code>MS_CLIENT_SECRET</code> nel file .env (guida in DEPLOY.md).</> })}
     </Section>
   );
   const orgArchive = status.storage_owner;   // a user of an organization: files in the administrator's archive
   const secTargets = (mode) => ((status.google.connected || status.microsoft?.connected || orgArchive)) ? (
     <Section mode={mode} id="cloud-targets" testid="cloud-targets-card" icon={FolderSync} title="Dove salvo file ed eventi">
-      <div className="text-sm text-white/60">{orgArchive ? "Il calendario è il tuo; i file vanno nell'archivio dell'organizzazione." : "Puoi sceglierne uno o entrambi."}</div>
-      {orgArchive && (
-        <div className="mt-3 text-sm text-white/80" data-testid="org-archive">
-          File e foto (anche delle commesse) vanno nell'archivio di <b>{orgArchive.name}</b>
-          {(orgArchive.targets || []).length ? ` (${orgArchive.targets.map((x) => (x === "google" ? "Google Drive" : "OneDrive")).join(" e ")})` : ": non l'ha ancora collegato"}, nella cartella del cliente o della commessa.
-        </div>
-      )}
-      <div className="mt-4 space-y-3">
+      <div className="flex flex-col gap-5">
+        {orgArchive && (
+          <div className="text-[13px] text-white/75 leading-snug" data-testid="org-archive">
+            File e foto (anche delle commesse) vanno nell'archivio di <b>{orgArchive.name}</b>
+            {(orgArchive.targets || []).length ? ` (${orgArchive.targets.map((x) => (x === "google" ? "Google Drive" : "OneDrive")).join(" e ")})` : ": non l'ha ancora collegato"}, nella cartella del cliente o della commessa. Il calendario è il tuo.
+          </div>
+        )}
         {[
           ...(orgArchive ? [] : [{ kind: "storage", label: "Salva i file su", opts: [["google", "Google Drive", status.google.connected], ["onedrive", "OneDrive", status.microsoft?.connected]] }]),
           { kind: "calendar", label: "Sincronizza i task con", opts: [["google", "Google Calendar", status.google.connected], ["outlook", "Calendario di Outlook", status.microsoft?.connected]] },
         ].map((row) => {
           const chosen = status[row.kind === "storage" ? "storage_targets" : "calendar_targets"] || [];
+          const opts = row.opts.filter((o) => o[2]);
           return (
-            <div key={row.kind} className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm text-white/80 w-full sm:w-44">{row.label}</span>
-              {row.opts.filter((o) => o[2]).map(([value, label]) => {
-                const on = chosen.includes(value);
-                return (
-                  <button
-                    key={value}
-                    data-testid={`target-${row.kind}-${value}`}
-                    onClick={() => toggleTarget(row.kind, value)}
-                    className={`text-xs px-3 py-1.5 rounded-full transition-colors inline-flex items-center gap-1.5 ${on ? "bg-[#00B0F0]/25 text-[#00B0F0]" : "bg-white/10 text-white/70"}`}
-                  >
-                    {on && <Check size={12} />} {label}
-                  </button>
-                );
-              })}
-              {chosen.length === 0 && <span className="text-xs text-amber-300">nessuno: {row.kind === "storage" ? "i file restano solo nell'app" : "i task non vanno su nessun calendario"}</span>}
-            </div>
+            <Field key={row.kind} label={row.label}
+              hint={opts.length && chosen.length === 0 ? (row.kind === "storage" ? "Nessuno: i file restano solo nell'app." : "Nessuno: i task non vanno su nessun calendario.") : null}>
+              {opts.length ? (
+                <div>
+                  {opts.map(([value, label]) => (
+                    <div key={value} className="flex items-center gap-3 py-2.5 border-t border-white/10 first:border-t-0">
+                      <span className="flex-1 text-sm text-white">{label}</span>
+                      <IosSwitch checked={chosen.includes(value)} onChange={() => toggleTarget(row.kind, value)} label={`${row.label} ${label}`} testid={`target-${row.kind}-${value}`} />
+                    </div>
+                  ))}
+                </div>
+              ) : <span className="text-[12px] text-white/55">Collega Google o Microsoft per sceglierlo.</span>}
+            </Field>
           );
         })}
       </div>
@@ -477,69 +461,68 @@ export default function SettingsPage() {
   const secTelegram = (mode) => (
     <Section mode={mode} id="telegram" testid="telegram-card" icon={MessageCircle} title="Telegram Bot"
       badge={status.telegram.connected && <ConnectedBadge />}>
-      <div className="text-sm text-white/60">
-        Chatta con mAIPAL da mobile via <code>@{status.telegram.bot_username || "…"}</code>. Comandi: <code>/ask</code>, <code>/save</code>, <code>/task</code>.
-      </div>
-
-      {!status.telegram.connected && (
-        <div className="mt-4">
-          {!linkCode ? (
-            <button data-testid="tg-gen-code" onClick={genTelegramCode} className="pill-btn">Genera codice di collegamento</button>
-          ) : (
-            <div className="bg-white/10 rounded-xl p-4 space-y-3">
-              <div className="kicker">codice · usa una volta sola</div>
-              <div className="flex items-center gap-2">
-                <code data-testid="tg-code" className="flex-1 bg-white/10 px-3 py-2 rounded-lg font-mono-tight text-sm">/start {linkCode.code}</code>
-                <button onClick={() => copy(`/start ${linkCode.code}`)} className="p-2 rounded-lg bg-white/10 border"><Copy size={14} /></button>
-              </div>
-              <a href={linkCode.deep_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 pill-btn text-sm">
-                <ExternalLink size={14} /> Apri {"@"}{linkCode.bot_username} su Telegram
-              </a>
-              <div className="text-xs text-white/60">
-                1. Apri il bot · 2. Premi Avvia · 3. Il messaggio <code>/start {linkCode.code}</code> collegherà il tuo account.
-              </div>
-            </div>
-          )}
+      <div className="flex flex-col gap-4">
+        <div className="text-[13px] text-white/65 leading-snug">
+          Chatta con mAIPAL dal telefono con <b>@{status.telegram.bot_username || "…"}</b>. Comandi: <code>/ask</code>, <code>/save</code>, <code>/task</code>.
         </div>
-      )}
-
-      {status.telegram.connected && (
-        <div className="mt-4 flex gap-2">
-          <button data-testid="tg-disconnect" onClick={disconnectTg} className="px-4 py-2 rounded-full text-sm bg-white/10  hover:border-red-300 text-red-600 flex items-center gap-2">
-            <Unlink size={14} /> Scollega Telegram
+        {status.telegram.connected ? (
+          <button data-testid="tg-disconnect" onClick={disconnectTg} className={`${DANGER} w-full`}>
+            <Unlink size={15} /> Scollega Telegram
           </button>
-        </div>
-      )}
+        ) : !linkCode ? (
+          <button data-testid="tg-gen-code" onClick={genTelegramCode} className={`${PRIMARY} w-full`}><KeyRound size={15} /> Genera il codice di collegamento</button>
+        ) : (
+          <>
+            <Field label="Codice di collegamento" hint="Vale una volta sola. Apri il bot, premi Avvia: il messaggio con il codice collega il tuo account.">
+              <div className="relative">
+                <KeyRound size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
+                <div data-testid="tg-code" className={`${INPUT} pl-10 pr-14 flex items-center font-mono truncate`}>/start {linkCode.code}</div>
+                <button type="button" onClick={() => copy(`/start ${linkCode.code}`)} aria-label="Copia il codice"
+                  className={`${ICON_BTN} absolute right-1 top-1/2 -translate-y-1/2`}><Copy size={14} /></button>
+              </div>
+            </Field>
+            <a href={linkCode.deep_link} target="_blank" rel="noreferrer" className={`${PRIMARY} w-full`} data-testid="tg-open">
+              <ExternalLink size={15} /> {linkCode.bot_username ? `Apri @${linkCode.bot_username} su Telegram` : "Apri Telegram"}
+            </a>
+          </>
+        )}
+      </div>
     </Section>
   );
   const secWatch = (mode) => (
     <Section mode={mode} id="watch" testid="watch-card" icon={Watch} title="Orologio · Galaxy Watch"
       badge={watches.length > 0 && <ConnectedBadge />}>
-      <div className="text-sm text-white/60">
-        Parla con gli agenti e guarda task, to-do e liste dal polso. Apri mAIPAL sull'orologio: mostra un codice di 6 cifre, scrivilo qui.
-      </div>
-      <div className="mt-4 flex gap-2">
-        <Input data-testid="watch-code" inputMode="numeric" maxLength={7} placeholder="123456" value={watchCode}
-          onChange={(e) => setWatchCode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && pairWatch()}
-          className="w-36 font-mono-tight tracking-[0.3em] text-center" />
-        <button data-testid="watch-pair" onClick={pairWatch} disabled={watchBusy} className="pill-btn disabled:opacity-60">Collega</button>
-      </div>
-      {watches.length > 0 && (
-        <div className="mt-4 space-y-2">
-          {watches.map((w) => (
-            <div key={w.device_id} data-testid="watch-device" className="flex items-center gap-3 bg-white/10 rounded-xl px-3 py-2.5">
-              <Watch size={16} className="shrink-0" />
-              <span className="flex-1 min-w-0">
-                <span className="block text-sm">{w.name}</span>
-                <span className="block text-xs text-white/55">
-                  {w.last_seen ? `usato il ${new Date(w.last_seen).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "collegato, mai usato"}
-                </span>
-              </span>
-              <button onClick={() => unpairWatch(w.device_id)} title="Scollega" className="p-2 rounded-full hover:bg-white/10 text-red-300"><Trash2 size={15} /></button>
-            </div>
-          ))}
+      <div className="flex flex-col gap-4">
+        <div className="text-[13px] text-white/65 leading-snug">
+          Parla con gli agenti e guarda task, to-do e liste dal polso. Apri mAIPAL sull'orologio: mostra un codice di 6 cifre.
         </div>
-      )}
+        <Field label="Codice dell'orologio">
+          <form className="relative" onSubmit={(e) => { e.preventDefault(); pairWatch(); }}>
+            <FormInput icon={Watch} data-testid="watch-code" inputMode="numeric" maxLength={7} placeholder="123456" value={watchCode}
+              onChange={(e) => setWatchCode(e.target.value)} className="font-mono tracking-[0.3em] placeholder:tracking-[0.3em] pr-[96px]" />
+            <button type="submit" data-testid="watch-pair" disabled={watchBusy || !watchCode.trim()} className={INLINE_BTN}>
+              {watchBusy ? <Loader2 size={13} className="animate-spin" /> : "Collega"}</button>
+          </form>
+        </Field>
+        {watches.length > 0 && (
+          <Field label="Orologi collegati">
+            <div>
+              {watches.map((w) => (
+                <div key={w.device_id} data-testid="watch-device" className="flex items-center gap-3 py-2.5 border-t border-white/10 first:border-t-0">
+                  <span className="h-9 w-9 rounded-full bg-white/12 border border-white/15 flex items-center justify-center shrink-0"><Watch size={16} /></span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm text-white truncate">{w.name}</span>
+                    <span className="block text-[11px] text-white/55">
+                      {w.last_seen ? `usato il ${new Date(w.last_seen).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "collegato, mai usato"}
+                    </span>
+                  </span>
+                  <button onClick={() => unpairWatch(w.device_id)} aria-label={`Scollega ${w.name}`} title="Scollega" className={ICON_BTN}><X size={14} /></button>
+                </div>
+              ))}
+            </div>
+          </Field>
+        )}
+      </div>
     </Section>
   );
   const secNotifications = (mode) => (
@@ -799,16 +782,16 @@ function OrgLogoPanel({ logo, setLogo }) {
 
 function ConnectedBadge() {
   return (
-    <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-green-50 text-green-700 border border-green-500/30">
-      <Check size={10} className="inline mr-1" /> connesso
+    <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-emerald-400/20 text-emerald-100 border border-emerald-300/30 inline-flex items-center gap-1">
+      <Check size={11} strokeWidth={2.6} /> Collegato
     </span>
   );
 }
 
 function NotConfiguredBadge() {
   return (
-    <span className="text-[10px] font-mono-tight tracking-widest uppercase px-2 py-1 rounded-md bg-amber-50 text-amber-700 border border-amber-500/30">
-      non configurato
+    <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-amber-300/15 text-amber-100 border border-amber-300/30">
+      Non configurato
     </span>
   );
 }

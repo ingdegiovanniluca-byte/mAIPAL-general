@@ -45,3 +45,8 @@ export function Select({ icon: Icon, value, onChange, options, testid, placehold
 
 export const PRIMARY = "h-11 rounded-xl text-sm font-semibold bg-white/90 text-[#7A2A5C] disabled:opacity-60 inline-flex items-center justify-center gap-1.5";
 export const SECONDARY = "h-11 rounded-xl text-sm font-medium bg-white/10 border border-white/15 text-white/90 disabled:opacity-60 inline-flex items-center justify-center gap-1.5";
+// the same, for what removes or unlinks something (red text: never two text colors on one button)
+export const DANGER = SECONDARY.replace("text-white/90", "text-red-300");
+// a small square button (in a row of a list: remove, copy...) and a button inside a field, on its right
+export const ICON_BTN = "h-9 w-9 shrink-0 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center text-white/75 disabled:opacity-50";
+export const INLINE_BTN = "absolute right-1.5 top-1/2 -translate-y-1/2 h-8 px-3 rounded-lg bg-white/85 text-[#7A2A5C] text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1";

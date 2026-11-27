@@ -556,9 +556,10 @@ Dalle Impostazioni (popup del profilo → Impostazioni, o dal menu) gestisci:
 - **Profilo**: foto, professione, settore, ambito di utilizzo (lavoro, vita privata, tempo libero: puoi accenderne più di uno), interessi, tono delle risposte (dal menu), indirizzi di casa e lavoro, orario delle news e del riepilogo del mattino. Ricorda di toccare **Salva profilo**.
 - **Logo organizzazione** (solo amministratori, sotto il Profilo): carica il logo dell'organizzazione (PNG o JPG, meglio con lo sfondo trasparente). Viene usato nei report e nei documenti generati per l'organizzazione. Da **Nei documenti** scegli **Usa il logo** o **Non usarlo**; con **Sostituisci** e **Togli** lo cambi o lo elimini. Quando è attivo, i report Word generati da te e dal tuo team (sopralluogo, intervento, SAL, report di commessa, varianti, referti) hanno il logo in alto a sinistra su ogni pagina. I documenti già generati non cambiano; una nuova revisione di un report usa il logo di adesso. Un'altra organizzazione non vede mai il tuo logo.
 - **Verticale**: il tuo settore (Veterinario, Fitness, Artigiano); quello scelto è evidenziato con la spunta. Cambia gli agenti e le sezioni dedicate.
+- **Collegamenti**: ogni servizio ha la sua scheda con lo stato (**Collegato** / **Non configurato**), l'account collegato e un solo pulsante largo (**Collega …** o **Scollega**).
 - **Google Workspace**: collega Drive (cartella mAIPAL per file e allegati) e Calendar (eventi dai task).
 - **Microsoft**: collega OneDrive e Outlook.
-- **Dove salvo file ed eventi**: se hai collegato entrambi, scegli dove salvare i file e dove mettere gli eventi. Se sei un **utente** di un'organizzazione colleghi solo il **calendario** (Google o Outlook): i file e le foto che mandi, anche sulle commesse, vanno nell'**archivio dell'amministratore** (il suo Drive o OneDrive), nella cartella del cliente, della commessa o della lista; qui vedi di chi è l'archivio.
+- **Dove salvo file ed eventi**: con gli interruttori scegli dove salvare i file e dove mettere gli eventi (anche entrambi). Se sei un **utente** di un'organizzazione colleghi solo il **calendario** (Google o Outlook): i file e le foto che mandi, anche sulle commesse, vanno nell'**archivio dell'amministratore** (il suo Drive o OneDrive), nella cartella del cliente, della commessa o della lista; qui vedi di chi è l'archivio.
 - **Telegram**: collega il bot (vedi "Telegram").
 - **Orologio**: collega il Galaxy Watch (vedi "Orologio").
 - **Notifiche**: gli avvisi di mAIPAL su questo dispositivo, anche con l'app chiusa (vedi "Notifiche").
@@ -570,7 +571,7 @@ Tema chiaro/scuro e lato del microfono non sono qui: sono nel popup del profilo.
 ## Telegram
 <!-- id: telegram · verticale: tutti -->
 Con Telegram usi mAIPAL dal telefono come una chat.
-- **Collegarlo**: Impostazioni → Telegram → Genera codice di collegamento → apri il bot, premi Avvia: il messaggio `/start codice` collega l'account. Il codice vale una volta sola.
+- **Collegarlo**: Impostazioni → Collegamenti → Telegram → **Genera il codice di collegamento** (puoi copiarlo) → **Apri … su Telegram**, premi Avvia: il messaggio `/start codice` collega l'account. Il codice vale una volta sola.
 - Scrivi liberamente: il bot capisce se stai salvando, cercando, creando un task o scrivendo il diario. Se il messaggio dopo continua lo stesso argomento, resta nel contesto.
 - Mandagli foto (con o senza didascalia): le salva su Drive; se non capisce la cartella, te lo chiede.
 - Comandi: `/ask` domanda, `/save` informazione, `/task` task, `/journal` diario, `/report` referto o report, `/lista` modifica una lista, `/azione` e `/azioni` azioni programmate, `/end` chiude la conversazione, `/help`.
@@ -581,8 +582,8 @@ Con Telegram usi mAIPAL dal telefono come una chat.
 ## Orologio
 <!-- id: orologio · verticale: tutti -->
 Con l'app mAIPAL per **Galaxy Watch** parli con gli agenti e guardi task, to-do e liste dal polso.
-- **Collegarlo**: apri mAIPAL sull'orologio, mostra un codice di 6 cifre; scrivilo in Impostazioni → Orologio e tocca Collega.
-- In Impostazioni vedi gli orologi collegati e quando sono stati usati; con il cestino lo scolleghi.
+- **Collegarlo**: apri mAIPAL sull'orologio, mostra un codice di 6 cifre; scrivilo in Impostazioni → Collegamenti → Orologio, nel campo **Codice dell'orologio**, e tocca **Collega**.
+- In **Orologi collegati** vedi gli orologi e quando sono stati usati; con la **X** lo scolleghi.
 
 ## Notifiche
 <!-- id: notifiche · verticale: tutti -->
@@ -603,8 +604,8 @@ Ogni account fa parte di un'**organizzazione** (la tua impresa o il tuo studio):
 - **Chi entra**: chi sottoscrive diventa l'**amministratore** della sua organizzazione. Tutti gli altri entrano solo se un amministratore li ha aggiunti, con la stessa email (password o Google); altrimenti l'accesso viene rifiutato.
 - **Ruoli**: **amministratore** (aggiunge utenti e collaboratori, crea i team, decide le regole di condivisione, collega Google Drive o OneDrive come archivio dell'organizzazione, mette documenti nella KB dell'organizzazione, condivide liste, diari di commessa e task); **utente** (usa l'app e Telegram, collega il suo calendario, i suoi file vanno nell'archivio dell'amministratore); **collaboratore** (solo Telegram, sulle commesse abilitate: vedi "Collaboratori su Telegram").
 - **Impostazioni → Organizzazione** (amministratori): in alto gli indicatori con i limiti dell'abbonamento e quanti ne usi (**Utenti**, **Collaboratori**, **Amministratori**; per ora 5 utenti, 5 collaboratori, 1 amministratore); sotto il **nome dell'organizzazione**.
-  - **Aggiungi un utente** con la sua email (e, se l'abbonamento prevede più amministratori, il **Ruolo** dal menu): compare tra chi non ha ancora fatto il primo accesso finché non entra. Con lo **scudo** dai o togli i diritti di amministratore.
-  - **Sospendi** (non accede più, i suoi dati restano) e **Riattiva**; la **X** lo toglie dall'organizzazione e dai suoi team (quello che ha scritto nelle liste e commesse condivise resta).
+  - **Aggiungi un utente** con la sua email (e, se l'abbonamento prevede più amministratori, il **Ruolo** dal menu): compare tra chi non ha ancora fatto il primo accesso finché non entra.
+  - Il pulsante **…** accanto a una persona apre il menu: **Rendi amministratore** / **Togli i diritti di amministratore**, **Sospendi** (non accede più, i suoi dati restano) / **Riattiva**, **Togli dall'organizzazione** (la toglie anche dai suoi team; quello che ha scritto nelle liste e commesse condivise resta).
   - Chi ha sottoscritto resta sempre amministratore.
 - **Regole di condivisione** (con gli interruttori): **Gli utenti possono condividere** (spento: liste, diari di commessa, task e informazioni li condividono solo gli amministratori); **I nuovi collaboratori vedono telefono ed email dei clienti** (lo cambi poi per ognuno nella sua scheda); **Gli utenti vedono valore, costi e margine delle commesse** (spento di default).
 - **Clienti e commesse** li crea, modifica ed elimina l'**amministratore**; gli utenti scrivono sulle commesse condivise con loro (note, ore, materiali, sopralluoghi, preventivi) ma non ne creano di nuove.

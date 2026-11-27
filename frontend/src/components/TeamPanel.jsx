@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Plus, Mail, Trash2, Copy, RefreshCw, Loader2, Users, KeyRound, Check, X } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
 import OrganizationPage, { teamCard, GroupTitle, PersonRow } from "@/pages/OrganizationPage";
-import { Field, Input, INPUT, PRIMARY, SECONDARY } from "@/components/FormFields";
+import { Field, Input, INPUT, PRIMARY, SECONDARY, DANGER } from "@/components/FormFields";
 import { StatTiles, StatTile } from "@/components/StatTiles";
 
 /* Impostazioni > Team. Everyone sees their own team (or joins one with a code); the admin also
@@ -230,7 +230,7 @@ function TeamCard({ team, onChanged }) {
           </div>
         )}
       </Field>
-      <button type="button" onClick={deleteTeam} data-testid="team-delete" className={`${SECONDARY} w-full text-red-300`}>
+      <button type="button" onClick={deleteTeam} data-testid="team-delete" className={`${DANGER} w-full`}>
         <Trash2 size={15} /> Elimina il team
       </button>
     </div>

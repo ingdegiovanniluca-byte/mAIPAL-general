@@ -527,6 +527,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
    sheets from the bottom, dialogs, tooltips): those keep the colour theme's smoky glass and
    white text. Generated from the classes the app uses (see the light-theme review). */
 [data-theme="light"] .text-white:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: #211D28 !important; }
+/* the settings' warning and status colors (light tints on the dark glass), darker on the light theme */
+[data-theme="light"] .text-red-300:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .dark-island) *) { color: #B42318 !important; }
+[data-theme="light"] .text-emerald-100:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .dark-island) *) { color: #05603A !important; }
+[data-theme="light"] .text-amber-100:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .dark-island) *) { color: #93370D !important; }
 [data-theme="light"] .bg-white\/10:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.055) !important; }
 [data-theme="light"] .text-white\/60:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.7) !important; }
 [data-theme="light"] .text-white\/50:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { color: rgba(33, 29, 40, 0.62) !important; }
@@ -594,6 +598,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 [data-theme="light"] .focus\:bg-white\/10:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *):focus { background-color: rgba(33, 29, 40, 0.055) !important; }
 [data-theme="light"] .bg-white\/\[0\.08\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.05) !important; }
 [data-theme="light"] .bg-white\/\[0\.05\]:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.042) !important; }
+[data-theme="light"] .bg-white\/12:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.06) !important; }
+[data-theme="light"] .bg-white\/85:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.125) !important; }
+[data-theme="light"] .border-white\/25:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.16) !important; }
+[data-theme="light"] .border-white\/50:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.26) !important; }
+[data-theme="light"] .focus\:border-white\/45:focus:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { border-color: rgba(33, 29, 40, 0.3) !important; }
+[data-theme="light"] .focus\:bg-white\/\[0\.14\]:focus:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.07) !important; }
 [data-theme="light"] .bg-white\/90:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, 0.128) !important; }
 [data-theme="light"] .bg-white\/45:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { background-color: rgba(33, 29, 40, .25) !important; }
 [data-theme="light"] .accent-white:not(:is(.glass-panel, [role="dialog"], [role="alertdialog"], .bg-\[\#403A3C\], .dark-island) *) { accent-color: #211D28 !important; }

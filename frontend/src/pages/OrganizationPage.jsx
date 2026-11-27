@@ -117,7 +117,7 @@ export default function OrganizationPage({ reloadKey = 0, onOrg }) {
             {(org.members || []).map((m) => <PersonRow key={m.user_id} m={m} me={m.user_id === user?.user_id} />)}
           </div>
           <button type="button" onClick={() => leave({ id: org.id, name: org.name })} data-testid="team-leave"
-            className={`${SECONDARY} w-full mt-4 text-white/75`}>
+            className={`${SECONDARY} w-full mt-4`}>
             <LogOut size={15} /> Esci da «{org.name}»
           </button>
         </div>
