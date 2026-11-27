@@ -1,17 +1,39 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { Input } from "@/components/ui/input";
-import { Users, LogOut } from "lucide-react";
+import { Users, LogOut, KeyRound, Loader2, Check } from "lucide-react";
 import { toast } from "sonner";
+import { Field, Input, Select, PRIMARY, SECONDARY } from "@/components/FormFields";
 
-// a team's card: it opens with the name, the number of members on its right
-export const teamCard = "rounded-2xl bg-white/[0.07] border border-white/10 p-4";
+// a team's card (the Profilo's style); the small title above a group of cards
+export const teamCard = "card-soft p-5";
+export function GroupTitle({ children }) {
+  return <div className="text-[13px] font-semibold text-white mb-2 mt-1">{children}</div>;
+}
 export function MembersCount({ n }) {
   return (
     <span className="shrink-0 inline-flex items-center gap-1 text-xs text-white/70" data-testid="team-members-count" title={`${n} ${n === 1 ? "membro" : "membri"}`}>
       <Users size={13} /> {n}
     </span>
+  );
+}
+// a person of the team: the photo (or the initial), the name, the e-mail
+export function PersonRow({ m, me, children }) {
+  return (
+    <div className="flex items-center gap-3 py-2.5 border-t border-white/10 first:border-t-0" data-testid="team-person">
+      {m.picture ? (
+        <img src={m.picture} alt="" className="h-9 w-9 rounded-full object-cover shrink-0" />
+      ) : (
+        <div className="h-9 w-9 rounded-full bg-white/12 border border-white/15 flex items-center justify-center text-[13px] font-semibold shrink-0">
+          {(m.name || m.email || "?").charAt(0).toUpperCase()}
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-white truncate">{m.name || m.email}{me ? " (tu)" : ""}</div>
+        {m.name && m.email && <div className="text-[11px] text-white/50 truncate">{m.email}</div>}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -59,92 +81,58 @@ export default function OrganizationPage({ reloadKey = 0 }) {
   const teams = org?.teams || [];
   const invites = org?.invites || [];
   const multi = teams.length > 1;
+  const active = teams.find((t) => t.active);
 
   return (
     <div className="space-y-3">
+      {invites.length > 0 && <GroupTitle>Inviti ricevuti</GroupTitle>}
       {invites.map((inv) => (
         <div key={inv.org_id} className={teamCard} data-testid="team-invite">
-          <div className="text-[11px] uppercase tracking-widest text-white/50">Invito</div>
-          <div className="mt-1 font-semibold text-lg truncate">{inv.name}</div>
-          {inv.invited_by && <div className="text-[12px] text-white/55">da {inv.invited_by}</div>}
-          <div className="mt-3 flex gap-2">
-            <button type="button" disabled={busy} onClick={() => accept(inv)} data-testid="team-invite-accept"
-              className="px-4 py-2 rounded-full text-sm bg-white text-[#403A3C] font-medium disabled:opacity-50">Accetta</button>
-            <button type="button" disabled={busy} onClick={() => decline(inv)} data-testid="team-invite-decline"
-              className="px-4 py-2 rounded-full text-sm bg-white/15 text-white disabled:opacity-50">Rifiuta</button>
+          <div className="text-lg font-semibold text-white truncate">{inv.name}</div>
+          {inv.invited_by && <div className="text-[12px] text-white/55 mt-0.5">Ti ha invitato {inv.invited_by}</div>}
+          <div className="grid grid-cols-2 gap-3 mt-4">
+            <button type="button" disabled={busy} onClick={() => decline(inv)} data-testid="team-invite-decline" className={SECONDARY}>Rifiuta</button>
+            <button type="button" disabled={busy} onClick={() => accept(inv)} data-testid="team-invite-accept" className={PRIMARY}><Check size={15} /> Accetta</button>
           </div>
         </div>
       ))}
 
-      {multi && (
-        <div className={teamCard} data-testid="my-teams">
-          <div className="kicker mb-2">· i tuoi team</div>
-          {teams.map((t) => (
-            <div key={t.id} className="flex items-center gap-3 py-2 border-t border-white/[0.1] first:border-t-0" data-testid="my-team-row">
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium truncate">{t.name}</div>
-                <div className="text-[11px] text-white/50">{t.members_count} {t.members_count === 1 ? "membro" : "membri"}</div>
-              </div>
-              {t.active ? (
-                <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/20 text-white" data-testid="team-active">Attivo</span>
-              ) : (
-                <button type="button" disabled={busy} onClick={() => activate(t)} data-testid="team-activate"
-                  className="text-[12px] px-3 py-1 rounded-full bg-white/10 hover:bg-white/15 text-white disabled:opacity-50">Usa questo</button>
-              )}
-              <button type="button" onClick={() => leave(t)} title="Esci dal team" aria-label={`Esci dal team ${t.name}`}
-                className="p-1.5 rounded-full text-white/45 hover:text-red-400"><LogOut size={14} /></button>
-            </div>
-          ))}
-          <div className="text-[11px] text-white/45 mt-2">Liste, commesse e task condivisi «con il team» sono quelli del team attivo.</div>
-        </div>
-      )}
-
       {org?.id && (
         <div className={teamCard} data-testid="my-team">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="flex-1 min-w-0 font-semibold text-lg truncate">{org.name}</div>
-            {multi && <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/20 text-white">Attivo</span>}
-            <MembersCount n={(org.members || []).length} />
-          </div>
-          <div className="space-y-2">
-            {(org.members || []).map((m) => (
-              <div key={m.user_id} className="flex items-center gap-2.5 py-1.5">
-                {m.picture ? (
-                  <img src={m.picture} alt={m.name} className="h-8 w-8 rounded-full object-cover shrink-0" />
-                ) : (
-                  <div className="h-8 w-8 rounded-full bg-white/10 flex items-center justify-center text-xs font-semibold shrink-0">
-                    {(m.name || m.email || "?").charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">{m.name || m.email}{m.user_id === user?.user_id ? " (tu)" : ""}</div>
-                  <div className="text-[11px] text-white/45 truncate">{m.email}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          {!multi && (
-            <button onClick={() => leave({ id: org.id, name: org.name })} className="mt-4 flex items-center gap-2 text-sm text-white/50 hover:text-red-400 transition-colors">
-              <LogOut size={14} /> Esci dal team
-            </button>
+          {multi ? (
+            <Field label="Team attivo" hint="Liste, commesse e task condivisi «con il team» sono quelli del team attivo." testid="my-teams">
+              <Select icon={Users} value={active?.id || org.id} testid="team-active-select"
+                options={teams.map((t) => [t.id, `${t.name} · ${t.members_count} ${t.members_count === 1 ? "membro" : "membri"}`])}
+                onChange={(id) => { const t = teams.find((x) => x.id === id); if (t && !t.active) activate(t); }} />
+            </Field>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0 text-lg font-semibold text-white truncate">{org.name}</div>
+              <MembersCount n={(org.members || []).length} />
+            </div>
           )}
+          <div className="text-[12px] font-medium text-white/85 mt-5 mb-1">{multi ? `Membri di «${org.name}»` : "Membri"}</div>
+          <div>
+            {(org.members || []).map((m) => <PersonRow key={m.user_id} m={m} me={m.user_id === user?.user_id} />)}
+          </div>
+          <button type="button" onClick={() => leave({ id: org.id, name: org.name })} data-testid="team-leave"
+            className={`${SECONDARY} w-full mt-4 text-white/75`}>
+            <LogOut size={15} /> Esci da «{org.name}»
+          </button>
         </div>
       )}
 
       <div className={teamCard} data-testid="team-join">
-        <div className="text-sm text-white/60 mb-3">
-          {org?.id ? "Hai un codice per entrare in un altro team? Scrivilo qui." : "Non fai ancora parte di un team. Se sei stato invitato, accetta l'invito qui sopra oppure inserisci il codice che ti hanno dato."}
-        </div>
-        <div className="flex gap-2">
-          <Input
-            data-testid="team-join-code"
-            value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-            placeholder="es. A1B2C3"
-            className="h-11 rounded-xl bg-white/10 uppercase"
-          />
-          <button data-testid="team-join-btn" onClick={joinOrgCall} disabled={busy} className="pill-btn shrink-0">Unisciti</button>
-        </div>
+        <Field label={org?.id ? "Entra in un altro team" : "Entra in un team"}
+          hint={org?.id ? "Scrivi il codice che ti ha dato l'amministratore." : "Non fai ancora parte di un team: accetta un invito qui sopra o scrivi il codice che ti hanno dato."}>
+          <form className="relative" onSubmit={(e) => { e.preventDefault(); joinOrgCall(); }}>
+            <Input icon={KeyRound} data-testid="team-join-code" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+              placeholder="Es. A1B2C3" className="uppercase tracking-widest placeholder:normal-case placeholder:tracking-normal pr-[100px]" autoCapitalize="characters" />
+            <button type="submit" data-testid="team-join-btn" disabled={busy || !joinCode.trim()}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 px-3 rounded-lg bg-white/85 text-[#7A2A5C] text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1">
+              {busy ? <Loader2 size={13} className="animate-spin" /> : "Unisciti"}</button>
+          </form>
+        </Field>
       </div>
     </div>
   );

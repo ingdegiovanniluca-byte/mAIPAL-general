@@ -16,10 +16,13 @@ export function Field({ label, hint, children, testid, className = "" }) {
 }
 
 export function Input({ icon: Icon, className = "", ...p }) {
+  // (a padding given in className replaces the default one: two of them would fight in the stylesheet)
+  const own = (side) => new RegExp(`(^|\\s)(p${side}|px)-`).test(className);
+  const pad = `${Icon ? "pl-10" : own("l") ? "" : "pl-3.5"} ${own("r") ? "" : "pr-3.5"}`;
   return (
     <div className="relative min-w-0">
       {Icon && <Icon size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />}
-      <input {...p} className={`${INPUT} ${Icon ? "pl-10" : "pl-3.5"} pr-3.5 ${className}`} />
+      <input {...p} className={`${INPUT} ${pad} ${className}`} />
     </div>
   );
 }

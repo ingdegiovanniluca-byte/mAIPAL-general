@@ -604,7 +604,8 @@ export default function SettingsPage() {
             <span className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center"><panelTile.icon size={19} /></span>
             <h2 className="text-2xl font-bold tracking-tight">{panelTile.full || panelTile.title}</h2>
           </div>
-          <div className="space-y-3">
+          {/* (pb-36: room to scroll the last card above the bottom bar and the install banner) */}
+          <div className="space-y-3 pb-36">
             {panel === "profile" && <>{secProfile("bare")}{logo?.can_edit && <div className="pt-3">
               <div className="text-[13px] font-semibold text-white mb-1">Logo organizzazione</div>
               {secOrgLogo("bare")}</div>}</>}
