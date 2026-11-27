@@ -7,6 +7,8 @@ Serve a uno scopo preciso: **cambiare il modello che interpreta i messaggi dell'
 - Le parti più importanti per questo scopo sono i capitoli **6** (come viaggia un messaggio), **7** (inventario dei modelli), **8** (scrivi e basta) e **9** (come cambiare modello).
 - Il resto serve a orientarsi nel codice.
 
+**L'app** (pagine, stile, comportamenti, schermate e l'elenco di tutte le chiamate al server) è descritta in **`docs/FRONTEND.md`**. Il frontend non parla mai con un modello: per cambiare modello l'interfaccia resta identica.
+
 Aggiornato a: 27/11/2026, ramo `claude/analyze-main-branch-175dis`.
 
 ---
