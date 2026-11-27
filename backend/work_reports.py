@@ -396,13 +396,30 @@ def _shade(cell, hex_fill: str) -> None:
     cell._tc.get_or_add_tcPr().append(shd)
 
 
+def add_logo(doc, logo: Optional[bytes]) -> None:
+    """The organization's logo at the top of every page (the page header), left, 1.6 cm tall (at most 6 cm wide)."""
+    if not logo:
+        return
+    try:
+        from PIL import Image
+        w, h = Image.open(io.BytesIO(logo)).size
+        height = Cm(1.6) if w / max(h, 1) * 1.6 <= 6 else Cm(6 * h / max(w, 1))
+        p = doc.sections[0].header.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        p.add_run().add_picture(io.BytesIO(logo), height=height)
+    except Exception:
+        logger.exception("report logo not added")
+
+
 def build_docx(title: str, client_name: Optional[str], job_title: Optional[str], sections: list, company: str = "",
-               photos: Optional[list] = None, doc_info: Optional[dict] = None) -> bytes:
+               photos: Optional[list] = None, doc_info: Optional[dict] = None, logo: Optional[bytes] = None) -> bytes:
     """photos: [{"bytes": jpeg, "caption": text}] - the "Documentazione fotografica", before the signatures.
     doc_info: the document's identification (ISO 9001 §7.5): {"code", "revision", "date", "commessa", "revisions":
     [{"rev", "date", "what"}], "quality_note": bool} - a control block on top, the code and the pages in the footer,
-    the revisions' history, and the signatures of who wrote it, who approved it and the client."""
+    the revisions' history, and the signatures of who wrote it, who approved it and the client.
+    logo: the organization's logo (PNG/JPEG bytes), on top of every page."""
     doc = Document()
+    add_logo(doc, logo)
     normal = doc.styles["Normal"]
     normal.font.name = "Calibri"
     normal.font.size = Pt(10.5)

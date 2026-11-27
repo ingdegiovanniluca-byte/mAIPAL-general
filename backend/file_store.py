@@ -46,6 +46,41 @@ def image_to_jpeg(data: bytes, downscale) -> Tuple[bytes, int, int]:
         raise BadFile("L'immagine non si apre: prova con una foto JPG o PNG")
 
 
+LOGO_MAX_BYTES = 5 * 1024 * 1024
+LOGO_MAX_DIM = 1000
+
+
+def logo_png(data: bytes) -> Tuple[bytes, int, int]:
+    """The organization's logo (for the reports): a real image (JPG, PNG, WebP, HEIC) -> PNG at most 1000 px, its
+    transparency kept, without metadata. A vector logo (SVG, PDF) is not taken: Word reports need an image."""
+    from PIL import Image
+    if len(data) > LOGO_MAX_BYTES:
+        raise BadFile("Il logo deve essere al massimo di 5 MB")
+    if data[:5] == b"%PDF-" or b"<svg" in data[:2048]:
+        raise BadFile("Carica il logo come immagine PNG o JPG (non SVG o PDF)")
+    try:
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except Exception:
+            pass
+        img = Image.open(io.BytesIO(data))
+        if img.format not in ("PNG", "JPEG", "WEBP", "HEIF", "GIF", "MPO"):
+            raise BadFile("Carica il logo come immagine PNG o JPG")
+        img.load()
+        img = img.convert("RGBA")
+        img.thumbnail((LOGO_MAX_DIM, LOGO_MAX_DIM), Image.LANCZOS)
+        if img.getchannel("A").getextrema() == (255, 255):
+            img = img.convert("RGB")   # no transparency: a smaller file
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        return buf.getvalue(), img.width, img.height
+    except BadFile:
+        raise
+    except Exception:
+        raise BadFile("L'immagine del logo non si apre: prova con un PNG o un JPG")
+
+
 def check_glb(data: bytes) -> None:
     """A 3D model in GLB (binary glTF 2.0): its header and its declared length must match."""
     import struct

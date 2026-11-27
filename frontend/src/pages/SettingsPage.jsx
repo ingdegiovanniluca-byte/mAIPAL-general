@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, API } from "@/lib/api";
 import { toast } from "sonner";
-import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, LayoutGrid, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2, Bell } from "lucide-react";
+import { Cloud, Cloudy, MessageCircle, Copy, ExternalLink, Check, Unlink, User as UserIcon, Home, Briefcase, Camera, Users, Shield, ChevronDown, Factory, Heart, MessageSquareText, Building2, Newspaper, Sunrise, Clock, Compass, FolderSync, ChevronRight, ArrowLeft, Link2, Watch, PawPrint, Dumbbell, Hammer, HardHat, Trash2, Bell, Loader2, Upload, Image as ImageIcon, FileText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/auth/AuthContext";
 import { useIsMobile } from "@/hooks/use-is-mobile";
@@ -10,6 +10,7 @@ import TeamPanel from "@/components/TeamPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import AdminPage from "@/pages/AdminPage";
 import CollaboratorsPanel from "@/components/CollaboratorsPanel";
+import { Field, Input as FormInput, Select, PRIMARY, SECONDARY, INPUT } from "@/components/FormFields";
 
 // the value saved stays the same ("Gestione tempo libero"): only the label shown is shorter
 const VERTICALS = ["Lavoro", "Vita privata", "Gestione tempo libero"];
@@ -100,6 +101,7 @@ export default function SettingsPage() {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef(null);
   const [businessVertical, setBusinessVertical] = useState(null);
+  const [logo, setLogo] = useState(null);
   const [savingVertical, setSavingVertical] = useState(false);
 
   const chooseBusinessVertical = async (key) => {
@@ -135,6 +137,7 @@ export default function SettingsPage() {
     const r = await api.get("/integrations/status");
     setStatus(r.data);
     api.get("/watch/devices").then((w) => setWatches(w.data || [])).catch(() => {});
+    api.get("/report-logo").then((r) => setLogo(r.data)).catch(() => {});
   };
 
   useEffect(() => {
@@ -284,59 +287,61 @@ export default function SettingsPage() {
         <div className="text-[13px] leading-snug text-white/60" data-testid="profile-intro">Il profilo personalizza le risposte.<br />Tocca la foto per cambiarla.</div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <FieldLabel icon={Briefcase}>professione</FieldLabel>
-          <Input data-testid="prof-profession" value={profession} onChange={(e) => setProfession(e.target.value)} placeholder="es. Product Manager" className="h-11 rounded-xl bg-white/10" />
-        </div>
-        <div>
-          <FieldLabel icon={Factory}>settore</FieldLabel>
-          <Input data-testid="prof-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="es. Fintech" className="h-11 rounded-xl bg-white/10" />
-        </div>
-        <div className="md:col-span-2">
-          <FieldLabel icon={LayoutGrid} mb="mb-2">ambito di utilizzo</FieldLabel>
-          <ChipRow testid="prof-verticals">
-            {VERTICALS.map((v) => (
-              <Chip key={v} on={verticals.includes(v)} onClick={() => toggleV(v)} testid={`prof-v-${v}`}>{VERTICAL_LABEL[v] || v}</Chip>
-            ))}
-          </ChipRow>
-        </div>
-        <div className="md:col-span-2">
-          <FieldLabel icon={Heart}>interessi (separati da virgola)</FieldLabel>
-          <Input data-testid="prof-interests" value={interests} onChange={(e) => setInterests(e.target.value)} placeholder="palestra, viaggi, cucina" className="h-11 rounded-xl bg-white/10" />
-        </div>
-        <div className="md:col-span-2">
-          <FieldLabel icon={MessageSquareText} mb="mb-2">tono di risposta</FieldLabel>
-          <ChipRow testid="prof-tones">
-            {TONES.map((t) => (
-              <Chip key={t} on={tone === t} onClick={() => setTone(t)} testid={`prof-tone-${t}`}>{t}</Chip>
-            ))}
-          </ChipRow>
-        </div>
-        <div>
-          <FieldLabel icon={Home}>indirizzo casa</FieldLabel>
-          <Input data-testid="prof-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
-        </div>
-        <div>
-          <FieldLabel icon={Building2}>indirizzo lavoro</FieldLabel>
-          <Input data-testid="prof-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via, Numero, Città" className="h-11 rounded-xl bg-white/10" />
-        </div>
-        <div>
-          <FieldLabel icon={Newspaper}>orario invio news</FieldLabel>
-          <TimeField testid="prof-news-time" value={newsTime} onChange={setNewsTime} />
-        </div>
-        <div>
-          <FieldLabel icon={Sunrise}>orario riepilogo mattutino</FieldLabel>
-          <TimeField testid="prof-summary-time" value={summaryTime} onChange={setSummaryTime} />
+        <Field label="Professione">
+          <FormInput icon={Briefcase} data-testid="prof-profession" value={profession} onChange={(e) => setProfession(e.target.value)} placeholder="Es. Elettricista" />
+        </Field>
+        <Field label="Settore">
+          <FormInput icon={Factory} data-testid="prof-sector" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="Es. Impianti" />
+        </Field>
+        <Field label="Ambito di utilizzo" className="md:col-span-2" testid="prof-verticals">
+          {/* more than one can be on: three toggles on one row */}
+          <div className="grid grid-cols-3 gap-2">
+            {VERTICALS.map((v) => {
+              const on = verticals.includes(v);
+              return (
+                <button key={v} type="button" onClick={() => toggleV(v)} aria-pressed={on} data-testid={`prof-v-${v}`}
+                  className={`h-11 min-w-0 rounded-xl border text-[12px] inline-flex items-center justify-center px-1.5 transition-colors ${on ? "bg-white/30 border-white/50 text-white font-semibold" : "bg-white/[0.07] border-white/15 text-white/60"}`}>
+                  <span className="truncate">{VERTICAL_LABEL[v] || v}</span>
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+        <Field label="Interessi" hint="Separati da una virgola" className="md:col-span-2">
+          <FormInput icon={Heart} data-testid="prof-interests" value={interests} onChange={(e) => setInterests(e.target.value)} placeholder="Palestra, viaggi, cucina" />
+        </Field>
+        <Field label="Tono delle risposte" className="md:col-span-2">
+          <Select icon={MessageSquareText} value={tone} onChange={setTone} testid="prof-tone"
+            options={TONES.map((t) => [t, t[0].toUpperCase() + t.slice(1)])} />
+        </Field>
+        <Field label="Indirizzo di casa">
+          <FormInput icon={Home} data-testid="prof-home" value={homeAddress} onChange={(e) => setHomeAddress(e.target.value)} placeholder="Via, numero, città" />
+        </Field>
+        <Field label="Indirizzo di lavoro">
+          <FormInput icon={Building2} data-testid="prof-work" value={workAddress} onChange={(e) => setWorkAddress(e.target.value)} placeholder="Via, numero, città" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3 md:col-span-2">
+          <Field label="Invio news">
+            <TimeField icon={Newspaper} testid="prof-news-time" value={newsTime} onChange={setNewsTime} />
+          </Field>
+          <Field label="Riepilogo mattutino">
+            <TimeField icon={Sunrise} testid="prof-summary-time" value={summaryTime} onChange={setSummaryTime} />
+          </Field>
         </div>
       </div>
 
-      <div className="mt-6 flex justify-end">
-        <button data-testid="prof-save" onClick={saveProfile} disabled={savingProfile} className="pill-btn">
-          {savingProfile ? "Salvo…" : "Salva profilo"}
-        </button>
-      </div>
+      <button data-testid="prof-save" onClick={saveProfile} disabled={savingProfile} className={`${PRIMARY} w-full mt-6`}>
+        {savingProfile ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {savingProfile ? "Salvo…" : "Salva profilo"}
+      </button>
     </Section>
   );
+  // the organization's logo, for its administrator: on top of the reports generated
+  const secLogo = (mode) => (logo?.can_edit ? (
+    <Section mode={mode} id="report-logo" testid="report-logo-card" icon={ImageIcon} title="Logo nei report" defaultOpen
+      subtitle={mode === "bare" ? null : "Il logo dell'organizzazione in alto su ogni pagina dei report che generi."}>
+      <ReportLogoPanel logo={logo} setLogo={setLogo} />
+    </Section>
+  ) : null);
   const secVertical = (mode) => (
     <Section mode={mode} id="vertical" testid="vertical-card" icon={Compass} title="Verticale"
       subtitle="Il settore in cui operi: personalizza le funzionalità dedicate di mAIPAL. In futuro sarà legato al tuo abbonamento.">
@@ -600,7 +605,9 @@ export default function SettingsPage() {
             <h2 className="text-2xl font-bold tracking-tight">{panelTile.full || panelTile.title}</h2>
           </div>
           <div className="space-y-3">
-            {panel === "profile" && secProfile("bare")}
+            {panel === "profile" && <>{secProfile("bare")}{logo?.can_edit && <div className="pt-3">
+              <div className="text-[13px] font-semibold text-white mb-1">Logo nei report</div>
+              {secLogo("bare")}</div>}</>}
             {panel === "vertical" && secVertical("bare")}
             {panel === "links" && <>{secGoogle("static")}{secMicrosoft("static")}{secTargets("static")}{secTelegram("static")}{secWatch("static")}</>}
             {panel === "notifications" && secNotifications("bare")}
@@ -653,6 +660,7 @@ export default function SettingsPage() {
 
       <div className="mt-8 space-y-4">
         {secProfile()}
+        {secLogo()}
         {secVertical()}
         {secGoogle()}
         {secMicrosoft()}
@@ -726,36 +734,64 @@ function Section({ id, testid, icon: Icon, title, badge, subtitle, defaultOpen =
   );
 }
 
-// A row of choices that never wraps: it scrolls sideways when it doesn't fit. The chips are the
-// commands' size of the commesse (Diario, Modifica, Elimina); the chosen one is lit like the
-// current section in the bottom menu.
-function ChipRow({ testid, children }) {
-  return <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1" data-testid={testid}>{children}</div>;
-}
-function Chip({ on, onClick, testid, children }) {
+// A time, with its icon on the left; a tap anywhere on it opens the picker.
+function TimeField({ icon: Icon = Clock, testid, value, onChange }) {
   return (
-    <button type="button" data-testid={testid} onClick={onClick} aria-pressed={on}
-      className={`shrink-0 whitespace-nowrap inline-flex items-center px-2.5 py-1 rounded-full text-xs transition-colors ${on ? "lg-bubble text-white font-medium" : "bg-white/10 text-white/75 hover:bg-white/15"}`}>
-      {children}
-    </button>
-  );
-}
-
-// A time, with a white clock on its left; a tap anywhere on it opens the picker.
-function TimeField({ testid, value, onChange }) {
-  return (
-    <div className="relative">
-      <Clock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white pointer-events-none" />
-      <Input data-testid={testid} type="time" value={value} onChange={(e) => onChange(e.target.value)} className="time-field relative h-11 rounded-xl bg-white/10 pl-10" />
+    <div className="relative min-w-0">
+      <Icon size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none z-[1]" />
+      <input data-testid={testid} type="time" value={value} onChange={(e) => onChange(e.target.value)} className={`time-field relative ${INPUT} pl-10 pr-3`} />
     </div>
   );
 }
 
-// field title with a small icon as tall as the title itself
-function FieldLabel({ icon: Icon, mb = "mb-1", children }) {
+// The organization's logo on the reports: shown on white (as on the page), uploaded, replaced, removed, used or not.
+function ReportLogoPanel({ logo, setLogo }) {
+  const [busy, setBusy] = useState(false);
+  const input = useRef(null);
+  const run = async (fn, ok) => {
+    setBusy(true);
+    try { setLogo((await fn()).data); if (ok) toast.success(ok); }
+    catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setBusy(false); }
+  };
+  const upload = (f) => {
+    if (!f) return;
+    const fd = new FormData();
+    fd.append("file", f, f.name);
+    run(() => api.post("/report-logo", fd), "Logo salvato");
+    if (input.current) input.current.value = "";
+  };
+  const remove = () => toast("Togliere il logo? I report già generati restano come sono.", {
+    action: { label: "Togli", onClick: () => run(() => api.delete("/report-logo"), "Logo tolto") },
+    cancel: { label: "Annulla", onClick: () => {} }, duration: 8000 });
   return (
-    <div className={`kicker ${mb} flex items-center gap-1.5`}>
-      <Icon size={12} className="shrink-0" /> {children}
+    <div className="flex flex-col gap-4" data-testid="report-logo">
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/*" hidden onChange={(e) => upload(e.target.files?.[0])} data-testid="report-logo-input" />
+      {logo.has ? (
+        <div className="h-24 rounded-xl bg-white flex items-center justify-center px-4" data-testid="report-logo-preview">
+          <img src={`${API}/report-logo/image?v=${encodeURIComponent(logo.v)}`} alt="Logo dell'organizzazione" className="max-h-16 max-w-full object-contain" />
+        </div>
+      ) : (
+        <button type="button" onClick={() => input.current?.click()} disabled={busy} data-testid="report-logo-empty"
+          className="h-24 rounded-xl border border-dashed border-white/30 text-[13px] text-white/75 flex flex-col items-center justify-center gap-1.5">
+          {busy ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />} Carica il logo
+        </button>
+      )}
+      {logo.has && (
+        <Field label="Nei report" hint={logo.use_in_reports ? "In alto a sinistra su ogni pagina dei report generati da te e dal tuo team." : "Il logo resta salvato, ma i report escono senza."}>
+          <Select icon={FileText} value={logo.use_in_reports ? "on" : "off"} testid="report-logo-use"
+            options={[["on", "Usa il logo"], ["off", "Non usarlo"]]}
+            onChange={(v) => run(() => api.patch("/report-logo", { use_in_reports: v === "on" }), v === "on" ? "I report useranno il logo" : "I report escono senza logo")} />
+        </Field>
+      )}
+      {logo.has && (
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" onClick={() => input.current?.click()} disabled={busy} data-testid="report-logo-replace" className={SECONDARY}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} Sostituisci</button>
+          <button type="button" onClick={remove} disabled={busy} data-testid="report-logo-remove" className={SECONDARY}><Trash2 size={15} /> Togli</button>
+        </div>
+      )}
+      <span className="text-[11px] text-white/55 leading-snug -mt-1">PNG o JPG, meglio con lo sfondo trasparente. I report già generati non cambiano.</span>
     </div>
   );
 }

@@ -316,8 +316,10 @@ def apply_patient_data(sections: list[dict], patient: dict | None) -> None:
                 sec["fields"][label] = str(data[patient_key])
 
 
-def build_docx(title: str, patient_name: str | None, sections: list[dict]) -> bytes:
+def build_docx(title: str, patient_name: str | None, sections: list[dict], logo: bytes | None = None) -> bytes:
     doc = Document()
+    from work_reports import add_logo
+    add_logo(doc, logo)
     heading = doc.add_heading(title, level=0)
     for run in heading.runs:
         run.font.size = Pt(20)
