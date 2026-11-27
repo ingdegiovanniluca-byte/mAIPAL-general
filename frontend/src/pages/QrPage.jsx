@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box } from "lucide-react";
+import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Layers, Maximize2, SlidersHorizontal } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { phonePosition } from "@/pages/QrScanPage";
@@ -13,13 +13,12 @@ const QrArViewer = React.lazy(() => import("@/components/QrArViewer"));
    with a code: what it shows is written here and can be changed at any time without printing it again. Only who
    is in the organization opens it (see QrScanPage). */
 
-const FIELD = "h-10 w-full min-w-0 rounded-xl bg-white/10 px-3 text-sm text-white placeholder:text-white/40 outline-none";
 const KINDS = [["cantiere", "Cantiere"], ["attrezzo", "Attrezzo"], ["punto", "Punto informativo"], ["altro", "Altro"]];
 const VISIBILITY = [["public", "Pubblico"], ["org", "Solo organizzazione"], ["admins", "Solo amministratori"]];
 const VISIBILITY_NOTE = {
-  public: "Chiunque lo scansioni lo vede, anche senza account (clienti, fornitori, visitatori): non scrivere codici o dati riservati. Commessa e cliente non vengono mostrati.",
-  org: "Lo vede solo chi è nella tua organizzazione, dopo l'accesso a mAIPAL. Per tutti gli altri il QR non esiste.",
-  admins: "Lo vedono solo gli amministratori della tua organizzazione.",
+  public: "Lo vede chiunque, anche senza account: non scrivere dati riservati. Commessa e cliente non si vedono.",
+  org: "Solo chi è nella tua organizzazione, dopo l'accesso a mAIPAL.",
+  admins: "Solo gli amministratori della tua organizzazione.",
 };
 const VISIBILITY_SHORT = { public: "Pubblico: lo vede chiunque lo scansioni", org: "Lo vede tutta l'organizzazione", admins: "Lo vedono solo gli amministratori" };
 const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
@@ -34,18 +33,46 @@ const CHANGED = { ar: "realtà aumentata", place: "luogo", files: "file", title:
 // bottom bar under the finger and swallow the tap (see "Crea QR").
 const keepFocus = (e) => e.preventDefault();
 
-function Chips({ options, value, onChange, testid }) {
+/* The form's pieces: the label above, the field with its icon on the left, the dropdowns with their chevron. */
+const INPUT = "h-11 w-full min-w-0 rounded-xl bg-white/10 border border-white/15 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/45 focus:bg-white/[0.14] transition-colors";
+
+function Field({ label, hint, children, testid, className = "" }) {
   return (
-    <div className="flex flex-wrap gap-2" data-testid={testid}>
-      {options.map(([k, label]) => (
-        <button key={k} type="button" onClick={() => onChange(k)} onMouseDown={keepFocus} aria-pressed={value === k} data-testid={`${testid}-${k}`}
-          className={`h-8 px-3 rounded-full text-xs font-medium transition-colors ${value === k ? "bg-white/55 text-[#7A2A5C]" : "bg-white/12 text-white/85 border border-white/15"}`}>
-          {label}
-        </button>
-      ))}
+    <div className={`flex flex-col gap-1.5 min-w-0 ${className}`} data-testid={testid}>
+      {label && <span className="text-[12px] font-medium text-white/85">{label}</span>}
+      {children}
+      {hint && <span className="text-[11px] text-white/55 leading-snug">{hint}</span>}
     </div>
   );
 }
+
+function Input({ icon: Icon, className = "", ...p }) {
+  return (
+    <div className="relative min-w-0">
+      {Icon && <Icon size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />}
+      <input {...p} className={`${INPUT} ${Icon ? "pl-10" : "pl-3.5"} pr-3.5 ${className}`} />
+    </div>
+  );
+}
+
+// a native dropdown (the phone's own picker): options [[value, label]], value given back with its own type
+function Select({ icon: Icon, value, onChange, options, testid, placeholder }) {
+  return (
+    <div className="relative min-w-0">
+      {Icon && <Icon size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />}
+      <select value={String(value ?? "")} data-testid={testid}
+        onChange={(e) => { const o = options.find(([k]) => String(k) === e.target.value); onChange(o ? o[0] : e.target.value); }}
+        className={`${INPUT} appearance-none truncate ${Icon ? "pl-10" : "pl-3.5"} pr-10 cursor-pointer`}>
+        {placeholder != null && <option value="" disabled hidden className="text-black">{placeholder}</option>}
+        {options.map(([k, label]) => <option key={k} value={String(k)} className="text-black">{label}</option>)}
+      </select>
+      <ChevronDown size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/60 pointer-events-none" />
+    </div>
+  );
+}
+
+const PRIMARY = "h-11 rounded-xl text-sm font-semibold bg-white/90 text-[#7A2A5C] disabled:opacity-60 inline-flex items-center justify-center gap-1.5";
+const SECONDARY = "h-11 rounded-xl text-sm font-medium bg-white/10 border border-white/15 text-white/90 disabled:opacity-60 inline-flex items-center justify-center gap-1.5";
 
 function QrTile({ q, onOpen }) {
   return (
@@ -86,6 +113,7 @@ const mapLink = (p) => `https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lo
    site, an address). Checked against the phone's position when it is scanned. */
 function QrPlace({ place, setPlace, commessaId }) {
   const [busy, setBusy] = useState(null);
+  const [source, setSource] = useState("");
   const [address, setAddress] = useState("");
   const on = !!place?.on;
   const set = (x) => setPlace({ radius_m: 100, label: "", ...(place || {}), ...x, on: true });
@@ -104,45 +132,59 @@ function QrPlace({ place, setPlace, commessaId }) {
     catch (e) { toast.error(e.response?.data?.detail || "Posizione non trovata"); }
     finally { setBusy(null); }
   };
+  const run = (v) => (v === "mine" ? mine() : v === "commessa" ? lookup({ commessa_id: commessaId }, "job") : null);
+  const pick = (v) => { setSource(v); run(v); };
+  const sources = [["mine", "La mia posizione adesso"], ...(commessaId ? [["commessa", "Il cantiere della commessa"]] : []), ["address", "Un indirizzo"]];
+  const radius = place?.radius_m || 100;
   return (
-    <div className="flex flex-col gap-2" data-testid="qr-place">
-      <span className="kicker">Dove si apre</span>
-      <Chips options={[["any", "Ovunque"], ["here", "Solo in un luogo"]]} value={on ? "here" : "any"} testid="qr-place-mode"
-        onChange={(v) => (v === "here" ? set({}) : setPlace({ ...(place || {}), on: false }))} />
+    <div className="flex flex-col gap-4" data-testid="qr-place">
+      <Field label="Dove si apre">
+        <Select icon={MapPin} value={on ? "here" : "any"} testid="qr-place-mode"
+          options={[["any", "Ovunque"], ["here", "Solo in un luogo"]]}
+          onChange={(v) => (v === "here" ? set({}) : setPlace({ ...(place || {}), on: false }))} />
+      </Field>
       {on && (
-        <div className="flex flex-col gap-2.5 rounded-xl bg-white/[0.07] p-3">
-          <div className="text-sm text-white" data-testid="qr-place-point">
-            {place.lat != null
-              ? <>📍 {place.label ? `${place.label} · ` : ""}<span className="text-white/70">{place.lat.toFixed(5)}, {place.lon.toFixed(5)}</span> · <a href={mapLink(place)} target="_blank" rel="noopener noreferrer" className="underline">mappa</a></>
-              : <span className="text-white/70">Scegli il luogo:</span>}
+        <>
+          <Field label="Punto">
+            <Select icon={Crosshair} value={source} onChange={pick} options={sources} testid="qr-place-source"
+              placeholder={place.lat != null ? "Punto già scelto" : "Scegli il punto"} />
+          </Field>
+          {source === "address" && (
+            <form className="relative" onSubmit={(e) => { e.preventDefault(); if (address.trim()) lookup({ address }, "addr"); }}>
+              <Input icon={Search} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Via, numero, comune"
+                className="pr-[84px]" data-testid="qr-place-address" />
+              <button type="submit" disabled={!!busy || !address.trim()} data-testid="qr-place-search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 px-3 rounded-lg bg-white/85 text-[#7A2A5C] text-xs font-semibold disabled:opacity-50">
+                {busy === "addr" ? <Loader2 size={13} className="animate-spin" /> : "Cerca"}</button>
+            </form>
+          )}
+          {(place.lat != null || busy) && (
+            <div className="flex items-center gap-2 text-[12px] text-white/75 -mt-1" data-testid="qr-place-point">
+              {busy && busy !== "addr" ? <><Loader2 size={13} className="animate-spin" /> Cerco la posizione…</> : (
+                <>
+                  <span className="truncate">{place.lat.toFixed(5)}, {place.lon.toFixed(5)}</span>
+                  <a href={mapLink(place)} target="_blank" rel="noopener noreferrer" className="underline shrink-0">mappa</a>
+                  {(source === "mine" || source === "commessa") && (
+                    <button type="button" onClick={() => run(source)} onMouseDown={keepFocus} aria-label="Aggiorna la posizione"
+                      className="ml-auto h-7 w-7 shrink-0 rounded-lg bg-white/10 flex items-center justify-center"><RefreshCw size={13} /></button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-[1fr_116px] gap-3">
+            <Field label="Nome del luogo">
+              <Input icon={Tag} value={place.label || ""} onChange={(e) => set({ label: e.target.value })} maxLength={80}
+                placeholder="Facoltativo" data-testid="qr-place-label" />
+            </Field>
+            <Field label="Entro">
+              <Select value={radius} onChange={(r) => set({ radius_m: r })} options={RADII} testid="qr-place-radius" />
+            </Field>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={mine} disabled={!!busy} data-testid="qr-place-mine" onMouseDown={keepFocus}
-              className="h-8 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60">
-              {busy === "me" ? <Loader2 size={13} className="animate-spin" /> : <MapPin size={13} />} La mia posizione</button>
-            {commessaId && (
-              <button type="button" onClick={() => lookup({ commessa_id: commessaId }, "job")} disabled={!!busy} data-testid="qr-place-commessa" onMouseDown={keepFocus}
-                className="h-8 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60">
-                {busy === "job" ? <Loader2 size={13} className="animate-spin" /> : null} Cantiere della commessa</button>
-            )}
-          </div>
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (address.trim()) lookup({ address }, "addr"); }}>
-            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Oppure un indirizzo (via, numero, comune)"
-              className={FIELD} data-testid="qr-place-address" />
-            <button type="submit" disabled={!!busy || !address.trim()} data-testid="qr-place-search"
-              className="h-10 px-3 shrink-0 rounded-xl bg-white/15 text-xs font-medium disabled:opacity-50">{busy === "addr" ? <Loader2 size={13} className="animate-spin" /> : "Cerca"}</button>
-          </form>
-          <input value={place.label || ""} onChange={(e) => set({ label: e.target.value })} maxLength={80} placeholder="Nome del luogo (facoltativo, es. Cantiere Rossi)"
-            className={FIELD} data-testid="qr-place-label" />
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[11px] text-white/60">Entro</span>
-            <Chips options={RADII} value={place.radius_m || 100} onChange={(r) => set({ radius_m: r })} testid="qr-place-radius" />
-          </div>
-          <div className="text-[11px] text-white/55 leading-snug">
-            Chi lo scansiona deve essere entro {radiusLabel(place.radius_m || 100)}: il telefono chiede la posizione. Gli amministratori lo aprono ovunque.
-            La posizione la dà il telefono e si può falsificare: è un filtro in più, non usarlo come unica protezione per dati riservati.
-          </div>
-        </div>
+          <span className="text-[11px] text-white/55 leading-snug -mt-2">
+            Si apre solo entro {radiusLabel(radius)}; gli amministratori ovunque. La posizione del telefono si può falsificare: è un filtro in più, non una protezione.
+          </span>
+        </>
       )}
     </div>
   );
@@ -174,69 +216,55 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
   };
 
   return (
-    <div className="card-soft p-4 flex flex-col gap-4" data-testid="qr-editor">
-      <label className="flex flex-col gap-1.5">
-        <span className="kicker">Nome</span>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder="Es. Cantiere Rossi · ingresso, Trapano Hilti 2"
-          className={FIELD} data-testid="qr-title" />
-      </label>
-      <div className="flex flex-col gap-1.5">
-        <span className="kicker">Tipo</span>
-        <Chips options={KINDS} value={kind} onChange={setKind} testid="qr-kind" />
-      </div>
+    <div className="card-soft p-5 flex flex-col gap-4" data-testid="qr-editor">
+      <Field label="Nome">
+        <Input icon={Type} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder="Es. Cantiere Rossi · ingresso"
+          data-testid="qr-title" />
+      </Field>
+      <Field label="Tipo">
+        <Select icon={Tag} value={kind} onChange={setKind} options={KINDS} testid="qr-kind" />
+      </Field>
       {commesse.length > 0 && (
-        <label className="flex flex-col gap-1.5">
-          <span className="kicker">Commessa (facoltativa)</span>
-          <select value={commessaId} onChange={(e) => setCommessaId(e.target.value)} className={FIELD} data-testid="qr-commessa">
-            <option value="">Nessuna</option>
-            {commesse.map((c) => <option key={c.id} value={c.id}>{c.title}{c.client_name ? ` · ${c.client_name}` : ""}</option>)}
-          </select>
-        </label>
+        <Field label="Commessa">
+          <Select icon={Briefcase} value={commessaId} onChange={setCommessaId} testid="qr-commessa"
+            options={[["", "Nessuna"], ...commesse.map((c) => [c.id, `${c.title}${c.client_name ? ` · ${c.client_name}` : ""}`])]} />
+        </Field>
       )}
-      <label className="flex flex-col gap-1.5">
-        <span className="kicker">Cosa mostra</span>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} maxLength={5000} data-testid="qr-text"
-          placeholder={"Es. Referente: Marco 333 1234567\nCancello: codice 4521\nAcqua chiusa al piano 2 fino a venerdì"}
-          className="w-full min-w-0 rounded-xl bg-white/10 px-3 py-2.5 text-sm text-white placeholder:text-white/40 outline-none leading-relaxed" />
-      </label>
-      <div className="flex flex-col gap-2">
-        <span className="kicker">Link (planimetrie, schede, cartella Drive…)</span>
+      <Field label="Cosa mostra">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} maxLength={5000} data-testid="qr-text"
+          placeholder={"Es. Referente: Marco 333 1234567\nCancello: codice 4521"}
+          className="w-full min-w-0 rounded-xl bg-white/10 border border-white/15 px-3.5 py-3 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/45 focus:bg-white/[0.14] transition-colors leading-relaxed resize-none" />
+      </Field>
+      <Field label="Link">
         {links.map((l, i) => (
-          <div key={i} className="flex gap-2 items-center" data-testid="qr-link-row">
-            <input value={l.label || ""} onChange={(e) => setLink(i, "label", e.target.value)} placeholder="Nome" className={`${FIELD} basis-1/3`} />
-            <input value={l.url || ""} onChange={(e) => setLink(i, "url", e.target.value)} placeholder="https://…" className={FIELD} data-testid="qr-link-url" />
+          <div key={i} className="grid grid-cols-[96px_1fr_44px] gap-2" data-testid="qr-link-row">
+            <Input value={l.label || ""} onChange={(e) => setLink(i, "label", e.target.value)} placeholder="Nome" />
+            <Input icon={Link2} value={l.url || ""} onChange={(e) => setLink(i, "url", e.target.value)} placeholder="https://…" inputMode="url" data-testid="qr-link-url" />
             <button type="button" onClick={() => setLinks((xs) => xs.filter((_, j) => j !== i))} aria-label="Togli il link"
-              className="h-9 w-9 shrink-0 rounded-full bg-white/10 flex items-center justify-center text-white/80"><X size={15} /></button>
+              className="h-11 w-11 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-white/75"><X size={15} /></button>
           </div>
         ))}
         {links.length < 10 && (
           <button type="button" onClick={() => setLinks((xs) => [...xs, { label: "", url: "" }])} data-testid="qr-add-link" onMouseDown={keepFocus}
-            className="self-start inline-flex items-center gap-1.5 text-xs font-medium text-white/85 px-3 h-8 rounded-full bg-white/10">
-            <Link2 size={13} /> Aggiungi un link
+            className="h-11 rounded-xl border border-dashed border-white/25 text-[13px] text-white/80 inline-flex items-center justify-center gap-1.5">
+            <Plus size={15} /> {links.length ? "Un altro link" : "Aggiungi un link (planimetria, scheda, Drive…)"}
           </button>
         )}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <span className="kicker">Chi lo vede quando lo scansiona</span>
-        <Chips options={VISIBILITY} value={visibility} onChange={setVisibility} testid="qr-visibility" />
-        <span className="text-[11px] text-white/60 leading-snug" data-testid="qr-visibility-note">{VISIBILITY_NOTE[visibility]}</span>
-      </div>
+      </Field>
+      <Field label="Chi lo vede" hint={<span data-testid="qr-visibility-note">{VISIBILITY_NOTE[visibility]}</span>}>
+        <Select icon={Eye} value={visibility} onChange={setVisibility} options={VISIBILITY} testid="qr-visibility" />
+      </Field>
       <QrPlace place={place} setPlace={setPlace} commessaId={commessaId} />
-      <div className="flex flex-col gap-1.5" data-testid="qr-style-box">
-        <span className="kicker">Aspetto del QR</span>
-        <Chips options={[["maipal", "mAIPAL"], ["classic", "Classico"]]} value={style} onChange={setStyle} testid="qr-style" />
-        <span className="text-[11px] text-white/60 leading-snug">{style === "maipal"
-          ? "Con la forma e i colori del logo mAIPAL e il logo al centro: si legge come un QR normale."
-          : "Bianco e nero, il più semplice: si legge anche stampato molto piccolo o sbiadito."}
-          {initial?.id && initial.style !== style ? " Cambiando aspetto ristampa l'etichetta: quella vecchia si legge ancora, ma per la realtà aumentata va usata la nuova." : ""}</span>
-      </div>
-      <div className="flex gap-2 justify-end">
-        {onCancel && <button type="button" onClick={onCancel} onMouseDown={(e) => e.preventDefault()} className="h-10 px-4 rounded-full text-sm text-white/80 bg-white/10">Annulla</button>}
+      <Field label="Aspetto" testid="qr-style-box"
+        hint={`${style === "maipal" ? "Forma e colori del logo mAIPAL, con il logo al centro." : "Bianco e nero: si legge anche piccolo o sbiadito."}${initial?.id && initial.style !== style ? " Cambiando aspetto ristampa l'etichetta (per la realtà aumentata serve la nuova)." : ""}`}>
+        <Select icon={Palette} value={style} onChange={setStyle} options={[["maipal", "mAIPAL"], ["classic", "Classico"]]} testid="qr-style" />
+      </Field>
+      <div className={`grid gap-3 pt-1 ${onCancel ? "grid-cols-2" : "grid-cols-1"}`}>
+        {onCancel && <button type="button" onClick={onCancel} onMouseDown={keepFocus} className={SECONDARY}>Annulla</button>}
         {/* (onMouseDown: the field keeps the focus, so the keyboard closing doesn't bring the bottom bar under the finger
             and swallow the tap) */}
-        <button type="button" onClick={save} onMouseDown={(e) => e.preventDefault()} disabled={busy} data-testid="qr-save"
-          className="h-10 px-5 rounded-full text-sm font-semibold bg-white/85 text-[#7A2A5C] disabled:opacity-60 inline-flex items-center gap-1.5">
-          <Check size={15} /> {initial?.id ? "Salva" : "Crea QR"}
+        <button type="button" onClick={save} onMouseDown={keepFocus} disabled={busy} data-testid="qr-save" className={PRIMARY}>
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {initial?.id ? "Salva" : "Crea QR"}
         </button>
       </div>
     </div>
@@ -287,7 +315,7 @@ function QrFiles({ q, onChanged }) {
     finally { setBusy(false); }
   };
   return (
-    <div className="card-soft p-4 flex flex-col gap-3" data-testid="qr-files">
+    <div className="card-soft p-5 flex flex-col gap-4" data-testid="qr-files">
       <div className="flex items-center justify-between gap-2">
         <span className="kicker">Foto e PDF ({files.length}/{MAX_FILES})</span>
         {busy && <Loader2 size={15} className="animate-spin text-white/70" />}
@@ -308,13 +336,13 @@ function QrFiles({ q, onChanged }) {
         </div>
       ))}
       {files.length < MAX_FILES && (
-        <div className="flex flex-wrap gap-2">
+        <div className={`grid gap-3 ${q.commessa ? "grid-cols-2" : "grid-cols-1"}`}>
           <input ref={input} type="file" accept="image/*,application/pdf,.pdf,.glb,model/gltf-binary" multiple hidden onChange={(e) => upload(e.target.files)} data-testid="qr-file-input" />
-          <button type="button" disabled={busy} onClick={() => input.current?.click()} data-testid="qr-file-upload"
-            className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"><Upload size={14} /> Carica foto, PDF o modello 3D</button>
+          <button type="button" disabled={busy} onClick={() => input.current?.click()} data-testid="qr-file-upload" className={SECONDARY}>
+            <Upload size={15} /> Carica file</button>
           {q.commessa && (
-            <button type="button" disabled={busy} onClick={openPhotos} data-testid="qr-file-from-commessa"
-              className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"><ImageIcon size={14} /> Foto della commessa</button>
+            <button type="button" disabled={busy} onClick={openPhotos} data-testid="qr-file-from-commessa" className={SECONDARY}>
+              <ImageIcon size={15} /> Foto commessa</button>
           )}
         </div>
       )}
@@ -335,6 +363,9 @@ function QrFiles({ q, onChanged }) {
 }
 
 const AR_LABEL_SIZES = { qr: [[3, "3 cm"], [5, "5 cm"], [8, "8 cm"], [10, "10 cm"]], frame: [[8, "8 cm"], [10, "10 cm"], [15, "15 cm"], [20, "20 cm"]] };
+// the label on a wall (the object stands up, as the label) or on a floor/table (the object stands on it)
+const MOUNTS = { wall: ["0", "0", "0"], floor: ["90", "0", "0"] };
+const mountOf = (rot) => Object.keys(MOUNTS).find((k) => MOUNTS[k].every((v, i) => parseFloat(String(rot[i]).replace(",", ".")) === +v)) || null;
 const num = (v, d = 0) => { const x = parseFloat(String(v).replace(",", ".")); return Number.isFinite(x) ? x : d; };
 
 // the AR label: the QR in the middle, the 4 squares (ArUco markers 0-3) in the corners, the name above, the code below
@@ -376,7 +407,9 @@ function QrAr({ q, onChanged }) {
   const [width, setWidth] = useState(String(ar0.width_cm || 20));
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
+  const [fine, setFine] = useState(() => (ar0.offset_cm || []).some((v) => v) || !mountOf((ar0.rot_deg || [0, 0, 0]).map(String)));
   const file = candidates.find((f) => f.id === fileId);
+  const mount = mountOf(rot);
   const save = async (enable = on) => {
     setBusy(true);
     try {
@@ -390,67 +423,78 @@ function QrAr({ q, onChanged }) {
   const triple = (vals, set, names, testid) => (
     <div className="grid grid-cols-3 gap-2">
       {names.map((n, i) => (
-        <label key={n} className="flex flex-col gap-1">
-          <span className="text-[11px] text-white/60">{n}</span>
-          <input inputMode="decimal" value={vals[i]} onChange={(e) => set(vals.map((v, j) => (j === i ? e.target.value : v)))} className={FIELD} data-testid={`${testid}-${i}`} />
-        </label>
+        <Field key={n} label={<span className="text-white/60 font-normal">{n}</span>}>
+          <Input inputMode="decimal" value={vals[i]} onChange={(e) => set(vals.map((v, j) => (j === i ? e.target.value : v)))} className="text-center px-2" data-testid={`${testid}-${i}`} />
+        </Field>
       ))}
     </div>
   );
   return (
-    <div className="card-soft p-4 flex flex-col gap-3" data-testid="qr-ar-settings">
+    <div className="card-soft p-5 flex flex-col gap-4" data-testid="qr-ar-settings">
       <span className="kicker">Realtà aumentata</span>
       {!candidates.length ? (
         <div className="text-xs text-white/65 leading-snug">Carica tra i file del QR un modello 3D (<b>GLB</b>, fino a 25 MB) o una foto: chi scansiona il QR lo vedrà appoggiato sull'etichetta, e lo seguirà se l'etichetta si sposta.</div>
       ) : (
         <>
-          <Chips options={[["off", "No"], ["on", "Sì"]]} value={on ? "on" : "off"} onChange={(v) => { setOn(v === "on"); if (v === "off" && q.ar) save(false); }} testid="qr-ar-on" />
+          <Field label="Mostra un oggetto in AR">
+            <Select icon={Box} value={on ? "on" : "off"} options={[["off", "No"], ["on", "Sì"]]} testid="qr-ar-on"
+              onChange={(v) => { setOn(v === "on"); if (v === "off" && q.ar) save(false); }} />
+          </Field>
           {on && (
             <>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] text-white/60">Cosa mostrare</span>
-                <select value={fileId} onChange={(e) => setFileId(e.target.value)} className={FIELD} data-testid="qr-ar-file">
-                  {candidates.map((f) => <option key={f.id} value={f.id}>{f.kind === "model" ? "Modello 3D" : "Foto"} · {f.name}</option>)}
-                </select>
-              </label>
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[11px] text-white/60">Etichetta</span>
-                <Chips options={[["frame", "Etichetta AR (consigliata)"], ["qr", "Solo il QR"]]} value={label} testid="qr-ar-label"
+              <Field label="Cosa mostrare">
+                <Select icon={file?.kind === "image" ? ImageIcon : Box} value={fileId} onChange={setFileId} testid="qr-ar-file"
+                  options={candidates.map((f) => [f.id, `${f.kind === "model" ? "Modello 3D" : "Foto"} · ${f.name}`])} />
+              </Field>
+              <Field label="Etichetta" hint={label === "frame"
+                ? "QR con 4 riquadri agli angoli: più stabile, si aggancia anche da lontano. Stampala qui sotto."
+                : "Il QR già stampato: meno stabile, va inquadrato da vicino."}>
+                <Select icon={QrCode} value={label} options={[["frame", "Etichetta AR (consigliata)"], ["qr", "Solo il QR"]]} testid="qr-ar-label"
                   onChange={(v) => { setLabel(v); setLabelCm(v === "frame" ? 10 : 5); }} />
-                <span className="text-[11px] text-white/55 leading-snug">{label === "frame"
-                  ? "Il QR con 4 riquadri agli angoli: più stabile, si aggancia anche da più lontano e di sbieco. Stampala con il pulsante qui sotto."
-                  : "Il QR normale, già stampato: meno stabile, va inquadrato da vicino (circa 10 volte il lato dell'etichetta)."}</span>
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Lato etichetta">
+                  <Select icon={Maximize2} value={num(labelCm)} onChange={setLabelCm} options={AR_LABEL_SIZES[label]} testid="qr-ar-size" />
+                </Field>
+                {file?.kind === "image" ? (
+                  <Field label="Larghezza foto (cm)">
+                    <Input inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} data-testid="qr-ar-width" />
+                  </Field>
+                ) : (
+                  <Field label="Scala (1 = reale)">
+                    <Input inputMode="decimal" value={scale} onChange={(e) => setScale(e.target.value)} data-testid="qr-ar-scale" />
+                  </Field>
+                )}
               </div>
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[11px] text-white/60">Lato dell'etichetta stampata</span>
-                <Chips options={AR_LABEL_SIZES[label]} value={num(labelCm)} onChange={setLabelCm} testid="qr-ar-size" />
-              </div>
-              {file?.kind === "image" ? (
-                <label className="flex flex-col gap-1"><span className="text-[11px] text-white/60">Larghezza della foto (cm)</span>
-                  <input inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} className={FIELD} data-testid="qr-ar-width" /></label>
-              ) : (
-                <label className="flex flex-col gap-1"><span className="text-[11px] text-white/60">Scala del modello (1 = misure reali, in metri)</span>
-                  <input inputMode="decimal" value={scale} onChange={(e) => setScale(e.target.value)} className={FIELD} data-testid="qr-ar-scale" /></label>
-              )}
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[11px] text-white/60">Posizione rispetto al centro dell'etichetta (cm)</span>
-                {triple(off, setOff, ["→ destra", "↑ su", "fuori"], "qr-ar-off")}
-                <span className="text-[11px] text-white/60 mt-1">Rotazione (gradi)</span>
-                {triple(rot, setRot, ["X", "Y", "Z"], "qr-ar-rot")}
-                <div className="flex flex-wrap gap-2 mt-1">
-                  <button type="button" onMouseDown={keepFocus} onClick={() => setRot(["0", "0", "0"])} className="h-8 px-3 rounded-full bg-white/10 text-[11px] text-white/85">Etichetta su una parete</button>
-                  <button type="button" onMouseDown={keepFocus} onClick={() => setRot(["90", "0", "0"])} className="h-8 px-3 rounded-full bg-white/10 text-[11px] text-white/85">Etichetta su un piano</button>
+              <Field label="Etichetta appoggiata su">
+                <Select icon={Layers} value={mount || "custom"} testid="qr-ar-mount"
+                  options={[["wall", "Una parete"], ["floor", "Un piano (tavolo, pavimento)"], ...(mount ? [] : [["custom", "Rotazione personalizzata"]])]}
+                  onChange={(v) => { if (MOUNTS[v]) setRot(MOUNTS[v]); }} />
+              </Field>
+              <button type="button" onClick={() => setFine((x) => !x)} onMouseDown={keepFocus} aria-expanded={fine} data-testid="qr-ar-fine"
+                className="flex items-center gap-2 text-[13px] text-white/85 h-8 -mt-1">
+                <SlidersHorizontal size={15} className="text-white/60" /> Regolazione fine
+                <ChevronDown size={15} className={`ml-auto text-white/60 transition-transform ${fine ? "rotate-180" : ""}`} />
+              </button>
+              {fine && (
+                <div className="flex flex-col gap-3 -mt-2">
+                  <span className="text-[11px] text-white/55">Posizione dal centro dell'etichetta (cm)</span>
+                  {triple(off, setOff, ["→ destra", "↑ su", "fuori"], "qr-ar-off")}
+                  <span className="text-[11px] text-white/55">Rotazione (gradi)</span>
+                  {triple(rot, setRot, ["X", "Y", "Z"], "qr-ar-rot")}
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={busy || !fileId} onMouseDown={keepFocus} onClick={() => save(true)} data-testid="qr-ar-save"
-                  className="h-9 px-4 rounded-full bg-white/85 text-[#7A2A5C] text-xs font-semibold disabled:opacity-60">Salva</button>
-                {q.ar && <button type="button" onClick={() => setPreview(true)} data-testid="qr-ar-preview"
-                  className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5"><Box size={14} /> Prova in AR</button>}
-                {q.ar?.label === "frame" && <button type="button" onClick={() => printArLabel(q, q.ar.label_cm)} data-testid="qr-ar-print"
-                  className="h-9 px-3 rounded-full bg-white/15 text-xs font-medium inline-flex items-center gap-1.5"><Printer size={14} /> Stampa etichetta AR {q.ar.label_cm} cm</button>}
-              </div>
-              <div className="text-[11px] text-white/55 leading-snug">Consiglio: prova in AR davanti all'etichetta stampata e correggi posizione, rotazione e scala finché l'oggetto è dove deve. Modelli da SketchUp, Blender, Revit: esportali in glTF binario (.glb), con misure in metri.</div>
+              )}
+              <button type="button" disabled={busy || !fileId} onMouseDown={keepFocus} onClick={() => save(true)} data-testid="qr-ar-save" className={PRIMARY}>
+                {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Salva
+              </button>
+              {q.ar && (
+                <div className={`grid gap-3 -mt-1 ${q.ar.label === "frame" ? "grid-cols-2" : "grid-cols-1"}`}>
+                  <button type="button" onClick={() => setPreview(true)} data-testid="qr-ar-preview" className={SECONDARY}><Box size={15} /> Prova in AR</button>
+                  {q.ar.label === "frame" && <button type="button" onClick={() => printArLabel(q, q.ar.label_cm)} data-testid="qr-ar-print" className={SECONDARY}>
+                    <Printer size={15} /> Stampa {q.ar.label_cm} cm</button>}
+                </div>
+              )}
+              <span className="text-[11px] text-white/55 leading-snug">Prova davanti all'etichetta stampata e correggi finché l'oggetto è al suo posto. Da SketchUp, Blender, Revit: esporta in .glb, misure in metri.</span>
             </>
           )}
         </>
