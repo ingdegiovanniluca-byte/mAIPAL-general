@@ -525,7 +525,7 @@ I **QR** sono etichette da attaccare in cantiere, su un attrezzo o in un punto (
   - **Pubblico**: chiunque lo scansioni, anche senza account (clienti, fornitori, visitatori: per esempio il cartello di cantiere con orari e contatti). Vede solo titolo, testo e link che hai scritto: commessa, cliente e chi l'ha modificato non vengono mostrati. Non scriverci codici o dati riservati.
   - **Solo organizzazione**: chi è nella tua organizzazione, dopo l'accesso a mAIPAL. Per tutti gli altri il QR "non è disponibile", come un codice sbagliato.
   - **Solo amministratori**: per esempio per codici riservati.
-- **Scansionare**: con la fotocamera del telefono. Un QR privato, se non sei entrato in mAIPAL, ti chiede l'accesso e poi si apre. Se l'etichetta è rovinata, scrivi il codice stampato sotto (es. K7P3-XQ9M-2TRA) nel campo «Codice stampato» della sezione QR.
+- **Scansionare**: con la fotocamera del telefono. Un QR privato, se non sei entrato in mAIPAL, ti chiede l'accesso e poi si apre. Se l'etichetta è rovinata, scrivi il codice stampato sotto (es. K7P3-XQ9M-2TRA) nel campo «Cerca per codice» della sezione QR.
 - **Etichetta persa o copiata**: **Nuovo codice** fa smettere di funzionare quella vecchia (il contenuto resta); ristampa quella nuova. **Disattiva** la ferma finché non la riattivi; **Elimina** la cancella.
 - Se un QR è collegato a una commessa, chi lo scansiona ha anche il pulsante per aprire il diario di quella commessa.
 

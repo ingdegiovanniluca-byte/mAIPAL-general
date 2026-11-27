@@ -623,9 +623,12 @@ export default function QrPage() {
           <Plus size={17} strokeWidth={1.7} />
         </button>
         {list.length > 0 && <span className="kicker">{list.length} QR</span>}
-        <form onSubmit={goCode} className="ml-auto flex items-center gap-2">
-          <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Codice stampato" data-testid="qr-type-code"
-            className="h-9 w-[150px] rounded-full bg-white/10 px-3 text-xs text-white placeholder:text-white/40 outline-none font-mono" />
+        {/* the code printed under the QR on the label (when it can't be scanned): opens that QR */}
+        <form onSubmit={goCode} className="ml-auto relative" role="search">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Cerca per codice" data-testid="qr-type-code"
+            aria-label="Cerca un QR per codice (es. K7P3-XQ9M-2TRA)" enterKeyHint="search" autoCapitalize="characters"
+            className="h-9 w-[170px] rounded-full bg-white/10 border border-white/15 pl-8 pr-3 text-xs text-white placeholder:text-white/45 outline-none focus:border-white/45 uppercase placeholder:normal-case" />
         </form>
       </div>
       {loaded && list.length === 0 ? (

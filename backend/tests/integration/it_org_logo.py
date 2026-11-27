@@ -122,6 +122,13 @@ async def main():
     # a broken logo never stops the report
     assert header_images(work_reports.build_docx("R", None, None, SECTIONS, logo=b"broken")) == 0
 
+    # every Word document the app generates passes the logo (a new one without it fails here)
+    import inspect, re as _re
+    src = inspect.getsource(server)
+    calls = _re.findall(r"(?:work_reports|vet_reports)\.build_docx\((?:[^()]|\([^()]*(?:\([^()]*\)[^()]*)*\))*\)", src)
+    assert len(calls) >= 5 and all("logo=await _org_logo_bytes(current)" in c for c in calls), [c[:80] for c in calls if "logo=" not in c]
+    assert src.count("Document()") == 0, "a document built elsewhere: it must get the logo too"
+
     # not used in the reports: kept, not put
     await fails(server.patch_org_logo(server.OrgLogoPatch(use_in_documents=False), worker), 403)
     out = await server.patch_org_logo(server.OrgLogoPatch(use_in_documents=False), admin)
