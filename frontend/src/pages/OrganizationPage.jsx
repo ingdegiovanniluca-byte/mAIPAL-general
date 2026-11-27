@@ -22,7 +22,7 @@ export function PersonRow({ m, me, children }) {
       {m.picture ? (
         <img src={m.picture} alt="" className="h-9 w-9 rounded-full object-cover shrink-0" />
       ) : (
-        <div className="h-9 w-9 rounded-full bg-white/12 border border-white/15 flex items-center justify-center text-[13px] font-semibold shrink-0">
+        <div className="h-9 w-9 rounded-full bg-white/[0.12] border border-white/15 flex items-center justify-center text-[13px] font-semibold shrink-0">
           {(m.name || m.email || "?").charAt(0).toUpperCase()}
         </div>
       )}

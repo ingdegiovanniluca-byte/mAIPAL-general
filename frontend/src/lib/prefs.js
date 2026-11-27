@@ -6,7 +6,7 @@ const KEY = "maipal.prefs";
 const DEFAULTS = {
   micSide: "right",   // chat composer: voice button on the right or left
   // mobile bottom bar: the sections next to Chat (at most 3), chosen in the "+" menu
-  pinnedSections: ["/dashboard/tasks", "/dashboard/todos", "/dashboard/liste"],
+  pinnedSections: ["/dashboard/tasks", "/dashboard/liste", "/dashboard/journal"],
 };
 
 function readAll() {

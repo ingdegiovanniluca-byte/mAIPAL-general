@@ -39,7 +39,7 @@ function QrTile({ q, onOpen }) {
   return (
     <div role="button" tabIndex={0} data-testid="qr-tile" onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
       className={`w-full text-left rounded-[20px] px-3 h-[64px] flex items-center gap-3 backdrop-blur-xl cursor-pointer ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
-      <span className="w-9 h-9 rounded-xl bg-white/12 flex items-center justify-center shrink-0"><QrCode size={17} /></span>
+      <span className="w-9 h-9 rounded-xl bg-white/[0.12] flex items-center justify-center shrink-0"><QrCode size={17} /></span>
       <span className="flex-1 min-w-0">
         <span className="block text-[13px] font-semibold text-white leading-tight truncate" data-testid="qr-tile-title">{q.title}</span>
         <span className="block text-[11px] text-white/60 leading-tight mt-0.5 truncate">

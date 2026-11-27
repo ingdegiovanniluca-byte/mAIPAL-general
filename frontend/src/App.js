@@ -11,7 +11,6 @@ import JournalPage from "@/pages/JournalPage";
 import JobDiaryPage from "@/pages/JobDiaryPage";
 import DocumentsPage from "@/pages/DocumentsPage";
 import SettingsPage from "@/pages/SettingsPage";
-import TodoBoardPage from "@/pages/TodoBoardPage";
 import NewsPage from "@/pages/NewsPage";
 import CollectionsPage from "@/pages/CollectionsPage";
 import FitnessPage from "@/pages/FitnessPage";
@@ -56,7 +55,7 @@ function AppRouter() {
         <Route index element={<Navigate to="/dashboard/chat" replace />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="tasks" element={<TaskBoardPage />} />
-        <Route path="todos" element={<TodoBoardPage />} />
+        <Route path="todos" element={<Navigate to="/dashboard/tasks?v=todo" replace />} />
         <Route path="journal" element={<JournalRoute />} />
         <Route path="oggi" element={<TodayPage />} />
         <Route path="news" element={<NewsPage />} />

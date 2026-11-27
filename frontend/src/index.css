@@ -894,3 +894,13 @@ body.hide-bottom-dock [data-bottom-dock] { display: none !important; }
 
 /* the commessa's chat open: the install banner would cover its send button */
 body.commessa-chat-open [data-testid="install-banner"] { display: none !important; }
+
+/* Task e To-Do: the "Adesso" line of today (warm orange) and the late tasks' box (amber), darker on the light theme */
+.tt-now { color: #FFB37A; }
+.tt-now-bg { background-color: #FFB37A; }
+.tt-late { color: #FFD58A; }
+.tt-late-box { background: rgba(255, 213, 138, 0.14); border: 1px solid rgba(255, 213, 138, 0.4); }
+[data-theme="light"] .tt-now { color: #C2410C; }
+[data-theme="light"] .tt-now-bg { background-color: #EA7A2E; }
+[data-theme="light"] .tt-late { color: #93370D; }
+[data-theme="light"] .tt-late-box { background: rgba(245, 158, 11, 0.10); border-color: rgba(217, 119, 6, 0.35); }

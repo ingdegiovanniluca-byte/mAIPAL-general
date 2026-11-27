@@ -192,7 +192,7 @@ La guida utente (`backend/help/mAIPAL-help.md`) ha una sezione per ognuna. In si
 | Agente **Cerca** | Risponde a domande sui dati salvati, task, liste, commesse, presenze, clienti vicini, sul web e su come si usa l'app | `retrieval.py`, `search_index.py`, `help_guide.py`, `server.py` |
 | Agente **Salva** | Salva informazioni (testo, foto con OCR, documenti), modifica o crea liste, legge preventivi nella chat | `server.py` (`_classify_document`, `_ocr_image_bytes`), `list_updates.py` |
 | Agente **Task** | Crea, sposta e completa task e promemoria, anche ricorrenti | `server.py` (`_extract_task_meta`, `interpret_task_command`), `recurrence.py` |
-| **Task / To-Do** | Bacheca task con calendario; to-do con passi suggeriti | `TaskBoardPage.jsx`, `TodoBoardPage.jsx` |
+| **Task e To-Do** | Una sezione: task per giornata (oggi per ora di avvio, scaduti, giorni successivi), calendario del mese, to-do in Da fare / In corso / Fatto con passi suggeriti | `TaskBoardPage.jsx`, `TodoDetail.jsx` |
 | **Diario** | Personale (non artigiano) | `JournalPage.jsx`, `server.py` `create_journal` |
 | **Dashboard Oggi** (artigiano) | La giornata: cantieri, chi c'è, attività, scadenze | `TodayPage.jsx` |
 | **Diario di commessa** (artigiano) | Note di cantiere interpretate (ore, materiali, problemi, attività, arrivo/fine), foto, preventivi, tappe, costi, lavori extra, condivisione | `JobDiaryPage.jsx`, `job_logs.py`, `site_presence.py` |

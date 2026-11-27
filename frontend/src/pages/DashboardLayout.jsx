@@ -3,7 +3,7 @@ import PageBackground from "@/components/PageBackground";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
-  LogOut, Settings, Plus, MessageSquare, CheckSquare, ListChecks, BookOpen,
+  LogOut, Settings, Plus, MessageSquare, CheckSquare, BookOpen,
   Newspaper, List, FileText, Dumbbell, Repeat, Sun, Moon, Check, Mic, ChevronsLeft, LayoutDashboard, QrCode,
 } from "lucide-react";
 import { HelpIcon } from "@/lib/helpIcon";
@@ -26,7 +26,6 @@ import { ChatPaneContext, SheetHostContext } from "@/lib/chatPane";
 const NAV_ITEMS = [
   { to: "/dashboard/chat", label: "Chat", testid: "tab-chat", icon: MessageSquare },
   { to: "/dashboard/tasks", label: "Task", testid: "tab-tasks", icon: CheckSquare },
-  { to: "/dashboard/todos", label: "To-Do", testid: "tab-todos", icon: ListChecks },
   { to: "/dashboard/oggi", label: "Dashboard", testid: "tab-dashboard", vertical: "artigiano", icon: LayoutDashboard },
   { to: "/dashboard/journal", label: "Diario", testid: "tab-journal", icon: BookOpen },
   { to: "/dashboard/news", label: "News", testid: "tab-news", icon: Newspaper },
@@ -200,7 +199,9 @@ export default function DashboardLayout() {
 
   const visibleItems = NAV_ITEMS.filter((item) => (!item.adminOnly || user?.role === "admin") && (!item.vertical || user?.business_vertical === item.vertical));
   const [pinnedPref, setPinnedPref] = usePref("pinnedSections");
+  // (the To-Do are inside Task now: a bar that had them gets the Diario in their place)
   const pinned = (Array.isArray(pinnedPref) ? pinnedPref : [])
+    .map((to) => (to === "/dashboard/todos" ? "/dashboard/journal" : to)).filter((to, i, all) => all.indexOf(to) === i)
     .filter((to) => to !== CHAT_PATH && visibleItems.some((i) => i.to === to)).slice(0, MAX_PINNED);
   const primaryItems = visibleItems.filter((item) => item.to === CHAT_PATH || pinned.includes(item.to));
   // The "+" menu: every section but Chat, each with a dot to pin it to the bar (Impostazioni

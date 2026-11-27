@@ -20,7 +20,7 @@ mAIPAL è il tuo assistente personale: scrivi o detti in italiano quello che ti 
 **Come è organizzata l'app**
 - **Chat**: il punto di partenza. Scegli un agente (Cerca, Salva, Task, Diario, …) e scrivi o detta.
   - **Una chat è una conversazione**: finché non apri una **nuova chat**, i messaggi restano lì anche se vanno a un agente diverso (scegli un altro agente, usi una @menzione o tocchi il suggerimento «è meglio l'agente …»). Per cambiare argomento apri una nuova chat.
-- **Le sezioni** (Task, To-Do, Diario, News, Liste, Documenti, Azioni, Impostazioni) mostrano e permettono di modificare quello che hai salvato.
+- **Le sezioni** (Task con i To-Do, Diario, News, Liste, Documenti, Azioni, Impostazioni) mostrano e permettono di modificare quello che hai salvato.
 - **Menu in basso (telefono)**: Chat è sempre presente; con il tasto **+** apri l'elenco di tutte le sezioni. Con il pallino accanto a ciascuna scegli le 3 da tenere in primo piano nel menu.
 - **Menu in alto (computer)**: tutte le sezioni sono in fila nella barra in alto.
 - **Popup del profilo** (tocca la tua foto o la tua iniziale in alto a destra): Impostazioni, Installa l'app, Help, Esci; sotto, il tema chiaro/scuro e da che lato della chat sta il microfono.
@@ -113,22 +113,35 @@ L'agente Task trasforma quello che scrivi in **task** (con una data) o **to-do**
 
 ## Task
 <!-- id: task · path: /dashboard/tasks · verticale: tutti -->
-La sezione Task mostra i tuoi impegni con una data.
-- **Telefono**: in alto la striscia dei giorni del mese; tocca un giorno o una settimana per filtrare (un altro tocco toglie il filtro). Sotto, un'unica lista in ordine di scadenza; il colore indica la priorità.
-- **Computer**: tre colonne per priorità (alta, media, bassa), con filtri per attivi/completati, scaduti/non scaduti, preferiti, archiviati e ricerca per #hashtag.
-- **Aprendo un task** puoi:
+La sezione **Task** (pagina «Task e To-Do») tiene insieme i task, cioè gli impegni con un giorno, e i **to-do**, le cose da fare senza una data precisa. È fatta come il diario di commessa.
+- In alto il pulsante **+ Nuovo task** (o **+ Nuovo to-do** se sei nei To-Do) e tre numeri: i task di **oggi**, quelli **scaduti** e i **to-do aperti** (sul computer: oggi, scaduti, to-do da fare, in corso e fatti).
+- Sotto, le tre viste a parole grandi: **To-Do · Giornate · Calendario**. Si apre su **Giornate**; tocca una parola di lato (o scorri col dito) per cambiare vista.
+- **Filtri** (menu a tendina): **Attivi / Completati**, **priorità**, **#tag**, e la **stella** per vedere solo i preferiti. Priorità, tag e stella valgono anche per i to-do.
+- **Giornate**:
+  - **oggi è sempre in cima**, con il numero del giorno a sinistra: i task in ordine di **ora di avvio**; quelli senza ora sono «**In giornata**», in fondo. Una linea arancio «**Adesso 10:12**» segna l'ora attuale; l'ora dei task già passati è arancio. I task fatti restano barrati;
+  - subito dopo il riquadro giallo degli **Scaduti** (i primi tre, «Mostra tutti» per gli altri);
+  - poi i **giorni successivi**, raggruppati per **mese**, ciascuno con il numero e il giorno della settimana; in fondo quelli **senza data**;
+  - su ogni riga: l'ora, il pallino della priorità, le icone di ripetizione, promemoria, calendario, note, preferito e l'iniziale di chi l'ha in carico; sotto il titolo da dove è nato o a chi è assegnato;
+  - il **tondo** a destra segna il task come **fatto** (toccalo di nuovo per riaprirlo); l'icona del calendario accanto alle date apre il Calendario.
+- **Completati** (dal filtro): i task fatti, per giorno, dal più recente.
+- **Calendario**: il mese con il numero delle settimane; sotto ogni giorno i pallini delle priorità dei task aperti; oggi è pieno, il giorno scelto ha il bordo. Sotto il mese, i task del giorno scelto (con le frecce cambi mese).
+- **+ Nuovo task**: scrivi cosa, il giorno (**Quando**), l'ora (**Alle**, facoltativa) e la priorità. Il resto si imposta aprendo il task.
+- **Aprendo un task** (tocca la riga) puoi:
   - modificarlo scrivendo in linguaggio naturale ("spostalo a giovedì alle 10, priorità alta");
-  - cambiare la data, la ripetizione, il promemoria e il calendario;
+  - cambiare la data e l'ora, la **priorità** (tocca «Priorità alta»), la ripetizione, il promemoria e il calendario; metterlo tra i preferiti, segnarlo come fatto, eliminarlo;
   - aggiungere **note** libere (restano solo per te, mAIPAL non le interpreta);
   - **condividerlo o assegnarlo** a un collega del team;
   - vedere **da dove è nato** (es. "Da: Nota del 29 set" se creato con @task).
 - **Task ricorrenti**: modificando o eliminando un'occorrenza scegli se vale solo per quella o anche per le successive; quelle passate restano come sono.
-- I task scaduti sono in rosso scuro.
+- **Sul computer**, se c'è spazio, Giornate (o Calendario) a sinistra e i To-Do a destra, affiancati.
 
 ## To-Do
-<!-- id: todo · path: /dashboard/todos · verticale: tutti -->
-I to-do sono le cose da fare senza una data precisa.
-- Tre stati: **Da fare**, **In corso** (con la barra di avanzamento), **Fatti**.
+<!-- id: todo · path: /dashboard/tasks · verticale: tutti -->
+I to-do sono le cose da fare senza una data precisa. Stanno nella sezione **Task**, vista **To-Do** (il vecchio indirizzo della sezione To-Do porta qui).
+- Tre gruppi, come i mesi del diario: **Da fare**, **In corso** (con la barra di avanzamento), **Fatto** (gli ultimi cinque, «Mostra tutti» per gli altri). I preferiti stanno in cima.
+- Su ogni riga: il pallino della priorità, quanti **passi** sono fatti (es. «2/3 passi»), la data di **inizio**, la stella se è preferito, il titolo.
+- Il **+** di un gruppo crea un to-do già in quello stato: scrivi cosa c'è da fare, le note e la priorità.
+- Il pulsante **…** di una riga: **Sposta in** un altro stato (In corso, Fatto, Da fare), aggiungi o togli dai **preferiti**, **Elimina**.
 - **Aprendo un to-do** si apre **a tutto schermo**:
   - in alto, al centro, il **titolo** (toccalo per cambiarlo) e sotto quanti passi sono fatti e la scadenza;
   - un **riquadro colorato** con la **descrizione** (toccala per scriverla: di cosa si tratta) e, se vuoi, una **foto** (es. per un viaggio, la stanza da sistemare): **Foto** nel riquadro la carica dal telefono, **Cambia foto** la sostituisce, **⋯ → Togli la foto** la toglie;
@@ -142,11 +155,6 @@ I to-do sono le cose da fare senza una data precisa.
   - **Toccalo** per riscriverlo, segnarlo come **principale** (in grassetto e sempre in cima), dargli una **scadenza**, un **promemoria** (il giorno della scadenza, dalle 9, ti scrivo su Telegram) e una riga di nota.
   - Con il primo passo fatto il to-do va in **In corso**; quando li hai fatti tutti ti chiedo se segnarlo come **Fatto**.
 - **⋯ → Suggerisci i passi**: mAIPAL propone una lista di passi dal titolo e dalle note; aggiungo solo quelli che scegli.
-- **Sul telefono** i tre stati sono tre **cartelle**, una sotto l'altra, con il numero dei to-do e il **+**. Dalla cartella spuntano i primi to-do: passandoci sopra il dito la cartella si apre in avanti e i to-do escono a ventaglio (quello sotto il dito sale di più).
-- **Sfogliare i to-do di una cartella**: scorri in su con il dito sopra i to-do e lasciali: restano alzati. Ora scorrendo in orizzontale sfogli tutti i to-do della cartella (le caselle seguono il dito; dopo l'ultimo ricomincia dal primo, e all'indietro dall'ultimo) (il to do in primo piano si alza un po’ di più; in basso a sinistra vedi quale è, es. "3 di 7"), toccandone uno lo apri, e scorrendo in giù rientrano nella cartella.
-- Tocca una cartella per l'**elenco** di tutti i suoi to-do: la stella li mette tra i preferiti (in cima), le frecce li **spostano** in un'altra cartella, il cerchio li segna come fatti (o li riapre), il cestino li elimina; toccando il titolo li apri. Con la freccia in alto (o il tasto indietro) torni alle cartelle.
-- Il **+** su una cartella crea un to-do già in quello stato: scrivi cosa c'è da fare, le note e la priorità.
-- Sul computer i tre stati restano tre colonne affiancate.
 - Li crei anche dalla chat con l'agente Task (se non c'è una data diventa un to-do).
 
 ## Diario
@@ -213,7 +221,7 @@ Il diario di commessa raccoglie, cantiere per cantiere, il lavoro fatto: ore per
   - una riga di informazioni da scorrere: **Codice** della commessa (es. 2026-011; il titolo in alto mostra solo il nome), **Stato** (toccalo per cambiarlo), Ore, Segnalazioni, **Documenti e link** (toccalo per aprire la **cartella della commessa** su Google Drive o OneDrive, mAIPAL/Clienti/<cliente>/<commessa>, che creo se non c'è ancora, e i **link utili**), Date, Telefono, Email (il cantiere è sulla mappa qui sotto; la voce **Cantiere** compare solo finché la posizione non c'è);
   - la **mappa** del cantiere, a colori, sotto i dati in alto: il pallino è **verde** (col numero) se qualcuno è in cantiere ora, arancione se non c'è nessuno. Trascina la **barretta** sotto la mappa in su per nasconderla e in giù per riaprirla, oppure toccala; la scelta resta su quel dispositivo. Con un dito sposti la mappa, con due la ingrandisci. **Tocca il pallino** per sapere cosa indica: chi è in cantiere e da quando (o che non c'è nessuno), l'indirizzo e il pulsante per **navigare** fin lì. La posizione è quella dell'indirizzo o quella che imposti tu: tocca il pallino e poi l'icona della **posizione**. Senza una posizione la mappa non c'è, e al suo posto nella barra in alto c'è la voce **Cantiere** per impostarla;
   - le sezioni **Diario / Ore / Problemi / Materiali / Costi / Pianificazione / Sopralluogo / Preventivo**: scorri per passare dall'una all'altra (tappe e attività sono tutte in **Pianificazione**; la **descrizione del lavoro** è in cima a **Preventivo**);
-  - **Attività** (in Pianificazione): le cose da fare della commessa. Con **+ Attività** scrivi cosa c'è da fare, **chi se ne occupa**, **entro quando** (facoltativo) e, se vuoi, la **tappa** a cui appartiene. Il pallino la segna come fatta; toccandola la modifichi o la elimini. Restano dentro la commessa (non compaiono nella sezione To-Do generale);
+  - **Attività** (in Pianificazione): le cose da fare della commessa. Con **+ Attività** scrivi cosa c'è da fare, **chi se ne occupa**, **entro quando** (facoltativo) e, se vuoi, la **tappa** a cui appartiene. Il pallino la segna come fatta; toccandola la modifichi o la elimini. Restano dentro la commessa (non compaiono tra i To-Do della sezione Task);
   - il **periodo** (questa settimana da lunedì, ultimi 30 giorni, questo mese, tutto o date a scelta) con l'icona del calendario;
   - le voci giorno per giorno, con l'autore in grigio (e «Telegram» se è arrivata da lì; nella sezione **Ore** non è indicato) e le foto. **Tocca una voce** per aprirla: si apre una finestra adatta allo schermo del telefono con il testo sistemato dall'agente, ore, materiali, problemi (con l'azione correttiva), foto, il **messaggio originale** così come è stato mandato e le **modifiche** fatte (chi, quando, cosa). Il **testo** della nota lo modifica **solo chi l'ha scritta** (**Modifica**), e ogni modifica resta tracciata. Il **messaggio originale** non si modifica mai, e nemmeno il testo che registra l'app per le **presenze** («In cantiere dalle … alle …»);
   - il **contenuto** (ore di lavoro, pausa delle presenze, materiali, problemi, giorno, fase) lo può correggere anche l'**amministratore**, su qualunque nota, compresa quella di un collaboratore: tocca **Correggi** nella finestra della nota (es. l'operatore ha segnato 3 pezzi ma erano 2). Cambiando la pausa di una presenza le ore si ricalcolano da sole. La correzione resta scritta in chiaro sotto la nota, nel diario: «✎ Luca ha corretto i materiali il 17 nov: 3 pz scatole 503 → 2 pz scatole 503», «✎ Ore corrette da Luca il 17 nov: Avanzino 8,5 h → 8 h · pausa 30 → 60 min»;
@@ -503,7 +511,7 @@ Documenti è la tua **base di conoscenza**: tutto quello che hai caricato con Sa
 - Per aggiungerne: Chat → Salva, con la graffetta (o condividendo un file dal telefono verso mAIPAL).
 - **Sul telefono** i documenti sono in **cartelle**, una per argomento (Lavoro, Ricevute, Finanza…), due per riga: le più piene in alto, ognuna con il colore del suo argomento. Dentro ci sono i file e anche le **informazioni registrate** con Salva (segnate **Info**).
   - In alto, sempre visibili anche scorrendo: quanti **documenti** (e quante sono info), quanti **caratteri** e quante **categorie**.
-  - Dalla cartella spuntano gli ultimi documenti, e i gesti sono quelli dei To-Do: col dito sopra escono a ventaglio; **scorri in su** sopra i documenti e restano alzati; allora scorrendo in orizzontale li sfogli tutti (dopo l'ultimo ricomincia dal primo), toccandone uno apri la sua scheda, e scorrendo in giù rientrano. La pagina scorre trascinando sulla parte bassa delle cartelle (nome e numero) o negli spazi tra una e l'altra.
+  - Dalla cartella spuntano gli ultimi documenti, e i gesti sono questi: col dito sopra escono a ventaglio; **scorri in su** sopra i documenti e restano alzati; allora scorrendo in orizzontale li sfogli tutti (dopo l'ultimo ricomincia dal primo), toccandone uno apri la sua scheda, e scorrendo in giù rientrano. La pagina scorre trascinando sulla parte bassa delle cartelle (nome e numero) o negli spazi tra una e l'altra.
   - **Tocca** la cartella per l'elenco dei suoi documenti, dal più recente; tocca un documento per la sua scheda (argomento, parole chiave, anteprima, **Apri su Drive**, **Elimina**). Con la freccia in alto (o il tasto indietro) torni alle cartelle.
   - Il **+** apre la chat con **Salva** per aggiungere un documento: l'argomento lo sceglie mAIPAL.
 

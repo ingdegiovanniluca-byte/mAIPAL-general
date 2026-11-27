@@ -1,23 +1,34 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
-import { useLocation, useNavigate } from "react-router-dom";
-import { Calendar, CalendarCheck, CalendarClock, Star, Trash2, CircleCheck, Archive, Bell, BellRing, Hourglass, Users, Send, StickyNote, Wand2, UserCheck, Share2, Repeat, Link2 } from "lucide-react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Calendar, CalendarCheck, CalendarDays, Star, Trash2, CircleCheck, Bell, BellRing, Users, Send, StickyNote, Wand2, Share2,
+  Repeat, Link2, Plus, Check, ChevronDown, ChevronLeft, ChevronRight, MoreHorizontal, SquareCheck, Clock, Flag, Type,
+} from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import TaskCalendar from "@/pages/TaskCalendar";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import TodoDetail from "@/components/TodoDetail";
+import { NewTodoSheet } from "@/components/TodoFolders";
+import GlassBottomSheet from "@/components/GlassBottomSheet";
+import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
+import { StatTile } from "@/components/StatTiles";
+import { Field, Input, Select, PRIMARY } from "@/components/FormFields";
 
-const COLS = [
-  { key: "alta", label: "Alta priorità", tint: "column-tint-high", dot: "bg-[color:var(--high)]", side: "priority-high" },
-  { key: "media", label: "Media priorità", tint: "column-tint-med", dot: "bg-[color:var(--med)]", side: "priority-med" },
-  { key: "bassa", label: "Bassa priorità", tint: "column-tint-low", dot: "bg-[color:var(--low)]", side: "priority-low" },
-];
+/* Task e To-Do, one section in the style of the diario di commessa: the big words on top choose the view
+   (To-Do · Giornate · Calendario, a swipe or a tap on a side one changes it).
+   GIORNATE: today always first, its tasks by the hour they start (an "Adesso" line where the time is now,
+   the ones without an hour "In giornata"), then the late ones in their own box, then the next days under
+   their month, each day with its number on the left; the round button on a row completes it, a tap on the
+   row opens the task (the same card as before, with all its functions).
+   TO-DO: the three states (Da fare, In corso, Fatto) as the diary's months, each with its "+"; a tap opens
+   the to do's own full page, unchanged; "…" moves it, marks it done or deletes it.
+   CALENDARIO: the month, and under it the tasks of the day chosen.
+   On the computer, with room enough, Giornate (or Calendario) and To-Do side by side. */
 
-// Mobile shows one chronological list instead of the three priority areas, so each card
-// carries its own priority marker - these colors stay readable on the dark glass cards.
 const PRIORITY_RANK = { alta: 0, media: 1, bassa: 2 };
 const PRIORITY_META = {
   alta: { label: "Alta", color: "#E8663F" },
@@ -26,6 +37,9 @@ const PRIORITY_META = {
 };
 
 const IT_MONTHS_LONG = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+const IT_MONTHS_SHORT = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
+const IT_WD_LONG = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+const IT_WD_SHORT = ["DOM", "LUN", "MAR", "MER", "GIO", "VEN", "SAB"];
 
 const formatDayMonth = (iso, time) => {
   const d = new Date(iso);
@@ -35,43 +49,119 @@ const formatDayMonth = (iso, time) => {
   return time ? `${time}, ${day} ${month}` : `${day} ${month}`;
 };
 
-const isTaskOverdue = (t) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
-  return !!t.due_date && !t.completed && t.due_date < todayStr;
+const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayIso = () => isoOf(new Date());
+const dateOf = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); };
+const addDays = (iso, n) => { const d = dateOf(iso); d.setDate(d.getDate() + n); return isoOf(d); };
+const hhmm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+const shortDay = (iso, withYear) => {
+  const d = dateOf(iso);
+  return `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]}${withYear ? ` ${d.getFullYear()}` : ""}`;
 };
-// "Non scaduti": la scadenza non è ancora passata, compresi i task senza scadenza - il
-// complemento diretto di isTaskOverdue.
-const isTaskNotOverdue = (t) => !isTaskOverdue(t);
+// "Ieri", "Lunedì 24 nov", "3 ott 2025": the day of a late task
+const lateDay = (iso, today) => {
+  if (iso === addDays(today, -1)) return "Ieri";
+  const d = dateOf(iso);
+  const days = Math.round((dateOf(today) - d) / 86400000);
+  if (days < 7) return `${IT_WD_LONG[d.getDay()][0].toUpperCase()}${IT_WD_LONG[d.getDay()].slice(1)} ${shortDay(iso)}`;
+  return shortDay(iso, d.getFullYear() !== dateOf(today).getFullYear());
+};
+
+const isTaskOverdue = (t, today = todayIso()) => !!t.due_date && !t.completed && t.due_date < today;
+
+// a day's tasks: those with an hour by the hour, then the ones "in giornata"; same hour, the higher priority first
+const byHour = (a, b) => {
+  const ta = a.due_time || "99:99", tb = b.due_time || "99:99";
+  if (ta !== tb) return ta.localeCompare(tb);
+  const pa = PRIORITY_RANK[a.priority] ?? 3, pb = PRIORITY_RANK[b.priority] ?? 3;
+  if (pa !== pb) return pa - pb;
+  return (a.created_at || "").localeCompare(b.created_at || "");
+};
+
+const VIEWS = [
+  { key: "todo", label: "To-Do" },
+  { key: "giornate", label: "Giornate" },
+  { key: "calendario", label: "Calendario" },
+];
+const TODO_GROUPS = [
+  { key: "da_fare", label: "Da fare", dot: "rgba(255,255,255,0.75)" },
+  { key: "in_corso", label: "In corso", dot: "#36C5E0" },
+  { key: "fatto", label: "Fatto", dot: "#FFAC33" },
+];
+const NEW_TODO_FOLDER = { da_fare: { key: "da_fare", label: "Da fare" }, in_corso: { key: "in_corso", label: "In corso" }, fatto: { key: "fatto", label: "Fatti" } };
+
+// the width of the section (the chat column on the left takes part of the window on the computer)
+function useWidth() {
+  const ref = useRef(null);
+  const [w, setW] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    setW(el.offsetWidth);
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+// the time now, again every minute (the "Adesso" line moves on its own)
+function useNow() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
 
 export default function TaskBoardPage() {
   const { user } = useAuth();
   const isMobile = useIsMobile();
+  const [rootRef, width] = useWidth();
+  const split = !isMobile && width >= 860;
+  const now = useNow();
+  const today = isoOf(now);
   const [tasks, setTasks] = useState([]);
+  const [todos, setTodos] = useState([]);
   const [selected, setSelected] = useState(null);
-  const [showCompleted, setShowCompleted] = useState(false);
-  const [dragOverCol, setDragOverCol] = useState(null);
-  const [filters, setFilters] = useState({});
-  const [calendarCollapsed, setCalendarCollapsed] = useState(false);
-  const [calendarFilter, setCalendarFilter] = useState(null); // { type: "day", date } | { type: "week", start, end }
-  // Mobile: month of the week shown in the calendar strip - with no day/week selected the list
-  // shows that month's tasks.
-  const [mobileMonth, setMobileMonth] = useState(() => { const d = new Date(); return { month: d.getMonth(), year: d.getFullYear() }; });
-  const [tagFilters, setTagFilters] = useState([]);
+  const [openTodo, setOpenTodo] = useState(null);
   const [orgMembers, setOrgMembers] = useState([]);
+  const [status, setStatus] = useState("attivi");
+  const [prio, setPrio] = useState("");
+  const [tag, setTag] = useState("");
+  const [favOnly, setFavOnly] = useState(false);
+  const [newTask, setNewTask] = useState(false);
+  const [newTodo, setNewTodo] = useState(null);       // the state it goes in
+  const [calDay, setCalDay] = useState(null);
+
+  const [params, setParams] = useSearchParams();
+  const view = VIEWS.some((v) => v.key === params.get("v")) ? params.get("v") : "giornate";
+  const setView = (v) => setParams((p) => {
+    const n = new URLSearchParams(p);
+    if (v === "giornate") n.delete("v"); else n.set("v", v);
+    return n;
+  }, { replace: true });
+  // on the computer the To-Do are always on the right: on the left Giornate or Calendario
+  const leftView = split && view === "todo" ? "giornate" : view;
 
   const load = async () => {
     const r = await api.get("/tasks");
     setTasks(r.data);
   };
-  useEffect(() => { load(); }, []);
-  // Opened from a suggestion ("Oggi: «Palestra» alle 18:00"): show that task right away.
+  const loadTodos = async () => {
+    const r = await api.get("/todos");
+    setTodos(r.data);
+  };
+  useEffect(() => { load(); loadTodos(); }, []);
+  // Opened from a suggestion ("Oggi: «Palestra» alle 18:00") or from the chat: that task right away.
   const location = useLocation();
   const navigate = useNavigate();
   useEffect(() => {
     const wanted = location.state?.openTask;
     if (wanted && tasks.some((t) => t.id === wanted)) {
       setSelected(wanted);
-      navigate(location.pathname, { replace: true, state: null });
+      navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks]);
@@ -80,512 +170,644 @@ export default function TaskBoardPage() {
     else setOrgMembers([]);
   }, [user?.org_id]);
 
-  const sortTasks = (arr) => [...arr].sort((a, b) => {
-    if (showCompleted) {
-      const ca = a.completed_at || a.created_at || "";
-      const cb = b.completed_at || b.created_at || "";
-      return cb.localeCompare(ca);
-    }
-    const da = a.due_date || "9999-12-31";
-    const db_ = b.due_date || "9999-12-31";
-    if (da !== db_) return da.localeCompare(db_);
-    return (b.created_at || "").localeCompare(a.created_at || "");
-  });
-
-  const visible = tasks.filter((t) => showCompleted ? !!t.completed : !t.completed);
-
-  const allTags = Array.from(new Set(tasks.flatMap((t) => t.tags || []))).sort((a, b) => a.localeCompare(b));
-
-  // "scaduti" e "non scaduti" si escludono a vicenda dentro la stessa colonna: attivandone
-  // uno si disattiva automaticamente l'altro.
-  const toggleFilter = (colKey, kind) => {
-    setFilters((f) => {
-      const cur = f[colKey] || { fav: false, overdue: false, notOverdue: false };
-      const next = { ...cur, [kind]: !cur[kind] };
-      if (kind === "overdue" && next.overdue) next.notOverdue = false;
-      if (kind === "notOverdue" && next.notOverdue) next.overdue = false;
-      return { ...f, [colKey]: next };
-    });
-  };
-
-
-  const grouped = COLS.map((c) => {
-    const colTasks = visible.filter((t) => t.priority === c.key);
-    const f = filters[c.key] || { fav: false, overdue: false, notOverdue: false };
-    let filtered = colTasks;
-    if (f.overdue) filtered = filtered.filter(isTaskOverdue);
-    else if (f.notOverdue) filtered = filtered.filter(isTaskNotOverdue);
-    if (f.fav) filtered = filtered.filter((t) => !!t.favorite);
-    if (calendarFilter?.type === "day") filtered = filtered.filter((t) => t.due_date === calendarFilter.date);
-    else if (calendarFilter?.type === "week") filtered = filtered.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
-    if (tagFilters.length > 0) filtered = filtered.filter((t) => (t.tags || []).some((tag) => tagFilters.includes(tag)));
-    return { ...c, items: sortTasks(filtered), filterState: f };
-  });
-
-  // ===== Mobile: niente aree di priorità - un'unica lista in ordine cronologico (per data di
-  // scadenza); a parità di data prima la priorità più alta, poi l'ora. Un solo gruppo di
-  // filtri (stato "all") vale per tutta la lista. Senza giorno/settimana selezionati mostra i
-  // task del mese in visualizzazione nel calendario. =====
-  const mobileMonthPrefix = `${mobileMonth.year}-${String(mobileMonth.month + 1).padStart(2, "0")}-`;
-  const mobileFilterState = filters.all || { fav: false, overdue: false, notOverdue: false };
-  const mobileList = (() => {
-    let list = visible;
-    const f = mobileFilterState;
-    if (f.overdue) list = list.filter(isTaskOverdue);
-    else if (f.notOverdue) list = list.filter(isTaskNotOverdue);
-    if (f.fav) list = list.filter((t) => !!t.favorite);
-    if (calendarFilter?.type === "day") list = list.filter((t) => t.due_date === calendarFilter.date);
-    else if (calendarFilter?.type === "week") list = list.filter((t) => t.due_date && t.due_date >= calendarFilter.start && t.due_date <= calendarFilter.end);
-    else list = list.filter((t) => t.due_date && t.due_date.startsWith(mobileMonthPrefix));
-    return [...list].sort((a, b) => {
-      const da = a.due_date || "9999-12-31";
-      const db_ = b.due_date || "9999-12-31";
-      if (da !== db_) return da.localeCompare(db_);
-      const pa = PRIORITY_RANK[a.priority] ?? 3;
-      const pb = PRIORITY_RANK[b.priority] ?? 3;
-      if (pa !== pb) return pa - pb;
-      const ta = a.due_time || "99:99";
-      const tb = b.due_time || "99:99";
-      if (ta !== tb) return ta.localeCompare(tb);
-      return (b.created_at || "").localeCompare(a.created_at || "");
-    });
-  })();
-
-  const toggleFav = async (id, cur) => {
-    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: !cur } : t)));
-    try { await api.post(`/tasks/${id}/favorite`); }
-    catch { toast.error("Errore"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: cur } : t))); }
-  };
-
+  // ===== the task's quick actions (the rest is in its card) =====
   const toggleDone = async (id, cur) => {
-    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: !cur } : t)));
+    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: !cur, completed_at: cur ? null : new Date().toISOString() } : t)));
     try {
       await api.post(`/tasks/${id}/complete`);
       toast.success(cur ? "Riaperto" : "Task completato ✓");
+      load();
     } catch { toast.error("Errore"); setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, completed: cur } : t))); }
   };
 
-  // A recurring task goes on Calendar as a whole series (one recurring event).
-  const toggleCal = async (id, cur) => {
-    const t0 = tasks.find((t) => t.id === id);
-    const sid = t0?.recurrence_label ? t0.series_id : null;
-    const hit = (t) => t.id === id || (sid && t.series_id === sid);
-    setTasks((ts) => ts.map((t) => (hit(t) ? { ...t, calendar_synced: !cur } : t)));
-    try {
-      await api.patch(`/tasks/${id}`, { calendar_synced: !cur });
-      toast.success(sid ? (cur ? "Serie rimossa da Calendar" : "Serie aggiunta a Calendar come evento ricorrente") : (cur ? "Rimosso da Calendar" : "Aggiunto a Calendar"));
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Errore");
-      setTasks((ts) => ts.map((t) => (hit(t) ? { ...t, calendar_synced: cur } : t)));
-    }
+  // ===== the to dos' actions =====
+  const sortTodos = (arr) => [...arr].sort((a, b) => {
+    if (!!b.favorite !== !!a.favorite) return b.favorite ? 1 : -1;
+    return (b.created_at || "").localeCompare(a.created_at || "");
+  });
+  const todoFav = async (id, cur) => {
+    setTodos((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: !cur } : t)));
+    try { await api.post(`/todos/${id}/favorite`); }
+    catch { toast.error("Errore preferito"); setTodos((ts) => ts.map((t) => (t.id === id ? { ...t, favorite: cur } : t))); }
   };
-
-  const toggleReminder = async (id, cur) => {
-    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, reminder_enabled: !cur } : t)));
+  const todoMove = async (todo, next) => {
+    const prev = todos;
+    setTodos((ts) => ts.map((t) => (t.id === todo.id ? { ...t, status: next } : t)));
     try {
-      await api.patch(`/tasks/${id}`, { reminder_enabled: !cur });
-      toast.success(cur ? "Promemoria disattivato" : "Promemoria attivato");
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Errore");
-      setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, reminder_enabled: cur } : t)));
-    }
+      await api.patch(`/todos/${todo.id}`, { status: next });
+      toast.success(`Spostato in ${TODO_GROUPS.find((g) => g.key === next).label}`);
+    } catch { toast.error("Non sono riuscito a spostarlo"); setTodos(prev); }
   };
-
-  const del = async (id) => {
-    const task = tasks.find((t) => t.id === id);
-    if (!task) return;
-    askDeleteTask(task, async (scope) => {
-      const prev = tasks;
-      setTasks((ts) => ts.filter((t) => t.id !== id && !(scope === "following" && task.series_id && t.series_id === task.series_id && !t.completed && (t.due_date || "") >= (task.due_date || ""))));
-      try {
-        await api.delete(`/tasks/${id}`, { params: { scope } });
-        toast.success(scope === "following" ? "Task eliminati, la ripetizione si ferma qui" : "Task eliminato");
-        if (scope === "following") await load();
-      } catch { toast.error("Errore"); setTasks(prev); }
+  const todoDelete = (id) => {
+    toast("Eliminare questo to-do?", {
+      action: {
+        label: "Elimina",
+        onClick: async () => {
+          const prev = todos;
+          setTodos((ts) => ts.filter((t) => t.id !== id));
+          try { await api.delete(`/todos/${id}`); toast.success("To-do eliminato"); }
+          catch { toast.error("Errore eliminazione"); setTodos(prev); }
+        },
+      },
+      cancel: { label: "Annulla", onClick: () => {} },
+      duration: 6000,
     });
   };
 
-  const changePriority = async (id, newPriority) => {
-    const cur = tasks.find((t) => t.id === id);
-    if (!cur || cur.priority === newPriority) return;
-    const prevPriority = cur.priority;
-    setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, priority: newPriority } : t)));
-    try { await api.patch(`/tasks/${id}`, { priority: newPriority }); }
-    catch {
-      toast.error("Errore nello spostamento");
-      setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, priority: prevPriority } : t)));
-    }
-  };
+  // ===== the filters: priority, tag and favourites for both; Attivi / Completati for the tasks =====
+  const allTags = Array.from(new Set([...tasks, ...todos].flatMap((t) => t.tags || []))).sort((a, b) => a.localeCompare(b));
+  const keep = (t) => (!prio || t.priority === prio) && (!tag || (t.tags || []).includes(tag)) && (!favOnly || !!t.favorite);
+  const shown = tasks.filter(keep);
+  const shownTodos = todos.filter(keep);
 
-  const activeCount = tasks.filter((t) => !t.completed).length;
-  const completedCount = tasks.filter((t) => !!t.completed).length;
   const selectedTask = tasks.find((t) => t.id === selected) || null;
+  const nToday = tasks.filter((t) => t.due_date === today && !t.completed).length;
+  const nLate = tasks.filter((t) => isTaskOverdue(t, today)).length;
+  const nTodo = (s) => todos.filter((t) => t.status === s).length;
 
-  // Mobile: sotto la striscia dei giorni compare solo il filtro giorno/settimana attivo (un
-  // tocco lo toglie). Niente altri controlli sopra i riquadri, come nel riferimento grafico:
-  // archiviati e ricerca per hashtag restano sul desktop.
-  const mobileBelowStrip = isMobile && calendarFilter ? (
-    <button
-      data-testid="calendar-filter-pill"
-      onClick={() => setCalendarFilter(null)}
-      className="mt-4 rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
-    >
-      {calendarFilter.type === "day"
-        ? formatDayMonth(calendarFilter.date)
-        : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
+  const filters = (withStatus) => (
+    <div className={`grid gap-2 ${withStatus ? "grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_36px]" : "grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_36px]"}`}
+      data-testid="task-filters">
+      {withStatus && (
+        <PillSelect label="Attivi o completati" value={status} onChange={setStatus} testid="filter-status"
+          options={[["attivi", "Attivi"], ["completati", "Completati"]]} />
+      )}
+      <PillSelect label="Priorità" value={prio} onChange={setPrio} testid="filter-priority"
+        options={[["", "Priorità"], ["alta", "Alta"], ["media", "Media"], ["bassa", "Bassa"]]} />
+      <PillSelect label="Tag" value={tag} onChange={setTag} testid="filter-tag" disabled={!allTags.length}
+        options={[["", "# Tag"], ...allTags.map((x) => [x, `#${x}`])]} />
+      <button type="button" data-testid="filter-fav" aria-pressed={favOnly} aria-label="Solo preferiti" title="Solo preferiti"
+        onClick={() => setFavOnly((v) => !v)}
+        className={`h-9 w-9 rounded-full border flex items-center justify-center ${favOnly ? "bg-white/85 border-white/50 text-[#7A2A5C]" : "bg-white/[0.12] border-white/15 text-white"}`}>
+        <Star size={16} strokeWidth={1.8} className={favOnly ? "fill-current" : ""} />
+      </button>
+    </div>
+  );
+
+  const giornate = (
+    <Giornate tasks={shown} status={status} now={now} today={today} orgMembers={orgMembers}
+      onOpen={setSelected} onToggleDone={toggleDone} onCalendar={() => setView("calendario")} onTodo={() => setView("todo")} />
+  );
+  const calendario = (
+    <MonthView tasks={shown} today={today} day={calDay || today} onDay={setCalDay} orgMembers={orgMembers}
+      onOpen={setSelected} onToggleDone={toggleDone} />
+  );
+  const todoView = (
+    <TodoGroups todos={shownTodos} sortTodos={sortTodos} onOpen={setOpenTodo} onAdd={(s) => setNewTodo(NEW_TODO_FOLDER[s])}
+      onMove={todoMove} onDelete={todoDelete} onToggleFav={todoFav} />
+  );
+  const cta = (label, onClick, testid) => (
+    <button type="button" onClick={onClick} data-testid={testid}
+      className="h-11 px-[22px] rounded-full border border-white/30 bg-white/[0.22] text-white text-[15px] font-medium inline-flex items-center gap-2">
+      <Plus size={18} strokeWidth={2} /> {label}
     </button>
-  ) : null;
+  );
 
-  return (
-    <div className="flex flex-col md:h-[calc(100vh-17rem)]">
-      <TaskCalendar
-        mobileBelowStrip={mobileBelowStrip}
-        onVisibleMonthChange={setMobileMonth}
-        tasks={tasks}
-        collapsed={calendarCollapsed}
-        onToggleCollapse={() => setCalendarCollapsed((v) => !v)}
-        selectedDate={calendarFilter?.type === "day" ? calendarFilter.date : null}
-        onSelectDate={(d) => setCalendarFilter((v) => (v?.type === "day" && v.date === d ? null : { type: "day", date: d }))}
-        selectedWeekStart={calendarFilter?.type === "week" ? calendarFilter.start : null}
-        onSelectWeek={(mondayIso) => {
-          setCalendarFilter((v) => {
-            if (v?.type === "week" && v.start === mondayIso) return null;
-            const [y, m, d] = mondayIso.split("-").map(Number);
-            const end = new Date(y, m - 1, d + 6);
-            const endIso = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
-            return { type: "week", start: mondayIso, end: endIso };
-          });
-        }}
-      />
-      {/* ===== Desktop (>=768px): barra filtri invariata ===== */}
-      {!isMobile && (
-        <div className="flex items-center gap-2 mb-2 shrink-0 flex-wrap">
-          {calendarFilter && (
-            <button
-              data-testid="calendar-filter-pill"
-              onClick={() => setCalendarFilter(null)}
-              className="rounded-full inline-flex items-center gap-1.5 px-3 py-2 text-xs bg-[#00B0F0]/20 text-[#00B0F0]"
-            >
-              {calendarFilter.type === "day"
-                ? formatDayMonth(calendarFilter.date)
-                : `${formatDayMonth(calendarFilter.start)} – ${formatDayMonth(calendarFilter.end)}`} ✕
-            </button>
-          )}
-          <button
-            data-testid="filter-active"
-            onClick={() => setShowCompleted(false)}
-            title="Attivi"
-            className={`rounded-full inline-flex items-center transition-all duration-200 ${!showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
-          >
-            {!showCompleted ? (
-              <>
-                <CircleCheck size={14} />
-                <span className="text-xs font-mono-tight uppercase tracking-widest">attivi</span>
-                <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{activeCount}</span>
-              </>
-            ) : (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                <CircleCheck size={13} />
-              </>
-            )}
-          </button>
-          <button
-            data-testid="filter-completed"
-            onClick={() => setShowCompleted(true)}
-            title="Completati"
-            className={`rounded-full inline-flex items-center transition-all duration-200 ${showCompleted ? "gap-1.5 px-4 py-2 bg-[#CECAD0] text-[#403A3C]" : "gap-1 px-2.5 py-2 bg-white/10 text-white/50 hover:text-white/80"}`}
-          >
-            {showCompleted ? (
-              <>
-                <Archive size={14} />
-                <span className="text-xs font-mono-tight uppercase tracking-widest">completati</span>
-                <span className="ml-0.5 text-[10px] font-bold bg-black/10 rounded-full px-1.5 py-0.5">{completedCount}</span>
-              </>
-            ) : (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                <Archive size={13} />
-              </>
-            )}
-          </button>
-          {allTags.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar md:flex-wrap md:overflow-visible ml-2 md:ml-4 max-w-full">
-              {allTags.map((tag) => (
-                <button
-                  key={tag}
-                  data-testid={`tag-filter-${tag}`}
-                  onClick={() => setTagFilters((v) => (v.includes(tag) ? v.filter((x) => x !== tag) : [...v, tag]))}
-                  className={`shrink-0 text-[11px] px-2.5 py-1 rounded-full transition-colors ${tagFilters.includes(tag) ? "bg-[#00B0F0] text-white" : "bg-white/10 text-white/60 hover:text-white/90"}`}
-                >
-                  #{tag}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {isMobile && (
-        <div data-testid="mobile-task-list">
-          {/* Un solo menu di filtro, all'altezza dove prima c'era "Alta priorità". */}
-          <div className="flex items-center justify-between px-1 mb-4">
-            <div className="kicker whitespace-nowrap" data-testid="mobile-list-scope">
-              {calendarFilter?.type === "day" ? "task del giorno" : calendarFilter?.type === "week" ? "task della settimana" : IT_MONTHS_LONG[mobileMonth.month]}
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                data-testid="filter-overdue-all"
-                onClick={() => toggleFilter("all", "overdue")}
-                title="Filtra scaduti"
-                aria-pressed={!!mobileFilterState.overdue}
-                className={`p-1 transition-colors ${mobileFilterState.overdue ? "text-[#E0703A]" : "text-white/50"}`}
-              >
-                <Hourglass size={13} strokeWidth={mobileFilterState.overdue ? 2.5 : 2} />
-              </button>
-              <button
-                data-testid="filter-not-overdue-all"
-                onClick={() => toggleFilter("all", "notOverdue")}
-                title="Filtra non scaduti"
-                aria-pressed={!!mobileFilterState.notOverdue}
-                className={`p-1 transition-colors ${mobileFilterState.notOverdue ? "text-[#4E95D9]" : "text-white/50"}`}
-              >
-                <CalendarClock size={13} strokeWidth={mobileFilterState.notOverdue ? 2.5 : 2} />
-              </button>
-              <button
-                data-testid="filter-fav-all"
-                onClick={() => toggleFilter("all", "fav")}
-                title="Filtra preferiti"
-                aria-pressed={!!mobileFilterState.fav}
-                className={`p-1 transition-colors ${mobileFilterState.fav ? "text-amber-400" : "text-white/50"}`}
-              >
-                <Star size={13} className={mobileFilterState.fav ? "fill-current" : ""} />
-              </button>
-              <div data-testid="count-all" className="liquid-glass-panel h-7 min-w-[1.75rem] px-1 ml-1 rounded-full flex items-center justify-center text-sm font-bold">{mobileList.length}</div>
-            </div>
-          </div>
-          <div className="space-y-3">
-            {mobileList.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
-            {mobileList.map((t) => (
-              <TaskCard
-                key={t.id}
-                task={t}
-                orgMembers={orgMembers}
-                onClick={() => setSelected(t.id)}
-                onToggleFav={() => toggleFav(t.id, !!t.favorite)}
-                onToggleDone={() => toggleDone(t.id, !!t.completed)}
-                onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
-                onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
-                onDelete={() => del(t.id)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!isMobile && (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mt-2 md:flex-1 md:min-h-0">
-        {grouped.map((c) => {
-          return (
-          <div
-            key={c.key}
-            className={`rounded-2xl p-4 md:p-5 ${c.tint} transition-[filter] flex flex-col min-h-0 ${dragOverCol === c.key ? "brightness-125" : ""}`}
-            data-testid={`col-${c.key}`}
-            onDragOver={(e) => { e.preventDefault(); setDragOverCol(c.key); }}
-            onDragLeave={() => setDragOverCol((v) => (v === c.key ? null : v))}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOverCol(null);
-              const id = e.dataTransfer.getData("text/plain");
-              if (id) changePriority(id, c.key);
-            }}
-          >
-            <div className="flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${c.dot}`} />
-                <div className="kicker whitespace-nowrap">{c.label}</div>
-              </div>
-              {/* Filtri come sole icone, senza area né numero: lo stato attivo si riconosce dal
-                  colore. Il numero a destra conta i task effettivamente mostrati nel riquadro,
-                  quindi cambia con filtri, tag, ricerca e giorno/settimana selezionati. */}
-              <div className="flex items-center gap-1 md:gap-1.5 shrink-0">
-                <button
-                  data-testid={`filter-overdue-${c.key}`}
-                  onClick={() => toggleFilter(c.key, "overdue")}
-                  title="Filtra scaduti"
-                  aria-pressed={!!c.filterState.overdue}
-                  className={`p-1 transition-colors ${c.filterState.overdue ? "text-[#E0703A]" : "text-white/50 hover:text-white/80"}`}
-                >
-                  <Hourglass size={13} strokeWidth={c.filterState.overdue ? 2.5 : 2} />
-                </button>
-                <button
-                  data-testid={`filter-not-overdue-${c.key}`}
-                  onClick={() => toggleFilter(c.key, "notOverdue")}
-                  title="Filtra non scaduti"
-                  aria-pressed={!!c.filterState.notOverdue}
-                  className={`p-1 transition-colors ${c.filterState.notOverdue ? "text-[#4E95D9]" : "text-white/50 hover:text-white/80"}`}
-                >
-                  <CalendarClock size={13} strokeWidth={c.filterState.notOverdue ? 2.5 : 2} />
-                </button>
-                <button
-                  data-testid={`filter-fav-${c.key}`}
-                  onClick={() => toggleFilter(c.key, "fav")}
-                  title="Filtra preferiti"
-                  aria-pressed={!!c.filterState.fav}
-                  className={`p-1 transition-colors ${c.filterState.fav ? "text-amber-400" : "text-white/50 hover:text-white/80"}`}
-                >
-                  <Star size={13} className={c.filterState.fav ? "fill-current" : ""} />
-                </button>
-                {/* liquid-glass-panel invece di liquid-glass-btn: stesso effetto vetro,
-                    ma senza l'onda di colore animata (contatore fermo). */}
-                <div data-testid={`col-count-${c.key}`} className="liquid-glass-panel h-7 min-w-[1.75rem] px-1 ml-1 rounded-full flex items-center justify-center text-sm font-bold">{c.items.length}</div>
-              </div>
-            </div>
-            <div className="mt-4 md:mt-5 space-y-3 md:flex-1 md:min-h-0 md:overflow-y-auto md:pr-1">
-              {c.items.length === 0 && <div className="text-center text-white/40 py-16 kicker">vuoto</div>}
-              {c.items.map((t) => (
-                <TaskCard
-                  key={t.id}
-                  task={t}
-                  orgMembers={orgMembers}
-                  onClick={() => setSelected(t.id)}
-                  onToggleFav={() => toggleFav(t.id, !!t.favorite)}
-                  onToggleDone={() => toggleDone(t.id, !!t.completed)}
-                  onToggleCal={() => toggleCal(t.id, !!t.calendar_synced)}
-                  onToggleReminder={() => toggleReminder(t.id, !!t.reminder_enabled)}
-                  onDelete={() => del(t.id)}
-                />
-              ))}
-            </div>
-          </div>
-          );
-        })}
-      </div>
-      )}
-
+  const sheets = (
+    <>
       {selectedTask && (
         <TaskDialog task={selectedTask} orgMembers={orgMembers} onClose={() => setSelected(null)} onUpdated={async () => { await load(); }} />
+      )}
+      {openTodo && <TodoDetail todo={openTodo} onClose={() => setOpenTodo(null)} onUpdated={loadTodos} />}
+      {newTask && <NewTaskSheet today={today} onClose={() => setNewTask(false)} onCreated={load} />}
+      {newTodo && <NewTodoSheet folder={newTodo} onClose={() => setNewTodo(null)} onCreated={loadTodos} />}
+    </>
+  );
+
+  const title = (
+    <div className="flex items-center gap-2">
+      <SquareCheck size={20} className="text-white/80" />
+      <h1 className="text-2xl font-semibold text-white">Task e To-Do</h1>
+    </div>
+  );
+
+  // one box around both layouts, so the width is always measured on the same element
+  return (
+    <div ref={rootRef} className="w-full pb-10" data-testid="task-page">
+      {split ? (
+      <>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          {title}
+          <div className="flex items-center gap-2">
+            {cta("Nuovo task", () => setNewTask(true), "new-task-btn")}
+            {cta("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")}
+          </div>
+        </div>
+        <div className="mt-6 grid grid-cols-5 gap-3" data-testid="task-stats">
+          <StatTile label="Oggi" value={nToday} testid="stat-today" />
+          <StatTile label="Scaduti" value={nLate} testid="stat-late" />
+          <StatTile label="To-Do da fare" value={nTodo("da_fare")} testid="stat-todo" />
+          <StatTile label="In corso" value={nTodo("in_corso")} testid="stat-doing" />
+          <StatTile label="Fatti" value={nTodo("fatto")} testid="stat-done" />
+        </div>
+        <div className="mt-6 max-w-[560px]">{filters(true)}</div>
+        <div className="mt-6 grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] gap-10 items-start">
+          <div className="min-w-0">
+            <div className="flex items-baseline gap-6 mb-4" data-testid="view-tabs">
+              {VIEWS.filter((v) => v.key !== "todo").map((v) => (
+                <button key={v.key} type="button" onClick={() => setView(v.key)} data-testid={`view-${v.key}`} aria-current={leftView === v.key ? "page" : undefined}
+                  className={leftView === v.key ? "text-[30px] font-semibold tracking-tight text-white/[0.68]" : "text-[17px] font-medium text-white/50 hover:text-white/75"}>
+                  {v.label}
+                </button>
+              ))}
+            </div>
+            {leftView === "calendario" ? calendario : giornate}
+          </div>
+          <div className="min-w-0">
+            <div className="mb-4 text-[30px] font-semibold tracking-tight text-white/[0.68]" data-testid="todo-pane-title">To-Do</div>
+            {todoView}
+          </div>
+        </div>
+      </>
+      ) : (
+      <>
+      {title}
+      <div className="mt-5 flex justify-center">
+        {view === "todo"
+          ? cta("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")
+          : cta("Nuovo task", () => setNewTask(true), "new-task-btn")}
+      </div>
+      <div className="mt-5 grid grid-cols-3 gap-2 min-[380px]:gap-3" data-testid="task-stats">
+        <StatTile label="Oggi" value={nToday} testid="stat-today" />
+        <StatTile label="Scaduti" value={nLate} testid="stat-late" />
+        <StatTile label="To-Do aperti" value={nTodo("da_fare") + nTodo("in_corso")} testid="stat-todo" />
+      </div>
+      <ViewCarousel view={view} onView={setView} />
+      <div className="mt-3">{filters(view !== "todo")}</div>
+      <div className="mt-5">
+        {view === "todo" ? todoView : view === "calendario" ? calendario : giornate}
+      </div>
+      </>
+      )}
+      {sheets}
+    </div>
+  );
+}
+
+// the views, like the diary's sections: the chosen one in the middle, big; a swipe or a tap on a side one changes it
+function ViewCarousel({ view, onView }) {
+  const x0 = useRef(null);
+  const i = VIEWS.findIndex((v) => v.key === view);
+  const at = (k) => VIEWS[(k + VIEWS.length) % VIEWS.length];
+  return (
+    <div className="mt-6 -mx-4 h-[46px] flex items-center justify-center gap-[22px] overflow-hidden select-none" data-testid="view-tabs"
+      onTouchStart={(e) => { x0.current = e.touches?.[0]?.clientX ?? null; }}
+      onTouchEnd={(e) => {
+        if (x0.current == null) return;
+        const dx = (e.changedTouches?.[0]?.clientX ?? x0.current) - x0.current;
+        x0.current = null;
+        if (Math.abs(dx) > 40) onView(at(i + (dx < 0 ? 1 : -1)).key);
+      }}
+      style={{ WebkitMaskImage: "linear-gradient(to right, transparent 0, #000 18%, #000 82%, transparent 100%)", maskImage: "linear-gradient(to right, transparent 0, #000 18%, #000 82%, transparent 100%)" }}>
+      <button type="button" onClick={() => onView(at(i - 1).key)} data-testid={`view-${at(i - 1).key}`}
+        className="flex-1 basis-0 text-right text-[15px] font-medium text-white/30">{at(i - 1).label}</button>
+      <h2 className="shrink-0 m-0 text-[30px] font-semibold tracking-tight text-white/[0.68]" data-testid="view-current"
+        style={{ textShadow: "0 2px 16px rgba(60,10,60,0.18)" }}>{at(i).label}</h2>
+      <button type="button" onClick={() => onView(at(i + 1).key)} data-testid={`view-${at(i + 1).key}`}
+        className="flex-1 basis-0 text-left text-[15px] font-medium text-white/30">{at(i + 1).label}</button>
+    </div>
+  );
+}
+
+// a small dropdown in the filters row (the phone's own picker)
+function PillSelect({ label, value, onChange, options, testid, disabled }) {
+  return (
+    <div className="relative min-w-0">
+      <select aria-label={label} value={value} data-testid={testid} disabled={disabled} onChange={(e) => onChange(e.target.value)}
+        className={`h-9 w-full appearance-none truncate rounded-full border pl-3.5 pr-8 text-[13px] text-white outline-none cursor-pointer disabled:opacity-50 ${value ? "bg-white/25 border-white/40" : "bg-white/[0.12] border-white/15"}`}>
+        {options.map(([k, l]) => <option key={k} value={k} className="text-black">{l}</option>)}
+      </select>
+      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60 pointer-events-none" />
+    </div>
+  );
+}
+
+// the day on the left of its tasks: the number and the weekday
+function DayNum({ iso }) {
+  const d = dateOf(iso);
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[24px] font-medium leading-none text-white tabular-nums">{d.getDate()}</span>
+      <span className="text-[11px] tracking-[0.14em] text-white/60">{IT_WD_SHORT[d.getDay()]}</span>
+    </div>
+  );
+}
+
+// the line on top of a block (Oggi, a month, Da fare...): the words and, on the right, how many
+function BlockHead({ children, right, testid, className = "text-white/75" }) {
+  return (
+    <div className={`flex items-center justify-between gap-3 text-[12px] tracking-[0.18em] uppercase pb-2.5 border-b border-white/30 ${className}`} data-testid={testid}>
+      <span className="flex items-center gap-2 min-w-0">{children}</span>
+      {right != null && <span className="shrink-0 text-white/60 tracking-[0.08em]">{right}</span>}
+    </div>
+  );
+}
+
+// one task in the days: the hour, the priority, what is on (repeats, reminder, calendar, who), the title, where it came from
+function TaskRow({ task, orgMembers, onOpen, onToggleDone, when, whenClass = "text-white/90" }) {
+  const prio = PRIORITY_META[task.priority];
+  const done = !!task.completed;
+  const assignee = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to) : null;
+  const sub = assignee ? `Assegnato a ${assignee.name}` : task.source?.label ? `Da: ${task.source.label}` : task.recurrence_label || "";
+  const time = when ?? (task.due_time || "In giornata");
+  return (
+    <div className="flex items-start gap-2.5 py-2" data-testid={`task-${task.id}`}>
+      <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex flex-col gap-1" data-testid="task-open">
+        <span className="flex items-center gap-2 text-[13px] text-white/60 min-w-0">
+          <span className={`font-semibold whitespace-nowrap ${whenClass}`}>{time}</span>
+          {prio && <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
+          {task.recurrence_label && <Repeat size={14} className="shrink-0" aria-label={task.recurrence_label} data-testid="task-recurring-icon" />}
+          {task.reminder_enabled && <BellRing size={14} className="shrink-0" aria-label="Promemoria attivo" data-testid="task-reminder-icon" />}
+          {task.calendar_synced && <CalendarCheck size={14} className="shrink-0" aria-label="Nel calendario" data-testid="task-calendar-icon" />}
+          {task.visibility === "org" && !assignee && <Users size={14} className="shrink-0" aria-label="Condiviso col team" />}
+          {!!task.notes && <StickyNote size={14} className="shrink-0" aria-label="Ha delle note" />}
+          {task.favorite && <Star size={14} className="shrink-0 fill-current" aria-label="Preferito" />}
+          {assignee && (
+            <span className="h-[18px] w-[18px] shrink-0 rounded-full bg-white/25 text-white text-[10px] font-semibold flex items-center justify-center" title={`Assegnato a ${assignee.name}`}>
+              {(assignee.name || "?").trim()[0]?.toUpperCase()}
+            </span>
+          )}
+        </span>
+        <span className={`text-[16px] leading-[1.35] break-words ${done ? "line-through text-white/55" : "text-white"}`}>{task.title}</span>
+        {sub && <span className="text-[12px] text-white/60 truncate">{sub}</span>}
+      </button>
+      <button type="button" data-testid="task-complete" onClick={onToggleDone} aria-label={done ? "Fatto: tocca per riaprirlo" : "Segna come fatto"}
+        title={done ? "Riapri" : "Segna come fatto"}
+        className={`mt-1.5 h-[30px] w-[30px] shrink-0 rounded-full border-[1.5px] border-white/50 flex items-center justify-center ${done ? "bg-white/85 text-[#7A2A5C]" : "text-transparent"}`}>
+        <Check size={16} strokeWidth={2.6} />
+      </button>
+    </div>
+  );
+}
+
+// tasks grouped by month and day (the next days; the completed ones, newest first)
+function MonthsAndDays({ tasks, dayOf, desc, rowProps, today }) {
+  const days = [];
+  [...tasks].sort((a, b) => {
+    const da = dayOf(a), db_ = dayOf(b);
+    if (da !== db_) return desc ? db_.localeCompare(da) : da.localeCompare(db_);
+    return byHour(a, b);
+  }).forEach((t) => {
+    const d = dayOf(t);
+    const g = days[days.length - 1];
+    if (g && g.day === d) g.items.push(t); else days.push({ day: d, items: [t] });
+  });
+  const months = [];
+  days.forEach((g) => {
+    const key = g.day.slice(0, 7);
+    const m = months[months.length - 1];
+    if (m && m.key === key) m.days.push(g); else months.push({ key, days: [g] });
+  });
+  const year = dateOf(today).getFullYear();
+  return months.map((m) => {
+    const [y, mo] = m.key.split("-").map(Number);
+    return (
+      <section key={m.key} className="flex flex-col" data-testid={`month-${m.key}`}>
+        <BlockHead>{IT_MONTHS_LONG[mo - 1]}{y !== year ? ` ${y}` : ""}</BlockHead>
+        {m.days.map((g) => (
+          <div key={g.day} className="grid grid-cols-[52px_minmax(0,1fr)] pt-3.5" data-testid={`day-${g.day}`}>
+            <DayNum iso={g.day} />
+            <div className="flex flex-col">
+              {g.items.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} />)}
+            </div>
+          </div>
+        ))}
+      </section>
+    );
+  });
+}
+
+function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone, onCalendar, onTodo }) {
+  const [allLate, setAllLate] = useState(false);
+  const rowProps = (t) => ({ orgMembers, onOpen: () => onOpen(t.id), onToggleDone: () => onToggleDone(t.id, !!t.completed) });
+
+  if (status === "completati") {
+    const done = tasks.filter((t) => t.completed);
+    const dayOf = (t) => (t.completed_at ? isoOf(new Date(t.completed_at)) : t.due_date || today);
+    return (
+      <div className="flex flex-col gap-5" data-testid="giornate">
+        <div className="text-center text-[12px] tracking-[0.16em] uppercase text-white/85" data-testid="period-label">
+          Completati <span className="text-white/60">· {done.length === 1 ? "1 task" : `${done.length} task`}</span>
+        </div>
+        {done.length === 0 && <div className="text-center text-white/60 text-[14px] py-10">Nessun task completato.</div>}
+        <MonthsAndDays tasks={done} dayOf={dayOf} desc today={today} rowProps={rowProps} />
+      </div>
+    );
+  }
+
+  const nowHm = hhmm(now);
+  const todays = tasks.filter((t) => t.due_date === today).sort(byHour);
+  const late = tasks.filter((t) => isTaskOverdue(t, today)).sort((a, b) => b.due_date.localeCompare(a.due_date) || byHour(a, b));
+  const next = tasks.filter((t) => !t.completed && t.due_date && t.due_date > today);
+  const undated = tasks.filter((t) => !t.completed && !t.due_date).sort((a, b) => (PRIORITY_RANK[a.priority] ?? 3) - (PRIORITY_RANK[b.priority] ?? 3) || (b.created_at || "").localeCompare(a.created_at || ""));
+  const last = next.reduce((m, t) => (t.due_date > m ? t.due_date : m), today);
+  const nShown = todays.filter((t) => !t.completed).length + next.length;
+  // where the "Adesso" line goes: before the first task with an hour still to come (after the last one with an hour, if none)
+  const timed = todays.filter((t) => t.due_time);
+  let nowAt = timed.findIndex((t) => t.due_time > nowHm);
+  if (nowAt < 0) nowAt = timed.length;
+  const nowLine = (
+    <div key="now" className="flex items-center gap-2 pt-0.5 pb-1 text-[11px] font-semibold tracking-[0.14em] uppercase tt-now" data-testid="now-line">
+      <span className="w-[7px] h-[7px] rounded-full tt-now-bg" />
+      <span className="flex-1 h-px tt-now-bg opacity-70" />
+      Adesso {nowHm}
+    </div>
+  );
+  const todayRows = [];
+  todays.forEach((t, k) => {
+    if (k === nowAt && t.due_time) todayRows.push(nowLine);
+    todayRows.push(<TaskRow key={t.id} task={t} {...rowProps(t)} whenClass={!t.completed && t.due_time && t.due_time <= nowHm ? "tt-now" : "text-white/90"} />);
+    if (k === timed.length - 1 && nowAt === timed.length) todayRows.push(nowLine);
+  });
+  if (!timed.length && todays.length) todayRows.unshift(nowLine);
+  const d = dateOf(today);
+  const lateShown = allLate ? late : late.slice(0, 3);
+
+  return (
+    <div className="flex flex-col gap-6" data-testid="giornate">
+      <div className="flex items-center justify-center gap-3 text-[13px] tracking-[0.16em] uppercase text-white/85">
+        <button type="button" onClick={onCalendar} aria-label="Apri il calendario" title="Apri il calendario" data-testid="period-btn" className="text-white/90">
+          <CalendarDays size={20} strokeWidth={1.7} />
+        </button>
+        <span data-testid="period-label">
+          {shortDay(today)}{last > today ? ` — ${shortDay(last, true)}` : ` ${d.getFullYear()}`}
+          <span className="text-white/60"> · {nShown === 1 ? "1 task" : `${nShown} task`}</span>
+        </span>
+      </div>
+
+      {/* TODAY: always first, by the hour they start */}
+      <section className="flex flex-col" data-testid="giornate-oggi">
+        <BlockHead className="text-white/90" right={`${todays.length} task`}>
+          <span className="w-2 h-2 rounded-full tt-now-bg shrink-0" />
+          <span className="truncate">Oggi · {IT_WD_LONG[d.getDay()]} {d.getDate()} {IT_MONTHS_LONG[d.getMonth()]}</span>
+        </BlockHead>
+        <div className="grid grid-cols-[52px_minmax(0,1fr)] pt-3.5">
+          <DayNum iso={today} />
+          <div className="flex flex-col">
+            {todayRows}
+            {todays.length === 0 && <div className="py-1.5 text-[14px] text-white/60" data-testid="today-empty">Niente in programma per oggi.</div>}
+          </div>
+        </div>
+      </section>
+
+      {/* LATE: right after today */}
+      {late.length > 0 && (
+        <section className="tt-late-box rounded-[20px] px-4 py-3.5" data-testid="giornate-scaduti">
+          <div className="text-[12px] tracking-[0.18em] uppercase tt-late">Scaduti · {late.length}</div>
+          <div className="mt-1 flex flex-col">
+            {lateShown.map((t) => (
+              <TaskRow key={t.id} task={t} {...rowProps(t)} whenClass="tt-late"
+                when={`${lateDay(t.due_date, today)}${t.due_time ? ` · ${t.due_time}` : ""}`} />
+            ))}
+          </div>
+          {late.length > 3 && (
+            <button type="button" onClick={() => setAllLate((v) => !v)} data-testid="late-more" className="mt-1 text-[13px] font-medium tt-late">
+              {allLate ? "Mostra meno" : `Mostra tutti (${late.length})`}
+            </button>
+          )}
+        </section>
+      )}
+
+      {/* the next days, by month, as in the diario di commessa */}
+      <MonthsAndDays tasks={next} dayOf={(t) => t.due_date} today={today} rowProps={rowProps} />
+
+      {undated.length > 0 && (
+        <section className="flex flex-col" data-testid="giornate-senza-data">
+          <BlockHead right={`${undated.length} task`}>Senza data</BlockHead>
+          <div className="pt-1.5 flex flex-col">
+            {undated.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} when="Senza data" whenClass="text-white/60" />)}
+          </div>
+        </section>
+      )}
+
+      {next.length === 0 && undated.length === 0 && (
+        <div className="text-center text-[13px] text-white/60" data-testid="giornate-end">
+          Nessun altro task in programma. Le cose senza un giorno preciso stanno bene nei{" "}
+          <button type="button" onClick={onTodo} className="underline underline-offset-2 text-white/85">To-Do</button>.
+        </div>
       )}
     </div>
   );
 }
 
-function TaskCard({ task, orgMembers, onClick, onToggleFav, onToggleDone, onToggleCal, onToggleReminder, onDelete }) {
-  const isMobile = useIsMobile();
-  const stop = (fn) => (e) => { e.stopPropagation(); e.preventDefault(); fn(); };
-  const isFav = !!task.favorite;
-  const isDone = !!task.completed;
-  const isCal = !!task.calendar_synced;
-  const isReminder = !!task.reminder_enabled;
-  const overdue = isTaskOverdue(task);
-  // Overdue: dark red. Otherwise desktop uses a light #DADDD6 (30% transparent) card with dark
-  // ink, while mobile uses the same glass as the diary's day cards (card-soft) with white ink.
-  const glass = !overdue && isMobile;
-  const bg = overdue ? "rgba(118, 40, 14, 0.9)" : glass ? undefined : "rgba(218, 221, 214, 0.7)";
-  const light = !overdue && !glass;
-  const prio = PRIORITY_META[task.priority];
-  const ink = light ? "text-[#2B2A2E]" : "text-white";
-  const inkMuted = light ? "text-[#2B2A2E]/60" : "text-white/60";
-  const iconIdle = light ? "text-[#2B2A2E]/45 hover:text-[#2B2A2E]/80" : "text-white/40 hover:text-white/70";
-  const assigneeName = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to)?.name : null;
-
-  const favBand = (
-    <button
-      data-testid="task-fav"
-      onClick={stop(onToggleFav)}
-      className={`shrink-0 w-12 flex items-center justify-center transition-colors ${isFav ? "bg-amber-400" : light ? "bg-black/5 hover:bg-black/10" : "bg-white/10 hover:bg-white/15"}`}
-      title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
-    >
-      <Star size={18} className={isFav ? "text-white fill-white" : light ? "text-[#2B2A2E]/40" : "text-white/50"} />
-    </button>
-  );
-
-  const titleBlock = (
-    <button onClick={onClick} className="flex-1 min-w-0 text-left px-4 py-3">
-      <div className={`font-semibold text-sm break-words md:truncate flex items-center gap-1.5 ${ink} ${isDone ? "line-through" : ""}`}>
-        {task.title}
-        {task.visibility === "org" && <Users size={11} className={`${light ? "text-[#2B2A2E]/45" : "text-white/45"} shrink-0`} title="Condiviso col team" />}
-        {assigneeName && <UserCheck size={11} className="text-[#4E95D9] shrink-0" title={`Assegnato a ${assigneeName}`} />}
-      </div>
-      {isMobile ? (
-        (prio || task.due_date) && (
-          <div className={`text-[11px] ${inkMuted} mt-1 flex items-center gap-1.5`}>
-            {prio && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: prio.color }} />}
-            {prio && <span>{prio.label}</span>}
-            {prio && task.due_date && <span>·</span>}
-            {task.due_date && <span>{formatDayMonth(task.due_date, task.due_time)}</span>}
-            {task.recurrence_label && <Repeat size={11} className="shrink-0" aria-label={task.recurrence_label} data-testid="task-recurring-icon" />}
-          </div>
-        )
-      ) : task.due_date && (
-        <div className={`text-[11px] ${inkMuted} mt-1 flex items-center gap-1.5`} title={task.recurrence_label || undefined}>
-          {formatDayMonth(task.due_date, task.due_time)}
-          {task.recurrence_label && <Repeat size={11} className="shrink-0" data-testid="task-recurring-icon" />}
-        </div>
-      )}
-      {assigneeName && (
-        <div className="text-[11px] text-[#4E95D9]/80 mt-0.5 truncate">→ {assigneeName}</div>
-      )}
-    </button>
-  );
-
-  const actionIcons = (
-    <>
-      {!!task.notes && (
-        <span className={`p-1.5 ${light ? "text-[#2B2A2E]/45" : "text-white/40"}`} title="Questo task ha delle note">
-          <StickyNote size={14} />
-        </span>
-      )}
-      <button data-testid="task-reminder" onClick={stop(onToggleReminder)} className={`p-1.5 rounded-full ${isReminder ? (light ? "text-purple-600" : "text-purple-300") : iconIdle}`} title={isReminder ? "Disattiva promemoria" : "Attiva promemoria"}>
-        {isReminder ? <BellRing size={14} /> : <Bell size={14} />}
-      </button>
-      <button data-testid="task-calendar" onClick={stop(onToggleCal)} className={`p-1.5 rounded-full ${isCal ? (light ? "text-[#2F6FB0]" : "text-[#4E95D9]") : iconIdle}`} title={isCal ? "Rimuovi da Calendar" : "Aggiungi a Calendar"}>
-        <CalendarCheck size={14} className={isCal ? "fill-current" : ""} />
-      </button>
-      <button data-testid="task-complete" onClick={stop(onToggleDone)} className={`p-1.5 rounded-full ${isDone ? (light ? "text-[#4E8A22]" : "text-[#92D050]") : iconIdle}`} title={isDone ? "Riapri" : "Segna come fatto"}>
-        <CircleCheck size={14} className={isDone ? "fill-current" : ""} />
-      </button>
-      <button data-testid="task-delete" onClick={stop(onDelete)} className={`p-1.5 rounded-full ${light ? "text-[#2B2A2E]/45 hover:text-red-600" : "text-white/40 hover:text-red-400"}`} title="Elimina">
-        <Trash2 size={14} />
-      </button>
-    </>
-  );
-
-  const rootProps = {
-    "data-testid": `task-${task.id}`,
-    draggable: true,
-    onDragStart: (e) => e.dataTransfer.setData("text/plain", task.id),
-    style: { background: bg },
-  };
-
-  if (isMobile) {
-    // Spec v2 §2.6: la fascia della stellina copre tutta l'altezza della scheda (titolo,
-    // data E riga delle azioni) - per questo titolo e azioni stanno in una colonna a parte
-    // accanto alla fascia, invece di essere tre elementi fratelli in una riga che va a capo
-    // (in quel caso la fascia si fermava all'altezza della prima riga). Le icone partono da
-    // sinistra: pl-2.5 del contenitore + p-1.5 di ogni pulsante = 16px, lo stesso px-4 del
-    // titolo, così il primo glifo è esattamente in linea con l'inizio del testo.
-    return (
-      <div {...rootProps} className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${glass ? "card-soft" : ""} ${isDone ? "opacity-60" : ""}`}>
-        {favBand}
-        <div className="flex-1 min-w-0 flex flex-col">
-          {titleBlock}
-          <div className="flex items-center justify-start gap-1 pl-2.5 pr-3 pb-2 -mt-1">
-            {actionIcons}
-          </div>
-        </div>
-      </div>
-    );
+// the month as a grid (week numbers on the left, the priority of the day's open tasks as dots); under it the chosen day
+function MonthView({ tasks, today, day, onDay, orgMembers, onOpen, onToggleDone }) {
+  const [month, setMonth] = useState(() => day.slice(0, 7));
+  useEffect(() => { setMonth(day.slice(0, 7)); }, [day]);
+  const [y, m] = month.split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const lead = (first.getDay() + 6) % 7;
+  const start = new Date(y, m - 1, 1 - lead);
+  const weeks = [];
+  for (let w = 0; w < 6; w++) {
+    const row = [];
+    for (let k = 0; k < 7; k++) {
+      const dd = new Date(start);
+      dd.setDate(start.getDate() + w * 7 + k);
+      row.push(isoOf(dd));
+    }
+    if (w > 3 && row[0].slice(0, 7) !== month) break;
+    weeks.push(row);
   }
-
+  const byDay = {};
+  tasks.forEach((t) => { if (t.due_date) (byDay[t.due_date] = byDay[t.due_date] || []).push(t); });
+  const weekNum = (iso) => {
+    const dt = dateOf(iso);
+    const u = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+    u.setUTCDate(u.getUTCDate() - ((u.getUTCDay() + 6) % 7) + 3);
+    const ft = new Date(Date.UTC(u.getUTCFullYear(), 0, 4));
+    return 1 + Math.round((u - ft) / (7 * 86400000));
+  };
+  const shift = (n) => { const dt = new Date(y, m - 1 + n, 1); setMonth(isoOf(dt).slice(0, 7)); };
+  const dayTasks = (byDay[day] || []).slice().sort(byHour);
+  const dd = dateOf(day);
   return (
-    <div {...rootProps} className={`w-full flex items-stretch rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing ${isDone ? "opacity-60" : ""}`}>
-      {favBand}
-      {titleBlock}
-      <div className="shrink-0 flex items-center justify-end gap-1 px-3">
-        {actionIcons}
+    <div className="flex flex-col gap-5" data-testid="calendario">
+      <div className="card-soft p-4">
+        <div className="flex items-center justify-between">
+          <button type="button" onClick={() => shift(-1)} aria-label="Mese prima" data-testid="cal-prev" className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center text-white"><ChevronLeft size={18} /></button>
+          <div className="text-[15px] font-semibold text-white capitalize" data-testid="cal-month">{IT_MONTHS_LONG[m - 1]} {y}</div>
+          <button type="button" onClick={() => shift(1)} aria-label="Mese dopo" data-testid="cal-next" className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center text-white"><ChevronRight size={18} /></button>
+        </div>
+        <div className="mt-3 grid grid-cols-[24px_repeat(7,minmax(0,1fr))] gap-y-1 text-center">
+          <span />
+          {["L", "M", "M", "G", "V", "S", "D"].map((w, k) => <span key={k} className="text-[11px] text-white/55 py-1">{w}</span>)}
+          {weeks.map((row) => (
+            <React.Fragment key={row[0]}>
+              <span className="text-[10px] text-white/40 self-center tabular-nums" data-testid="cal-weeknum">{weekNum(row[0])}</span>
+              {row.map((iso) => {
+                const inMonth = iso.slice(0, 7) === month;
+                const open = (byDay[iso] || []).filter((t) => !t.completed);
+                const dots = Array.from(new Set(open.map((t) => t.priority))).sort((a, b) => (PRIORITY_RANK[a] ?? 3) - (PRIORITY_RANK[b] ?? 3)).slice(0, 3);
+                const isToday = iso === today, isSel = iso === day;
+                return (
+                  <button key={iso} type="button" onClick={() => onDay(iso)} data-testid={`cal-day-${iso}`} aria-pressed={isSel}
+                    className={`mx-auto h-11 w-10 rounded-xl flex flex-col items-center justify-center gap-1 ${inMonth ? "" : "opacity-35"} ${isSel && !isToday ? "ring-2 ring-white/70" : ""} ${isToday ? "bg-white/85" : ""}`}>
+                    <span className={`text-[14px] leading-none tabular-nums ${isToday ? "text-[#7A2A5C] font-semibold" : "text-white"}`}>{dateOf(iso).getDate()}</span>
+                    <span className="flex gap-0.5 h-[5px]">
+                      {dots.map((p) => <span key={p} className="w-[5px] h-[5px] rounded-full" style={{ background: PRIORITY_META[p]?.color || "rgba(255,255,255,.6)" }} />)}
+                    </span>
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
       </div>
+      <section className="flex flex-col" data-testid="cal-day-list">
+        <BlockHead className="text-white/90" right={`${dayTasks.length} task`}>
+          {day === today ? "Oggi · " : ""}{IT_WD_LONG[dd.getDay()]} {dd.getDate()} {IT_MONTHS_LONG[dd.getMonth()]}
+        </BlockHead>
+        <div className="pt-1.5 flex flex-col">
+          {dayTasks.map((t) => (
+            <TaskRow key={t.id} task={t} orgMembers={orgMembers} onOpen={() => onOpen(t.id)} onToggleDone={() => onToggleDone(t.id, !!t.completed)} />
+          ))}
+          {dayTasks.length === 0 && <div className="py-3 text-[14px] text-white/60">Nessun task in questo giorno.</div>}
+        </div>
+      </section>
     </div>
+  );
+}
+
+// the to dos' three states, like the diary's months: the title with how many and its "+", then the rows
+function TodoGroups({ todos, sortTodos, onOpen, onAdd, onMove, onDelete, onToggleFav }) {
+  const [allDone, setAllDone] = useState(false);
+  return (
+    <div className="flex flex-col gap-6" data-testid="todo-groups">
+      {TODO_GROUPS.map((g) => {
+        const items = sortTodos(todos.filter((t) => t.status === g.key));
+        const list = g.key === "fatto" && !allDone ? items.slice(0, 5) : items;
+        return (
+          <section key={g.key} className="flex flex-col" data-testid={`todo-group-${g.key}`}>
+            <div className="flex items-center justify-between gap-3 pb-2 border-b border-white/30">
+              <span className="flex items-center gap-2 text-[12px] tracking-[0.18em] uppercase text-white/90">
+                <span className="w-2 h-2 rounded-full" style={{ background: g.dot }} />{g.label} · <span data-testid={`todo-count-${g.key}`}>{items.length}</span>
+              </span>
+              <button type="button" onClick={() => onAdd(g.key)} data-testid={`todo-add-${g.key}`} aria-label={`Nuovo to-do in ${g.label}`} title={`Nuovo to-do in ${g.label}`}
+                className="h-8 w-8 rounded-full bg-white/15 text-white flex items-center justify-center">
+                <Plus size={16} />
+              </button>
+            </div>
+            {list.map((t) => (
+              <TodoRow key={t.id} todo={t} onOpen={() => onOpen(t)} onMove={(s) => onMove(t, s)} onDelete={() => onDelete(t.id)} onToggleFav={() => onToggleFav(t.id, !!t.favorite)} />
+            ))}
+            {items.length === 0 && <div className="py-3 text-[14px] text-white/55">Nessun to-do.</div>}
+            {g.key === "fatto" && items.length > 5 && (
+              <button type="button" onClick={() => setAllDone((v) => !v)} data-testid="todo-done-more" className="mt-2 self-start text-[13px] font-medium text-white/75">
+                {allDone ? "Mostra meno" : `Mostra tutti (${items.length})`}
+              </button>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function TodoRow({ todo, onOpen, onMove, onDelete, onToggleFav }) {
+  const btn = useRef(null);
+  const panel = useRef(null);
+  const [menu, setMenu] = useState(false);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const close = (e) => { if (!panel.current?.contains(e.target) && !btn.current?.contains(e.target)) setMenu(false); };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [menu]);
+  const prio = PRIORITY_META[todo.priority];
+  const steps = todo.steps || [];
+  const stepsDone = steps.filter((x) => x.done).length;
+  const pct = steps.length ? Math.round((stepsDone / steps.length) * 100) : todo.completion_percent || 0;
+  const done = todo.status === "fatto";
+  const meta = [
+    prio?.label,
+    steps.length ? `${stepsDone}/${steps.length} passi` : "nessun passo",
+    todo.start_date ? `inizio ${shortDay(todo.start_date)}` : null,
+  ].filter(Boolean).join(" · ");
+  const pick = (fn) => () => { setMenu(false); fn(); };
+  return (
+    <div className="flex items-start gap-2.5 pt-3 pb-2.5 border-b border-white/10" data-testid={`todo-${todo.id}`}>
+      <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex flex-col gap-1.5" data-testid="todo-open">
+        <span className="flex items-center gap-2 text-[13px] text-white/60 min-w-0">
+          <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: prio?.color || "rgba(255,255,255,.45)" }} />
+          <span className="truncate">{meta}</span>
+          {todo.favorite && <Star size={14} className="shrink-0 fill-current" aria-label="Preferito" />}
+          {!!todo.notes && <StickyNote size={14} className="shrink-0" aria-label="Ha delle note" />}
+        </span>
+        <span className={`text-[16px] leading-[1.35] break-words ${done ? "line-through text-white/55" : "text-white"}`}>{todo.title}</span>
+        {todo.status === "in_corso" && (
+          <span className="flex items-center gap-2.5">
+            <span className="flex-1 h-[5px] rounded-full bg-white/20 overflow-hidden">
+              <span className="block h-full rounded-full bg-white/85" style={{ width: `${pct}%` }} />
+            </span>
+            <span className="text-[12px] text-white/75 tabular-nums">{pct}%</span>
+          </span>
+        )}
+      </button>
+      <button ref={btn} type="button" onClick={() => setMenu((v) => !v)} data-testid="todo-menu" aria-label="Sposta, segna fatto o elimina" aria-expanded={menu}
+        className="h-9 w-9 shrink-0 rounded-[10px] bg-white/10 border border-white/15 text-white/85 flex items-center justify-center">
+        <MoreHorizontal size={18} />
+      </button>
+      {menu && (
+        <GlassMenu anchorRef={btn} panelRef={panel} testid="todo-move-menu" width={236}>
+          <div className="px-5 pt-2.5 pb-1 text-[11px] tracking-[0.16em] uppercase text-white/55">Sposta in</div>
+          {TODO_GROUPS.filter((g) => g.key !== todo.status).map((g) => (
+            <GlassMenuItem key={g.key} icon={g.key === "fatto" ? CircleCheck : g.key === "in_corso" ? Clock : Flag} label={g.label}
+              testid={`move-to-${g.key}`} onClick={pick(() => onMove(g.key))} />
+          ))}
+          <GlassMenuItem icon={Star} label={todo.favorite ? "Togli dai preferiti" : "Aggiungi ai preferiti"} testid="todo-fav" onClick={pick(onToggleFav)} />
+          <GlassMenuItem icon={Trash2} label="Elimina" danger testid="todo-delete" onClick={pick(onDelete)} />
+        </GlassMenu>
+      )}
+    </div>
+  );
+}
+
+// a new task written by hand: what, the day and the hour, the priority (the rest in its card, once it exists)
+function NewTaskSheet({ today, onClose, onCreated }) {
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState(today);
+  const [time, setTime] = useState("");
+  const [priority, setPriority] = useState("media");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!title.trim()) return;
+    setBusy(true);
+    try {
+      const r = await api.post("/tasks", { title: title.trim(), due_date: date || null, priority });
+      if (date && time) await api.patch(`/tasks/${r.data.id}`, { due_time: time });
+      toast.success("Task aggiunto");
+      await onCreated();
+      onClose();
+    } catch (e) { toast.error(e.response?.data?.detail || "Non sono riuscito a salvare il task"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <GlassBottomSheet onClose={onClose} testid="task-new-sheet" className="max-h-[88vh] md:left-1/2 md:right-auto md:w-[480px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-xl font-semibold text-white mb-4">Nuovo task</div>
+      <div className="flex flex-col gap-4">
+        <Field label="Cosa">
+          <Input icon={Type} autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+            placeholder="Es. Chiamare il commercialista" data-testid="task-new-title" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Quando">
+            <Input icon={Calendar} type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="task-new-date" />
+          </Field>
+          <Field label="Alle">
+            <Input icon={Clock} type="time" value={time} disabled={!date} onChange={(e) => setTime(e.target.value)} data-testid="task-new-time" />
+          </Field>
+        </div>
+        <Field label="Priorità">
+          <Select icon={Flag} value={priority} onChange={setPriority} testid="task-new-priority"
+            options={[["alta", "Alta"], ["media", "Media"], ["bassa", "Bassa"]]} />
+        </Field>
+        <button type="button" onClick={save} disabled={busy || !title.trim()} data-testid="task-new-save" className={`${PRIMARY} w-full`}>
+          {busy ? "…" : "Aggiungi il task"}
+        </button>
+        <div className="text-[12px] text-white/55 text-center">Ripetizione, promemoria, calendario e condivisione si impostano aprendo il task.</div>
+      </div>
+    </GlassBottomSheet>
   );
 }
 
@@ -799,6 +1021,32 @@ function RecurrenceRow({ task, onUpdated }) {
         <button onClick={() => setOpen(false)} className="text-xs px-2 py-1.5 rounded-full text-white/50 hover:text-white/80">Annulla</button>
       </div>
     </div>
+  );
+}
+
+// "Priorità alta" in the task's card: a tap changes it (on the computer it was the drag between the columns)
+function PriorityRow({ task, onUpdated }) {
+  const p = PRIORITY_META[task.priority];
+  const change = async (v) => {
+    try {
+      await api.patch(`/tasks/${task.id}`, { priority: v });
+      await onUpdated();
+      toast.success("Priorità aggiornata");
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+  };
+  return (
+    <label className="relative flex items-center gap-1.5 mt-1.5 text-sm w-fit cursor-pointer hover:underline decoration-dotted underline-offset-2"
+      style={{ color: "#D9D9D9" }} title="Cambia la priorità" data-testid="task-priority">
+      <Flag size={14} />
+      {p && <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />}
+      Priorità {p ? p.label.toLowerCase() : "media"}
+      <select data-testid="task-priority-select" aria-label="Priorità" value={task.priority || "media"} onChange={(e) => change(e.target.value)}
+        className="absolute inset-0 opacity-0 cursor-pointer">
+        <option value="alta">Alta</option>
+        <option value="media">Media</option>
+        <option value="bassa">Bassa</option>
+      </select>
+    </label>
   );
 }
 
@@ -1026,6 +1274,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
                 <DialogTitle className="text-xl font-bold text-white break-words text-left leading-snug">{task.title}</DialogTitle>
               </DialogHeader>
               {dateBlock}
+              <PriorityRow task={task} onUpdated={onUpdated} />
               <RecurrenceRow task={task} onUpdated={onUpdated} />
               <SourceRow source={task.source} />
             </div>
@@ -1037,6 +1286,7 @@ function TaskDialog({ task, orgMembers, onClose, onUpdated }) {
                 <DialogTitle className="text-xl font-bold text-white truncate">{task.title}</DialogTitle>
               </DialogHeader>
               {dateBlock}
+              <PriorityRow task={task} onUpdated={onUpdated} />
               <RecurrenceRow task={task} onUpdated={onUpdated} />
               <SourceRow source={task.source} />
             </div>

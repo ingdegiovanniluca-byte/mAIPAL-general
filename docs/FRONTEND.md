@@ -126,7 +126,7 @@ Se invece l'app va **ricostruita da zero** in un altro progetto, questo document
   - al centro il **nome della sezione** con la **«i»** (apre la spiegazione della sezione, `HelpSheet.jsx`);
   - a destra l'**avatar** (foto o iniziale).
 - **Barra in basso «liquida»** (`LiquidDock.jsx`): una pillola di vetro con **Chat + 3 sezioni** scelte dall'utente, unita come due gocce che si fondono al pulsante tondo **«+»**.
-  - Le sezioni predefinite sono Task, To-Do e Liste. Una bolla di vetro scorre sotto la sezione attiva.
+  - Le sezioni predefinite sono Task, Liste e Diario (chi aveva fissato To-Do trova il Diario al suo posto: i To-Do sono dentro Task). Una bolla di vetro scorre sotto la sezione attiva.
   - **Si nasconde mentre si scrive**: quando la tastiera è aperta. Ricompare 350 ms dopo, così un tocco non finisce sulla barra.
 - **Menu «+»**: pannello di vetro scuro con tutte le sezioni. Il **pallino** a destra di ognuna la mette o la toglie dalla barra in basso (massimo 3).
 - **Menu del profilo** (tocco sull'avatar): Impostazioni, Installa l'app, Help, Esci; poi il **tema** (sole/luna) e il **lato del microfono** nella chat (sinistra/destra).
@@ -151,7 +151,7 @@ Se invece l'app va **ricostruita da zero** in un altro progetto, questo document
 |---|---|---|
 | Chat | `/dashboard/chat` | tutti |
 | Task | `/dashboard/tasks` | tutti |
-| To-Do | `/dashboard/todos` | tutti |
+| To-Do | `/dashboard/todos` → porta a `/dashboard/tasks?v=todo` (non è più nel menu) | tutti |
 | Dashboard | `/dashboard/oggi` | artigiano |
 | Diario | `/dashboard/journal` | tutti: per l'artigiano è il **diario di commessa**, per gli altri il diario personale |
 | News | `/dashboard/news` | tutti |
@@ -216,24 +216,30 @@ Sul telefono è costruita come la pagina iniziale di un browser. Dall'alto:
 
 **Help**: dal menu del profilo, la chat entra in modalità Help (colore `#5B6FA8`). Risponde su come si usa l'app, dalla guida; la «×» accanto al nome esce dalla modalità.
 
-### 4.3 Task (`TaskBoardPage.jsx`, `TaskCalendar.jsx`)
+### 4.3 Task e To-Do (`TaskBoardPage.jsx`, `TodoDetail.jsx`, `TodoFolders.jsx`)
 
-<img src="screens/m09-task.jpg" width="230"> <img src="screens/m26-help-sezione.jpg" width="230">
+<img src="screens/m09-task.jpg" width="230"> <img src="screens/m10-todo.jpg" width="230"> <img src="screens/m26-help-sezione.jpg" width="230">
 
-- **In alto**: il mese grande («Nov.») e la **striscia dei giorni** della settimana con il numero della settimana. Toccando un giorno si filtrano i task; sul computer c'è il calendario del mese intero.
-- **Sotto**: l'elenco dei task in ordine di scadenza.
-  - Ogni scheda è colorata per priorità (alta = rosso mattone pieno), con la stella dei preferiti, la priorità, la data e le azioni (calendario, promemoria, condividi, elimina).
-  - Sul computer i task sono su tre colonne per priorità.
-- Il titolo della barra mostra l'anno («Task 2026»).
-- Il dettaglio di un task si modifica anche scrivendo in linguaggio naturale. Si possono impostare ricorrenze, note, condivisione e assegnazione a un collega.
-- La seconda schermata mostra la **«i»** di una sezione aperta: il foglio di vetro con la spiegazione dalla guida.
+Una sola sezione, «Task» nei menu, titolo «Task e To-Do», fatta come il diario di commessa. L'indirizzo `?v=todo` / `?v=calendario` sceglie la vista (senza, Giornate).
 
-### 4.4 To-Do (`TodoBoardPage.jsx`, `TodoFolders.jsx`, `TodoDetail.jsx`)
+- **In alto**: il pulsante a pillola **+ Nuovo task** (in To-Do: **+ Nuovo to-do**) e gli indicatori (`StatTile`): Oggi, Scaduti, To-Do aperti (sul computer: Oggi, Scaduti, To-Do da fare, In corso, Fatti).
+- **Le viste** a parole grandi, come le sezioni del diario: **To-Do · Giornate · Calendario**; quella scelta al centro, un tocco o uno scorrimento su quelle di lato cambia vista.
+- **Filtri** a tendina: Attivi/Completati (solo task), priorità, #tag, e la stella dei preferiti (priorità, tag e stella valgono anche per i to-do).
+- **Giornate**:
+  - il periodo con l'icona del calendario (apre Calendario);
+  - **Oggi** sempre per primo: il numero del giorno a sinistra, i task per **ora di avvio** (`due_time`), quelli senza ora «In giornata»; la linea arancio **«Adesso HH:MM»** si aggiorna da sola; i fatti barrati;
+  - il riquadro giallo **Scaduti** (primi tre, «Mostra tutti»);
+  - i giorni successivi raggruppati per **mese**; in fondo «Senza data»;
+  - ogni riga: ora, pallino di priorità, icone (ripete, promemoria, calendario, condiviso, note, preferito, iniziale dell'assegnatario), titolo, origine o assegnatario; il **tondo** a destra completa o riapre.
+- **Calendario**: il mese con i numeri delle settimane e i pallini delle priorità; oggi pieno, il giorno scelto con il bordo; sotto, i task di quel giorno.
+- **To-Do**: tre gruppi come i mesi del diario, **Da fare · In corso · Fatto**, ognuno con il numero e il «+» (`NewTodoSheet` di `TodoFolders.jsx`). Riga: priorità, passi n/m, data di inizio, stella, titolo, barra di avanzamento per In corso, menu **«…»** (`GlassMenu`: Sposta in, preferiti, Elimina).
+- **Aprire un task**: la scheda di sempre (`TaskDialog`): modifica scrivendo, data e ora, **priorità** (prima si cambiava trascinando tra le colonne), ripetizione, promemoria, calendario, note, condivisione e assegnazione, eliminazione (per i ricorrenti: solo questo o anche i successivi).
+- **Aprire un to-do**: il dettaglio a tutto schermo di sempre (`TodoDetail.jsx`, invariato): titolo, passi fatti, copertina con descrizione e foto, Avvio/Stato, note, **passi** (anche suggeriti dall'AI).
+- **Sul computer**, con almeno 860 px per la sezione: Giornate (o Calendario) a sinistra e To-Do a destra, affiancati; con meno spazio la pagina è quella del telefono.
 
-<img src="screens/m10-todo.jpg" width="230">
+### 4.4 To-Do
 
-- Tre **cartelle** impilate: **Da fare**, **In corso**, **Fatti**. Ognuna ha il conteggio e un «+».
-- Toccando un to-do si apre il dettaglio a tutto schermo: titolo, percentuale, **passi** (anche suggeriti dall'AI), note, copertina.
+Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene le cartelle di vetro usate da Documenti e il foglio «nuovo to-do».
 
 ### 4.5 Dashboard «Oggi» (artigiano, `TodayPage.jsx` → `TodayDashboard.jsx`)
 
@@ -547,7 +553,6 @@ Se si riscrive il server, o si cambia il modello dentro il server, **queste chia
 **`frontend/src/components/TodoFolders.jsx`**
 
 - `POST /todos`
-- `PATCH /todos/{…}`
 
 **`frontend/src/lib/api.js`**
 
@@ -818,6 +823,7 @@ Se si riscrive il server, o si cambia il modello dentro il server, **queste chia
 
 - `GET /org`
 - `GET /tasks`
+- `POST /tasks`
 - `DELETE /tasks/{…}`
 - `PATCH /tasks/{…}`
 - `POST /tasks/{…}/assign`
@@ -826,9 +832,8 @@ Se si riscrive il server, o si cambia il modello dentro il server, **queste chia
 - `POST /tasks/{…}/favorite`
 - `GET /tasks/{…}/recurrence`
 - `PUT /tasks/{…}/recurrence`
-
-**`frontend/src/pages/TodoBoardPage.jsx`**
-
 - `GET /todos`
+- `PATCH /todos/{…}`
 - `DELETE /todos/{…}`
 - `POST /todos/{…}/favorite`
+

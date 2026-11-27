@@ -509,7 +509,7 @@ export default function SettingsPage() {
             <div>
               {watches.map((w) => (
                 <div key={w.device_id} data-testid="watch-device" className="flex items-center gap-3 py-2.5 border-t border-white/10 first:border-t-0">
-                  <span className="h-9 w-9 rounded-full bg-white/12 border border-white/15 flex items-center justify-center shrink-0"><Watch size={16} /></span>
+                  <span className="h-9 w-9 rounded-full bg-white/[0.12] border border-white/15 flex items-center justify-center shrink-0"><Watch size={16} /></span>
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm text-white truncate">{w.name}</span>
                     <span className="block text-[11px] text-white/55">

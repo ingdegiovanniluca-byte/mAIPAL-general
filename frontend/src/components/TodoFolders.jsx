@@ -1,18 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
-import { ArrowLeft, ArrowRightLeft, CircleCheck, Plus, Rows3, Star, StickyNote, Trash2 } from "lucide-react";
+import { Plus, Rows3 } from "lucide-react";
 import { toast } from "sonner";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 
-/* To-Do on the phone: the three states as folders of the app's glass, one under the other.
-   The first to dos peek out of each folder as small cards; a finger (or the mouse) on them
-   tilts the front forward and fans them out, the one under the finger rising most. Slid up,
-   the cards stay up when the finger lifts: then a sideways slide scrolls smoothly through all
-   the folder's to dos, round and round (after the last one the first comes again), a slide
-   down puts them back, a tap on one opens it. A tap on the folder
-   opens the list of all its to dos (cards like the task cards), its + a new one already in
-   that state. */
+/* The glass folders (used by Documenti): the first items peek out of each folder as small cards;
+   a finger (or the mouse) on them tilts the front forward and fans them out, the one under the
+   finger rising most. Slid up, the cards stay up when the finger lifts: then a sideways slide
+   scrolls smoothly through all the folder's items, round and round, a slide down puts them back,
+   a tap on one opens it. Also the sheet that writes a new to do in one of the three states (the
+   To-Do of the Task section). */
 
 export const FOLDERS = [
   { key: "da_fare", label: "Da fare", tone: "linear-gradient(160deg, rgba(142,47,107,.18), rgba(142,47,107,.04))" },
@@ -24,7 +21,6 @@ const PRIORITY = {
   media: { label: "Media", color: "#F2B640" },
   bassa: { label: "Bassa", color: "#8FB3C9" },
 };
-const ACCENT = "#00B0F0";
 
 // the folder's two layers, measured on a 318 x 255 box (the back with its tab on the right,
 // the front with its tab on the left), drawn at any size through objectBoundingBox clip paths
@@ -63,23 +59,6 @@ function lastChange(items) {
   const d = new Date(last), today = new Date();
   const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86400000);
   return days <= 0 ? "aggiornato oggi" : days === 1 ? "aggiornato ieri" : `aggiornato il ${longDate(last)}`;
-}
-
-// the folders' size: three of them fit between the header and the bottom bar, with room above
-// each for the cards to fan out (no scrolling, so a finger on the cards never fights the page)
-function useFolderScale() {
-  const calc = () => {
-    if (typeof window === "undefined") return 0.66;
-    const free = window.innerHeight - 56 - 100 - 3 * 70;
-    return Math.max(0.42, Math.min(0.66, free / (3 * H)));
-  };
-  const [k, setK] = useState(calc);
-  useEffect(() => {
-    const on = () => setK(calc());
-    window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
-  }, []);
-  return k;
 }
 
 const PIN_SLIDE = 24;    // px up (or down, once up) that keep the cards up (or put them back)
@@ -267,56 +246,7 @@ export function Folder({ folder, items, k, fan, hot, pinned, onFan, onUnfan, onP
   );
 }
 
-function TodoCard({ todo, onOpen, onToggleFav, onDelete, onMove }) {
-  const [moving, setMoving] = useState(false);
-  const done = todo.status === "fatto";
-  const prio = PRIORITY[todo.priority];
-  const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
-  return (
-    <div data-testid={`todo-${todo.id}`} className={`w-full flex items-stretch rounded-2xl overflow-hidden card-soft ${done ? "opacity-70" : ""}`}>
-      <button data-testid="todo-fav" onClick={stop(onToggleFav)}
-        className={`shrink-0 w-12 flex items-center justify-center transition-colors ${todo.favorite ? "bg-amber-400" : "bg-white/10 hover:bg-white/15"}`}
-        title={todo.favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}>
-        <Star size={18} className={todo.favorite ? "text-white fill-white" : "text-white/50"} />
-      </button>
-      <div className="flex-1 min-w-0 flex flex-col">
-        <button onClick={onOpen} className="text-left px-4 pt-3 pb-1">
-          <div className={`font-semibold text-sm break-words text-white ${done ? "line-through" : ""}`}>{todo.title}</div>
-          {meta(todo) && (
-            <div className="text-[11px] text-white/60 mt-1 flex items-center gap-1.5">
-              {prio && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: prio.color }} />}
-              {meta(todo)}
-            </div>
-          )}
-          {todo.status === "in_corso" && (
-            <div className="mt-2 h-1 rounded-full bg-white/15 overflow-hidden">
-              <div className="h-full rounded-full bg-white/80" style={{ width: `${todo.completion_percent || 0}%` }} />
-            </div>
-          )}
-        </button>
-        <div className="flex items-center gap-1 pl-2.5 pr-3 pb-2">
-          <button onClick={onOpen} className={`p-1.5 rounded-full ${todo.notes ? "text-white/80" : "text-white/40 hover:text-white/70"}`} title="Note e dettagli"><StickyNote size={14} /></button>
-          <button data-testid="todo-move" onClick={stop(() => setMoving((m) => !m))} className={`p-1.5 rounded-full ${moving ? "text-white" : "text-white/40 hover:text-white/70"}`} title="Sposta in un'altra cartella"><ArrowRightLeft size={14} /></button>
-          <button data-testid="todo-done" onClick={stop(() => onMove(done ? "da_fare" : "fatto"))} className={`p-1.5 rounded-full ${done ? "text-[#92D050]" : "text-white/40 hover:text-white/70"}`} title={done ? "Riapri" : "Segna come fatto"}>
-            <CircleCheck size={14} className={done ? "fill-current" : ""} />
-          </button>
-          <button data-testid="todo-delete" onClick={stop(onDelete)} className="p-1.5 rounded-full text-white/40 hover:text-red-400" title="Elimina"><Trash2 size={14} /></button>
-        </div>
-        {moving && (
-          <div className="flex flex-wrap items-center gap-2 px-4 pb-3" data-testid="todo-move-menu">
-            <span className="text-[11px] text-white/60">Sposta in</span>
-            {FOLDERS.filter((f) => f.key !== todo.status).map((f) => (
-              <button key={f.key} data-testid={`move-to-${f.key}`} onClick={stop(() => { setMoving(false); onMove(f.key); })}
-                className="px-3 py-1 rounded-full text-xs lg-glass text-white">{f.label}</button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function NewTodoSheet({ folder, onClose, onCreated }) {
+export function NewTodoSheet({ folder, onClose, onCreated }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState(null);
@@ -354,77 +284,5 @@ function NewTodoSheet({ folder, onClose, onCreated }) {
         {busy ? "…" : `Aggiungi a ${folder.label}`}
       </button>
     </GlassBottomSheet>
-  );
-}
-
-export default function TodoFolders({ todos, sortTodos, reload, setTodos, onOpenTodo, onToggleFav, onDelete }) {
-  const [params, setParams] = useSearchParams();
-  const open = FOLDERS.find((f) => f.key === params.get("cartella")) || null;
-  const [fan, setFan] = useState(null);           // {key, hot}
-  const [pinned, setPinned] = useState(null);     // the folder whose cards stay up
-  const [adding, setAdding] = useState(null);     // a folder
-  const k = useFolderScale();
-  const byFolder = Object.fromEntries(FOLDERS.map((f) => [f.key, sortTodos(todos.filter((t) => t.status === f.key))]));
-
-  const openFolder = (f) => setParams((p) => { const n = new URLSearchParams(p); n.set("cartella", f.key); return n; });
-  const closeFolder = () => setParams((p) => { const n = new URLSearchParams(p); n.delete("cartella"); return n; }, { replace: false });
-
-  const moveTo = async (todo, status) => {
-    const prev = todos;
-    setTodos((ts) => ts.map((t) => (t.id === todo.id ? { ...t, status } : t)));
-    try {
-      await api.patch(`/todos/${todo.id}`, { status });
-      toast.success(`Spostato in ${FOLDERS.find((f) => f.key === status).label}`);
-    } catch { toast.error("Non sono riuscito a spostarlo"); setTodos(prev); }
-  };
-
-  const sheet = adding && <NewTodoSheet folder={adding} onClose={() => setAdding(null)} onCreated={reload} />;
-
-  if (open) {
-    const items = byFolder[open.key];
-    return (
-      <div data-testid={`folder-list-${open.key}`}>
-        <button onClick={closeFolder} data-testid="folder-back" aria-label="Torna alle cartelle"
-          className="lg-glass h-9 w-9 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
-          <ArrowLeft size={17} />
-        </button>
-        <div className="flex items-end justify-between px-1 mt-5 mb-6">
-          <div className="text-[44px] font-bold leading-none tracking-tight text-white">{open.label}<span style={{ color: ACCENT }}>.</span></div>
-          <div className="text-[44px] font-light leading-none tabular-nums text-white/60">{items.length}</div>
-        </div>
-        <div className="flex items-center justify-between px-1 mb-4">
-          <div className="kicker">{lastChange(items)}</div>
-          <button onClick={() => setAdding(open)} data-testid="folder-list-add" aria-label={`Nuovo to do in ${open.label}`}
-            className="lg-glass h-11 w-11 rounded-full flex items-center justify-center text-white active:scale-95 transition-transform">
-            <Plus size={20} />
-          </button>
-        </div>
-        <div className="space-y-3">
-          {items.length === 0 && <div className="text-center text-white/50 py-16 kicker">nessun to do</div>}
-          {items.map((t) => (
-            <TodoCard key={t.id} todo={t} onOpen={() => onOpenTodo(t)} onToggleFav={() => onToggleFav(t.id, !!t.favorite)}
-              onDelete={() => onDelete(t.id)} onMove={(s) => moveTo(t, s)} />
-          ))}
-        </div>
-        {sheet}
-      </div>
-    );
-  }
-
-  return (
-    <div data-testid="todo-folders" className="todo-folders flex flex-col items-center justify-evenly"
-      style={{ minHeight: "calc(100dvh - 3.5rem - 7rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))" }}>
-      <ClipDefs />
-      {FOLDERS.map((f) => (
-        <Folder key={f.key} folder={f} items={byFolder[f.key]} k={k}
-          fan={fan?.key === f.key} hot={fan?.key === f.key ? fan.hot : -1} pinned={pinned === f.key}
-          onFan={(hot) => { if (pinned && pinned !== f.key) setPinned(null); setFan((cur) => (cur?.key === f.key && cur.hot === hot ? cur : { key: f.key, hot })); }}
-          onUnfan={() => setFan((cur) => (cur?.key === f.key ? null : cur))}
-          onPin={() => { setFan(null); setPinned(f.key); }}
-          onUnpin={() => setPinned((cur) => (cur === f.key ? null : cur))}
-          onOpen={() => { setPinned(null); openFolder(f); }} onOpenTodo={onOpenTodo} onAdd={() => setAdding(f)} />
-      ))}
-      {sheet}
-    </div>
   );
 }

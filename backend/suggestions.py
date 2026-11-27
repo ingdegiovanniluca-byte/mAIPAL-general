@@ -75,7 +75,7 @@ def build_rule_suggestions(today: date, now_local: datetime, tasks: list, todos:
     if stuck:
         age, t = max(stuck, key=lambda x: x[0])
         out.append({"id": "todo", "kind": "todo", "text": f"To-Do fermo da {age} giorni: {_q(t.get('title'))}",
-                    "target": {"type": "page", "to": "/dashboard/todos"}, "priority": 50})
+                    "target": {"type": "page", "to": "/dashboard/tasks?v=todo"}, "priority": 50})
 
     todays_news = [n for n in news if n.get("date") == iso and n.get("feedback") != "dislike"]
     if todays_news:
