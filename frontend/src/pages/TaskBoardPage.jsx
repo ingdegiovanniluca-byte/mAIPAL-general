@@ -280,7 +280,7 @@ export default function TaskBoardPage() {
               <div className="flex items-baseline gap-6 mb-4" data-testid="view-tabs">
                 {VIEWS.filter((v) => v.key !== "todo").map((v) => (
                   <button key={v.key} type="button" onClick={() => setView(v.key)} data-testid={`view-${v.key}`} aria-current={leftView === v.key ? "page" : undefined}
-                    className={leftView === v.key ? "text-[26px] font-semibold tracking-tight text-white/[0.68]" : "text-[16px] font-medium text-white/50 hover:text-white/75"}>
+                    className={leftView === v.key ? "text-[30px] font-semibold tracking-tight text-white/[0.68]" : "text-[16px] font-medium text-white/50 hover:text-white/75"}>
                     {v.label}
                   </button>
                 ))}
@@ -290,7 +290,7 @@ export default function TaskBoardPage() {
             </div>
             <div className="min-w-0">
               <div className="mb-4 flex items-center justify-between">
-                <span className="text-[26px] font-semibold tracking-tight text-white/[0.68]" data-testid="todo-pane-title">To-Do</span>
+                <span className="text-[30px] font-semibold tracking-tight text-white/[0.68]" data-testid="todo-pane-title">To-Do</span>
                 {addBtn("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")}
               </div>
               {todoView}
@@ -356,44 +356,51 @@ function PillSelect({ label, value, onChange, options, testid }) {
   );
 }
 
-// the day on the left of its tasks: the number and the weekday
+/* The type, as in the diario di commessa: the day's number 14px (two digits) in a 34px column, the month's line 11px
+   in capitals spaced out, the days split by a thin line, the meta line 11.5px, the text 14px medium, the round tick
+   of 20px (green when done, as the activities of the diary). */
+const DAY_ROW = "grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 py-3 border-t border-white/[0.16]";
+const LINE_ROW = "py-3 border-t border-white/[0.16]";
+
+// the day on the left of its tasks: the number (as in the diary) and, under it, the weekday
 function DayNum({ iso }) {
   const d = dateOf(iso);
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[24px] font-medium leading-none text-white tabular-nums">{d.getDate()}</span>
-      <span className="text-[11px] tracking-[0.14em] text-white/60">{IT_WD_SHORT[d.getDay()]}</span>
+    <div className="flex flex-col">
+      <span className="text-[14px] font-medium leading-[1.45] text-white/90 tabular-nums">{String(d.getDate()).padStart(2, "0")}</span>
+      <span className="text-[10.5px] leading-tight text-white/45">{IT_WD_SHORT[d.getDay()].toLowerCase()}</span>
     </div>
   );
 }
 
-// the line on top of a block (Oggi, a month, Da fare...): the words and, on the right, how many
-function BlockHead({ children, right, testid, className = "text-white/75" }) {
+// the line on top of a block (Oggi, a month, Da fare...), as the diary's month: the words and, on the right, how many
+function BlockHead({ children, right, testid, className = "text-white/60" }) {
   return (
-    <div className={`flex items-center justify-between gap-3 text-[12px] tracking-[0.18em] uppercase pb-2.5 border-b border-white/30 ${className}`} data-testid={testid}>
-      <span className="flex items-center gap-2 min-w-0">{children}</span>
-      {right != null && <span className="shrink-0 text-white/60 tracking-[0.08em]">{right}</span>}
+    <div className="flex items-center justify-between gap-3 pt-4 pb-1.5" data-testid={testid}>
+      <span className={`flex items-center gap-2 min-w-0 text-[11px] font-medium tracking-[0.18em] uppercase whitespace-nowrap ${className}`}>{children}</span>
+      {right != null && <span className="shrink-0 text-[11px] text-white/50">{right}</span>}
     </div>
   );
 }
 
-// one task in the days, on one line: the hour on the left, the priority as a dot, the title; the round button completes it
-function TaskRow({ task, onOpen, onToggleDone, when, whenClass = "text-white/60" }) {
+// one task, as an entry of the diary: the hour and the priority on the small line, the title under it; the round
+// tick on the right completes it
+function TaskRow({ task, onOpen, onToggleDone, when, whenClass = "text-white/50", line = false }) {
   const prio = PRIORITY_META[task.priority];
   const done = !!task.completed;
   return (
-    <div className="flex items-center gap-2.5 py-1.5" data-testid={`task-${task.id}`}>
-      <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex items-baseline gap-2.5" data-testid="task-open">
-        <span className={`w-[44px] shrink-0 text-[13px] tabular-nums whitespace-nowrap ${whenClass}`}>{when ?? (task.due_time || "—")}</span>
-        <span className={`min-w-0 text-[15px] leading-[1.35] break-words ${done ? "line-through text-white/50" : "text-white"}`}>
-          {prio && <span className="inline-block w-[7px] h-[7px] rounded-full mr-2 align-middle -mt-0.5" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
-          {task.title}
+    <div className={`flex items-start gap-3 ${line ? LINE_ROW : ""}`} data-testid={`task-${task.id}`}>
+      <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left" data-testid="task-open">
+        <span className={`flex items-center gap-[5px] text-[11.5px] font-medium tabular-nums ${whenClass}`}>
+          {prio && <span className="inline-block w-[6px] h-[6px] rounded-full" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
+          {when ?? (task.due_time || "in giornata")}
         </span>
+        <span className={`block mt-[3px] text-[14px] font-medium leading-snug break-words ${done ? "line-through text-white/45" : "text-white"}`}>{task.title}</span>
       </button>
       <button type="button" data-testid="task-complete" onClick={onToggleDone} aria-label={done ? "Fatto: tocca per riaprirlo" : "Segna come fatto"}
         title={done ? "Riapri" : "Segna come fatto"}
-        className={`h-[26px] w-[26px] shrink-0 rounded-full border-[1.5px] border-white/50 flex items-center justify-center ${done ? "bg-white/85 text-[#7A2A5C]" : "text-transparent"}`}>
-        <Check size={14} strokeWidth={2.6} />
+        className={`mt-[3px] h-5 w-5 shrink-0 rounded-full flex items-center justify-center backdrop-blur-md ${done ? "bg-[#8ED973] text-[#1F4D17]" : "bg-white/20"}`}>
+        {done && <Check size={12} strokeWidth={2.8} />}
       </button>
     </div>
   );
@@ -424,9 +431,9 @@ function MonthsAndDays({ tasks, dayOf, desc, rowProps, today }) {
       <section key={m.key} className="flex flex-col" data-testid={`month-${m.key}`}>
         <BlockHead>{IT_MONTHS_LONG[mo - 1]}{y !== year ? ` ${y}` : ""}</BlockHead>
         {m.days.map((g) => (
-          <div key={g.day} className="grid grid-cols-[52px_minmax(0,1fr)] pt-3.5" data-testid={`day-${g.day}`}>
+          <div key={g.day} className={DAY_ROW} data-testid={`day-${g.day}`}>
             <DayNum iso={g.day} />
-            <div className="flex flex-col">
+            <div className="flex flex-col gap-3">
               {g.items.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} />)}
             </div>
           </div>
@@ -461,7 +468,7 @@ function Giornate({ tasks, status, now, today, onOpen, onToggleDone }) {
   let nowAt = timed.findIndex((t) => t.due_time > nowHm);
   if (nowAt < 0) nowAt = timed.length;
   const nowLine = (
-    <div key="now" className="flex items-center gap-2 pt-0.5 pb-1 text-[11px] font-semibold tracking-[0.14em] uppercase tt-now" data-testid="now-line">
+    <div key="now" className="flex items-center gap-2 text-[10.5px] font-medium tracking-[0.14em] uppercase tt-now" data-testid="now-line">
       <span className="w-[7px] h-[7px] rounded-full tt-now-bg" />
       <span className="flex-1 h-px tt-now-bg opacity-70" />
       Adesso {nowHm}
@@ -478,17 +485,17 @@ function Giornate({ tasks, status, now, today, onOpen, onToggleDone }) {
   const lateShown = allLate ? late : late.slice(0, 3);
 
   return (
-    <div className="flex flex-col gap-6" data-testid="giornate">
+    <div className="flex flex-col gap-2" data-testid="giornate">
       {/* TODAY: always first, by the hour they start */}
       <section className="flex flex-col" data-testid="giornate-oggi">
-        <BlockHead className="text-white/90">
-          <span className="w-2 h-2 rounded-full tt-now-bg shrink-0" />Oggi
+        <BlockHead className="text-white/85">
+          <span className="w-[6px] h-[6px] rounded-full tt-now-bg shrink-0" />Oggi
         </BlockHead>
-        <div className="grid grid-cols-[52px_minmax(0,1fr)] pt-3.5">
+        <div className={DAY_ROW}>
           <DayNum iso={today} />
-          <div className="flex flex-col">
+          <div className="flex flex-col gap-3">
             {todayRows}
-            {todays.length === 0 && <div className="py-1.5 text-[14px] text-white/60" data-testid="today-empty">Niente in programma per oggi.</div>}
+            {todays.length === 0 && <div className="text-[14px] leading-[1.45] text-white/60" data-testid="today-empty">Niente in programma per oggi.</div>}
           </div>
         </div>
       </section>
@@ -496,14 +503,14 @@ function Giornate({ tasks, status, now, today, onOpen, onToggleDone }) {
       {/* LATE: right after today */}
       {late.length > 0 && (
         <section className="tt-late-box rounded-[20px] px-4 py-3.5" data-testid="giornate-scaduti">
-          <div className="text-[12px] tracking-[0.18em] uppercase tt-late">Scaduti · {late.length}</div>
-          <div className="mt-1 flex flex-col">
+          <div className="text-[11px] font-medium tracking-[0.18em] uppercase tt-late">Scaduti · {late.length}</div>
+          <div className="mt-3 flex flex-col gap-3">
             {lateShown.map((t) => (
-              <TaskRow key={t.id} task={t} {...rowProps(t)} whenClass="tt-late" when={lateDay(t.due_date, today)} />
+              <TaskRow key={t.id} task={t} {...rowProps(t)} whenClass="tt-late" when={`${lateDay(t.due_date, today)}${t.due_time ? ` · ${t.due_time}` : ""}`} />
             ))}
           </div>
           {late.length > 3 && (
-            <button type="button" onClick={() => setAllLate((v) => !v)} data-testid="late-more" className="mt-1 text-[13px] font-medium tt-late">
+            <button type="button" onClick={() => setAllLate((v) => !v)} data-testid="late-more" className="mt-3 text-[12px] font-medium tt-late">
               {allLate ? "Mostra meno" : `Mostra tutti (${late.length})`}
             </button>
           )}
@@ -516,8 +523,8 @@ function Giornate({ tasks, status, now, today, onOpen, onToggleDone }) {
       {undated.length > 0 && (
         <section className="flex flex-col" data-testid="giornate-senza-data">
           <BlockHead>Senza data</BlockHead>
-          <div className="pt-1.5 flex flex-col">
-            {undated.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} />)}
+          <div className="flex flex-col">
+            {undated.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} when="senza data" line />)}
           </div>
         </section>
       )}
@@ -582,14 +589,14 @@ function MonthView({ tasks, today, day, onDay, onOpen, onToggleDone }) {
         </div>
       </div>
       <section className="flex flex-col" data-testid="cal-day-list">
-        <BlockHead className="text-white/90">
+        <BlockHead className="text-white/85">
           {day === today ? "Oggi · " : ""}{IT_WD_LONG[dd.getDay()]} {dd.getDate()} {IT_MONTHS_LONG[dd.getMonth()]}
         </BlockHead>
-        <div className="pt-1.5 flex flex-col">
+        <div className="flex flex-col">
           {dayTasks.map((t) => (
-            <TaskRow key={t.id} task={t} onOpen={() => onOpen(t.id)} onToggleDone={() => onToggleDone(t.id, !!t.completed)} />
+            <TaskRow key={t.id} task={t} line onOpen={() => onOpen(t.id)} onToggleDone={() => onToggleDone(t.id, !!t.completed)} />
           ))}
-          {dayTasks.length === 0 && <div className="py-3 text-[14px] text-white/60">Nessun task in questo giorno.</div>}
+          {dayTasks.length === 0 && <div className={`${LINE_ROW} text-[14px] leading-[1.45] text-white/60`}>Nessun task in questo giorno.</div>}
         </div>
       </section>
     </div>
@@ -600,15 +607,15 @@ function MonthView({ tasks, today, day, onDay, onOpen, onToggleDone }) {
 function TodoGroups({ todos, sortTodos, onOpen, onAdd, onMove, onDelete, onToggleFav }) {
   const [allDone, setAllDone] = useState(false);
   return (
-    <div className="flex flex-col gap-6" data-testid="todo-groups">
+    <div className="flex flex-col gap-2" data-testid="todo-groups">
       {TODO_GROUPS.map((g) => {
         const items = sortTodos(todos.filter((t) => t.status === g.key));
         const list = g.key === "fatto" && !allDone ? items.slice(0, 5) : items;
         return (
           <section key={g.key} className="flex flex-col" data-testid={`todo-group-${g.key}`}>
-            <div className="flex items-center justify-between gap-3 pb-2 border-b border-white/30">
-              <span className="flex items-center gap-2 text-[12px] tracking-[0.18em] uppercase text-white/90">
-                <span className="w-2 h-2 rounded-full" style={{ background: g.dot }} />{g.label} <span className="text-white/55" data-testid={`todo-count-${g.key}`}>{items.length}</span>
+            <div className="flex items-center justify-between gap-3 pt-4 pb-1.5">
+              <span className="flex items-center gap-2 text-[11px] font-medium tracking-[0.18em] uppercase text-white/60 whitespace-nowrap">
+                <span className="w-[6px] h-[6px] rounded-full" style={{ background: g.dot }} />{g.label} <span className="text-white/45" data-testid={`todo-count-${g.key}`}>{items.length}</span>
               </span>
               <button type="button" onClick={() => onAdd(g.key)} data-testid={`todo-add-${g.key}`} aria-label={`Nuovo to-do in ${g.label}`} title={`Nuovo to-do in ${g.label}`}
                 className="h-7 w-7 rounded-full bg-white/15 text-white flex items-center justify-center">
@@ -618,9 +625,9 @@ function TodoGroups({ todos, sortTodos, onOpen, onAdd, onMove, onDelete, onToggl
             {list.map((t) => (
               <TodoRow key={t.id} todo={t} onOpen={() => onOpen(t)} onMove={(s) => onMove(t, s)} onDelete={() => onDelete(t.id)} onToggleFav={() => onToggleFav(t.id, !!t.favorite)} />
             ))}
-            {items.length === 0 && <div className="py-2.5 text-[13px] text-white/50">Nessuno</div>}
+            {items.length === 0 && <div className={`${LINE_ROW} text-[14px] leading-[1.45] text-white/50`}>Nessuno</div>}
             {g.key === "fatto" && items.length > 5 && (
-              <button type="button" onClick={() => setAllDone((v) => !v)} data-testid="todo-done-more" className="mt-2 self-start text-[13px] font-medium text-white/75">
+              <button type="button" onClick={() => setAllDone((v) => !v)} data-testid="todo-done-more" className="mt-1 self-start text-[12px] font-medium text-white/70">
                 {allDone ? "Mostra meno" : `Mostra tutti (${items.length})`}
               </button>
             )}
@@ -649,15 +656,15 @@ function TodoRow({ todo, onOpen, onMove, onDelete, onToggleFav }) {
   const pick = (fn) => () => { setMenu(false); fn(); };
   // one line: the priority as a dot, the title, how many steps are done; in corso a thin bar under it
   return (
-    <div className="flex items-center gap-2 py-2 border-b border-white/10" data-testid={`todo-${todo.id}`}>
+    <div className={`flex items-start gap-2 ${LINE_ROW}`} data-testid={`todo-${todo.id}`}>
       <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex flex-col gap-1.5" data-testid="todo-open">
         <span className="flex items-baseline gap-2 min-w-0">
-          <span className={`min-w-0 flex-1 text-[15px] leading-[1.35] break-words ${done ? "line-through text-white/50" : "text-white"}`}>
-            {prio && <span className="inline-block w-[7px] h-[7px] rounded-full mr-2 align-middle -mt-0.5" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
+          <span className={`min-w-0 flex-1 text-[14px] font-medium leading-snug break-words ${done ? "line-through text-white/45" : "text-white"}`}>
+            {prio && <span className="inline-block w-[6px] h-[6px] rounded-full mr-2 align-middle -mt-0.5" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
             {todo.title}
             {todo.favorite && <Star size={12} className="inline ml-1.5 -mt-0.5 fill-current text-white/60" aria-label="Preferito" />}
           </span>
-          {steps.length > 0 && <span className="shrink-0 text-[12px] text-white/55 tabular-nums" title="Passi fatti" data-testid="todo-steps">{stepsDone}/{steps.length}</span>}
+          {steps.length > 0 && <span className="shrink-0 text-[11.5px] font-medium text-white/50 tabular-nums" title="Passi fatti" data-testid="todo-steps">{stepsDone}/{steps.length}</span>}
         </span>
         {todo.status === "in_corso" && pct > 0 && (
           <span className="block h-[3px] rounded-full bg-white/20 overflow-hidden" title={`${pct}%`}>
@@ -666,7 +673,7 @@ function TodoRow({ todo, onOpen, onMove, onDelete, onToggleFav }) {
         )}
       </button>
       <button ref={btn} type="button" onClick={() => setMenu((v) => !v)} data-testid="todo-menu" aria-label="Sposta, segna fatto o elimina" aria-expanded={menu}
-        className="h-7 w-7 shrink-0 rounded-full text-white/60 hover:bg-white/10 flex items-center justify-center">
+        className="-mt-1 h-7 w-7 shrink-0 rounded-full text-white/60 hover:bg-white/10 flex items-center justify-center">
         <MoreHorizontal size={16} />
       </button>
       {menu && (

@@ -220,7 +220,7 @@ Sul telefono è costruita come la pagina iniziale di un browser. Dall'alto:
 
 <img src="screens/m09-task.jpg" width="230"> <img src="screens/m10-todo.jpg" width="230"> <img src="screens/m26-help-sezione.jpg" width="230">
 
-Una sola sezione, «Task» nei menu, titolo «Task e To-Do», fatta come il diario di commessa. L'indirizzo `?v=todo` / `?v=calendario` sceglie la vista (senza, Giornate).
+Una sola sezione, «Task» nei menu, titolo «Task e To-Do», fatta come il diario di commessa, con le sue misure: numero del giorno 14px (due cifre) in una colonna di 34px con il giorno della settimana sotto, mesi e blocchi in 11px maiuscolo spaziato, giorni e righe separati da una linea sottile (`border-white/[0.16]`), ora e dettagli 11,5px, titoli 14px medi, spunta tonda di 20px (verde quando è fatto). L'indirizzo `?v=todo` / `?v=calendario` sceglie la vista (senza, Giornate).
 
 - **In alto** le viste a parole grandi, come le sezioni del diario: **To-Do · Giornate · Calendario**; quella scelta al centro, un tocco o uno scorrimento su quelle di lato cambia vista. Niente titolo e niente indicatori: la barra in alto dice già «Task».
 - **Una riga di filtri piccoli** (`PillSelect`, pillole alte 28 px; la tendina nativa invisibile sopra, a 16 px, così l'iPhone non ingrandisce): Attivi/Fatti (solo task), Priorità, # (tag, solo se ce ne sono), stella dei preferiti; a destra **+ task** / **+ to-do**.
