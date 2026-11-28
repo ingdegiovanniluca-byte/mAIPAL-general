@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Maximize2, Pencil, History, Wrench } from "lucide-react";
+import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, Share2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Maximize2, Pencil, History, Wrench } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { phonePosition } from "@/pages/QrScanPage";
@@ -34,19 +34,22 @@ const CHANGED = { tool_item_id: "attrezzo", ar: "realtà aumentata", place: "luo
 // bottom bar under the finger and swallow the tap (see "Crea QR").
 const keepFocus = (e) => e.preventDefault();
 
+// a QR in the list, as the tiles of Impostazioni: the active ones lit, the turned-off ones dim
 function QrTile({ q, onOpen }) {
   return (
-    <div role="button" tabIndex={0} data-testid="qr-tile" onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
-      className={`w-full text-left rounded-[20px] px-3 h-[64px] flex items-center gap-3 backdrop-blur-xl cursor-pointer ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
-      <span className="w-9 h-9 rounded-xl bg-white/[0.12] flex items-center justify-center shrink-0"><QrCode size={17} /></span>
-      <span className="flex-1 min-w-0">
-        <span className="block text-[13px] font-semibold text-white leading-tight truncate" data-testid="qr-tile-title">{q.title}</span>
-        <span className="block text-[11px] text-white/60 leading-tight mt-0.5 truncate">
-          {q.kind_label}{q.visibility === "public" ? " · pubblico" : ""}{q.place?.on ? " · solo sul posto" : ""}{q.commessa ? ` · ${q.commessa.title}` : ""} · {q.code_label}{q.active ? "" : " · disattivato"}
+    <button type="button" data-testid="qr-tile" data-active={q.active ? "true" : "false"} onClick={onOpen}
+      className={`text-left rounded-[20px] px-3 h-[64px] flex flex-col justify-center backdrop-blur-xl transition-colors ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
+      <span className="flex items-center gap-2">
+        <QrCode size={17} className={`shrink-0 ${q.active ? "text-white" : "text-white/55"}`} />
+        <span className="flex-1 min-w-0">
+          <span className={`block text-[13px] font-semibold leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${q.active ? "text-white" : "text-white/70"}`} data-testid="qr-tile-title">{q.title}</span>
+          <span className="block text-[11px] text-white/60 leading-tight mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
+            {q.active ? q.kind_label : "Disattivato"}
+          </span>
         </span>
+        <ChevronRight size={14} className="shrink-0 text-white/45" />
       </span>
-      <ChevronRight size={14} className="shrink-0 text-white/45" />
-    </div>
+    </button>
   );
 }
 
@@ -380,12 +383,7 @@ function QrDetail({ id, commesse, onChanged, onDeleted, onBack }) {
   };
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const back = (
-    <button onClick={onBack} data-testid="qr-back" className="flex items-center gap-1.5 text-sm text-white/70 h-11">
-      <ArrowLeft size={16} /> QR
-    </button>
-  );
-  if (!q) return <>{back}<div className="kicker">caricamento…</div></>;
+  if (!q) return <div className="kicker">caricamento…</div>;
   const set = (data) => { setQ(data); onChanged(data); };
   const act = async (fn, ok) => {
     setBusy(true);
@@ -401,64 +399,77 @@ function QrDetail({ id, commesse, onChanged, onDeleted, onBack }) {
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   });
   const setActive = (on) => act(() => api.patch(`/qr/${q.id}`, { active: on }), on ? "QR riattivato" : "QR disattivato: chi lo scansiona non vede niente");
-  const copyLink = () => { navigator.clipboard?.writeText(q.url); toast.success("Link copiato"); };
+  // the phone's own "share" (WhatsApp, mail...); where there isn't one, the link is copied
+  const shareLink = async () => {
+    if (navigator.share) {
+      try { await navigator.share({ title: q.title, url: q.url }); return; }
+      catch (e) { if (e?.name === "AbortError") return; }
+    }
+    try { await navigator.clipboard?.writeText(q.url); toast.success("Link copiato"); }
+    catch { toast.message(q.url); }
+  };
   const versions = q.versions || [];
   const t = q.tool;
 
   return (
     <div className="flex flex-col gap-3" data-testid="qr-detail">
-      {/* on top: back, and what changes the QR - on/off, edit, new code, delete */}
-      <div className="flex items-center gap-2" data-testid="qr-toolbar">
-        {back}
-        <div className="ml-auto flex items-center gap-2">
-          <IosSwitch checked={!!q.active} onChange={setActive} disabled={busy} label={q.active ? "Attivo: tocca per disattivarlo" : "Disattivato: tocca per riattivarlo"} testid="qr-toggle-active" />
-          <button type="button" onClick={() => setEditing((v) => !v)} aria-pressed={editing} data-testid="qr-edit" title="Modifica" aria-label="Modifica"
-            className={`${ROUND} ${editing ? "bg-white/85 text-[#7A2A5C]" : "bg-white/15 text-white"}`}><Pencil size={17} /></button>
-          <button type="button" onClick={newCode} disabled={busy} data-testid="qr-new-code" title="Nuovo codice" aria-label="Nuovo codice"
-            className={`${ROUND} bg-white/15 text-white`}><RefreshCw size={17} /></button>
-          <button type="button" onClick={remove} disabled={busy} data-testid="qr-delete" title="Elimina" aria-label="Elimina"
-            className={`${ROUND} bg-white/90 text-[#C0262D]`}><Trash2 size={17} /></button>
+      {/* on top: back, with the QR's name */}
+      <div className="flex items-center gap-1.5 min-w-0" data-testid="qr-toolbar">
+        <button onClick={onBack} data-testid="qr-back" aria-label="Torna ai QR" title="Torna ai QR"
+          className="h-10 w-8 -ml-1 shrink-0 flex items-center justify-center text-white/75"><ArrowLeft size={18} /></button>
+        <h2 className="min-w-0 text-[17px] font-semibold text-white leading-tight truncate" data-testid="qr-title-view">{q.title}</h2>
+      </div>
+
+      {/* the QR alone */}
+      <div className="card-soft p-6 flex justify-center" data-testid="qr-image-card">
+        <div className={`bg-white rounded-2xl p-2.5 shadow-sm transition-opacity ${q.active ? "" : "opacity-40"}`}>
+          <img src={q.images.svg} alt={`QR ${q.code_label}`} width={210} height={210} data-testid="qr-image" />
         </div>
       </div>
 
-      {/* the QR, with what identifies it and the three ways to take it out */}
-      <div className="card-soft p-5 flex flex-col gap-4">
-        <div className="flex flex-col items-center gap-3">
-          <div className={`bg-white rounded-2xl p-2.5 shadow-sm ${q.active ? "" : "opacity-50"}`}>
-            <img src={q.images.svg} alt={`QR ${q.code_label}`} width={196} height={196} data-testid="qr-image" />
-          </div>
-          <div className="text-center min-w-0 w-full">
-            <div className="text-lg font-semibold text-white leading-tight break-words" data-testid="qr-title-view">{q.title}</div>
-            <div className="font-mono text-[15px] tracking-wider text-white/85 mt-1" data-testid="qr-code-label">{q.code_label}</div>
-            <div className="flex flex-wrap justify-center gap-1.5 mt-2">
-              <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-white/80">{q.kind_label}</span>
-              <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-white/80">{q.visibility === "public" ? "Pubblico" : q.visibility === "admins" ? "Solo amministratori" : "Organizzazione"}</span>
-              {q.place?.on && <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/10 border border-white/15 text-white/80">Solo sul posto</span>}
-              {!q.active && <span className="text-[11px] px-2.5 py-1 rounded-full bg-amber-300/15 border border-amber-300/30 text-amber-100" data-testid="qr-inactive">Disattivato</span>}
-            </div>
-          </div>
+      {/* one row: on/off, print, download, share the link - and, apart, new code and delete */}
+      <div className="mt-2 flex items-center justify-center gap-2.5" data-testid="qr-actions">
+        <IosSwitch checked={!!q.active} onChange={setActive} disabled={busy} label={q.active ? "Attivo: tocca per disattivarlo" : "Disattivato: tocca per riattivarlo"} testid="qr-toggle-active" />
+        <button type="button" onClick={() => setPrinting(true)} data-testid="qr-print" title="Stampa l'etichetta" aria-label="Stampa l'etichetta"
+          className={`${ROUND} bg-white/15 text-white`}><Printer size={18} /></button>
+        <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" title="Scarica il PNG" aria-label="Scarica il PNG"
+          className={`${ROUND} bg-white/15 text-white`}><Download size={18} /></a>
+        <button type="button" onClick={shareLink} data-testid="qr-copy-link" title={`Condividi il link: ${q.url}`} aria-label="Condividi il link"
+          className={`${ROUND} bg-white/15 text-white`}><Share2 size={18} /></button>
+        <span className="w-px h-7 bg-white/25 mx-1.5 shrink-0" aria-hidden="true" />
+        <button type="button" onClick={newCode} disabled={busy} data-testid="qr-new-code" title="Genera un nuovo codice" aria-label="Genera un nuovo codice"
+          className={`${ROUND} bg-white/15 text-white`}><RefreshCw size={18} /></button>
+        <button type="button" onClick={remove} disabled={busy} data-testid="qr-delete" title="Elimina" aria-label="Elimina"
+          className={`${ROUND} bg-white/90 text-[#C0262D]`}><Trash2 size={18} /></button>
+      </div>
+      <div className="text-center text-[12px] text-white/60 -mt-1" data-testid="qr-active-note">
+        {q.active ? "Attivo" : "Disattivato: chi lo scansiona non vede niente"}
+      </div>
+
+      {/* then the numbers and what identifies it */}
+      <div className="mt-3 card-soft p-5">
+        <StatTiles testid="qr-stats">
+          <StatTile label="Scansioni" value={q.scans || 0} testid="qr-stat-scans" />
+          <StatTile label="Foto e PDF" value={(q.files || []).length} testid="qr-stat-files" />
+          <StatTile label="Modifiche" value={versions.length} testid="qr-stat-versions" />
+        </StatTiles>
+        <div className="text-[11px] text-white/55 mt-3" data-testid="qr-last-scan">
+          {q.last_scan_at ? `Ultima scansione ${when(q.last_scan_at)}${q.last_scan_by_name ? ` · ${q.last_scan_by_name}` : ""}` : "Non ancora scansionato"}
         </div>
-        <div className="flex justify-center gap-4">
-          <button type="button" onClick={() => setPrinting(true)} data-testid="qr-print" title="Stampa l'etichetta" aria-label="Stampa l'etichetta"
-            className={`${ROUND} bg-white/90 text-[#7A2A5C]`}><Printer size={18} /></button>
-          <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" title="Scarica il PNG" aria-label="Scarica il PNG"
-            className={`${ROUND} bg-white/15 text-white`}><Download size={18} /></a>
-          <button type="button" onClick={copyLink} data-testid="qr-copy-link" title={`Copia il link: ${q.url}`} aria-label="Copia il link"
-            className={`${ROUND} bg-white/15 text-white`}><Link2 size={18} /></button>
-        </div>
-        <div className="border-t border-white/10 pt-4">
-          <StatTiles testid="qr-stats">
-            <StatTile label="Scansioni" value={q.scans || 0} testid="qr-stat-scans" />
-            <StatTile label="Foto e PDF" value={(q.files || []).length} testid="qr-stat-files" />
-            <StatTile label="Modifiche" value={versions.length} testid="qr-stat-versions" />
-          </StatTiles>
-          <div className="text-[11px] text-white/55 mt-3" data-testid="qr-last-scan">
-            {q.last_scan_at ? `Ultima scansione ${when(q.last_scan_at)}${q.last_scan_by_name ? ` · ${q.last_scan_by_name}` : ""}` : "Non ancora scansionato"}
-          </div>
+        <div className="mt-4 pt-3 border-t border-white/10 grid grid-cols-2 gap-x-4 gap-y-3">
+          <div className="min-w-0"><div className="text-[12px] text-white/60">Codice</div><div className="font-mono text-[14px] tracking-wider text-white mt-0.5" data-testid="qr-code-label">{q.code_label}</div></div>
+          <div className="min-w-0"><div className="text-[12px] text-white/60">Tipo</div><div className="text-sm text-white mt-0.5">{q.kind_label}</div></div>
         </div>
       </div>
 
-      <div className="pt-2"><GroupTitle>Contenuto</GroupTitle></div>
+      <div className="pt-2 flex items-center justify-between">
+        <GroupTitle>Contenuto</GroupTitle>
+        {!editing && (
+          <button type="button" onClick={() => setEditing(true)} data-testid="qr-edit" className="-mt-1 h-8 px-3 rounded-full bg-white/15 text-[12px] font-medium text-white inline-flex items-center gap-1.5">
+            <Pencil size={13} /> Modifica
+          </button>
+        )}
+      </div>
       {editing ? (
         <QrEditor initial={q} commesse={commesse} onCancel={() => setEditing(false)} onSaved={(d) => { set(d); setEditing(false); }} />
       ) : (
@@ -611,7 +622,7 @@ export default function QrPage() {
           </button>
         </div>
       ) : (
-        <div className="flex flex-col gap-3" data-testid="qr-list">
+        <div className="grid grid-cols-2 gap-3" data-testid="qr-list">
           {list.map((q) => <QrTile key={q.id} q={q} onOpen={() => setParams({ open: q.id })} />)}
         </div>
       )}

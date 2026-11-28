@@ -300,12 +300,13 @@ Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene
 
 <img src="screens/m18-qr.jpg" width="230"> <img src="screens/m19-qr-dettaglio.jpg" width="230"> <img src="screens/d06-qr.jpg" width="460">
 
-- **Elenco**: «+» per un nuovo QR, il conteggio e il campo **«Cerca per codice»**; una riga per QR con tipo e codice.
+- **Elenco**: «+» per un nuovo QR, il conteggio e il campo **«Cerca per codice»**; i QR in una griglia di due tessere come quelle di Impostazioni (attivo: `bg-white/[0.22]`, disattivato: scuro con «Disattivato»).
 - **Un QR**:
-  - in alto, accanto a «← QR»: l'interruttore Attivo (`IosSwitch`) e i pulsanti tondi Modifica, Nuovo codice, Elimina (cestino rosso su bianco, leggibile sullo sfondo);
-  - il QR su fondo bianco, con nome, codice ed etichette; tre icone: **stampa** (apre `PrintSheet`, un `GlassBottomSheet` con il lato 3/5/8 cm), **scarica** PNG, **copia il link**;
-  - gli indicatori Scansioni / Foto e PDF / Modifiche;
-  - sotto: Contenuto (per un attrezzo: chi ce l'ha), Foto e PDF, Storico (chi ha preso l'attrezzo, le modifiche).
+  - in alto la freccia e il nome del QR;
+  - un riquadro con solo il QR (attenuato se disattivato);
+  - una riga di comandi: interruttore Attivo (`IosSwitch`), stampa (apre `PrintSheet`, il lato 3/5/8 cm), scarica PNG, condividi il link (`navigator.share`, altrimenti copia); dopo un separatore, nuovo codice ed elimina (cestino rosso su bianco);
+  - gli indicatori Scansioni / Foto e PDF / Modifiche, ultima scansione, codice e tipo;
+  - sotto: Contenuto (con «Modifica» accanto al titolo; per un attrezzo: chi ce l'ha), Foto e PDF, Storico (chi ha preso l'attrezzo, le modifiche).
 - **Nuovo / modifica**: per il tipo Attrezzo c'è il campo **Attrezzo** (`GET /qr/tools`: la lista Attrezzatura); «Nuovo» lo aggiunge alla lista con il nome del QR.
 - **`/q/:codice`**: la pagina che si apre scansionando, anche per chi non ha l'app se il QR è pubblico: il contenuto da leggere (titolo grande, testo, foto, PDF e link), il controllo del luogo e, per un attrezzo, il riquadro con chi ce l'ha e **Prendi** / **Restituisci** (`POST /qr/scan/{codice}/tool`).
 - La **realtà aumentata** è tolta dall'interfaccia (`QrArViewer.jsx` e `lib/arPose.js` restano nel codice, non più caricati; il server conserva le impostazioni).
