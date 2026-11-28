@@ -46,7 +46,7 @@ mAIPAL è un **assistente con intelligenza artificiale** per piccole imprese, pr
   - **bot Telegram**;
   - **app per Galaxy Watch** (cartella `wearos/`).
 - **Verticali** (il settore dell'utente, scelto in Impostazioni): cambiano agenti e sezioni.
-  - **Artigiano**: clienti e commesse, diario di commessa, ore in cantiere, materiali, preventivi, report di sopralluogo e intervento, collaboratori esterni su Telegram, avanzamento al cliente, QR e realtà aumentata.
+  - **Artigiano**: clienti e commesse, diario di commessa, ore in cantiere, materiali, preventivi, report di sopralluogo e intervento, collaboratori esterni su Telegram, avanzamento al cliente, QR (con la lista Attrezzatura: chi ha preso un attrezzo).
   - **Veterinario**: pazienti e referti.
   - **Fitness**: lezioni ed esercizi.
   - **Nessuno**: assistente personale (diario personale, task, liste, documenti).
@@ -202,7 +202,7 @@ La guida utente (`backend/help/mAIPAL-help.md`) ha una sezione per ognuna. In si
 | **Documenti** | Base di conoscenza (KB) con ricerca per significato | `DocumentsPage.jsx` |
 | **News** | Notizie quotidiane per gli interessi dell'utente | `news_service.py` |
 | **Azioni** | Comandi programmati ripetuti nel tempo | `scheduled_actions.py`, `ActionsPage.jsx` |
-| **QR** | Etichette per attrezzi e cantieri: contenuto modificabile, pubblico o privato, solo in un luogo, foto e PDF, realtà aumentata | `QrPage.jsx`, `QrScanPage.jsx`, `QrArViewer.jsx`, `qr_tags.py` |
+| **QR** | Etichette per attrezzi e cantieri: contenuto modificabile, pubblico o privato, solo in un luogo, foto e PDF; attrezzi con Prendi / Restituisci e lista Attrezzatura (la realtà aumentata è per ora tolta) | `QrPage.jsx`, `QrScanPage.jsx`, `qr_tags.py` |
 | **Fitness** | Lezioni ed esercizi | `FitnessPage.jsx`, `fitness.py` |
 | **Impostazioni** | Profilo, logo organizzazione, verticale, collegamenti (Google, Microsoft, Telegram, orologio), notifiche, team, collaboratori, organizzazione | `SettingsPage.jsx`, `TeamPanel.jsx`, `AdminPage.jsx` |
 | **Telegram** | Tutto via chat: il bot classifica i messaggi liberi; collaboratori e clienti hanno flussi propri | `telegram_bot.py`, `collab_telegram.py`, `client_telegram.py` |

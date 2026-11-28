@@ -296,17 +296,19 @@ Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene
 - Le azioni programmate attive (per esempio «Report settimanale cantieri – Ogni venerdì alle 18:00»).
 - Ognuna si apre per vedere i dettagli, sospenderla o eliminarla. Si creano dalla chat (agente Azioni).
 
-### 4.12 QR (`QrPage.jsx`, `QrScanPage.jsx`, `QrArViewer.jsx`)
+### 4.12 QR (`QrPage.jsx`, `QrScanPage.jsx`)
 
 <img src="screens/m18-qr.jpg" width="230"> <img src="screens/m19-qr-dettaglio.jpg" width="230"> <img src="screens/d06-qr.jpg" width="460">
 
 - **Elenco**: «+» per un nuovo QR, il conteggio e il campo **«Cerca per codice»**; una riga per QR con tipo e codice.
 - **Un QR**:
-  - in alto il QR su fondo bianco, con nome, codice ed etichette;
+  - in alto, accanto a «← QR»: l'interruttore Attivo (`IosSwitch`) e i pulsanti tondi Modifica, Nuovo codice, Elimina (cestino rosso su bianco, leggibile sullo sfondo);
+  - il QR su fondo bianco, con nome, codice ed etichette; tre icone: **stampa** (apre `PrintSheet`, un `GlassBottomSheet` con il lato 3/5/8 cm), **scarica** PNG, **copia il link**;
   - gli indicatori Scansioni / Foto e PDF / Modifiche;
-  - **Stampa l'etichetta** (lato da menu), Scarica PNG, Copia il link;
-  - sotto: Contenuto, Foto e PDF, Realtà aumentata, Gestione.
-- **`/q/:codice`**: la pagina che si apre scansionando, anche per chi non ha l'app se il QR è pubblico. Ha il controllo del luogo e la realtà aumentata (fotocamera e three.js).
+  - sotto: Contenuto (per un attrezzo: chi ce l'ha), Foto e PDF, Storico (chi ha preso l'attrezzo, le modifiche).
+- **Nuovo / modifica**: per il tipo Attrezzo c'è il campo **Attrezzo** (`GET /qr/tools`: la lista Attrezzatura); «Nuovo» lo aggiunge alla lista con il nome del QR.
+- **`/q/:codice`**: la pagina che si apre scansionando, anche per chi non ha l'app se il QR è pubblico: il contenuto da leggere (titolo grande, testo, foto, PDF e link), il controllo del luogo e, per un attrezzo, il riquadro con chi ce l'ha e **Prendi** / **Restituisci** (`POST /qr/scan/{codice}/tool`).
+- La **realtà aumentata** è tolta dall'interfaccia (`QrArViewer.jsx` e `lib/arPose.js` restano nel codice, non più caricati; il server conserva le impostazioni).
 
 ### 4.13 Fitness (`FitnessPage.jsx`, verticale fitness)
 
@@ -365,7 +367,7 @@ Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene
 | `DocFolders` | documenti |
 | `TeamPanel`, `CollaboratorsPanel`, `NotificationsPanel` | pannelli delle impostazioni |
 | `CommessaShareSheet`, `CommessaContacts`, `ClientUpdatesSheet`, `DeleteWithCode` | condivisione, contatti, avanzamento, cancellazione protetta delle commesse |
-| `QrArViewer` | realtà aumentata |
+| `QrArViewer` | realtà aumentata (per ora non usata) |
 | `ui/*` | componenti shadcn (dialog, popover, calendar, toast…) |
 
 ---

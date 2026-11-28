@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Layers, Maximize2, SlidersHorizontal, Pencil, History, Power } from "lucide-react";
+import { QrCode, Plus, ArrowLeft, ChevronRight, ChevronDown, Printer, Download, RefreshCw, Trash2, Link2, X, Check, FileText, Upload, Image as ImageIcon, Loader2, MapPin, Box, Crosshair, Search, Tag, Type, Briefcase, Eye, Palette, Maximize2, Pencil, History, Wrench } from "lucide-react";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { phonePosition } from "@/pages/QrScanPage";
-import { Field, Input, Select, PRIMARY, SECONDARY, DANGER, GroupTitle } from "@/components/FormFields";
+import { Field, Input, Select, PRIMARY, SECONDARY, GroupTitle } from "@/components/FormFields";
+import IosSwitch from "@/components/IosSwitch";
+import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { StatTiles, StatTile } from "@/components/StatTiles";
-
-// The augmented reality (three.js and the readers): loaded only when tried.
-const QrArViewer = React.lazy(() => import("@/components/QrArViewer"));
 
 /* QR (administrator): the organization's labels for tools, sites and info points. The label holds only a link
    with a code: what it shows is written here and can be changed at any time without printing it again. Only who
@@ -29,7 +28,7 @@ const when = (iso) => {
   const d = new Date(iso);
   return `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
-const CHANGED = { ar: "realtà aumentata", place: "luogo", files: "file", title: "nome", kind: "tipo", text: "testo", links: "link", commessa_id: "commessa", visibility: "chi lo vede", active: "attivo", code: "codice" };
+const CHANGED = { tool_item_id: "attrezzo", ar: "realtà aumentata", place: "luogo", files: "file", title: "nome", kind: "tipo", text: "testo", links: "link", commessa_id: "commessa", visibility: "chi lo vede", active: "attivo", code: "codice" };
 
 // A button of the editor tapped while typing: the field keeps the focus, so the keyboard closing doesn't bring the
 // bottom bar under the finger and swallow the tap (see "Crea QR").
@@ -160,14 +159,25 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
   const [visibility, setVisibility] = useState(initial?.visibility || "org");
   const [place, setPlace] = useState(initial?.place || null);
   const [style, setStyle] = useState(initial?.style || "maipal");
+  const [toolId, setToolId] = useState(initial?.tool?.item_id || "");
+  const [tools, setTools] = useState(null);     // the Attrezzatura list: {list, items} (only for a tool's QR)
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (kind !== "attrezzo" || tools) return;
+    api.get("/qr/tools").then((r) => setTools(r.data)).catch(() => setTools({ list: null, items: [] }));
+  }, [kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickTool = (id) => {
+    setToolId(id);
+    const t = (tools?.items || []).find((x) => x.id === id);
+    if (t && !title.trim()) setTitle(t.name);
+  };
   const setLink = (i, k, v) => setLinks((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
 
   const save = async () => {
     if (place?.on && place.lat == null) { toast.error("Scegli il luogo in cui si apre il QR, o metti «Ovunque»"); return; }
     setBusy(true);
     const body = { title, kind, text, links: links.filter((l) => (l.url || "").trim()), commessa_id: commessaId, visibility,
-      place: place?.on ? place : { on: false }, style };
+      place: place?.on ? place : { on: false }, style, ...(kind === "attrezzo" && tools?.list ? { tool_item_id: toolId } : {}) };
     try {
       const r = initial?.id ? await api.patch(`/qr/${initial.id}`, body) : await api.post("/qr", body);
       toast.success(initial?.id ? "Contenuto aggiornato: l'etichetta stampata resta la stessa" : "QR creato");
@@ -185,6 +195,13 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
       <Field label="Tipo">
         <Select icon={Tag} value={kind} onChange={setKind} options={KINDS} testid="qr-kind" />
       </Field>
+      {kind === "attrezzo" && tools?.list && (
+        <Field label="Attrezzo" testid="qr-tool-box"
+          hint={toolId ? `Dalla lista ${tools.list.name}: chi scansiona il QR lo prende o lo restituisce.` : `Lo aggiungo alla lista ${tools.list.name} con il nome del QR.`}>
+          <Select icon={Wrench} value={toolId} onChange={pickTool} testid="qr-tool"
+            options={[["", "Nuovo (con il nome del QR)"], ...tools.items.map((t) => [t.id, t.name])]} />
+        </Field>
+      )}
       {commesse.length > 0 && (
         <Field label="Commessa">
           <Select icon={Briefcase} value={commessaId} onChange={setCommessaId} testid="qr-commessa"
@@ -217,7 +234,7 @@ function QrEditor({ initial, commesse, onSaved, onCancel }) {
       </Field>
       <QrPlace place={place} setPlace={setPlace} commessaId={commessaId} />
       <Field label="Aspetto" testid="qr-style-box"
-        hint={`${style === "maipal" ? "Forma e colori del logo mAIPAL, con il logo al centro." : "Bianco e nero: si legge anche piccolo o sbiadito."}${initial?.id && initial.style !== style ? " Cambiando aspetto ristampa l'etichetta (per la realtà aumentata serve la nuova)." : ""}`}>
+        hint={`${style === "maipal" ? "Forma e colori del logo mAIPAL, con il logo al centro." : "Bianco e nero: si legge anche piccolo o sbiadito."}${initial?.id && initial.style !== style ? " Cambiando aspetto conviene ristampare l'etichetta." : ""}`}>
         <Select icon={Palette} value={style} onChange={setStyle} options={[["maipal", "mAIPAL"], ["classic", "Classico"]]} testid="qr-style" />
       </Field>
       <div className={`grid gap-3 pt-1 ${onCancel ? "grid-cols-2" : "grid-cols-1"}`}>
@@ -295,7 +312,7 @@ function QrFiles({ q, onChanged }) {
       ))}
       {files.length < MAX_FILES && (
         <div className={`grid gap-3 ${q.commessa ? "grid-cols-2" : "grid-cols-1"}`}>
-          <input ref={input} type="file" accept="image/*,application/pdf,.pdf,.glb,model/gltf-binary" multiple hidden onChange={(e) => upload(e.target.files)} data-testid="qr-file-input" />
+          <input ref={input} type="file" accept="image/*,application/pdf,.pdf" multiple hidden onChange={(e) => upload(e.target.files)} data-testid="qr-file-input" />
           <button type="button" disabled={busy} onClick={() => input.current?.click()} data-testid="qr-file-upload" className={SECONDARY}>
             <Upload size={15} /> Carica file</button>
           {q.commessa && (
@@ -314,153 +331,8 @@ function QrFiles({ q, onChanged }) {
         </div>
       ) : <div className="text-xs text-white/55">La commessa non ha foto.</div>)}
       <div className="text-[11px] text-white/55 leading-snug">
-        Foto (JPG, PNG, HEIC) e PDF fino a 10 MB, modelli 3D GLB fino a 25 MB (per la realtà aumentata). Li vede chi può aprire il QR{q.visibility === "public" ? ": è pubblico, quindi chiunque lo scansioni" : ""}. Alle foto viene tolta la posizione GPS.
+        Foto (JPG, PNG, HEIC) e PDF fino a 10 MB. Li vede chi può aprire il QR{q.visibility === "public" ? ": è pubblico, quindi chiunque lo scansioni" : ""}. Alle foto viene tolta la posizione GPS.
       </div>
-    </div>
-  );
-}
-
-const AR_LABEL_SIZES = { qr: [[3, "3 cm"], [5, "5 cm"], [8, "8 cm"], [10, "10 cm"]], frame: [[8, "8 cm"], [10, "10 cm"], [15, "15 cm"], [20, "20 cm"]] };
-// the label on a wall (the object stands up, as the label) or on a floor/table (the object stands on it)
-const MOUNTS = { wall: ["0", "0", "0"], floor: ["90", "0", "0"] };
-const mountOf = (rot) => Object.keys(MOUNTS).find((k) => MOUNTS[k].every((v, i) => parseFloat(String(rot[i]).replace(",", ".")) === +v)) || null;
-const num = (v, d = 0) => { const x = parseFloat(String(v).replace(",", ".")); return Number.isFinite(x) ? x : d; };
-
-// the AR label: the QR in the middle, the 4 squares (ArUco markers 0-3) in the corners, the name above, the code below
-async function printArLabel(q, cm) {
-  const w = window.open("", "_blank", "width=520,height=680");
-  if (!w) { toast.error("Il browser ha bloccato la finestra di stampa"); return; }
-  const { default: aruco } = await import("js-aruco2");
-  const dict = new aruco.AR.Dictionary("ARUCO_MIP_36h12");
-  const esc = (s) => String(s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const svgUri = (svg) => `data:image/svg+xml;base64,${btoa(svg)}`;
-  const at = [[0.01, 0.01], [0.79, 0.01], [0.79, 0.79], [0.01, 0.79]];
-  const marks = at.map(([x, y], id) => `<img src="${svgUri(dict.generateSVG(id).replace("<svg ", '<svg shape-rendering="crispEdges" '))}" style="position:absolute;left:${x * cm}cm;top:${y * cm}cm;width:${0.2 * cm}cm;height:${0.2 * cm}cm">`).join("");
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(q.title)} · etichetta AR</title>
-<style>@page{margin:10mm}body{margin:0;font-family:Poppins,Arial,sans-serif;color:#111}
-.l{position:relative;width:${cm}cm;height:${cm}cm;border:0.2mm dashed #bbb;box-sizing:content-box}
-.l img{image-rendering:pixelated}.t,.c{position:absolute;left:${0.22 * cm}cm;width:${0.56 * cm}cm;text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.t{top:${0.06 * cm}cm;font-size:${Math.max(6, cm * 0.85)}pt;font-weight:600}.c{bottom:${0.07 * cm}cm;font-size:${Math.max(5, cm * 0.7)}pt;font-family:monospace;letter-spacing:.05em}
-p{font-size:9pt;color:#555;max-width:${cm}cm}</style></head>
-<body><div class="l">${marks}<img src="${q.images.svg}" style="position:absolute;left:${0.22 * cm}cm;top:${0.22 * cm}cm;width:${0.56 * cm}cm;height:${0.56 * cm}cm">
-<div class="t">${esc(q.title)}</div><div class="c">${esc(q.code_label)}</div></div>
-<p>Stampa al 100% (senza adattare alla pagina): il lato dell'etichetta deve misurare ${cm} cm, i 4 riquadri agli angoli servono alla realtà aumentata.</p>
-<script>window.onload=function(){setTimeout(function(){window.print()},200)}</script></body></html>`);
-  w.document.close();
-}
-
-/* The augmented reality of the QR: what appears on the label (a 3D model GLB or a photo among its files), which label
-   (the plain QR, or the AR label with 4 squares in its corners: steadier), its printed size, and where the object
-   stands on it (cm from the label's center: x right, y up along the label, z out of it) with its rotation. */
-function QrAr({ q, onChanged }) {
-  const ar0 = q.ar || {};
-  const candidates = (q.files || []).filter((f) => f.kind === "model" || f.kind === "image");
-  const [on, setOn] = useState(!!q.ar);
-  const [fileId, setFileId] = useState(ar0.file_id || candidates[0]?.id || "");
-  const [label, setLabel] = useState(ar0.label || "frame");
-  const [labelCm, setLabelCm] = useState(ar0.label_cm || 10);
-  const [off, setOff] = useState((ar0.offset_cm || [0, 0, 0]).map(String));
-  const [rot, setRot] = useState((ar0.rot_deg || [0, 0, 0]).map(String));
-  const [scale, setScale] = useState(String(ar0.scale || 1));
-  const [width, setWidth] = useState(String(ar0.width_cm || 20));
-  const [busy, setBusy] = useState(false);
-  const [preview, setPreview] = useState(false);
-  const [fine, setFine] = useState(() => (ar0.offset_cm || []).some((v) => v) || !mountOf((ar0.rot_deg || [0, 0, 0]).map(String)));
-  const file = candidates.find((f) => f.id === fileId);
-  const mount = mountOf(rot);
-  const save = async (enable = on) => {
-    setBusy(true);
-    try {
-      const body = enable ? { on: true, file_id: fileId, label, label_cm: num(labelCm, 10), offset_cm: off.map((v) => num(v)), rot_deg: rot.map((v) => num(v)),
-        scale: num(scale, 1), width_cm: num(width, 20) } : { on: false };
-      onChanged((await api.patch(`/qr/${q.id}`, { ar: body })).data);
-      toast.success(enable ? "Realtà aumentata salvata" : "Realtà aumentata tolta");
-    } catch (e) { toast.error(e.response?.data?.detail || "Non salvato"); }
-    finally { setBusy(false); }
-  };
-  const triple = (vals, set, names, testid) => (
-    <div className="grid grid-cols-3 gap-2">
-      {names.map((n, i) => (
-        <Field key={n} label={<span className="text-white/60 font-normal">{n}</span>}>
-          <Input inputMode="decimal" value={vals[i]} onChange={(e) => set(vals.map((v, j) => (j === i ? e.target.value : v)))} className="text-center px-2" data-testid={`${testid}-${i}`} />
-        </Field>
-      ))}
-    </div>
-  );
-  return (
-    <div className="card-soft p-5 flex flex-col gap-4" data-testid="qr-ar-settings">
-      {!candidates.length ? (
-        <div className="text-xs text-white/65 leading-snug">Carica tra i file del QR un modello 3D (<b>GLB</b>, fino a 25 MB) o una foto: chi scansiona il QR lo vedrà appoggiato sull'etichetta, e lo seguirà se l'etichetta si sposta.</div>
-      ) : (
-        <>
-          <Field label="Mostra un oggetto in AR">
-            <Select icon={Box} value={on ? "on" : "off"} options={[["off", "No"], ["on", "Sì"]]} testid="qr-ar-on"
-              onChange={(v) => { setOn(v === "on"); if (v === "off" && q.ar) save(false); }} />
-          </Field>
-          {on && (
-            <>
-              <Field label="Cosa mostrare">
-                <Select icon={file?.kind === "image" ? ImageIcon : Box} value={fileId} onChange={setFileId} testid="qr-ar-file"
-                  options={candidates.map((f) => [f.id, `${f.kind === "model" ? "Modello 3D" : "Foto"} · ${f.name}`])} />
-              </Field>
-              <Field label="Etichetta" hint={label === "frame"
-                ? "QR con 4 riquadri agli angoli: più stabile, si aggancia anche da lontano. Stampala qui sotto."
-                : "Il QR già stampato: meno stabile, va inquadrato da vicino."}>
-                <Select icon={QrCode} value={label} options={[["frame", "Etichetta AR (consigliata)"], ["qr", "Solo il QR"]]} testid="qr-ar-label"
-                  onChange={(v) => { setLabel(v); setLabelCm(v === "frame" ? 10 : 5); }} />
-              </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Lato etichetta">
-                  <Select icon={Maximize2} value={num(labelCm)} onChange={setLabelCm} options={AR_LABEL_SIZES[label]} testid="qr-ar-size" />
-                </Field>
-                {file?.kind === "image" ? (
-                  <Field label="Larghezza foto (cm)">
-                    <Input inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} data-testid="qr-ar-width" />
-                  </Field>
-                ) : (
-                  <Field label="Scala (1 = reale)">
-                    <Input inputMode="decimal" value={scale} onChange={(e) => setScale(e.target.value)} data-testid="qr-ar-scale" />
-                  </Field>
-                )}
-              </div>
-              <Field label="Etichetta appoggiata su">
-                <Select icon={Layers} value={mount || "custom"} testid="qr-ar-mount"
-                  options={[["wall", "Una parete"], ["floor", "Un piano (tavolo, pavimento)"], ...(mount ? [] : [["custom", "Rotazione personalizzata"]])]}
-                  onChange={(v) => { if (MOUNTS[v]) setRot(MOUNTS[v]); }} />
-              </Field>
-              <button type="button" onClick={() => setFine((x) => !x)} onMouseDown={keepFocus} aria-expanded={fine} data-testid="qr-ar-fine"
-                className="flex items-center gap-2 text-[13px] text-white/85 h-8 -mt-1">
-                <SlidersHorizontal size={15} className="text-white/60" /> Regolazione fine
-                <ChevronDown size={15} className={`ml-auto text-white/60 transition-transform ${fine ? "rotate-180" : ""}`} />
-              </button>
-              {fine && (
-                <div className="flex flex-col gap-3 -mt-2">
-                  <span className="text-[11px] text-white/55">Posizione dal centro dell'etichetta (cm)</span>
-                  {triple(off, setOff, ["→ destra", "↑ su", "fuori"], "qr-ar-off")}
-                  <span className="text-[11px] text-white/55">Rotazione (gradi)</span>
-                  {triple(rot, setRot, ["X", "Y", "Z"], "qr-ar-rot")}
-                </div>
-              )}
-              <button type="button" disabled={busy || !fileId} onMouseDown={keepFocus} onClick={() => save(true)} data-testid="qr-ar-save" className={PRIMARY}>
-                {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Salva
-              </button>
-              {q.ar && (
-                <div className={`grid gap-3 -mt-1 ${q.ar.label === "frame" ? "grid-cols-2" : "grid-cols-1"}`}>
-                  <button type="button" onClick={() => setPreview(true)} data-testid="qr-ar-preview" className={SECONDARY}><Box size={15} /> Prova in AR</button>
-                  {q.ar.label === "frame" && <button type="button" onClick={() => printArLabel(q, q.ar.label_cm)} data-testid="qr-ar-print" className={SECONDARY}>
-                    <Printer size={15} /> Stampa {q.ar.label_cm} cm</button>}
-                </div>
-              )}
-              <span className="text-[11px] text-white/55 leading-snug">Prova davanti all'etichetta stampata e correggi finché l'oggetto è al suo posto. Da SketchUp, Blender, Revit: esporta in .glb, misure in metri.</span>
-            </>
-          )}
-        </>
-      )}
-      {preview && q.ar && (
-        <React.Suspense fallback={<div className="fixed inset-0 z-[100] bg-black" />}>
-          <QrArViewer ar={q.ar} onClose={() => setPreview(false)} />
-        </React.Suspense>
-      )}
     </div>
   );
 }
@@ -475,19 +347,45 @@ function InfoRow({ label, children, testid }) {
   );
 }
 
-function QrDetail({ id, commesse, onChanged, onDeleted }) {
+// a round icon button of the detail (print, download, link; edit, new code, delete)
+const ROUND = "h-11 w-11 shrink-0 rounded-full flex items-center justify-center transition-colors disabled:opacity-50";
+
+/* Print: the side of the label is chosen in a small sheet, then the browser's print. */
+function PrintSheet({ q, onClose }) {
+  const [cm, setCm] = useState(5);
+  return (
+    <GlassBottomSheet onClose={onClose} testid="qr-print-sheet" className="max-h-[80vh] md:left-1/2 md:right-auto md:w-[420px] md:-translate-x-1/2 md:bottom-8">
+      <div className="text-lg font-semibold text-white mb-4">Stampa l'etichetta</div>
+      <div className="flex flex-col gap-4">
+        <Field label="Lato del QR">
+          <Select icon={Maximize2} value={cm} onChange={setCm} testid="qr-print-size" options={[[3, "3 cm"], [5, "5 cm"], [8, "8 cm"]]} />
+        </Field>
+        <button type="button" onClick={() => { printLabel(q, cm); onClose(); }} data-testid="qr-print-go" className={`${PRIMARY} w-full`}>
+          <Printer size={15} /> Stampa
+        </button>
+      </div>
+    </GlassBottomSheet>
+  );
+}
+
+function QrDetail({ id, commesse, onChanged, onDeleted, onBack }) {
   const [q, setQ] = useState(null);
   const [editing, setEditing] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [printCm, setPrintCm] = useState(5);
+  const [printing, setPrinting] = useState(false);
   const load = async () => {
     try { const r = await api.get(`/qr/${id}`); setQ(r.data); }
     catch (e) { toast.error(e.response?.data?.detail || "QR non trovato"); }
   };
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!q) return <div className="kicker">caricamento…</div>;
+  const back = (
+    <button onClick={onBack} data-testid="qr-back" className="flex items-center gap-1.5 text-sm text-white/70 h-11">
+      <ArrowLeft size={16} /> QR
+    </button>
+  );
+  if (!q) return <>{back}<div className="kicker">caricamento…</div></>;
   const set = (data) => { setQ(data); onChanged(data); };
   const act = async (fn, ok) => {
     setBusy(true);
@@ -502,15 +400,31 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
     try { await api.delete(`/qr/${q.id}`); toast.success("QR eliminato"); onDeleted(q.id); }
     catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
   });
+  const setActive = (on) => act(() => api.patch(`/qr/${q.id}`, { active: on }), on ? "QR riattivato" : "QR disattivato: chi lo scansiona non vede niente");
   const copyLink = () => { navigator.clipboard?.writeText(q.url); toast.success("Link copiato"); };
   const versions = q.versions || [];
+  const t = q.tool;
 
   return (
     <div className="flex flex-col gap-3" data-testid="qr-detail">
-      {/* first of all: the QR, with what identifies it and how to print it */}
+      {/* on top: back, and what changes the QR - on/off, edit, new code, delete */}
+      <div className="flex items-center gap-2" data-testid="qr-toolbar">
+        {back}
+        <div className="ml-auto flex items-center gap-2">
+          <IosSwitch checked={!!q.active} onChange={setActive} disabled={busy} label={q.active ? "Attivo: tocca per disattivarlo" : "Disattivato: tocca per riattivarlo"} testid="qr-toggle-active" />
+          <button type="button" onClick={() => setEditing((v) => !v)} aria-pressed={editing} data-testid="qr-edit" title="Modifica" aria-label="Modifica"
+            className={`${ROUND} ${editing ? "bg-white/85 text-[#7A2A5C]" : "bg-white/15 text-white"}`}><Pencil size={17} /></button>
+          <button type="button" onClick={newCode} disabled={busy} data-testid="qr-new-code" title="Nuovo codice" aria-label="Nuovo codice"
+            className={`${ROUND} bg-white/15 text-white`}><RefreshCw size={17} /></button>
+          <button type="button" onClick={remove} disabled={busy} data-testid="qr-delete" title="Elimina" aria-label="Elimina"
+            className={`${ROUND} bg-white/90 text-[#C0262D]`}><Trash2 size={17} /></button>
+        </div>
+      </div>
+
+      {/* the QR, with what identifies it and the three ways to take it out */}
       <div className="card-soft p-5 flex flex-col gap-4">
         <div className="flex flex-col items-center gap-3">
-          <div className="bg-white rounded-2xl p-2.5 shadow-sm">
+          <div className={`bg-white rounded-2xl p-2.5 shadow-sm ${q.active ? "" : "opacity-50"}`}>
             <img src={q.images.svg} alt={`QR ${q.code_label}`} width={196} height={196} data-testid="qr-image" />
           </div>
           <div className="text-center min-w-0 w-full">
@@ -524,6 +438,14 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
             </div>
           </div>
         </div>
+        <div className="flex justify-center gap-4">
+          <button type="button" onClick={() => setPrinting(true)} data-testid="qr-print" title="Stampa l'etichetta" aria-label="Stampa l'etichetta"
+            className={`${ROUND} bg-white/90 text-[#7A2A5C]`}><Printer size={18} /></button>
+          <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" title="Scarica il PNG" aria-label="Scarica il PNG"
+            className={`${ROUND} bg-white/15 text-white`}><Download size={18} /></a>
+          <button type="button" onClick={copyLink} data-testid="qr-copy-link" title={`Copia il link: ${q.url}`} aria-label="Copia il link"
+            className={`${ROUND} bg-white/15 text-white`}><Link2 size={18} /></button>
+        </div>
         <div className="border-t border-white/10 pt-4">
           <StatTiles testid="qr-stats">
             <StatTile label="Scansioni" value={q.scans || 0} testid="qr-stat-scans" />
@@ -534,16 +456,6 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
             {q.last_scan_at ? `Ultima scansione ${when(q.last_scan_at)}${q.last_scan_by_name ? ` · ${q.last_scan_by_name}` : ""}` : "Non ancora scansionato"}
           </div>
         </div>
-        <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
-          <Field label="Stampa l'etichetta">
-            <Select icon={Maximize2} value={printCm} onChange={setPrintCm} testid="qr-print-size" options={[[3, "Lato 3 cm"], [5, "Lato 5 cm"], [8, "Lato 8 cm"]]} />
-          </Field>
-          <button type="button" onClick={() => printLabel(q, printCm)} data-testid="qr-print" className={`${PRIMARY} px-5`}><Printer size={15} /> Stampa</button>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" className={SECONDARY}><Download size={15} /> Scarica PNG</a>
-          <button type="button" onClick={copyLink} data-testid="qr-copy-link" className={SECONDARY} title={q.url}><Link2 size={15} /> Copia il link</button>
-        </div>
       </div>
 
       <div className="pt-2"><GroupTitle>Contenuto</GroupTitle></div>
@@ -551,6 +463,12 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
         <QrEditor initial={q} commesse={commesse} onCancel={() => setEditing(false)} onSaved={(d) => { set(d); setEditing(false); }} />
       ) : (
         <div className="card-soft p-5" data-testid="qr-content">
+          {t && (
+            <InfoRow label="Attrezzo" testid="qr-tool-view">
+              {t.name || q.title}
+              <div className="text-[12px] text-white/70 mt-0.5">{t.holder ? `Ce l'ha ${t.holder.name} dal ${when(t.holder.since)}` : "Disponibile"}</div>
+            </InfoRow>
+          )}
           <InfoRow label="Cosa mostra" testid="qr-text-view">
             {q.text ? <span className="whitespace-pre-wrap leading-relaxed">{q.text}</span> : <span className="text-white/50">Nessun testo</span>}
           </InfoRow>
@@ -568,17 +486,25 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
           </InfoRow>
           <InfoRow label="Aspetto">{q.style === "maipal" ? "mAIPAL" : "Classico"}</InfoRow>
           <div className="text-[11px] text-white/55 pt-3 border-t border-white/10">Aggiornato {when(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""}</div>
-          <button type="button" onClick={() => setEditing(true)} data-testid="qr-edit" className={`${PRIMARY} w-full mt-4`}><Pencil size={15} /> Modifica il contenuto</button>
         </div>
       )}
 
       <div className="pt-2"><GroupTitle>Foto e PDF ({(q.files || []).length}/{MAX_FILES})</GroupTitle></div>
       <QrFiles q={q} onChanged={set} />
-      <div className="pt-2"><GroupTitle>Realtà aumentata</GroupTitle></div>
-      <QrAr key={`${q.id}-${(q.files || []).length}-${q.ar?.file_id || ""}`} q={q} onChanged={set} />
 
-      <div className="pt-2"><GroupTitle>Gestione</GroupTitle></div>
+      <div className="pt-2"><GroupTitle>Storico</GroupTitle></div>
       <div className="card-soft p-5 flex flex-col gap-4">
+        {t && (q.tool_moves || []).length > 0 && (
+          <div data-testid="qr-tool-moves">
+            <div className="text-sm font-medium text-white mb-1">Chi l'ha preso</div>
+            {q.tool_moves.map((m) => (
+              <div key={m.id} className="py-2 border-t border-white/10 first:border-t-0 text-[13px] text-white/85">
+                <span className="text-white/55">{when(m.at)} · </span>
+                {m.name} {m.action === "take" ? (m.from_name ? `l'ha preso da ${m.from_name}` : "l'ha preso") : "l'ha restituito"}
+              </div>
+            ))}
+          </div>
+        )}
         <button type="button" onClick={() => setShowHistory((v) => !v)} aria-expanded={showHistory} className="w-full flex items-center gap-3 text-left" data-testid="qr-history-toggle">
           <History size={17} className="shrink-0 text-white/60" />
           <span className="flex-1 min-w-0">
@@ -600,16 +526,8 @@ function QrDetail({ id, commesse, onChanged, onDeleted }) {
             ))}
           </div>
         ) : <div className="text-[12px] text-white/55 -mt-1">Nessuna modifica</div>)}
-        <div className="border-t border-white/10" />
-        <Field label="Stato" hint={q.active ? "Attivo: chi lo scansiona vede il contenuto." : "Disattivato: chi lo scansiona non vede niente, finché non lo riattivi."}>
-          <Select icon={Power} value={q.active ? "on" : "off"} testid="qr-toggle-active" options={[["on", "Attivo"], ["off", "Disattivato"]]}
-            onChange={(v) => (v === "on") !== q.active && act(() => api.patch(`/qr/${q.id}`, { active: v === "on" }), v === "on" ? "QR riattivato" : "QR disattivato")} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <button type="button" disabled={busy} onClick={newCode} data-testid="qr-new-code" className={SECONDARY}><RefreshCw size={15} /> Nuovo codice</button>
-          <button type="button" disabled={busy} onClick={remove} data-testid="qr-delete" className={DANGER}><Trash2 size={15} /> Elimina</button>
-        </div>
       </div>
+      {printing && <PrintSheet q={q} onClose={() => setPrinting(false)} />}
     </div>
   );
 }
@@ -649,13 +567,15 @@ export default function QrPage() {
     return (
       // (pb-20: room to scroll the last buttons above the bottom bar and the install banner)
       <div className="w-full settings-page pb-20" data-testid={creating ? "qr-new" : "qr-open"}>
-        <button onClick={() => setParams({})} data-testid="qr-back" className="flex items-center gap-1.5 text-sm text-white/70 mb-4">
-          <ArrowLeft size={16} /> QR
-        </button>
+        {creating && (
+          <button onClick={() => setParams({})} data-testid="qr-back" className="flex items-center gap-1.5 text-sm text-white/70 mb-4">
+            <ArrowLeft size={16} /> QR
+          </button>
+        )}
         {creating ? (
           <QrEditor commesse={commesse} onCancel={() => setParams({})} onSaved={(d) => { replace(d); setParams({ open: d.id }, { replace: true }); }} />
         ) : (
-          <QrDetail id={openId} commesse={commesse} onChanged={replace}
+          <QrDetail id={openId} commesse={commesse} onChanged={replace} onBack={() => setParams({})}
             onDeleted={(id) => { setList((xs) => xs.filter((x) => x.id !== id)); setParams({}); }} />
         )}
       </div>

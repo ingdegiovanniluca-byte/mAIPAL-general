@@ -200,6 +200,9 @@ async def main():
     me = await server.update_profile(server.ProfilePatch(business_vertical="artigiano"), server.User(**{**U, "org_id": "o1"}))
     cl = next(c for c in db.collections.docs if c.get("system_key") == "artigiano_clienti")
     cl["visibility"] = "private"            # his Clienti list is his own: only single commesse are shared
+    for c in db.collections.docs:           # (and his Attrezzatura too: here only the lists he shares by hand)
+        if c.get("system_key") == "artigiano_attrezzatura":
+            c["visibility"] = "private"
     db.collection_items.docs.append({"id": "c_rossi", "collection_id": cl["id"], "data": {"nome": "Mario Rossi"}})
     db.collection_sub_items.docs.append({"id": "s_bagno", "collection_id": cl["id"], "item_id": "c_rossi", "data": {"titolo": "Bagno", "stato": "in corso"}})
 
@@ -218,7 +221,7 @@ async def main():
     await denied(server.delete_collection_item(lst["id"], item["id"], None, U2()))
     # the chat agent never changes a read-only list
     r = await denied(server._execute_list_update(U2(), "aggiungi Ferramenta Rossi ai fornitori"), 400)
-    assert "sola lettura" in r
+    assert "sola lettura" in r, r
     # shared with the whole team, read-only: Sara now reads only
     out = await server.set_collection_sharing(lst["id"], server.CollectionSharingPayload(visibility="org", org_perm="read"), me)
     assert out["org_perm"] == "read" and out["shared_with"] == []

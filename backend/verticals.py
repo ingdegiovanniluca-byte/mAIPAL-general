@@ -45,6 +45,19 @@ COMMESSA_FIELDS = [
      "aliases": ["spese previste", "costo previsto", "costi previsti", "spesa", "budget spesa", "costo stimato", "spesa stimata"]},
 ]
 
+# ---- artigiano: the equipment (Attrezzatura), the tools of the organization; a tool's QR is linked to one of them
+# and, scanned, shows who has it (Prendi / Restituisci): "Ce l'ha" and "Dal" are kept up to date from there ----
+ATTREZZI_KEY = "artigiano_attrezzatura"
+ATTREZZI_NAME = "Attrezzatura"
+ATTREZZI_FIELDS = [
+    {"key": "nome", "label": "Nome", "type": "text"},
+    {"key": "marca_modello", "label": "Marca e modello", "type": "text"},
+    {"key": "matricola", "label": "Matricola", "type": "text"},
+    {"key": "note", "label": "Note", "type": "textarea"},
+    {"key": "preso_da", "label": "Ce l'ha", "type": "text"},
+    {"key": "preso_il", "label": "Dal", "type": "date"},
+]
+
 
 def norm_stato(stato: str) -> str:
     """A commessa's state in today's names (the old ones read as the new: preventivo -> preventivo
@@ -60,7 +73,7 @@ PACKS = {
     "artigiano": {
         "label": "Artigiani e piccole imprese",
         "team": True,                    # the owner gets a team (collaborators come later)
-        "system_lists": [CLIENTI_KEY],
+        "system_lists": [CLIENTI_KEY, ATTREZZI_KEY],
         "agents": ["work_report"],       # the "Report" agent (primo sopralluogo, ...)
     },
     "veterinario": {"label": "Veterinari", "team": False, "system_lists": [], "agents": ["vet_report"]},

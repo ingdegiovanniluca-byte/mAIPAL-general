@@ -118,9 +118,13 @@ async def main():
     assert [f["key"] for f in cl[0]["fields"]][:2] == ["nome", "telefono"]
     sub = {f["key"]: f for f in cl[0]["sub_item_fields"]}
     assert sub["stato"]["options"] == vx.COMMESSA_STATI and "titolo" in sub
+    # ...and the Attrezzatura list (the tools, for their QR: who has them, since when), shared with the team too
+    at = [c for c in db.collections.docs if c.get("system_key") == "artigiano_attrezzatura"]
+    assert len(at) == 1 and at[0]["name"] == "Attrezzatura" and at[0]["visibility"] == "org" and at[0]["org_id"] == me.org_id
+    assert [f["label"] for f in at[0]["fields"]] == ["Nome", "Marca e modello", "Matricola", "Note", "Ce l'ha", "Dal"]
     # idempotent
     await server._apply_vertical(me, "artigiano")
-    assert len([c for c in db.collections.docs if c.get("system_key")]) == 1 and len(db.organizations.docs) == 1
+    assert len([c for c in db.collections.docs if c.get("system_key")]) == 2 and len(db.organizations.docs) == 1
     # 2) protections
     try:
         await server.delete_collection(cl[0]["id"], me); assert False
@@ -156,7 +160,8 @@ async def main():
     assert {"Email", "Indirizzo", "Note"} <= {f["label"] for f in old["fields"]}
     assert {"Stato", "Data fine", "Indirizzo cantiere"} <= {f["label"] for f in old["sub_item_fields"]}
     assert db.collection_items.docs[-1]["data"] == {"cliente": "Rossi", "tel": "333"}
-    assert len([c for c in db.collections.docs if c.get("user_id") == "u2"]) == 1
+    # (his Clienti, adopted, and the new Attrezzatura: no second Clienti)
+    assert sorted(c.get("system_key") for c in db.collections.docs if c.get("user_id") == "u2") == ["artigiano_attrezzatura", "artigiano_clienti"]
 
     # 4) already on the vertical but without the list (set before this version): made on the next lists load
     U3 = {"user_id": "u3", "email": "c@b.it", "name": "Ugo", "business_vertical": "artigiano"}

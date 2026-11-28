@@ -1,17 +1,17 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText, MapPin, Loader2, Box } from "lucide-react";
+import { QrCode, BookOpen, Pencil, ExternalLink, Lock, FileText, MapPin, Loader2, Wrench, Undo2, Hand } from "lucide-react";
+import { toast } from "sonner";
 import PageBackground from "@/components/PageBackground";
 import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 
-/* A QR label scanned with the phone (APP/q/<code>).
+/* A QR label scanned with the phone (APP/q/<code>): its content first, as a page to read - the title, what was written,
+   the photos, the PDFs, the links. A tool's QR says who has the tool and has the buttons to take it or give it back.
    - Who is in the organization that made it: everything (also a private one), with the commessa's diary and, for the
-     administrator, Modifica.
+     administrator, a small pencil to change it.
    - Anyone else - logged in elsewhere or with no account: a public QR's content (only what was written for it);
      a private one "not available", the same as a wrong code, with the login for who is in the organization. */
-// The augmented reality: its own bundle (three.js, the readers), loaded only when opened.
-const QrArViewer = React.lazy(() => import("@/components/QrArViewer"));
 
 export const AFTER_LOGIN_KEY = "maipal.afterLogin";
 
@@ -35,6 +35,58 @@ export function phonePosition() {
 }
 
 const day = (iso) => { if (!iso) return ""; const d = new Date(iso); return `${d.getDate()} ${IT_MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
+// "oggi alle 9:40", "ieri alle 17:05", "il 24 novembre"
+const since = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  const days = Math.round((new Date(now.toDateString()) - new Date(d.toDateString())) / 86400000);
+  const hm = `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return days <= 0 ? `oggi alle ${hm}` : days === 1 ? `ieri alle ${hm}` : `il ${d.getDate()} ${IT_MONTHS[d.getMonth()]}`;
+};
+
+/* A tool's QR: who has it now and the buttons - Prendi (also from a colleague), Restituisci (who has it, or an
+   administrator for anyone). */
+function ToolBox({ q, onTool }) {
+  const [busy, setBusy] = useState(null);
+  const t = q.tool;
+  const h = t.holder;
+  const act = async (action) => {
+    setBusy(action);
+    try {
+      const r = await api.post(`/qr/scan/${encodeURIComponent(q.code)}/tool`, { action, token: q.pass || null });
+      onTool(r.data.tool);
+      toast.success(action === "take" ? "Preso: ora risulta a te" : "Restituito");
+    } catch (e) { toast.error((typeof e.response?.data?.detail === "string" && e.response.data.detail) || "Non riuscito, riprova"); }
+    finally { setBusy(null); }
+  };
+  const big = "h-12 rounded-2xl text-[15px] font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-60";
+  return (
+    <div className="card-soft p-4 flex flex-col gap-3" data-testid="qr-scan-tool">
+      <div className="flex items-center gap-3">
+        <span className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center ${h ? "bg-amber-300/25" : "bg-emerald-300/25"}`}><Wrench size={18} /></span>
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold leading-tight" data-testid="qr-scan-tool-state">
+            {!h ? "Disponibile" : h.mine ? "Ce l'hai tu" : `Ce l'ha ${h.name}`}
+          </div>
+          <div className="text-[12px] text-white/65 mt-0.5">
+            {h ? `Preso ${since(h.since)}` : "Nessuno l'ha preso"}{t.name && t.name !== q.title ? ` · ${t.name}` : ""}
+          </div>
+        </div>
+      </div>
+      {!h?.mine && (
+        <button type="button" onClick={() => act("take")} disabled={!!busy} data-testid="qr-scan-take" className={`${big} bg-white/90 text-[#7A2A5C]`}>
+          {busy === "take" ? <Loader2 size={17} className="animate-spin" /> : <Hand size={17} />} {h ? "Lo prendo io" : "Prendi"}
+        </button>
+      )}
+      {h && (h.mine || q.can_edit) && (
+        <button type="button" onClick={() => act("return")} disabled={!!busy} data-testid="qr-scan-return"
+          className={`${big} ${h.mine ? "bg-white/90 text-[#7A2A5C]" : "bg-white/15 text-white"}`}>
+          {busy === "return" ? <Loader2 size={17} className="animate-spin" /> : <Undo2 size={17} />} Restituisci
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function QrScanPage() {
   const { code } = useParams();
@@ -46,7 +98,6 @@ export default function QrScanPage() {
   const [place, setPlace] = useState(null);          // it opens only in one place: why not yet (ask the position, too far...)
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState(null);
-  const [arOpen, setArOpen] = useState(false);
 
   const load = React.useCallback((geo) => {
     setError(null); setReserved(false);
@@ -124,78 +175,62 @@ export default function QrScanPage() {
         ) : !q ? (
           <div className="kicker">caricamento…</div>
         ) : (
-          <>
-            <div className="card-soft p-5 flex flex-col gap-3" data-testid="qr-scan">
-              <div className="text-[11px] text-white/60 flex items-center gap-1.5"><QrCode size={13} /> {q.kind_label}</div>
-              <h1 className="text-2xl font-bold tracking-tight break-words" data-testid="qr-scan-title">{q.title}</h1>
-              {q.commessa && (
-                <div className="text-sm text-white/85">
-                  <span className="font-semibold">{q.commessa.title}</span>{q.commessa.client_name ? ` · ${q.commessa.client_name}` : ""}
-                  {q.commessa.address ? <div className="text-white/65 text-xs mt-0.5">{q.commessa.address}</div> : null}
-                </div>
-              )}
-              {q.place_note ? <div className="text-xs text-white/70 bg-white/10 rounded-xl px-3 py-2" data-testid="qr-scan-place-note">{q.place_note}</div> : null}
-              {q.text ? <div className="text-[15px] whitespace-pre-wrap break-words leading-relaxed" data-testid="qr-scan-text">{q.text}</div> : null}
-              {q.links?.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  {q.links.map((l, i) => (
-                    <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
-                      className="h-11 px-4 rounded-xl bg-white/15 text-sm font-medium flex items-center justify-between gap-2">
-                      <span className="truncate">{l.label}</span><ExternalLink size={15} className="shrink-0 text-white/70" />
-                    </a>
-                  ))}
-                </div>
-              )}
-              {q.files?.some((f) => f.kind === "image") && (
-                <div className={`grid gap-2 ${q.files.filter((f) => f.kind === "image").length > 1 ? "grid-cols-2" : "grid-cols-1"}`} data-testid="qr-scan-photos">
-                  {q.files.filter((f) => f.kind === "image").map((f) => (
-                    <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer" className="aspect-[4/3] rounded-xl overflow-hidden bg-white/10">
-                      <img src={`${API}/${f.url}`} alt={f.name} className="h-full w-full object-cover" />
-                    </a>
-                  ))}
-                </div>
-              )}
-              {q.files?.some((f) => f.kind === "pdf") && (
-                <div className="flex flex-col gap-2" data-testid="qr-scan-pdfs">
-                  {q.files.filter((f) => f.kind === "pdf").map((f) => (
-                    <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer"
-                      className="h-12 px-4 rounded-xl bg-white/15 text-sm font-medium flex items-center gap-2.5">
-                      <FileText size={17} className="shrink-0" /><span className="flex-1 truncate">{f.name}</span>
-                      <span className="text-[11px] text-white/60 shrink-0">{f.pages} pag.</span>
-                    </a>
-                  ))}
-                </div>
-              )}
-              <div className="text-[11px] text-white/55">Aggiornato il {day(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""} · <span className="whitespace-nowrap">{q.code_label}</span></div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {q.ar && (
-                <button type="button" onClick={() => setArOpen(true)} data-testid="qr-scan-ar"
-                  className="h-10 px-4 rounded-full bg-white/85 text-[#7A2A5C] text-sm font-semibold inline-flex items-center gap-1.5">
-                  <Box size={15} /> Vedi in realtà aumentata
-                </button>
-              )}
-              {q.commessa && (
-                <button type="button" onClick={() => navigate(`/dashboard/journal?commessa=${q.commessa.id}`)} data-testid="qr-scan-diary"
-                  className="h-10 px-4 rounded-full bg-white/85 text-[#7A2A5C] text-sm font-semibold inline-flex items-center gap-1.5">
-                  <BookOpen size={15} /> Diario della commessa
-                </button>
-              )}
+          <div className="flex flex-col gap-5" data-testid="qr-scan">
+            <div className="flex items-start gap-3">
+              <h1 className="flex-1 min-w-0 text-[28px] font-bold tracking-tight leading-tight break-words" data-testid="qr-scan-title">{q.title}</h1>
               {q.can_edit && (
-                <button type="button" onClick={() => navigate(`/dashboard/qr?open=${q.id}`)} data-testid="qr-scan-edit"
-                  className="h-10 px-4 rounded-full bg-white/15 text-sm font-medium inline-flex items-center gap-1.5">
-                  <Pencil size={14} /> Modifica
-                </button>
+                <button type="button" onClick={() => navigate(`/dashboard/qr?open=${q.id}`)} data-testid="qr-scan-edit" aria-label="Modifica il QR" title="Modifica il QR"
+                  className="mt-1 h-9 w-9 shrink-0 rounded-full bg-white/15 flex items-center justify-center"><Pencil size={15} /></button>
               )}
             </div>
-          </>
+            {q.commessa && (
+              <div className="-mt-3 text-sm text-white/85">
+                <span className="font-semibold">{q.commessa.title}</span>{q.commessa.client_name ? ` · ${q.commessa.client_name}` : ""}
+                {q.commessa.address ? <div className="text-white/65 text-xs mt-0.5">{q.commessa.address}</div> : null}
+              </div>
+            )}
+            {q.place_note ? <div className="text-xs text-white/70 bg-white/10 rounded-xl px-3 py-2" data-testid="qr-scan-place-note">{q.place_note}</div> : null}
+            {q.tool && !q.public && <ToolBox q={q} onTool={(tool) => setQ((x) => ({ ...x, tool }))} />}
+            {q.text ? <div className="text-[16px] whitespace-pre-wrap break-words leading-relaxed" data-testid="qr-scan-text">{q.text}</div> : null}
+            {q.files?.some((f) => f.kind === "image") && (
+              <div className={`grid gap-2 ${q.files.filter((f) => f.kind === "image").length > 1 ? "grid-cols-2" : "grid-cols-1"}`} data-testid="qr-scan-photos">
+                {q.files.filter((f) => f.kind === "image").map((f) => (
+                  <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer" className="aspect-[4/3] rounded-2xl overflow-hidden bg-white/10">
+                    <img src={`${API}/${f.url}`} alt={f.name} className="h-full w-full object-cover" />
+                  </a>
+                ))}
+              </div>
+            )}
+            {(q.files?.some((f) => f.kind === "pdf") || q.links?.length > 0) && (
+              <div className="flex flex-col gap-2" data-testid="qr-scan-pdfs">
+                {q.files.filter((f) => f.kind === "pdf").map((f) => (
+                  <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer"
+                    className="h-12 px-4 rounded-2xl bg-white/15 text-sm font-medium flex items-center gap-2.5">
+                    <FileText size={17} className="shrink-0" /><span className="flex-1 truncate">{f.name}</span>
+                    <span className="text-[11px] text-white/60 shrink-0">{f.pages} pag.</span>
+                  </a>
+                ))}
+                {(q.links || []).map((l, i) => (
+                  <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
+                    className="h-12 px-4 rounded-2xl bg-white/15 text-sm font-medium flex items-center gap-2.5">
+                    <ExternalLink size={16} className="shrink-0" /><span className="flex-1 truncate">{l.label}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+            {q.commessa && (
+              <button type="button" onClick={() => navigate(`/dashboard/journal?commessa=${q.commessa.id}`)} data-testid="qr-scan-diary"
+                className="self-start h-10 px-4 rounded-full bg-white/15 text-sm font-medium inline-flex items-center gap-1.5">
+                <BookOpen size={15} /> Diario della commessa
+              </button>
+            )}
+            {!q.text && !q.files?.length && !q.links?.length && !q.tool && (
+              <div className="text-sm text-white/60" data-testid="qr-scan-empty">Questo QR non ha ancora un contenuto.</div>
+            )}
+            <div className="pt-2 text-[11px] text-white/50">Aggiornato il {day(q.updated_at)}{q.updated_by_name ? ` da ${q.updated_by_name}` : ""} · <span className="whitespace-nowrap">{q.code_label}</span></div>
+          </div>
         )}
       </div>
-      {arOpen && q?.ar && (
-        <React.Suspense fallback={<div className="fixed inset-0 z-[100] bg-black flex items-center justify-center text-white text-sm">Carico la realtà aumentata…</div>}>
-          <QrArViewer ar={q.ar} onClose={() => setArOpen(false)} />
-        </React.Suspense>
-      )}
     </div>
   );
 }

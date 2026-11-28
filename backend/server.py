@@ -1354,6 +1354,7 @@ async def _apply_vertical(current: User, key: str) -> None:
         await _add_membership(current.user_id, org_doc["id"], "owner")
         current = current.model_copy(update={"org_id": org_doc["id"], "org_role": "owner"})
     await _ensure_clienti_list(current)
+    await _ensure_attrezzi_list(current)
     await _ensure_weekly_jobs_action(current.model_copy(update={"business_vertical": "artigiano"}))
 
 
@@ -4127,8 +4128,9 @@ async def toggle_todo_favorite(todo_id: str, current: User = Depends(get_current
 # ============ COLLEZIONI (liste personalizzate: clienti, esercizi, commesse, ecc.) ============
 @api_router.get("/collections")
 async def list_collections(current: User = Depends(get_current_user)):
-    if current.business_vertical == "artigiano" and not await db.collections.find_one(
-            {**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 1}):
+    if current.business_vertical == "artigiano" and not (
+            await db.collections.find_one({**_lists_query(current), "system_key": vx.CLIENTI_KEY}, {"_id": 1})
+            and await db.collections.find_one({**_lists_query(current), "system_key": vx.ATTREZZI_KEY}, {"_id": 1})):
         await _apply_vertical(current, "artigiano")
         current = User(**(await db.users.find_one({"user_id": current.user_id}, {"_id": 0})))
     cursor = db.collections.find(_lists_query(current), {"_id": 0}).sort("created_at", 1)
@@ -7450,6 +7452,48 @@ class CommessaStatoPayload(BaseModel):
 
 def _first_name(name: Optional[str]) -> str:
     return (name or "").strip().split(" ")[0] or "Io"
+
+
+async def _attrezzi_list(current: User) -> Optional[dict]:
+    """The equipment list (Attrezzatura) the user works with: their own, else the active team's, else another team's."""
+    found = await db.collections.find({**_lists_query(current), "system_key": vx.ATTREZZI_KEY}, {"_id": 0}).to_list(50)
+    return min(found, key=lambda c: (c.get("org_id") != current.org_id, c.get("user_id") != current.user_id,
+                                     c.get("created_at") or ""), default=None)
+
+
+async def _ensure_attrezzi_list(current: User) -> dict:
+    """The artigiano's "Attrezzatura" list (the tools: name, model, serial number, who has it and since when). A list
+    already called Attrezzatura or Attrezzi is adopted (its attributes and data stay, the missing base ones are added)."""
+    existing = await _attrezzi_list(current)
+    if existing:
+        return existing
+    named = next((c for c in await db.collections.find({"user_id": current.user_id}, {"_id": 0}).to_list(500)
+                  if (c.get("name") or "").strip().lower() in ("attrezzatura", "attrezzi") and not c.get("system_key")), None)
+    if named:
+        fields, fmap = vx.merge_system_fields(named.get("fields"), vx.ATTREZZI_FIELDS)
+        upd = {"fields": _unique_field_keys(fields), "system_key": vx.ATTREZZI_KEY, "system_map": fmap}
+        if current.org_id:
+            upd.update({"visibility": "org", "org_id": current.org_id})
+        await db.collections.update_one({"id": named["id"]}, {"$set": upd})
+        return {**named, **upd}
+    fields, fmap = vx.merge_system_fields([], vx.ATTREZZI_FIELDS)
+    others = await db.collections.find(_lists_query(current), {"_id": 0, "sort_order": 1}).to_list(500)
+    doc = {
+        "id": f"coll_{uuid.uuid4().hex[:12]}",
+        "name": vx.ATTREZZI_NAME,
+        "icon": None,
+        "fields": fields,
+        "sub_item_fields": [],
+        "system_key": vx.ATTREZZI_KEY,
+        "system_map": fmap,
+        "visibility": "org" if current.org_id else "private",
+        "sort_order": max([o.get("sort_order", 0) for o in others], default=-1) + 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _stamp_owner_fields(doc, current)
+    await db.collections.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 
 async def _clienti_list(current: User) -> Optional[dict]:
@@ -18793,6 +18837,7 @@ class QrPayload(BaseModel):
     place: Optional[dict] = None               # {"on", "lat", "lon", "radius_m", "label"}: opened only there
     style: Optional[Literal["maipal", "classic"]] = None   # how the QR is drawn (the printed label's look)
     ar: Optional[dict] = None                  # the augmented reality: {"on", "file_id", "label", "label_cm", "offset_cm", "rot_deg", "scale", "width_cm"}
+    tool_item_id: Optional[str] = None         # a tool's QR: the tool in the Attrezzatura list ("" = the one named as the QR)
 
 
 def _qr_scope(current: User) -> dict:
@@ -18836,6 +18881,7 @@ async def _qr_public(current: User, doc: dict, full: bool = False) -> dict:
     out["kind_label"] = qr.KINDS.get(doc.get("kind"), "Altro")
     out["commessa"] = await _qr_commessa(current, doc.get("commessa_id"))
     out["commessa_id"] = doc.get("commessa_id") or ""
+    out["tool"] = await _qr_tool_out(doc, current)
     if full:
         out["images"] = qr.images(doc["code"], doc.get("style") or "classic")
     return out
@@ -18872,7 +18918,85 @@ async def _qr_fields(current: User, p: QrPayload, base: Optional[dict] = None) -
         upd["ar"] = _qr_clean_ar(p.ar, (base or {}).get("files") or [])
     if p.style is not None:
         upd["style"] = p.style
+    if p.tool_item_id is not None:
+        upd["tool_item_id"] = p.tool_item_id or None
     return upd
+
+
+# ---- a tool's QR: linked to its tool in the Attrezzatura list (artigiani), scanned it says who has it and lets
+# whoever scans it take it or give it back; the list's "Ce l'ha" / "Dal" follow ----
+def _tool_key(lst: dict, base: str) -> str:
+    return (lst.get("system_map") or {}).get(base, base)
+
+
+async def _qr_tool_list(current: User) -> Optional[dict]:
+    """The equipment list for the QR: made for an artigiano if missing; another account uses it only if it has one."""
+    if current.business_vertical == "artigiano":
+        return await _ensure_attrezzi_list(current)
+    return await _attrezzi_list(current)
+
+
+async def _qr_link_tool(current: User, upd: dict, base: Optional[dict] = None) -> None:
+    """A tool's QR points to a tool of the list: the one chosen, else the one with the QR's name, else a new one (so
+    every tool with a label is in the list). Other kinds of QR: no tool."""
+    kind = upd.get("kind", (base or {}).get("kind"))
+    if kind != "attrezzo":
+        if (base or {}).get("tool_item_id"):
+            upd["tool_item_id"] = None
+        return
+    lst = await _qr_tool_list(current)
+    if not lst:
+        upd.pop("tool_item_id", None)
+        return
+    item_id = upd["tool_item_id"] if "tool_item_id" in upd else (base or {}).get("tool_item_id")
+    if item_id:
+        if not await db.collection_items.find_one({"id": item_id, "collection_id": lst["id"]}, {"_id": 1}):
+            raise HTTPException(status_code=404, detail="Attrezzo non trovato nella lista Attrezzatura")
+        upd["tool_item_id"] = item_id
+        return
+    title = (upd.get("title") or (base or {}).get("title") or "").strip()
+    key = _tool_key(lst, "nome")
+    items = await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0, "id": 1, "data": 1, "sort_order": 1}).to_list(5000)
+    same = next((i for i in items if str((i.get("data") or {}).get(key) or "").strip().lower() == title.lower()), None)
+    if same:
+        upd["tool_item_id"] = same["id"]
+        return
+    doc = {"id": f"item_{uuid.uuid4().hex[:12]}", "collection_id": lst["id"], "data": {key: title[:120]},
+           "visibility": lst.get("visibility", "private"),
+           "sort_order": max([i.get("sort_order") for i in items if i.get("sort_order") is not None], default=-1) + 1,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    _stamp_owner_fields(doc, current)
+    if lst.get("org_id"):
+        doc["org_id"] = lst["org_id"]
+    await db.collection_items.insert_one(doc)
+    upd["tool_item_id"] = doc["id"]
+
+
+async def _qr_tool_out(doc: dict, current: Optional[User] = None) -> Optional[dict]:
+    """A tool's QR: the tool of the list (its name) and who has it now."""
+    if doc.get("kind") != "attrezzo":
+        return None
+    name = None
+    if doc.get("tool_item_id"):
+        item = await db.collection_items.find_one({"id": doc["tool_item_id"]}, {"_id": 0, "data": 1, "collection_id": 1})
+        lst = await db.collections.find_one({"id": (item or {}).get("collection_id")}, {"_id": 0, "system_map": 1}) if item else None
+        if item:
+            name = str((item.get("data") or {}).get(_tool_key(lst or {}, "nome")) or "").strip() or None
+    h = doc.get("holder") or None
+    holder = {"name": h.get("name") or "", "since": h.get("since"), "mine": bool(current and h.get("user_id") == current.user_id)} if h else None
+    return {"item_id": doc.get("tool_item_id"), "name": name, "holder": holder}
+
+
+async def _qr_tool_mirror(doc: dict, holder: Optional[dict]) -> None:
+    """The list's "Ce l'ha" / "Dal" of the QR's tool, as the QR says."""
+    item = await db.collection_items.find_one({"id": doc.get("tool_item_id")}, {"_id": 0, "collection_id": 1}) if doc.get("tool_item_id") else None
+    if not item:
+        return
+    lst = await db.collections.find_one({"id": item["collection_id"]}, {"_id": 0, "system_map": 1}) or {}
+    since = (holder or {}).get("since") or ""
+    await db.collection_items.update_one({"id": doc["tool_item_id"]}, {"$set": {
+        f"data.{_tool_key(lst, 'preso_da')}": (holder or {}).get("name") or "",
+        f"data.{_tool_key(lst, 'preso_il')}": since[:10] if since else "", "embedding": None}})
 
 
 QR_AR_LABELS = {"qr": "Il QR (etichetta normale)", "frame": "Etichetta AR (QR con 4 riquadri agli angoli)"}
@@ -18980,6 +19104,7 @@ async def list_qr(current: User = Depends(get_current_user)):
 async def create_qr(payload: QrPayload, current: User = Depends(get_current_user)):
     _require_qr_admin(current)
     fields = await _qr_fields(current, payload)
+    await _qr_link_tool(current, fields)
     now = datetime.now(timezone.utc).isoformat()
     doc = {"id": f"qr_{uuid.uuid4().hex[:12]}", "code": await _unique_qr_code(), **_qr_scope(current), "owner_user_id": current.user_id,
            "text": "", "links": [], "commessa_id": None, "visibility": "org", "active": True, "style": "maipal", **fields,
@@ -19081,11 +19206,61 @@ async def scan_qr(code: str, current: User = Depends(get_current_user), request:
     out = await _qr_public(current, doc)
     out["can_edit"] = admin
     token = await _qr_pass(doc, current.user_id) if (doc.get("place") or {}).get("on") else None
+    out["pass"] = token   # (a tool taken or given back from here, on the spot)
     out["files"] = _with_pass(_qr_files_out(doc, f"qr/scan/{doc['code']}"), token)
     out["ar"] = _qr_ar_out(doc, f"qr/scan/{doc['code']}", token)
     if problem:
         out["place_note"] = "Sei fuori dal posto in cui si apre questo QR: lo vedi perché sei amministratore."
     return out
+
+
+class QrToolAction(BaseModel):
+    action: Literal["take", "return"]
+    token: Optional[str] = None   # the pass of the scan, for a QR that opens only in one place
+
+
+@api_router.post("/qr/scan/{code}/tool")
+async def qr_tool_action(code: str, payload: QrToolAction, current: User = Depends(get_current_user)):
+    """A tool's QR scanned: «Prendi» (now it's mine, also from a colleague who had it) or «Restituisci» (back in its
+    place). The QR remembers who has it and since when, the Attrezzatura list too, and every move is kept."""
+    doc = await _qr_scanned(current, code)
+    if doc.get("kind") != "attrezzo":
+        raise HTTPException(status_code=400, detail="Questo QR non è di un attrezzo.")
+    admin = _is_org_admin(current)
+    if (doc.get("place") or {}).get("on") and not admin and not await _qr_pass_ok(doc, payload.token):
+        raise HTTPException(status_code=403, detail="Scansiona il QR sul posto per prendere o restituire l'attrezzo.")
+    h = doc.get("holder") or {}
+    now = datetime.now(timezone.utc).isoformat()
+    if payload.action == "take":
+        if h.get("user_id") == current.user_id:
+            return {"tool": await _qr_tool_out(doc, current)}
+        holder = {"user_id": current.user_id, "name": current.name or "", "since": now}
+    else:
+        if not h:
+            return {"tool": await _qr_tool_out(doc, current)}
+        if h.get("user_id") != current.user_id and not admin:
+            raise HTTPException(status_code=403, detail=f"Ce l'ha {h.get('name') or 'un collega'}: lo restituisce lui (o un amministratore).")
+        holder = None
+    await db.qr_codes.update_one({"id": doc["id"], **_qr_scope(current)}, {"$set": {"holder": holder}})
+    await db.qr_tool_moves.insert_one({"id": f"qrm_{uuid.uuid4().hex[:12]}", "qr_id": doc["id"], **_qr_scope(current),
+                                       "action": payload.action, "user_id": current.user_id, "name": current.name or "",
+                                       "from_name": h.get("name") if h and h.get("user_id") != current.user_id else None, "at": now})
+    await _qr_tool_mirror(doc, holder)
+    return {"tool": await _qr_tool_out({**doc, "holder": holder}, current)}
+
+
+@api_router.get("/qr/tools")
+async def qr_tools(current: User = Depends(get_current_user)):
+    """(administrator) The tools of the Attrezzatura list, to link a tool's QR to one of them."""
+    _require_qr_admin(current)
+    lst = await _qr_tool_list(current)
+    if not lst:
+        return {"list": None, "items": []}
+    key = _tool_key(lst, "nome")
+    items = await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0, "id": 1, "data": 1, "sort_order": 1}).to_list(5000)
+    out = [{"id": i["id"], "name": str((i.get("data") or {}).get(key) or "").strip()} for i in items]
+    return {"list": {"id": lst["id"], "name": lst.get("name")},
+            "items": sorted([o for o in out if o["name"]], key=lambda o: o["name"].lower())}
 
 
 @api_router.get("/qr/scan/{code}/files/{file_id}")
@@ -19159,6 +19334,8 @@ async def get_qr(qr_id: str, current: User = Depends(get_current_user)):
     doc = await _qr_or_404(current, qr_id)
     out = await _qr_public(current, doc, full=True)
     out["versions"] = await db.qr_code_versions.find({"qr_id": qr_id, **_qr_scope(current)}, {"_id": 0}).sort("edited_at", -1).to_list(20)
+    if doc.get("kind") == "attrezzo":
+        out["tool_moves"] = await db.qr_tool_moves.find({"qr_id": qr_id, **_qr_scope(current)}, {"_id": 0, "user_id": 0}).sort("at", -1).to_list(10)
     return out
 
 
@@ -19168,12 +19345,13 @@ async def update_qr(qr_id: str, payload: QrPayload, current: User = Depends(get_
     _require_qr_admin(current)
     doc = await _qr_or_404(current, qr_id)
     upd = await _qr_fields(current, payload, base=doc)
+    await _qr_link_tool(current, upd, base=doc)
     changed = {k: v for k, v in upd.items() if doc.get(k) != v}
     if not changed:
         return await get_qr(qr_id, current)
     now = datetime.now(timezone.utc).isoformat()
     await db.qr_code_versions.insert_one({"id": f"qrv_{uuid.uuid4().hex[:12]}", "qr_id": qr_id, **_qr_scope(current),
-                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place", "ar", "style")},
+                                          "before": {k: doc.get(k) for k in ("title", "kind", "text", "links", "commessa_id", "visibility", "active", "place", "ar", "style", "tool_item_id")},
                                           "changed": sorted(changed), "edited_at": now, "edited_by": current.user_id,
                                           "edited_by_name": _first_name(current.name)})
     await db.qr_codes.update_one({"id": qr_id, **_qr_scope(current)}, {"$set": {**changed, "updated_at": now,
@@ -19346,6 +19524,7 @@ async def delete_qr(qr_id: str, current: User = Depends(get_current_user)):
     await db.qr_codes.delete_one({"id": qr_id, **_qr_scope(current)})
     await db.qr_code_versions.delete_many({"qr_id": qr_id, **_qr_scope(current)})
     await db.qr_scans.delete_many({"qr_id": qr_id, **_qr_scope(current)})
+    await db.qr_tool_moves.delete_many({"qr_id": qr_id, **_qr_scope(current)})
     return {"ok": True}
 
 
