@@ -6,7 +6,7 @@ import { api, API } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { phonePosition } from "@/pages/QrScanPage";
 import { Field, Input, Select, PRIMARY, SECONDARY, GroupTitle } from "@/components/FormFields";
-import IosSwitch from "@/components/IosSwitch";
+import ActiveDot from "@/components/ActiveDot";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import { StatTiles, StatTile } from "@/components/StatTiles";
 
@@ -34,26 +34,29 @@ const CHANGED = { tool_item_id: "attrezzo", ar: "realtà aumentata", place: "luo
 // bottom bar under the finger and swallow the tap (see "Crea QR").
 const keepFocus = (e) => e.preventDefault();
 
-// a QR in the list: one row, with its switch on the right - on, the row lit and "Attivo"; off, dimmed and "Disattivato".
-// The switch turns it on or off from here; a tap on the rest of the row opens it.
+// on / off, as in Azioni: the lists' dot, lit with the check when the QR is active
+const QrDot = ({ title, ...p }) => (
+  <ActiveDot {...p} onTitle="Attivo: tocca per disattivarlo" offTitle="Disattivato: tocca per riattivarlo"
+    onLabel={`Disattiva ${title || "il QR"}`} offLabel={`Riattiva ${title || "il QR"}`} />
+);
+
+// a QR in the list, as an action of Azioni: the dot (active / off) on the left, the name and its kind; the active
+// ones lit, the turned-off ones dim; a tap on the row opens it
 function QrTile({ q, onOpen, onToggle }) {
   const [busy, setBusy] = useState(false);
   const toggle = async (on) => { setBusy(true); try { await onToggle(on); } finally { setBusy(false); } };
   return (
-    <div data-testid="qr-tile" data-active={q.active ? "true" : "false"}
-      className={`w-full rounded-[20px] pl-3 pr-3 h-[64px] flex items-center gap-3 backdrop-blur-xl transition-colors ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
-      <button type="button" onClick={onOpen} className="flex-1 min-w-0 h-full flex items-center gap-3 text-left" aria-label={`Apri ${q.title}`}>
-        <QrCode size={18} className={`shrink-0 ${q.active ? "text-white" : "text-white/45"}`} />
-        <span className="flex-1 min-w-0">
-          <span className={`block text-[14px] font-semibold leading-tight truncate ${q.active ? "text-white" : "text-white/60"}`} data-testid="qr-tile-title">{q.title}</span>
-          <span className="block text-[11px] leading-tight mt-0.5 truncate">
-            <span className={q.active ? "text-white/80" : "text-white/50"} data-testid="qr-tile-state">{q.active ? "Attivo" : "Disattivato"}</span>
-            <span className="text-white/50"> · {q.kind_label}</span>
-          </span>
+    <div role="button" tabIndex={0} data-testid="qr-tile" data-active={q.active ? "true" : "false"} onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
+      className={`w-full text-left rounded-[20px] px-3 h-[64px] flex items-center gap-2.5 backdrop-blur-xl transition-colors cursor-pointer ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
+      <QrDot on={!!q.active} busy={busy} onToggle={toggle} title={q.title} testid="qr-tile-switch" />
+      <span className="flex-1 min-w-0">
+        <span className="block text-[13px] font-semibold text-white leading-tight whitespace-nowrap overflow-hidden text-ellipsis" data-testid="qr-tile-title">{q.title}</span>
+        <span className="block text-[11px] text-white/60 leading-tight mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis" data-testid="qr-tile-state">
+          {q.kind_label}{q.active ? "" : " · disattivato"}
         </span>
-      </button>
-      <IosSwitch checked={!!q.active} onChange={toggle} disabled={busy} testid="qr-tile-switch"
-        label={q.active ? `${q.title}: attivo, tocca per disattivarlo` : `${q.title}: disattivato, tocca per riattivarlo`} />
+      </span>
+      <ChevronRight size={14} className="shrink-0 text-white/45" />
     </div>
   );
 }
@@ -434,7 +437,10 @@ function QrDetail({ id, commesse, onChanged, onDeleted, onBack }) {
 
       {/* one row: on/off, print, download, share the link - and, apart, new code and delete */}
       <div className="mt-2 flex items-center justify-center gap-2.5" data-testid="qr-actions">
-        <IosSwitch checked={!!q.active} onChange={setActive} disabled={busy} label={q.active ? "Attivo: tocca per disattivarlo" : "Disattivato: tocca per riattivarlo"} testid="qr-toggle-active" />
+        <span className={`${ROUND} bg-white/15 cursor-pointer`} data-testid="qr-active" data-active={q.active ? "true" : "false"}
+          onClick={() => !busy && setActive(!q.active)}>
+          <QrDot on={!!q.active} busy={busy} onToggle={setActive} title={q.title} testid="qr-toggle-active" />
+        </span>
         <button type="button" onClick={() => setPrinting(true)} data-testid="qr-print" title="Stampa l'etichetta" aria-label="Stampa l'etichetta"
           className={`${ROUND} bg-white/15 text-white`}><Printer size={18} /></button>
         <a href={q.images.png} download={`QR-${q.code_label}.png`} data-testid="qr-download" title="Scarica il PNG" aria-label="Scarica il PNG"

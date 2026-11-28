@@ -300,11 +300,11 @@ Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene
 
 <img src="screens/m18-qr.jpg" width="230"> <img src="screens/m19-qr-dettaglio.jpg" width="230"> <img src="screens/d06-qr.jpg" width="460">
 
-- **Elenco**: «+» per un nuovo QR, il conteggio e il campo **«Cerca per codice»**; una riga per QR (attivo: `bg-white/[0.22]` e «Attivo»; disattivato: scuro e «Disattivato») con l'`IosSwitch` a destra che lo attiva o disattiva dall'elenco (`PATCH /qr/{id}` `{active}`).
+- **Elenco**: «+» per un nuovo QR, il conteggio e il campo **«Cerca per codice»**; una riga per QR come le Azioni: a sinistra `ActiveDot` (il pallino delle liste, lo stesso delle Azioni: con la spunta = attivo) che lo attiva o disattiva dall'elenco (`PATCH /qr/{id}` `{active}`); i disattivati scuri, con «disattivato».
 - **Un QR**:
   - in alto la freccia e il nome del QR;
   - un riquadro con solo il QR (attenuato se disattivato);
-  - una riga di comandi: interruttore Attivo (`IosSwitch`), stampa (apre `PrintSheet`, il lato 3/5/8 cm), scarica PNG, condividi il link (`navigator.share`, altrimenti copia); dopo un separatore, nuovo codice ed elimina (stesso fondo degli altri; chiede conferma);
+  - una riga di comandi: il pallino `ActiveDot` in un cerchio come gli altri tasti, stampa (apre `PrintSheet`, il lato 3/5/8 cm), scarica PNG, condividi il link (`navigator.share`, altrimenti copia); dopo un separatore, nuovo codice ed elimina (stesso fondo degli altri; chiede conferma);
   - gli indicatori Scansioni / Foto e PDF / Modifiche, ultima scansione, codice e tipo;
   - sotto: Contenuto (con «Modifica» accanto al titolo; per un attrezzo: chi ce l'ha), Foto e PDF, Storico (chi ha preso l'attrezzo, le modifiche).
 - **Nuovo / modifica**: per il tipo Attrezzo c'è il campo **Attrezzo** (`GET /qr/tools`: la lista Attrezzatura); «Nuovo» lo aggiunge alla lista con il nome del QR.

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Repeat, Plus, Play, Trash2, List, BarChart3, Bell, CheckSquare, Send, Smartphone, Loader2, ChevronDown, ChevronRight, Newspaper, ArrowLeft, Check } from "lucide-react";
+import { Repeat, Plus, Play, Trash2, List, BarChart3, Bell, CheckSquare, Send, Smartphone, Loader2, ChevronDown, ChevronRight, Newspaper, ArrowLeft } from "lucide-react";
 import { api } from "@/lib/api";
+import SharedDot from "@/components/ActiveDot";
 
 const ACCENT = "#3E7C8C"; // same color as the "Azioni programmate" button in the chat
 
@@ -30,19 +31,10 @@ const renderTelegramText = (text) => String(text || "").split(/(\*[^*\n]+\*)/g).
 );
 
 // The lists' selection dot (Liste, Spesa...): here it turns the action on and off.
-function ActiveDot({ on, busy, onToggle, testid }) {
-  return (
-    <button type="button" data-testid={testid} disabled={busy} aria-pressed={!!on}
-      onClick={(e) => { e.stopPropagation(); onToggle(!on); }}
-      title={on ? "Attiva: tocca per metterla in pausa" : "In pausa: tocca per riattivarla"}
-      aria-label={on ? "Metti in pausa l'azione" : "Riattiva l'azione"}
-      className="h-8 w-8 -m-1.5 shrink-0 flex items-center justify-center disabled:opacity-60">
-      <span className={`h-5 w-5 rounded-full flex items-center justify-center backdrop-blur-md transition-colors ${on ? "bg-white/55 text-[#7A2A5C]" : "bg-white/20"}`}>
-        {on && <Check size={12} strokeWidth={2.8} />}
-      </span>
-    </button>
-  );
-}
+const ActiveDot = (p) => (
+  <SharedDot {...p} onTitle="Attiva: tocca per metterla in pausa" offTitle="In pausa: tocca per riattivarla"
+    onLabel="Metti in pausa l'azione" offLabel="Riattiva l'azione" />
+);
 
 // One action in the list: like a tile of Impostazioni, one per row - the dot (on / paused),
 // the title on one line and, in grey, when it repeats; tapping it opens its card.
