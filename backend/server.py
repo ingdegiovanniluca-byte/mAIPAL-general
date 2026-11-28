@@ -6795,7 +6795,18 @@ async def _report_draft_step(current: User, d: dict, text: str, at: Optional[str
             elif res.get("create_for"):   # a client of the list without commesse
                 fmap = clienti.get("system_map") or {}
                 note = f"{_sysval(res['create_for'].get('data'), fmap, 'nome')} non ha commesse: senza commessa il report va nella sua cartella."
+    from_diary = upd.get("report_type") == work_reports.COMMESSA_REPORT["key"] and not d.get("commessa_id")
+    if from_diary and not ask:   # nothing to dictate: the commessa, and then it is made (from its diary)
+        ask, _r = await _commesse_asked(current, text)
+        if not ask["options"]:
+            ask, _r = await _commesse_asked(current, "commesse attive")
+    if from_diary and ask:
+        ask["allow_none"] = False
+        d["generate_asked"] = upd["generate_asked"] = True
     await db.report_drafts.update_one({"id": d["id"]}, {"$set": upd})
+    if from_diary and ask:
+        return ("📋 Report di commessa: lo faccio dal diario della commessa (lavori svolti, ore per persona, problemi…), "
+                "nel periodo che hai detto. Di quale commessa?"), ask
     if not ask and not d.get("report_type"):
         ask = {"kind": "type", "options": await _report_types(current)}
     types = {t["key"]: t["name"] for t in await _report_types(current)}
@@ -6829,6 +6840,14 @@ async def _report_draft_generate(current: User, d: dict) -> tuple:
     if not d.get("report_type"):
         await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"generate_asked": True}})
         return "Che report è? Poi lo genero.", {"kind": "type", "options": await _report_types(current)}, None
+    said_com = False
+    if d["report_type"] != work_reports.COMMESSA_REPORT["key"]:
+        # the messages ask for what only the diary has ("le attività della settimana, le ore, gli operai") and name no
+        # other type: a report di commessa, whatever was picked - a dictated report would come out empty
+        custom = await db.work_templates.find(_visible_query(current), {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        if work_reports.detect_report_type(" ".join(m.get("text") or "" for m in d["messages"]), custom) == work_reports.COMMESSA_REPORT["key"]:
+            d["report_type"], d["no_commessa"], said_com = work_reports.COMMESSA_REPORT["key"], False, True
+            await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"report_type": d["report_type"], "no_commessa": False}})
     is_com = d["report_type"] == work_reports.COMMESSA_REPORT["key"]
     if not d.get("commessa_id") and not d.get("no_commessa"):
         await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"generate_asked": True}})
@@ -6848,6 +6867,8 @@ async def _report_draft_generate(current: User, d: dict) -> tuple:
         return rep.get("message") or "Di quale commessa?", {"kind": "commessa", "options": rep.get("candidates") or [], "allow_none": not is_com}, None
     await db.report_drafts.update_one({"id": d["id"]}, {"$set": {"status": "generated", "report_id": rep.get("id"), "generate_asked": False}})
     d["status"] = "generated"
+    if said_com:
+        rep = {**rep, "type_from_text": True}
     return "", None, rep
 
 

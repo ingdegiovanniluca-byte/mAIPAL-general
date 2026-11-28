@@ -292,6 +292,15 @@ async def main():
     assert D("sopralluogo dai Rossi per una variante in bagno") == "sopralluogo" and D("sopraluogo Bianchi") == "sopralluogo"
     assert D("report della commessa bagno") == "commessa" and D("dai Rossi, bagno da rifare") is None
     assert D("salvami il bagno dei Rossi") is None and D("SAL.") == "sal"
+    for t in ("genera un report su una commessa con le attività svolte nella settimana, ore, operai che hanno lavorato",
+              "report settimanale della commessa bagno", "fammi un report della settimana sul cantiere Rossi con ore e operai",
+              "voglio un report con le ore e gli operai che hanno lavorato questa settimana", "report dei lavori del mese di Rossi"):
+        assert D(t) == "commessa", t
+    for t, k in (("report di intervento dai Rossi: sostituito il rubinetto, 2 ore", "intervento"),
+                 ("fammi un report: oggi abbiamo montato i sanitari", None), ("report del sopralluogo, ci sono stato 2 ore", "sopralluogo")):
+        assert D(t) == k, t
+    assert wr.parse_period("le attività svolte nella settimana", date(2026, 11, 28)) == (date(2026, 11, 23), date(2026, 11, 28))
+    assert wr.parts_from_text("ore e operai che hanno lavorato") == ["ore"]
     assert D("compila il Verbale ASL per i Rossi", [{"id": "wtpl_1", "name": "Verbale ASL"}]) == "wtpl_1"
     # the chips with "Report di commessa" selected; what the message says wins over them
     r = await server._generate_work_report(me, "report della commessa Bagno dei Rossi: solo i materiali, mese scorso", "commessa",

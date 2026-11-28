@@ -500,6 +500,24 @@ async def main():
     r = await chat(draft_id=d9["id"], generate=True)
     assert r["report"] and r["report"]["commessa_id"] == "s2" and r["report_text"].startswith("✅ Report generato"), r
     assert REPORTS[-1][1] == "Clienti / Mario Rossi / 2026-002 – Bagno / Report", REPORTS
+    # 10) the week's work, hours and workers of a commessa: a report di commessa (from the diary), not a dictated one
+    r = await chat(text="genera un report su una commessa con le attività svolte nella settimana, ore, operai che hanno lavorato")
+    d10 = r["draft"]
+    assert d10["report_type"] == "commessa" and not r["report"] and r["ask"]["kind"] == "commessa" and not r["ask"]["allow_none"], r
+    r = await server.report_chat_set(d10["id"], server.ReportChatSet(commessa_id="s2"), me)   # chosen: made at once
+    rep = r["report"]
+    assert rep and rep["report_type"] == "commessa" and {"attivita", "ore"} <= set(rep["include"]), r
+    assert rep["period_label"].startswith("dal "), rep["period_label"]
+    #     ... also when a dictated type was picked first: the messages ask for the diary's data
+    r = await chat(text="voglio un report con le ore")
+    d11 = r["draft"]
+    assert d11["report_type"] is None and r["ask"]["kind"] == "type", r
+    await server.report_chat_set(d11["id"], server.ReportChatSet(report_type="intervento"), me)
+    await chat(draft_id=d11["id"], text="della settimana, con le attività svolte e gli operai che hanno lavorato")
+    await server.report_chat_set(d11["id"], server.ReportChatSet(commessa_id="s2"), me)
+    r = await chat(draft_id=d11["id"], generate=True)
+    rep = r["report"]
+    assert rep and rep["report_type"] == "commessa" and rep["type_from_text"] and "ore" in rep["include"], r
     # a commessa the user can't reach: refused
     try:
         await chat(text="fammi il SAL", commessa_id="s_nope"); assert False
