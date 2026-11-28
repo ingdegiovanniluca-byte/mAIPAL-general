@@ -17,6 +17,8 @@ import isolation_scan  # noqa: E402
 
 # reviewed on 2026-11-24 with the probe: each verifies the user's access before the flagged query
 REVIEWED = {
+    "tools_draft_cancel", "tools_draft_confirm",   # the draft is read with user_id (_tool_draft_or_404) first
+    "tool_file",        # the tool's list must pass _lists_query, and the file must be one of that tool's files
     "scan_public_qr",   # public QR: only visibility "public" + active, and only the text the administrator wrote for it
     "add_milestone_action", "admin_delete_team", "admin_regenerate_team_code", "admin_rename_team", "create_commessa_folder",
     "decide_client_draft", "delete_activity_item", "delete_collaborator", "delete_collection", "delete_commessa_link",

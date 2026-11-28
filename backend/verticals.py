@@ -62,6 +62,7 @@ ATTREZZI_FIELDS = [
      "aliases": ["frequenza manutenzione", "manutenzione", "frequenza revisione", "revisione ogni"]},
     {"key": "rivenditore", "label": "Rivenditore", "type": "text", "aliases": ["fornitore", "negozio", "venditore"]},
     {"key": "note", "label": "Note", "type": "textarea"},
+    {"key": "link", "label": "Link utili", "type": "textarea", "aliases": ["link", "links", "siti", "sito"]},
     {"key": "preso_da", "label": "Ce l'ha", "type": "text"},
     {"key": "preso_il", "label": "Dal", "type": "date"},
 ]

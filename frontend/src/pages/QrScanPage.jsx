@@ -84,6 +84,18 @@ function ToolBox({ q, onTool }) {
           {busy === "return" ? <Loader2 size={17} className="animate-spin" /> : <Undo2 size={17} />} Restituisci
         </button>
       )}
+      {(t.files || []).length > 0 && (
+        <div className="flex flex-col gap-2 pt-1" data-testid="qr-scan-tool-files">
+          <div className="text-[12px] text-white/65">Documenti dell'attrezzo</div>
+          {t.files.map((f) => (
+            <a key={f.id} href={`${API}/${f.url}`} target="_blank" rel="noopener noreferrer"
+              className="h-11 px-4 rounded-2xl bg-white/15 text-sm font-medium flex items-center gap-2.5">
+              <FileText size={16} className="shrink-0" /><span className="flex-1 truncate">{f.name}</span>
+              {f.document && <span className="text-[11px] text-white/60 shrink-0">{f.document}</span>}
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

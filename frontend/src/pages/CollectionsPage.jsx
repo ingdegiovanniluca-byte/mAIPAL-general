@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, API } from "@/lib/api";
 import { stateColor, isClosed } from "@/lib/commessaStati";
 import { useAuth } from "@/auth/AuthContext";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,31 @@ const fmtVal = (f, v) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
 };
 const filled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+// a value as shown, with its web addresses clickable (the "Link utili" of a tool, a site in the notes)
+const URL_RE = /(https?:\/\/[^\s<>"]+|www\.[^\s<>"]+)/g;
+function Val({ f, v }) {
+  const text = fmtVal(f, v);
+  if (!/https?:\/\/|www\./.test(text)) return text;
+  return text.split(URL_RE).map((part, i) => (i % 2 === 1
+    ? <a key={i} href={part.startsWith("www.") ? `https://${part}` : part} target="_blank" rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()} className="underline underline-offset-2 break-all">{part}</a>
+    : part));
+}
+// the files kept with a tool (its manual, photos, receipts - sent in the chat): open them
+function ToolFiles({ item }) {
+  if (!(item.tool_files || []).length) return null;
+  return (
+    <div className="mt-1.5 mb-1.5" data-testid="tool-files">
+      <div className="text-[10px] uppercase tracking-widest text-white/60">Documenti</div>
+      <div className="flex flex-col gap-0.5 mt-0.5">
+        {item.tool_files.map((f) => (
+          <a key={f.id} href={`${API}/tools/${item.id}/files/${f.id}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+            className="text-sm underline underline-offset-2 break-all">📎 {f.name}</a>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // Gerarchia a 3 livelli:
 //   Livello 1 - Lista       (es. "Clienti", "Lezioni Pilates")
@@ -689,7 +714,7 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
                       && filled(item.data?.[f.key])).map((f) => (
                       <div key={f.key} className="pt-0.5">
                         <div className="text-[10px] uppercase tracking-widest text-white/50">{f.label}</div>
-                        <div className="text-xs text-white/85 break-words whitespace-pre-wrap">{fmtVal(f, item.data[f.key])}</div>
+                        <div className="text-xs text-white/85 break-words whitespace-pre-wrap"><Val f={f} v={item.data[f.key]} /></div>
                       </div>
                     ))}
                     <div className={`flex items-center gap-2 pt-1.5 ${ro ? "hidden" : ""}`}>
@@ -711,10 +736,11 @@ className={`lg-card p-4 pr-10 rounded-[22px] relative group cursor-grab active:c
               filled(item.data?.[f.key]) ? (
                 <div key={f.key} className="mb-1.5">
                   <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
-                  <div className="text-sm break-words">{fmtVal(f, item.data[f.key])}</div>
+                  <div className="text-sm break-words whitespace-pre-wrap"><Val f={f} v={item.data[f.key]} /></div>
                 </div>
               ) : null
             ))}
+            <ToolFiles item={item} />
             {hasSubLevel && !isClienti && (
               <div className="flex items-center gap-1 text-[11px] text-white/70 mt-2">
                 <ChevronRight size={12} /> {item.sub_item_count || 0} elementi
@@ -924,7 +950,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
                   {(coll.sub_item_fields || []).filter((f) => !mainSubKeys.includes(f.key) && filled(sub.data?.[f.key])).map((f) => (
                     <div key={f.key}>
                       <div className="text-[10px] uppercase tracking-widest text-white/50">{f.label}</div>
-                      <div className="text-xs text-white/85 break-words whitespace-pre-wrap">{fmtVal(f, sub.data[f.key])}</div>
+                      <div className="text-xs text-white/85 break-words whitespace-pre-wrap"><Val f={f} v={sub.data[f.key]} /></div>
                     </div>
                   ))}
                   {!(coll.sub_item_fields || []).some((f) => !mainSubKeys.includes(f.key) && filled(sub.data?.[f.key])) && (
@@ -975,7 +1001,7 @@ function SubItemsView({ collection, item, onBack, onCollectionChanged }) {
               filled(sub.data?.[f.key]) ? (
                 <div key={f.key} className="mb-1.5">
                   <div className="text-[10px] uppercase tracking-widest text-white/60">{f.label}</div>
-                  <div className="text-sm break-words">{fmtVal(f, sub.data[f.key])}</div>
+                  <div className="text-sm break-words whitespace-pre-wrap"><Val f={f} v={sub.data[f.key]} /></div>
                 </div>
               ) : null
             ))}

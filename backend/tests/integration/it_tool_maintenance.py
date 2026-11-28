@@ -112,7 +112,7 @@ async def main():
     # a new list: the base attributes, in this order (the QR's "who has it" at the end)
     lst = await server._ensure_attrezzi_list(admin)
     assert [f["label"] for f in lst["fields"]] == ["Nome", "Marca e modello", "Matricola", "Data acquisto", "Prezzo",
-        "Data ultima revisione / riparazione", "Frequenza manutenzione consigliata", "Rivenditore", "Note", "Ce l'ha", "Dal"]
+        "Data ultima revisione / riparazione", "Frequenza manutenzione consigliata", "Rivenditore", "Note", "Link utili", "Ce l'ha", "Dal"]
     freq = next(f for f in lst["fields"] if f["key"] == "frequenza_manutenzione")
     assert freq["type"] == "select" and "ogni 6 mesi" in freq["options"]
     assert {f["key"]: f["type"] for f in lst["fields"]}["prezzo"] == "number"

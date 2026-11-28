@@ -111,7 +111,7 @@ async def main():
     lst = tool_list()[0]
     labels = [f["label"] for f in lst["fields"]]
     assert labels[:3] == ["Nome", "Marca e modello", "Matricola"] and "Data ultima revisione / riparazione" in labels and labels[-2:] == ["Ce l'ha", "Dal"]
-    assert q["tool"] == {"item_id": q["tool"]["item_id"], "name": "Trapano Hilti", "holder": None}
+    assert q["tool"] == {"item_id": q["tool"]["item_id"], "name": "Trapano Hilti", "holder": None, "files": []}
     assert item(q["tool"]["item_id"])["data"] == {"nome": "Trapano Hilti"} and item(q["tool"]["item_id"])["org_id"] == "o1"
     # the same name again: the same tool, not a copy
     q_same = await server.create_qr(P(title="trapano hilti ", kind="attrezzo"), admin)
@@ -169,7 +169,7 @@ async def main():
     # another organization: never sees or moves these tools; without the artigiano pack no list is made
     await fails(server.qr_tool_action(q["code"], A(action="take"), other), 404)
     oq = await server.create_qr(P(title="Scala", kind="attrezzo"), other)
-    assert oq["tool"] == {"item_id": None, "name": None, "holder": None} and len(tool_list()) == 1
+    assert oq["tool"] == {"item_id": None, "name": None, "holder": None, "files": []} and len(tool_list()) == 1
     r = await server.qr_tool_action(oq["code"], A(action="take"), other)          # (the QR alone still says who has it)
     assert r["tool"]["holder"]["name"] == "Xeno Rossi"
 

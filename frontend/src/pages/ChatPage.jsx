@@ -1037,6 +1037,47 @@ export default function ChatPage() {
     })).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // a tool from the chat (artigiano): a photo of it, of its plate or booklet, its manual in PDF - read, shown as a
+  // draft, added to the Attrezzatura list (or, for a tool already there, what it lacks) and the files in its folder
+  const toolNamesRef = useRef(null);
+  const toolNames = async () => {
+    if (toolNamesRef.current) return toolNamesRef.current;
+    try { toolNamesRef.current = (await api.get("/tools/names")).data?.names || []; }
+    catch { toolNamesRef.current = []; }
+    return toolNamesRef.current;
+  };
+  const aboutTool = async (q) => {
+    const t = (q || "").toLowerCase();
+    if (/\b(attrezz\w*|utensil\w*)\b/.test(t)) return true;
+    const flat = t.replace(/[^a-z0-9]+/g, "");
+    return (await toolNames()).some((n) => { const f = n.replace(/[^a-z0-9]+/g, ""); return f.length >= 4 && flat.includes(f); });
+  };
+  const runToolRead = async (content, files, shown) => {
+    setThread((th) => th
+      ? { ...th, messages: [...th.messages, { role: "user", content: shown }] }
+      : { conv_id: null, action: "info_upload", messages: [{ role: "user", content: shown }], liveAnswer: "" });
+    const say = (msg) => setThread((th) => ({ ...th, messages: [...th.messages, msg] }));
+    try {
+      const fd = new FormData();
+      files.forEach((a) => fd.append("files", a.driveFile, a.driveFile.name || a.name));
+      fd.append("text", content);
+      const r = await api.post("/tools/read", fd);
+      say(r.data.status === "draft" ? { role: "assistant", content: r.data.message, toolDraft: r.data.draft } : { role: "assistant", content: r.data.message });
+    } catch (e) {
+      say({ role: "assistant", content: "⚠️ " + (e.response?.data?.detail || "Non sono riuscito a leggere il file") });
+    } finally { setStreaming(false); }
+  };
+  const resolveToolDraft = async (draft, ok) => {
+    setStreaming(true);
+    try {
+      const r = ok ? await api.post(`/tools/drafts/${draft.id}/confirm`) : await api.delete(`/tools/drafts/${draft.id}`);
+      toolNamesRef.current = null;
+      setThread((th) => ({ ...th, messages: [...th.messages.map((m) => (m.toolDraft === draft ? { ...m, toolDraft: { ...draft, done: true } } : m)),
+        { role: "assistant", content: r.data.message }] }));
+    } catch (e) { toast.error(e.response?.data?.detail || "Errore"); }
+    finally { setStreaming(false); }
+  };
+
   const resolveCommessaDraft = async (draft, key) => {
     setStreaming(true);
     try {
@@ -1541,6 +1582,15 @@ export default function ChatPage() {
       setText("");
       setAttachments([]);
       await runQuoteFromChat(mainQuestion, files, [mainQuestion, ...files.map((a) => `📎 ${a.name}`)].join("\n"));
+      return;
+    }
+    // a photo or a document of a tool (artigiano): to the Attrezzatura list and the tool's folder, not to the notes
+    if (active === "info_upload" && vertical === "artigiano" && mainQuestion && attachments.length > 0
+        && attachments.every((a) => a.driveFile) && await aboutTool(mainQuestion)) {
+      const files = attachments.filter((a) => a.driveFile);
+      setText("");
+      setAttachments([]);
+      await runToolRead(mainQuestion, files, [mainQuestion, ...files.map((a) => `📎 ${a.name}`)].join("\n"));
       return;
     }
     // "dammi i clienti vicino a me" in Cerca: the clients around, not a search in the notes
@@ -2821,6 +2871,16 @@ export default function ChatPage() {
                             className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">✅ Conferma il preventivo</button>
                         )}
                         <button onClick={() => resolveChatQuote(m.chatQuote, "discard")} disabled={streaming} data-testid="chat-quote-discard"
+                          className="text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/70 disabled:opacity-50">Annulla</button>
+                      </div>
+                    )}
+                    {m.toolDraft && !m.toolDraft.done && (
+                      <div className="flex flex-wrap gap-2 mt-2 ml-4" data-testid="tool-draft-choices">
+                        <button onClick={() => resolveToolDraft(m.toolDraft, true)} disabled={streaming} data-testid="tool-draft-ok"
+                          className="text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-50">
+                          ✅ {m.toolDraft.known ? "Salva" : "Aggiungi all'Attrezzatura"}
+                        </button>
+                        <button onClick={() => resolveToolDraft(m.toolDraft, false)} disabled={streaming} data-testid="tool-draft-no"
                           className="text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/70 disabled:opacity-50">Annulla</button>
                       </div>
                     )}

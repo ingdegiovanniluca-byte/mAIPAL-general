@@ -195,6 +195,7 @@ Sul telefono è costruita come la pagina iniziale di un browser. Dall'alto:
    - Dentro: il testo; `@` per taggare; la graffetta per gli allegati (foto, PDF, documenti, anche più file); **invia** (quadrato arrotondato).
    - Mentre si registra: timer, onde e annulla.
    - Gli allegati e il vocale compaiono come etichette sopra i pulsanti.
+   - **Attrezzo da foto o PDF** (artigiano, agente Salva): se gli allegati sono foto/PDF/Word/testo e il messaggio parla di un attrezzo («attrezzo», «utensile» o un nome della lista, `GET /tools/names`), `runToolRead` li manda a `POST /tools/read`; la risposta ha una bozza (`toolDraft`) con **✅ Aggiungi all'Attrezzatura** / **✅ Salva** (`POST /tools/drafts/{id}/confirm`) e **Annulla** (`DELETE /tools/drafts/{id}`).
 5. **La fila degli agenti**: icone tonde con il nome sotto, che scorrono di lato. Cerca è sempre primo, poi i più usati negli ultimi 30 giorni, poi **«Altri»**, che apre un foglio con tutti gli agenti e quanto sono usati.
    - L'agente scelto ha un disco di vetro dietro l'icona.
    - **Qui l'utente sceglie l'agente**: è la parte da rendere automatica (vedi capitolo 0).
@@ -281,6 +282,7 @@ Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene
 - Schede colorate per lista: nome, condivisione («condivisa con il team…» o «lista privata») e numero di elementi. Il «+» crea una lista.
 - Per l'artigiano la lista **Clienti** contiene le **commesse**.
 - Dentro una lista: righe con i campi; elementi annidati; modifica, ordinamento, condivisione per persona (modifica / sola lettura).
+- I valori con un indirizzo web diventano link (`Val`); nella lista **Attrezzatura** sotto l'attrezzo ci sono i **Documenti** mandati in chat (`ToolFiles`, `GET /tools/{item}/files/{file}`).
 
 ### 4.10 Documenti (`DocumentsPage.jsx`, `DocFolders.jsx`)
 
@@ -307,6 +309,7 @@ Sono dentro la sezione Task (vista To-Do, capitolo 4.3). `TodoFolders.jsx` tiene
   - una riga di comandi: il pallino `ActiveDot` in un cerchio come gli altri tasti, stampa (apre `PrintSheet`, il lato 3/5/8 cm), scarica PNG, condividi il link (`navigator.share`, altrimenti copia); dopo un separatore, nuovo codice ed elimina (stesso fondo degli altri; chiede conferma);
   - gli indicatori Scansioni / Foto e PDF / Modifiche, ultima scansione, codice e tipo;
   - sotto: Contenuto (con «Modifica» accanto al titolo; per un attrezzo: chi ce l'ha), Foto e PDF, Storico (chi ha preso l'attrezzo, le modifiche).
+- **Scansione** (`QrScanPage.jsx`): per un attrezzo `ToolBox` (chi ce l'ha, Prendi / Restituisci) e i **Documenti dell'attrezzo**.
 - **Nuovo / modifica**: per il tipo Attrezzo c'è il campo **Attrezzo** (`GET /qr/tools`: la lista Attrezzatura); «Nuovo» lo aggiunge alla lista con il nome del QR.
 - **`/q/:codice`**: la pagina che si apre scansionando, anche per chi non ha l'app se il QR è pubblico: il contenuto da leggere (titolo grande, testo, foto, PDF e link), il controllo del luogo e, per un attrezzo, il riquadro con chi ce l'ha e **Prendi** / **Restituisci** (`POST /qr/scan/{codice}/tool`).
 - La **realtà aumentata** è tolta dall'interfaccia (`QrArViewer.jsx` e `lib/arPose.js` restano nel codice, non più caricati; il server conserva le impostazioni).

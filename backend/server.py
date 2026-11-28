@@ -44,6 +44,7 @@ import jobs
 import db_indexes
 import search_index
 import qr_tags as qr
+import tool_intake as ti
 import file_store as fstore
 import time
 import embeddings as emb
@@ -7518,7 +7519,7 @@ async def _ensure_attrezzi_list(current: User) -> dict:
     already called Attrezzatura or Attrezzi is adopted (its attributes and data stay, the missing base ones are added)."""
     existing = await _attrezzi_list(current)
     if existing:
-        return existing
+        return await _attrezzi_up_to_date(existing)
     named = next((c for c in await db.collections.find({"user_id": current.user_id}, {"_id": 0}).to_list(500)
                   if (c.get("name") or "").strip().lower() in ("attrezzatura", "attrezzi") and not c.get("system_key")), None)
     if named:
@@ -7549,15 +7550,22 @@ async def _ensure_attrezzi_list(current: User) -> dict:
     return doc
 
 
+async def _attrezzi_up_to_date(coll: dict) -> dict:
+    """An Attrezzatura list with all today's base attributes (also before the start-up migration has run)."""
+    fields, fmap = vx.merge_system_fields(coll.get("fields"), vx.ATTREZZI_FIELDS)
+    fields = _unique_field_keys(vx.order_fields(fields, vx.ATTREZZI_FIELDS, fmap))
+    if [f.get("key") for f in fields] != [f.get("key") for f in coll.get("fields") or []] or fmap != (coll.get("system_map") or {}):
+        await db.collections.update_one({"id": coll["id"]}, {"$set": {"fields": fields, "system_map": fmap}})
+        coll = {**coll, "fields": fields, "system_map": fmap}
+    return coll
+
+
 async def _migrate_attrezzi_lists() -> int:
     """The Attrezzatura lists made before the new base attributes (purchase date, price, last service, advised
     maintenance, dealer): added, in the base order, nothing taken away. Idempotent. -> how many lists changed."""
     n = 0
     for coll in await db.collections.find({"system_key": vx.ATTREZZI_KEY}, {"_id": 0, "id": 1, "fields": 1, "system_map": 1}).to_list(5000):
-        fields, fmap = vx.merge_system_fields(coll.get("fields"), vx.ATTREZZI_FIELDS)
-        fields = _unique_field_keys(vx.order_fields(fields, vx.ATTREZZI_FIELDS, fmap))
-        if [f.get("key") for f in fields] != [f.get("key") for f in coll.get("fields") or []] or fmap != (coll.get("system_map") or {}):
-            await db.collections.update_one({"id": coll["id"]}, {"$set": {"fields": fields, "system_map": fmap}})
+        if (await _attrezzi_up_to_date(coll)) is not coll:
             n += 1
     return n
 
@@ -19106,13 +19114,14 @@ async def _qr_tool_out(doc: dict, current: Optional[User] = None) -> Optional[di
         return None
     name = None
     if doc.get("tool_item_id"):
-        item = await db.collection_items.find_one({"id": doc["tool_item_id"]}, {"_id": 0, "data": 1, "collection_id": 1})
+        item = await db.collection_items.find_one({"id": doc["tool_item_id"]}, {"_id": 0, "data": 1, "collection_id": 1, "tool_files": 1})
         lst = await db.collections.find_one({"id": (item or {}).get("collection_id")}, {"_id": 0, "system_map": 1}) if item else None
         if item:
             name = str((item.get("data") or {}).get(_tool_key(lst or {}, "nome")) or "").strip() or None
     h = doc.get("holder") or None
     holder = {"name": h.get("name") or "", "since": h.get("since"), "mine": bool(current and h.get("user_id") == current.user_id)} if h else None
-    return {"item_id": doc.get("tool_item_id"), "name": name, "holder": holder}
+    files = _tool_files_out(doc["tool_item_id"], (item or {}).get("tool_files")) if doc.get("tool_item_id") and current else []
+    return {"item_id": doc.get("tool_item_id"), "name": name, "holder": holder, "files": files}
 
 
 async def _qr_tool_mirror(doc: dict, holder: Optional[dict]) -> None:
@@ -19375,6 +19384,247 @@ async def qr_tool_action(code: str, payload: QrToolAction, current: User = Depen
                                        "from_name": h.get("name") if h and h.get("user_id") != current.user_id else None, "at": now})
     await _qr_tool_mirror(doc, holder)
     return {"tool": await _qr_tool_out({**doc, "holder": holder}, current)}
+
+
+# ---- a tool from the chat: a photo of it (or of its plate, its booklet, a receipt) or a PDF (the manual, the invoice)
+# read by the model (only what is written or visible, see tool_intake.py), confirmed by the user, then in the Attrezzatura
+# list; the files stay with the tool (in the app, and in mAIPAL/Attrezzatura/<tool> on Drive / OneDrive) ----
+TOOL_DRAFT_HOURS = 48
+_DOC_TYPES = {"pdf": "application/pdf", "txt": "text/plain",
+              "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+
+
+def _tool_files_out(item_id: str, files: Optional[list]) -> list:
+    return [{"id": f["id"], "name": f.get("name"), "kind": f.get("kind"), "document": f.get("document") or "",
+             "url": f"tools/{item_id}/files/{f['id']}"} for f in files or []]
+
+
+async def _tool_llm(system: str, msg) -> dict:
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"tool_{uuid.uuid4().hex[:8]}", system_message=system,
+                   user_id=msg[1], feature="caricamento_informazioni", channel="web", trigger="utente").with_model("openai", "gpt-4o-mini")
+    try:
+        return ti.parse_reply(await chat.send_message(msg[0]))
+    except Exception:
+        logger.exception("tool reading failed")
+        return {"fields": {}, "document": ""}
+
+
+async def _tool_read_file(current: User, name: str, data: bytes) -> tuple:
+    """One file sent: -> (what was read, the file as it is kept: {name, kind, content_type, data})."""
+    import base64 as _b64
+    kind = ti.kind_of(name)
+    if kind == "image":
+        try:
+            data = _downscale_image_bytes(data)
+        except Exception:
+            raise HTTPException(status_code=415, detail=f"«{name}»: non riesco ad aprire questa foto")
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+        kept = {"name": f"{stem}.jpg", "kind": "image", "content_type": "image/jpeg", "data": data}
+        msg = UserMessage(text="Leggi questa foto.", file_contents=[ImageContent(image_base64=_b64.b64encode(data).decode("ascii"))])
+        return await _tool_llm(ti.SYSTEM_IMAGE, (msg, current.user_id)), kept
+    ext = ti.ext_of(name)
+    kept = {"name": name, "kind": "pdf" if ext == "pdf" else "doc", "content_type": _DOC_TYPES.get(ext, "application/octet-stream"), "data": data}
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+        tmp.write(data)
+        path = tmp.name
+    try:
+        text = (_extract_text_from_file(path, name) or "").strip()
+    except Exception:
+        text = ""
+    finally:
+        try: os.unlink(path)
+        except OSError: pass
+    if not text:
+        return {"fields": {}, "document": ""}, kept
+    return await _tool_llm(ti.SYSTEM_TEXT, (UserMessage(text=text[:12000]), current.user_id)), kept
+
+
+def _tool_name_of(lst: dict, item: Optional[dict], fields: dict) -> str:
+    return str(((item or {}).get("data") or {}).get(_tool_key(lst, "nome")) or fields.get("nome") or "Attrezzo").strip()
+
+
+@api_router.post("/tools/read")
+async def tools_read(files: List[UploadFile] = File(...), text: str = Form(""), current: User = Depends(get_current_user)):
+    """The files sent in the chat about a tool: what they say, as a draft to confirm (a new tool, or the one of the list
+    they are about - then only what it doesn't have yet, and the files in its folder)."""
+    lst = await _qr_tool_list(current)
+    if not lst:
+        raise HTTPException(status_code=400, detail="La lista Attrezzatura c'è con il verticale Artigiano (Impostazioni → Verticale).")
+    _require_list_edit(lst, current)
+    if not files:
+        raise HTTPException(status_code=400, detail="Manda una foto o un PDF dell'attrezzo")
+    if len(files) > ti.MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"Al massimo {ti.MAX_FILES} file alla volta")
+    reads, kept = [], []
+    for f in files:
+        name = os.path.basename((f.filename or "").replace("\\", "/")).strip()[:120] or "file"
+        if not ti.kind_of(name):
+            raise HTTPException(status_code=415, detail=f"«{name}»: manda una foto o un PDF (anche Word o testo)")
+        data = await f.read()
+        if len(data) > ti.MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"«{name}» è troppo grande (max 20 MB)")
+        r, k = await _tool_read_file(current, name, data)
+        reads.append(r)
+        kept.append({**k, "document": r.get("document") or ""})
+    fields = ti.merge(reads)
+    fmap = lst.get("system_map") or {}
+    items = await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0}).to_list(5000)
+    hit = ti.match_item(fields, items, fmap, text)
+    if not hit and not fields.get("nome"):
+        return {"status": "unclear", "message": "Non riesco a capire di che attrezzo si tratta: scrivimi il nome insieme al file "
+                                                 "(es. «aggiungi il trapano Hilti TE 30» o «questo è il manuale del flessibile Makita»)."}
+    stored = []
+    for k in kept:
+        fid = await fstore.store.put(db, k["data"], k["name"], {"kind": "tool_draft", "user_id": current.user_id})
+        stored.append({"id": fid, **{x: k[x] for x in ("name", "kind", "content_type", "document")}, "size": len(k["data"])})
+    did = f"tdr_{uuid.uuid4().hex[:12]}"
+    await db.tool_drafts.insert_one({"id": did, "user_id": current.user_id, "list_id": lst["id"], "item_id": (hit or {}).get("id"),
+                                     "fields": fields, "files": stored, "created_at": datetime.now(timezone.utc).isoformat()})
+    name = _tool_name_of(lst, hit, fields)
+    names = ", ".join(f"«{x['name']}»" for x in stored)
+    if hit:
+        adds = ti.fill_missing(hit.get("data") or {}, fields, fmap)
+        back = {v: k for k, v in fmap.items()}
+        shown = ti.summary({back.get(k, k): v for k, v in adds.items() if back.get(k, k) in ti.FIELDS and back.get(k, k) not in ("note", "link")}
+                           | {k: fields[k] for k in ("note", "link") if fmap.get(k, k) in adds})
+        msg = (f"È «{name}», già nella lista Attrezzatura. " + ("Aggiungo:\n" + "\n".join(f"• {l}: {v}" for l, v in shown) + "\n" if shown else "")
+               + f"Salvo {names} nella cartella dell'attrezzo?")
+    else:
+        shown = ti.summary(fields)
+        msg = (f"Ho letto {names}: aggiungo «{name}» alla lista Attrezzatura con questi dati?\n"
+               + "\n".join(f"• {l}: {v}" for l, v in shown) + "\nI file vanno nella cartella dell'attrezzo.")
+    return {"status": "draft", "message": msg, "draft": {"id": did, "name": name, "known": bool(hit),
+                                                           "fields": shown, "files": [x["name"] for x in stored]}}
+
+
+@api_router.get("/tools/names")
+async def tools_names(current: User = Depends(get_current_user)):
+    """The names and models of the Attrezzatura list's tools: the chat recognizes a file about one of them ("il manuale
+    del flessibile Makita") even without the word "attrezzo"."""
+    lst = await _attrezzi_list(current)
+    if not lst:
+        return {"names": []}
+    keys = [_tool_key(lst, "nome"), _tool_key(lst, "marca_modello")]
+    out = set()
+    for i in await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0, "data": 1}).to_list(5000):
+        for k in keys:
+            v = " ".join(str((i.get("data") or {}).get(k) or "").lower().split())
+            if len(v) >= 4:
+                out.add(v)
+    return {"names": sorted(out)}
+
+
+async def _tool_draft_or_404(current: User, draft_id: str) -> dict:
+    d = await db.tool_drafts.find_one({"id": draft_id, "user_id": current.user_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Questa proposta non c'è più: rimanda il file.")
+    return d
+
+
+@api_router.post("/tools/drafts/{draft_id}/confirm")
+async def tools_draft_confirm(draft_id: str, current: User = Depends(get_current_user)):
+    d = await _tool_draft_or_404(current, draft_id)
+    lst = await db.collections.find_one({"id": d["list_id"], **_lists_query(current)}, {"_id": 0})
+    if not lst:
+        raise HTTPException(status_code=404, detail="Lista Attrezzatura non trovata")
+    _require_list_edit(lst, current)
+    lst = await _attrezzi_up_to_date(lst)
+    fmap, fields = lst.get("system_map") or {}, d.get("fields") or {}
+    item = await db.collection_items.find_one({"id": d.get("item_id"), "collection_id": lst["id"]}, {"_id": 0}) if d.get("item_id") else None
+    if not item:   # (one with the same name may have come in the meantime)
+        want = ti._norm(fields.get("nome"))
+        item = next((i for i in await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0}).to_list(5000)
+                     if want and ti._norm((i.get("data") or {}).get(_tool_key(lst, "nome"))) == want), None)
+    now = datetime.now(timezone.utc).isoformat()
+    if item:
+        adds = ti.fill_missing(item.get("data") or {}, fields, fmap)
+        if adds:
+            await db.collection_items.update_one({"id": item["id"]}, {"$set": {**{f"data.{k}": v for k, v in adds.items()}, "embedding": None}})
+        new = False
+    else:
+        orders = [i.get("sort_order") for i in await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0, "sort_order": 1}).to_list(5000)
+                  if i.get("sort_order") is not None]
+        item = {"id": f"item_{uuid.uuid4().hex[:12]}", "collection_id": lst["id"], "data": {fmap.get(k, k): v for k, v in fields.items()},
+                "visibility": lst.get("visibility", "private"), "sort_order": max(orders, default=-1) + 1, "created_at": now}
+        _stamp_owner_fields(item, current)
+        if lst.get("org_id"):
+            item["org_id"] = lst["org_id"]
+        await db.collection_items.insert_one(item)
+        item.pop("_id", None)
+        new = True
+    name = _tool_name_of(lst, item, fields)
+    files = [{**f, "added_at": now, "added_by_name": _first_name(current.name)} for f in d.get("files") or []]
+    if files:
+        await db.collection_items.update_one({"id": item["id"]}, {"$set": {"tool_files": (item.get("tool_files") or []) + files}})
+    # and in its folder on Drive / OneDrive, when one is linked: mAIPAL/Attrezzatura/<tool>
+    cloud, failed = [], 0
+    if files and await _storage_targets(await _storage_user(current.user_id)):
+        for f in files:
+            data = await fstore.store.get(db, f["id"])
+            if not data:
+                continue
+            with tempfile.NamedTemporaryFile(delete=False, suffix="." + (ti.ext_of(f["name"]) or "bin")) as tmp:
+                tmp.write(data)
+                path = tmp.name
+            try:
+                res = await _storage_save(current.user_id, lst.get("name") or vx.ATTREZZI_NAME, path, f["name"], f["content_type"], subfolders=[name])
+                cloud = cloud or res.get("saved", [])
+            except Exception:
+                logger.exception("tool file to the cloud failed")
+                failed += 1
+            finally:
+                try: os.unlink(path)
+                except OSError: pass
+    await db.tool_drafts.delete_one({"id": draft_id})
+    n = len(files)
+    where = ""
+    if n:
+        what = "1 file" if n == 1 else f"{n} file"
+        where = (f" {what} nella sua cartella su {' e '.join(STORAGE_LABELS[t] for t in cloud)} ({lst.get('name') or vx.ATTREZZI_NAME} / {name}) e con l'attrezzo nell'app."
+                 if cloud else f" {what} salvati con l'attrezzo nell'app (collega Google Drive o OneDrive in Impostazioni per averli anche nella sua cartella).")
+        if failed and cloud:
+            where += f" {failed} non sono arrivati su Drive/OneDrive: restano nell'app."
+    return {"status": "ok", "item_id": item["id"], "new": new,
+            "message": ("✅ «" + name + "» aggiunto alla lista Attrezzatura." if new else "✅ «" + name + "» aggiornato.") + where}
+
+
+@api_router.delete("/tools/drafts/{draft_id}")
+async def tools_draft_cancel(draft_id: str, current: User = Depends(get_current_user)):
+    d = await _tool_draft_or_404(current, draft_id)
+    for f in d.get("files") or []:
+        await fstore.store.delete(db, f["id"])
+    await db.tool_drafts.delete_one({"id": draft_id})
+    return {"status": "ok", "message": "Va bene, non aggiungo niente."}
+
+
+@api_router.get("/tools/{item_id}/files/{file_id}")
+async def tool_file(item_id: str, file_id: str, current: User = Depends(get_current_user)):
+    """A file of a tool (its manual, a photo): for who sees the Attrezzatura list."""
+    item = await db.collection_items.find_one({"id": item_id}, {"_id": 0, "collection_id": 1, "tool_files": 1})
+    lst = await db.collections.find_one({"id": (item or {}).get("collection_id"), **_lists_query(current)}, {"_id": 1}) if item else None
+    f = next((x for x in (item or {}).get("tool_files") or [] if x.get("id") == file_id), None) if lst else None
+    data = await fstore.store.get(db, file_id) if f else None
+    if not data:
+        raise HTTPException(status_code=404, detail="File non trovato")
+    from urllib.parse import quote
+    inline = f.get("kind") in ("image", "pdf")
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300",
+               "Content-Disposition": f"{'inline' if inline else 'attachment'}; filename*=UTF-8''{quote(f.get('name') or 'file')}"}
+    if f.get("kind") != "pdf":
+        headers["Content-Security-Policy"] = "default-src 'none'"
+    return Response(content=data, media_type=f.get("content_type") or "application/octet-stream", headers=headers)
+
+
+async def _tool_drafts_cleanup() -> int:
+    """Drafts never confirmed (older than TOOL_DRAFT_HOURS): gone, with their files."""
+    limit = (datetime.now(timezone.utc) - timedelta(hours=TOOL_DRAFT_HOURS)).isoformat()
+    n = 0
+    for d in await db.tool_drafts.find({"created_at": {"$lt": limit}}, {"_id": 0}).to_list(1000):
+        for f in d.get("files") or []:
+            await fstore.store.delete(db, f["id"])
+        await db.tool_drafts.delete_one({"id": d["id"]})
+        n += 1
+    return n
 
 
 @api_router.get("/qr/tools")
@@ -19723,6 +19973,7 @@ async def start_services():
     J("geo_backfill", 600, _geo_backfill_tick, 90)
     J("tenant_verticals", 600, _sync_tenant_verticals, 100)
     J("tool_maintenance", 3 * 3600, _tool_maintenance_tick, 150)
+    J("tool_drafts_cleanup", 6 * 3600, _tool_drafts_cleanup, 300)
     J("todo_step_reminders", 600, _todo_step_reminders, 120)
     J("task_reminders", 30 * 60, _reminders_tick, 30)
     J("exact_reminders", 60, _exact_reminders_tick, 15)
