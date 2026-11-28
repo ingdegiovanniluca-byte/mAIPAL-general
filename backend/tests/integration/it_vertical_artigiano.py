@@ -121,7 +121,7 @@ async def main():
     # ...and the Attrezzatura list (the tools, for their QR: who has them, since when), shared with the team too
     at = [c for c in db.collections.docs if c.get("system_key") == "artigiano_attrezzatura"]
     assert len(at) == 1 and at[0]["name"] == "Attrezzatura" and at[0]["visibility"] == "org" and at[0]["org_id"] == me.org_id
-    assert [f["label"] for f in at[0]["fields"]] == ["Nome", "Marca e modello", "Matricola", "Note", "Ce l'ha", "Dal"]
+    assert [f["label"] for f in at[0]["fields"]] == ["Nome", "Marca e modello", "Matricola", "Data acquisto", "Prezzo", "Data ultima revisione / riparazione", "Frequenza manutenzione consigliata", "Rivenditore", "Note", "Ce l'ha", "Dal"]
     # idempotent
     await server._apply_vertical(me, "artigiano")
     assert len([c for c in db.collections.docs if c.get("system_key")]) == 2 and len(db.organizations.docs) == 1

@@ -7523,6 +7523,7 @@ async def _ensure_attrezzi_list(current: User) -> dict:
                   if (c.get("name") or "").strip().lower() in ("attrezzatura", "attrezzi") and not c.get("system_key")), None)
     if named:
         fields, fmap = vx.merge_system_fields(named.get("fields"), vx.ATTREZZI_FIELDS)
+        fields = vx.order_fields(fields, vx.ATTREZZI_FIELDS, fmap)
         upd = {"fields": _unique_field_keys(fields), "system_key": vx.ATTREZZI_KEY, "system_map": fmap}
         if current.org_id:
             upd.update({"visibility": "org", "org_id": current.org_id})
@@ -7546,6 +7547,81 @@ async def _ensure_attrezzi_list(current: User) -> dict:
     await db.collections.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+async def _migrate_attrezzi_lists() -> int:
+    """The Attrezzatura lists made before the new base attributes (purchase date, price, last service, advised
+    maintenance, dealer): added, in the base order, nothing taken away. Idempotent. -> how many lists changed."""
+    n = 0
+    for coll in await db.collections.find({"system_key": vx.ATTREZZI_KEY}, {"_id": 0, "id": 1, "fields": 1, "system_map": 1}).to_list(5000):
+        fields, fmap = vx.merge_system_fields(coll.get("fields"), vx.ATTREZZI_FIELDS)
+        fields = _unique_field_keys(vx.order_fields(fields, vx.ATTREZZI_FIELDS, fmap))
+        if [f.get("key") for f in fields] != [f.get("key") for f in coll.get("fields") or []] or fmap != (coll.get("system_map") or {}):
+            await db.collections.update_one({"id": coll["id"]}, {"$set": {"fields": fields, "system_map": fmap}})
+            n += 1
+    return n
+
+
+TOOL_SOON_DAYS = 7   # the first reminder of a tool's maintenance: a week before
+
+
+def _it_day(iso: str) -> str:
+    y, m, d = (int(x) for x in iso[:10].split("-"))
+    return f"{d} {_IT_MONTHS[m - 1]}{'' if y == _local_today().year else f' {y}'}"
+
+
+async def _tool_maintenance_tick() -> int:
+    """(periodic) The tools of the Attrezzatura lists with both the last service and the advised frequency: a week
+    before the next maintenance and on its day (or once, if already late) a note to the organization's administrators
+    (Telegram and app, as they want "Manutenzione attrezzi"). Without one of the two dates nothing is sent. Each
+    reminder once per due date: a new service written in the list moves the next one. -> how many sent."""
+    today = _local_today()
+    sent = 0
+    for lst in await db.collections.find({"system_key": vx.ATTREZZI_KEY}, {"_id": 0}).to_list(5000):
+        fmap = lst.get("system_map") or {}
+        k_name, k_last, k_freq = fmap.get("nome", "nome"), fmap.get("ultima_revisione"), fmap.get("frequenza_manutenzione")
+        if not k_last or not k_freq:
+            continue
+        items = await db.collection_items.find({"collection_id": lst["id"]}, {"_id": 0}).to_list(10000)
+        recipients = None
+        for it in items:
+            d = it.get("data") or {}
+            due = vx.next_maintenance(d.get(k_last), d.get(k_freq))
+            if not due:
+                continue
+            days = (date.fromisoformat(due) - today).days
+            stage = "due" if days <= 0 else "soon" if days <= TOOL_SOON_DAYS else None
+            done = it.get("maint_alert") or {}
+            if not stage or (done.get("due") == due and (done.get("stage") == stage or done.get("stage") == "due")):
+                continue
+            name = str(d.get(k_name) or "Attrezzo").strip()
+            freq = str(d.get(k_freq) or "").strip()
+            if stage == "soon":
+                text = (f"🔧 *Manutenzione attrezzi*\n«{name}»: la revisione è da fare entro il {_it_day(due)} "
+                        f"(tra {days} {'giorno' if days == 1 else 'giorni'}; l'ultima il {_it_day(d.get(k_last))}, {freq}).")
+            else:
+                text = (f"🔧 *Manutenzione attrezzi*\n«{name}»: la revisione era da fare " + ("oggi" if days == 0 else f"il {_it_day(due)}")
+                        + f" (l'ultima il {_it_day(d.get(k_last))}, {freq}). Quando l'hai fatta, scrivi la nuova data nella lista Attrezzatura.")
+            if recipients is None:
+                recipients = await _tool_list_admins(lst)
+            for u in recipients:
+                await _notify_owner(u, text, kind="tools", url="/dashboard/liste")
+            await db.collection_items.update_one({"id": it["id"]}, {"$set": {"maint_alert": {"due": due, "stage": stage, "at": today.isoformat()}}})
+            sent += 1
+    return sent
+
+
+async def _tool_list_admins(lst: dict) -> list:
+    """Who hears of a tool's maintenance: the administrators of the list's organization, else the list's owner."""
+    owner = await db.users.find_one({"user_id": lst.get("user_id")}, {"_id": 0})
+    if not owner:
+        return []
+    if owner.get("tenant_id"):
+        admins = await db.users.find({"tenant_id": owner["tenant_id"], "role": "admin"}, {"_id": 0}).to_list(50)
+        admins = [a for a in admins if not a.get("revoked_at")]
+        if admins:
+            return [User(**a) for a in admins]
+    return [User(**owner)]
 
 
 async def _clienti_list(current: User) -> Optional[dict]:
@@ -19609,6 +19685,7 @@ async def start_services():
         logger.exception("organizations migration failed")
     try:
         await _migrate_commesse()
+        await _migrate_attrezzi_lists()
         await _migrate_weekly_actions()
         await _migrate_list_values()
         await _migrate_added_quotes()
@@ -19645,6 +19722,7 @@ async def start_services():
     J = lambda name, period, fn, first=0, max_run=1800: jobs.every(db, name, period, lambda: _in_tick(fn), first, max_run)
     J("geo_backfill", 600, _geo_backfill_tick, 90)
     J("tenant_verticals", 600, _sync_tenant_verticals, 100)
+    J("tool_maintenance", 3 * 3600, _tool_maintenance_tick, 150)
     J("todo_step_reminders", 600, _todo_step_reminders, 120)
     J("task_reminders", 30 * 60, _reminders_tick, 30)
     J("exact_reminders", 60, _exact_reminders_tick, 15)

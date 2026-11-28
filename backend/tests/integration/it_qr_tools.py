@@ -110,7 +110,7 @@ async def main():
     assert len(tool_list()) == 1 and tool_list()[0]["visibility"] == "org" and tool_list()[0]["name"] == "Attrezzatura"
     lst = tool_list()[0]
     labels = [f["label"] for f in lst["fields"]]
-    assert labels[:4] == ["Nome", "Marca e modello", "Matricola", "Note"] and "Ce l'ha" in labels and "Dal" in labels
+    assert labels[:3] == ["Nome", "Marca e modello", "Matricola"] and "Data ultima revisione / riparazione" in labels and labels[-2:] == ["Ce l'ha", "Dal"]
     assert q["tool"] == {"item_id": q["tool"]["item_id"], "name": "Trapano Hilti", "holder": None}
     assert item(q["tool"]["item_id"])["data"] == {"nome": "Trapano Hilti"} and item(q["tool"]["item_id"])["org_id"] == "o1"
     # the same name again: the same tool, not a copy

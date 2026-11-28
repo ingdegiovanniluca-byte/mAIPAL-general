@@ -49,14 +49,75 @@ COMMESSA_FIELDS = [
 # and, scanned, shows who has it (Prendi / Restituisci): "Ce l'ha" and "Dal" are kept up to date from there ----
 ATTREZZI_KEY = "artigiano_attrezzatura"
 ATTREZZI_NAME = "Attrezzatura"
+MAINT_FREQ_OPTIONS = ["ogni mese", "ogni 3 mesi", "ogni 6 mesi", "ogni anno", "ogni 2 anni"]
 ATTREZZI_FIELDS = [
     {"key": "nome", "label": "Nome", "type": "text"},
-    {"key": "marca_modello", "label": "Marca e modello", "type": "text"},
-    {"key": "matricola", "label": "Matricola", "type": "text"},
+    {"key": "marca_modello", "label": "Marca e modello", "type": "text", "aliases": ["marca", "modello"]},
+    {"key": "matricola", "label": "Matricola", "type": "text", "aliases": ["numero di serie", "seriale", "n. serie"]},
+    {"key": "data_acquisto", "label": "Data acquisto", "type": "date", "aliases": ["acquistato il", "data di acquisto"]},
+    {"key": "prezzo", "label": "Prezzo", "type": "number", "aliases": ["costo", "prezzo di acquisto", "importo"]},
+    {"key": "ultima_revisione", "label": "Data ultima revisione / riparazione", "type": "date",
+     "aliases": ["ultima revisione", "ultima manutenzione", "ultima riparazione", "data ultima revisione", "data ultima manutenzione"]},
+    {"key": "frequenza_manutenzione", "label": "Frequenza manutenzione consigliata", "type": "select", "options": MAINT_FREQ_OPTIONS,
+     "aliases": ["frequenza manutenzione", "manutenzione", "frequenza revisione", "revisione ogni"]},
+    {"key": "rivenditore", "label": "Rivenditore", "type": "text", "aliases": ["fornitore", "negozio", "venditore"]},
     {"key": "note", "label": "Note", "type": "textarea"},
     {"key": "preso_da", "label": "Ce l'ha", "type": "text"},
     {"key": "preso_il", "label": "Dal", "type": "date"},
 ]
+
+
+# ---- the maintenance of a tool: when the next one is due, from the last one and how often it is advised ----
+_FREQ_WORDS = {"mensile": (1, "m"), "bimestrale": (2, "m"), "trimestrale": (3, "m"), "quadrimestrale": (4, "m"),
+               "semestrale": (6, "m"), "annuale": (1, "y"), "biennale": (2, "y"), "triennale": (3, "y"),
+               "settimanale": (1, "w"), "quindicinale": (15, "d")}
+_UNITS = {"giorno": "d", "giorni": "d", "gg": "d", "settimana": "w", "settimane": "w", "mese": "m", "mesi": "m",
+          "anno": "y", "anni": "y"}
+
+
+def parse_frequency(value) -> Optional[tuple]:
+    """How often a maintenance is advised -> (n, unit) with unit d / w / m / y, or None when it can't be read:
+    "ogni 6 mesi", "6 mesi", "ogni anno", "annuale", "90 giorni", "ogni 2 anni", "semestrale"."""
+    import re
+    v = " ".join(str(value or "").lower().replace("ogni", " ").split())
+    if not v:
+        return None
+    if v in _FREQ_WORDS:
+        return _FREQ_WORDS[v]
+    m = re.fullmatch(r"(\d{1,3})?\s*([a-z]+)", v)
+    if not m or m.group(2) not in _UNITS:
+        return None
+    n = int(m.group(1) or 1)
+    return (n, _UNITS[m.group(2)]) if n > 0 else None
+
+
+def next_maintenance(last_iso, frequency) -> Optional[str]:
+    """The day of the next maintenance (ISO), from the last one and the frequency; None if one of them is missing or
+    can't be read (then no reminder)."""
+    from datetime import date, timedelta
+    import calendar
+    f = parse_frequency(frequency)
+    try:
+        last = date.fromisoformat(str(last_iso or "")[:10])
+    except ValueError:
+        return None
+    if not f:
+        return None
+    n, unit = f
+    if unit == "d":
+        return (last + timedelta(days=n)).isoformat()
+    if unit == "w":
+        return (last + timedelta(weeks=n)).isoformat()
+    months = n * (12 if unit == "y" else 1)
+    y, m = divmod(last.month - 1 + months, 12)
+    y, m = last.year + y, m + 1
+    return date(y, m, min(last.day, calendar.monthrange(y, m)[1])).isoformat()
+
+
+def order_fields(fields: list, base: list, mapping: dict) -> list:
+    """The base attributes in the base order, then the others the list already had."""
+    pos = {mapping.get(b["key"]): i for i, b in enumerate(base)}
+    return sorted(fields, key=lambda f: pos.get(f.get("key"), len(base)))
 
 
 def norm_stato(stato: str) -> str:

@@ -20,6 +20,7 @@ KINDS = [
     ("hours", "Ore da approvare", "Le ore scritte da un collaboratore che aspettano il tuo ok."),
     ("extra", "Lavori extra e materiali non previsti", "Un lavoro o un materiale fuori dal preventivo."),
     ("materials", "Materiali da prendere", "I materiali da prendere che sono per te."),
+    ("tools", "Manutenzione attrezzi", "Un attrezzo dell'Attrezzatura da revisionare: una settimana prima e il giorno della scadenza."),
     ("costs", "Costi e budget", "Spese oltre il previsto e commesse che rischiano di sforare."),
     ("client", "Aggiornamenti ai clienti", "Le bozze da approvare e gli aggiornamenti inviati ai clienti."),
     ("shares", "Condivisioni e inviti", "Task assegnati a te; commesse, liste e informazioni condivise con te; inviti in un team."),
