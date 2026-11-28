@@ -34,22 +34,27 @@ const CHANGED = { tool_item_id: "attrezzo", ar: "realtà aumentata", place: "luo
 // bottom bar under the finger and swallow the tap (see "Crea QR").
 const keepFocus = (e) => e.preventDefault();
 
-// a QR in the list, as the tiles of Impostazioni: the active ones lit, the turned-off ones dim
-function QrTile({ q, onOpen }) {
+// a QR in the list: one row, with its switch on the right - on, the row lit and "Attivo"; off, dimmed and "Disattivato".
+// The switch turns it on or off from here; a tap on the rest of the row opens it.
+function QrTile({ q, onOpen, onToggle }) {
+  const [busy, setBusy] = useState(false);
+  const toggle = async (on) => { setBusy(true); try { await onToggle(on); } finally { setBusy(false); } };
   return (
-    <button type="button" data-testid="qr-tile" data-active={q.active ? "true" : "false"} onClick={onOpen}
-      className={`text-left rounded-[20px] px-3 h-[64px] flex flex-col justify-center backdrop-blur-xl transition-colors ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
-      <span className="flex items-center gap-2">
-        <QrCode size={17} className={`shrink-0 ${q.active ? "text-white" : "text-white/55"}`} />
+    <div data-testid="qr-tile" data-active={q.active ? "true" : "false"}
+      className={`w-full rounded-[20px] pl-3 pr-3 h-[64px] flex items-center gap-3 backdrop-blur-xl transition-colors ${q.active ? "bg-white/[0.22] border border-white/30" : "bg-white/[0.07] border border-white/10"}`}>
+      <button type="button" onClick={onOpen} className="flex-1 min-w-0 h-full flex items-center gap-3 text-left" aria-label={`Apri ${q.title}`}>
+        <QrCode size={18} className={`shrink-0 ${q.active ? "text-white" : "text-white/45"}`} />
         <span className="flex-1 min-w-0">
-          <span className={`block text-[13px] font-semibold leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${q.active ? "text-white" : "text-white/70"}`} data-testid="qr-tile-title">{q.title}</span>
-          <span className="block text-[11px] text-white/60 leading-tight mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
-            {q.active ? q.kind_label : "Disattivato"}
+          <span className={`block text-[14px] font-semibold leading-tight truncate ${q.active ? "text-white" : "text-white/60"}`} data-testid="qr-tile-title">{q.title}</span>
+          <span className="block text-[11px] leading-tight mt-0.5 truncate">
+            <span className={q.active ? "text-white/80" : "text-white/50"} data-testid="qr-tile-state">{q.active ? "Attivo" : "Disattivato"}</span>
+            <span className="text-white/50"> · {q.kind_label}</span>
           </span>
         </span>
-        <ChevronRight size={14} className="shrink-0 text-white/45" />
-      </span>
-    </button>
+      </button>
+      <IosSwitch checked={!!q.active} onChange={toggle} disabled={busy} testid="qr-tile-switch"
+        label={q.active ? `${q.title}: attivo, tocca per disattivarlo` : `${q.title}: disattivato, tocca per riattivarlo`} />
+    </div>
   );
 }
 
@@ -440,10 +445,7 @@ function QrDetail({ id, commesse, onChanged, onDeleted, onBack }) {
         <button type="button" onClick={newCode} disabled={busy} data-testid="qr-new-code" title="Genera un nuovo codice" aria-label="Genera un nuovo codice"
           className={`${ROUND} bg-white/15 text-white`}><RefreshCw size={18} /></button>
         <button type="button" onClick={remove} disabled={busy} data-testid="qr-delete" title="Elimina" aria-label="Elimina"
-          className={`${ROUND} bg-white/90 text-[#C0262D]`}><Trash2 size={18} /></button>
-      </div>
-      <div className="text-center text-[12px] text-white/60 -mt-1" data-testid="qr-active-note">
-        {q.active ? "Attivo" : "Disattivato: chi lo scansiona non vede niente"}
+          className={`${ROUND} bg-white/15 text-white`}><Trash2 size={18} /></button>
       </div>
 
       {/* then the numbers and what identifies it */}
@@ -568,6 +570,17 @@ export default function QrPage() {
   }, [user?.business_vertical]);
 
   const replace = (d) => setList((xs) => [d, ...xs.filter((x) => x.id !== d.id)]);
+  // on / off from the list: the row stays where it is
+  const setActive = async (q, on) => {
+    setList((xs) => xs.map((x) => (x.id === q.id ? { ...x, active: on } : x)));
+    try {
+      await api.patch(`/qr/${q.id}`, { active: on });
+      toast.success(on ? `«${q.title}» attivo` : `«${q.title}» disattivato: chi lo scansiona non vede niente`);
+    } catch (e) {
+      setList((xs) => xs.map((x) => (x.id === q.id ? { ...x, active: !on } : x)));
+      toast.error(e.response?.data?.detail || "Non riuscito");
+    }
+  };
   const goCode = (e) => {
     e.preventDefault();
     const c = typed.replace(/[\s\-./]/g, "").toUpperCase();
@@ -622,8 +635,8 @@ export default function QrPage() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3" data-testid="qr-list">
-          {list.map((q) => <QrTile key={q.id} q={q} onOpen={() => setParams({ open: q.id })} />)}
+        <div className="flex flex-col gap-2.5" data-testid="qr-list">
+          {list.map((q) => <QrTile key={q.id} q={q} onOpen={() => setParams({ open: q.id })} onToggle={(on) => setActive(q, on)} />)}
         </div>
       )}
     </div>
