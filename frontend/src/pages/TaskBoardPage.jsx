@@ -3,8 +3,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthContext";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Calendar, CalendarCheck, CalendarDays, Star, Trash2, CircleCheck, Bell, BellRing, Users, Send, StickyNote, Wand2, Share2,
-  Repeat, Link2, Plus, Check, ChevronDown, ChevronLeft, ChevronRight, MoreHorizontal, SquareCheck, Clock, Flag, Type,
+  Calendar, CalendarCheck, Star, Trash2, CircleCheck, Bell, BellRing, Send, StickyNote, Wand2, Share2,
+  Repeat, Link2, Plus, Check, ChevronDown, ChevronLeft, ChevronRight, MoreHorizontal, Clock, Flag, Type,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -15,7 +15,6 @@ import TodoDetail from "@/components/TodoDetail";
 import { NewTodoSheet } from "@/components/TodoFolders";
 import GlassBottomSheet from "@/components/GlassBottomSheet";
 import GlassMenu, { GlassMenuItem } from "@/components/GlassMenu";
-import { StatTile } from "@/components/StatTiles";
 import { Field, Input, Select, PRIMARY } from "@/components/FormFields";
 
 /* Task e To-Do, one section in the style of the diario di commessa: the big words on top choose the view
@@ -58,13 +57,11 @@ const shortDay = (iso, withYear) => {
   const d = dateOf(iso);
   return `${d.getDate()} ${IT_MONTHS_SHORT[d.getMonth()]}${withYear ? ` ${d.getFullYear()}` : ""}`;
 };
-// "Ieri", "Lunedì 24 nov", "3 ott 2025": the day of a late task
+// "Ieri", "24 nov", "3 ott 25": the day of a late task, short enough for the hour's column
 const lateDay = (iso, today) => {
   if (iso === addDays(today, -1)) return "Ieri";
   const d = dateOf(iso);
-  const days = Math.round((dateOf(today) - d) / 86400000);
-  if (days < 7) return `${IT_WD_LONG[d.getDay()][0].toUpperCase()}${IT_WD_LONG[d.getDay()].slice(1)} ${shortDay(iso)}`;
-  return shortDay(iso, d.getFullYear() !== dateOf(today).getFullYear());
+  return d.getFullYear() !== dateOf(today).getFullYear() ? `${d.getDate()}/${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}` : shortDay(iso);
 };
 
 const isTaskOverdue = (t, today = todayIso()) => !!t.due_date && !t.completed && t.due_date < today;
@@ -221,48 +218,46 @@ export default function TaskBoardPage() {
   const shownTodos = todos.filter(keep);
 
   const selectedTask = tasks.find((t) => t.id === selected) || null;
-  const nToday = tasks.filter((t) => t.due_date === today && !t.completed).length;
-  const nLate = tasks.filter((t) => isTaskOverdue(t, today)).length;
-  const nTodo = (s) => todos.filter((t) => t.status === s).length;
-
-  const filters = (withStatus) => (
-    <div className={`grid gap-2 ${withStatus ? "grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_36px]" : "grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_36px]"}`}
-      data-testid="task-filters">
-      {withStatus && (
-        <PillSelect label="Attivi o completati" value={status} onChange={setStatus} testid="filter-status"
-          options={[["attivi", "Attivi"], ["completati", "Completati"]]} />
-      )}
-      <PillSelect label="Priorità" value={prio} onChange={setPrio} testid="filter-priority"
-        options={[["", "Priorità"], ["alta", "Alta"], ["media", "Media"], ["bassa", "Bassa"]]} />
-      <PillSelect label="Tag" value={tag} onChange={setTag} testid="filter-tag" disabled={!allTags.length}
-        options={[["", "# Tag"], ...allTags.map((x) => [x, `#${x}`])]} />
-      <button type="button" data-testid="filter-fav" aria-pressed={favOnly} aria-label="Solo preferiti" title="Solo preferiti"
-        onClick={() => setFavOnly((v) => !v)}
-        className={`h-9 w-9 rounded-full border flex items-center justify-center ${favOnly ? "bg-white/85 border-white/50 text-[#7A2A5C]" : "bg-white/[0.12] border-white/15 text-white"}`}>
-        <Star size={16} strokeWidth={1.8} className={favOnly ? "fill-current" : ""} />
-      </button>
+  // one compact row: the small filters on the left, the "+" on the right
+  const filters = (withStatus, add) => (
+    <div className="flex items-center gap-1.5" data-testid="task-filters">
+      <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+        {withStatus && (
+          <PillSelect label="Attivi o completati" value={status === "attivi" ? "" : status} onChange={(v) => setStatus(v || "attivi")} testid="filter-status"
+            options={[["", "Attivi"], ["completati", "Fatti"]]} />
+        )}
+        <PillSelect label="Priorità" value={prio} onChange={setPrio} testid="filter-priority"
+          options={[["", "Priorità"], ["alta", "Alta"], ["media", "Media"], ["bassa", "Bassa"]]} />
+        {allTags.length > 0 && (
+          <PillSelect label="Tag" value={tag} onChange={setTag} testid="filter-tag"
+            options={[["", "#"], ...allTags.map((x) => [x, `#${x}`])]} />
+        )}
+        <button type="button" data-testid="filter-fav" aria-pressed={favOnly} aria-label="Solo preferiti" title="Solo preferiti"
+          onClick={() => setFavOnly((v) => !v)}
+          className={`h-7 w-7 shrink-0 rounded-full border flex items-center justify-center ${favOnly ? "bg-white/85 border-white/50 text-[#7A2A5C]" : "bg-white/10 border-white/15 text-white/75"}`}>
+          <Star size={13} strokeWidth={1.8} className={favOnly ? "fill-current" : ""} />
+        </button>
+      </div>
+      {add}
     </div>
+  );
+  const addBtn = (label, onClick, testid) => (
+    <button type="button" onClick={onClick} data-testid={testid} aria-label={label} title={label}
+      className="h-7 shrink-0 pl-2 pr-3 rounded-full bg-white/85 text-[#7A2A5C] text-[12px] font-semibold inline-flex items-center gap-1">
+      <Plus size={14} strokeWidth={2.4} /> {label.replace("Nuovo ", "")}
+    </button>
   );
 
   const giornate = (
-    <Giornate tasks={shown} status={status} now={now} today={today} orgMembers={orgMembers}
-      onOpen={setSelected} onToggleDone={toggleDone} onCalendar={() => setView("calendario")} onTodo={() => setView("todo")} />
+    <Giornate tasks={shown} status={status} now={now} today={today} onOpen={setSelected} onToggleDone={toggleDone} />
   );
   const calendario = (
-    <MonthView tasks={shown} today={today} day={calDay || today} onDay={setCalDay} orgMembers={orgMembers}
-      onOpen={setSelected} onToggleDone={toggleDone} />
+    <MonthView tasks={shown} today={today} day={calDay || today} onDay={setCalDay} onOpen={setSelected} onToggleDone={toggleDone} />
   );
   const todoView = (
     <TodoGroups todos={shownTodos} sortTodos={sortTodos} onOpen={setOpenTodo} onAdd={(s) => setNewTodo(NEW_TODO_FOLDER[s])}
       onMove={todoMove} onDelete={todoDelete} onToggleFav={todoFav} />
   );
-  const cta = (label, onClick, testid) => (
-    <button type="button" onClick={onClick} data-testid={testid}
-      className="h-11 px-[22px] rounded-full border border-white/30 bg-white/[0.22] text-white text-[15px] font-medium inline-flex items-center gap-2">
-      <Plus size={18} strokeWidth={2} /> {label}
-    </button>
-  );
-
   const sheets = (
     <>
       {selectedTask && (
@@ -274,70 +269,46 @@ export default function TaskBoardPage() {
     </>
   );
 
-  const title = (
-    <div className="flex items-center gap-2">
-      <SquareCheck size={20} className="text-white/80" />
-      <h1 className="text-2xl font-semibold text-white">Task e To-Do</h1>
-    </div>
-  );
-
   // one box around both layouts, so the width is always measured on the same element
   return (
     <div ref={rootRef} className="w-full pb-10" data-testid="task-page">
       {split ? (
-      <>
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          {title}
-          <div className="flex items-center gap-2">
-            {cta("Nuovo task", () => setNewTask(true), "new-task-btn")}
-            {cta("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")}
-          </div>
-        </div>
-        <div className="mt-6 grid grid-cols-5 gap-3" data-testid="task-stats">
-          <StatTile label="Oggi" value={nToday} testid="stat-today" />
-          <StatTile label="Scaduti" value={nLate} testid="stat-late" />
-          <StatTile label="To-Do da fare" value={nTodo("da_fare")} testid="stat-todo" />
-          <StatTile label="In corso" value={nTodo("in_corso")} testid="stat-doing" />
-          <StatTile label="Fatti" value={nTodo("fatto")} testid="stat-done" />
-        </div>
-        <div className="mt-6 max-w-[560px]">{filters(true)}</div>
-        <div className="mt-6 grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] gap-10 items-start">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-6 mb-4" data-testid="view-tabs">
-              {VIEWS.filter((v) => v.key !== "todo").map((v) => (
-                <button key={v.key} type="button" onClick={() => setView(v.key)} data-testid={`view-${v.key}`} aria-current={leftView === v.key ? "page" : undefined}
-                  className={leftView === v.key ? "text-[30px] font-semibold tracking-tight text-white/[0.68]" : "text-[17px] font-medium text-white/50 hover:text-white/75"}>
-                  {v.label}
-                </button>
-              ))}
+        <>
+          <div className="max-w-[520px]">{filters(true, null)}</div>
+          <div className="mt-6 grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] gap-10 items-start">
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-6 mb-4" data-testid="view-tabs">
+                {VIEWS.filter((v) => v.key !== "todo").map((v) => (
+                  <button key={v.key} type="button" onClick={() => setView(v.key)} data-testid={`view-${v.key}`} aria-current={leftView === v.key ? "page" : undefined}
+                    className={leftView === v.key ? "text-[26px] font-semibold tracking-tight text-white/[0.68]" : "text-[16px] font-medium text-white/50 hover:text-white/75"}>
+                    {v.label}
+                  </button>
+                ))}
+                <span className="ml-auto self-center">{addBtn("Nuovo task", () => setNewTask(true), "new-task-btn")}</span>
+              </div>
+              {leftView === "calendario" ? calendario : giornate}
             </div>
-            {leftView === "calendario" ? calendario : giornate}
+            <div className="min-w-0">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-[26px] font-semibold tracking-tight text-white/[0.68]" data-testid="todo-pane-title">To-Do</span>
+                {addBtn("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")}
+              </div>
+              {todoView}
+            </div>
           </div>
-          <div className="min-w-0">
-            <div className="mb-4 text-[30px] font-semibold tracking-tight text-white/[0.68]" data-testid="todo-pane-title">To-Do</div>
-            {todoView}
-          </div>
-        </div>
-      </>
+        </>
       ) : (
-      <>
-      {title}
-      <div className="mt-5 flex justify-center">
-        {view === "todo"
-          ? cta("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")
-          : cta("Nuovo task", () => setNewTask(true), "new-task-btn")}
-      </div>
-      <div className="mt-5 grid grid-cols-3 gap-2 min-[380px]:gap-3" data-testid="task-stats">
-        <StatTile label="Oggi" value={nToday} testid="stat-today" />
-        <StatTile label="Scaduti" value={nLate} testid="stat-late" />
-        <StatTile label="To-Do aperti" value={nTodo("da_fare") + nTodo("in_corso")} testid="stat-todo" />
-      </div>
-      <ViewCarousel view={view} onView={setView} />
-      <div className="mt-3">{filters(view !== "todo")}</div>
-      <div className="mt-5">
-        {view === "todo" ? todoView : view === "calendario" ? calendario : giornate}
-      </div>
-      </>
+        <>
+          <ViewCarousel view={view} onView={setView} />
+          <div className="mt-3">
+            {filters(view !== "todo", view === "todo"
+              ? addBtn("Nuovo to-do", () => setNewTodo(NEW_TODO_FOLDER.da_fare), "new-todo-btn")
+              : addBtn("Nuovo task", () => setNewTask(true), "new-task-btn"))}
+          </div>
+          <div className="mt-5">
+            {view === "todo" ? todoView : view === "calendario" ? calendario : giornate}
+          </div>
+        </>
       )}
       {sheets}
     </div>
@@ -350,7 +321,7 @@ function ViewCarousel({ view, onView }) {
   const i = VIEWS.findIndex((v) => v.key === view);
   const at = (k) => VIEWS[(k + VIEWS.length) % VIEWS.length];
   return (
-    <div className="mt-6 -mx-4 h-[46px] flex items-center justify-center gap-[22px] overflow-hidden select-none" data-testid="view-tabs"
+    <div className="mt-1 -mx-4 h-[46px] flex items-center justify-center gap-[22px] overflow-hidden select-none" data-testid="view-tabs"
       onTouchStart={(e) => { x0.current = e.touches?.[0]?.clientX ?? null; }}
       onTouchEnd={(e) => {
         if (x0.current == null) return;
@@ -369,16 +340,19 @@ function ViewCarousel({ view, onView }) {
   );
 }
 
-// a small dropdown in the filters row (the phone's own picker)
-function PillSelect({ label, value, onChange, options, testid, disabled }) {
+// a small dropdown in the filters row: a little pill with what is chosen; the phone's own picker opens on it
+// (the native list stays invisible on top, at its own size, so the iPhone never zooms in)
+function PillSelect({ label, value, onChange, options, testid }) {
+  const cur = options.find(([k]) => k === value) || options[0];
   return (
-    <div className="relative min-w-0">
-      <select aria-label={label} value={value} data-testid={testid} disabled={disabled} onChange={(e) => onChange(e.target.value)}
-        className={`h-9 w-full appearance-none truncate rounded-full border pl-3.5 pr-8 text-[13px] text-white outline-none cursor-pointer disabled:opacity-50 ${value ? "bg-white/25 border-white/40" : "bg-white/[0.12] border-white/15"}`}>
+    <label className={`relative h-7 shrink-0 max-w-[112px] rounded-full border pl-2.5 pr-6 flex items-center text-[12px] cursor-pointer ${value ? "bg-white/25 border-white/40 text-white" : "bg-white/10 border-white/15 text-white/80"}`}>
+      <span className="truncate">{cur[1]}</span>
+      <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/60 pointer-events-none" />
+      <select aria-label={label} value={value} data-testid={testid} onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
         {options.map(([k, l]) => <option key={k} value={k} className="text-black">{l}</option>)}
       </select>
-      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60 pointer-events-none" />
-    </div>
+    </label>
   );
 }
 
@@ -403,38 +377,23 @@ function BlockHead({ children, right, testid, className = "text-white/75" }) {
   );
 }
 
-// one task in the days: the hour, the priority, what is on (repeats, reminder, calendar, who), the title, where it came from
-function TaskRow({ task, orgMembers, onOpen, onToggleDone, when, whenClass = "text-white/90" }) {
+// one task in the days, on one line: the hour on the left, the priority as a dot, the title; the round button completes it
+function TaskRow({ task, onOpen, onToggleDone, when, whenClass = "text-white/60" }) {
   const prio = PRIORITY_META[task.priority];
   const done = !!task.completed;
-  const assignee = task.assigned_to ? (orgMembers || []).find((m) => m.user_id === task.assigned_to) : null;
-  const sub = assignee ? `Assegnato a ${assignee.name}` : task.source?.label ? `Da: ${task.source.label}` : task.recurrence_label || "";
-  const time = when ?? (task.due_time || "In giornata");
   return (
-    <div className="flex items-start gap-2.5 py-2" data-testid={`task-${task.id}`}>
-      <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex flex-col gap-1" data-testid="task-open">
-        <span className="flex items-center gap-2 text-[13px] text-white/60 min-w-0">
-          <span className={`font-semibold whitespace-nowrap ${whenClass}`}>{time}</span>
-          {prio && <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
-          {task.recurrence_label && <Repeat size={14} className="shrink-0" aria-label={task.recurrence_label} data-testid="task-recurring-icon" />}
-          {task.reminder_enabled && <BellRing size={14} className="shrink-0" aria-label="Promemoria attivo" data-testid="task-reminder-icon" />}
-          {task.calendar_synced && <CalendarCheck size={14} className="shrink-0" aria-label="Nel calendario" data-testid="task-calendar-icon" />}
-          {task.visibility === "org" && !assignee && <Users size={14} className="shrink-0" aria-label="Condiviso col team" />}
-          {!!task.notes && <StickyNote size={14} className="shrink-0" aria-label="Ha delle note" />}
-          {task.favorite && <Star size={14} className="shrink-0 fill-current" aria-label="Preferito" />}
-          {assignee && (
-            <span className="h-[18px] w-[18px] shrink-0 rounded-full bg-white/25 text-white text-[10px] font-semibold flex items-center justify-center" title={`Assegnato a ${assignee.name}`}>
-              {(assignee.name || "?").trim()[0]?.toUpperCase()}
-            </span>
-          )}
+    <div className="flex items-center gap-2.5 py-1.5" data-testid={`task-${task.id}`}>
+      <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex items-baseline gap-2.5" data-testid="task-open">
+        <span className={`w-[44px] shrink-0 text-[13px] tabular-nums whitespace-nowrap ${whenClass}`}>{when ?? (task.due_time || "—")}</span>
+        <span className={`min-w-0 text-[15px] leading-[1.35] break-words ${done ? "line-through text-white/50" : "text-white"}`}>
+          {prio && <span className="inline-block w-[7px] h-[7px] rounded-full mr-2 align-middle -mt-0.5" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
+          {task.title}
         </span>
-        <span className={`text-[16px] leading-[1.35] break-words ${done ? "line-through text-white/55" : "text-white"}`}>{task.title}</span>
-        {sub && <span className="text-[12px] text-white/60 truncate">{sub}</span>}
       </button>
       <button type="button" data-testid="task-complete" onClick={onToggleDone} aria-label={done ? "Fatto: tocca per riaprirlo" : "Segna come fatto"}
         title={done ? "Riapri" : "Segna come fatto"}
-        className={`mt-1.5 h-[30px] w-[30px] shrink-0 rounded-full border-[1.5px] border-white/50 flex items-center justify-center ${done ? "bg-white/85 text-[#7A2A5C]" : "text-transparent"}`}>
-        <Check size={16} strokeWidth={2.6} />
+        className={`h-[26px] w-[26px] shrink-0 rounded-full border-[1.5px] border-white/50 flex items-center justify-center ${done ? "bg-white/85 text-[#7A2A5C]" : "text-transparent"}`}>
+        <Check size={14} strokeWidth={2.6} />
       </button>
     </div>
   );
@@ -477,18 +436,15 @@ function MonthsAndDays({ tasks, dayOf, desc, rowProps, today }) {
   });
 }
 
-function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone, onCalendar, onTodo }) {
+function Giornate({ tasks, status, now, today, onOpen, onToggleDone }) {
   const [allLate, setAllLate] = useState(false);
-  const rowProps = (t) => ({ orgMembers, onOpen: () => onOpen(t.id), onToggleDone: () => onToggleDone(t.id, !!t.completed) });
+  const rowProps = (t) => ({ onOpen: () => onOpen(t.id), onToggleDone: () => onToggleDone(t.id, !!t.completed) });
 
   if (status === "completati") {
     const done = tasks.filter((t) => t.completed);
     const dayOf = (t) => (t.completed_at ? isoOf(new Date(t.completed_at)) : t.due_date || today);
     return (
       <div className="flex flex-col gap-5" data-testid="giornate">
-        <div className="text-center text-[12px] tracking-[0.16em] uppercase text-white/85" data-testid="period-label">
-          Completati <span className="text-white/60">· {done.length === 1 ? "1 task" : `${done.length} task`}</span>
-        </div>
         {done.length === 0 && <div className="text-center text-white/60 text-[14px] py-10">Nessun task completato.</div>}
         <MonthsAndDays tasks={done} dayOf={dayOf} desc today={today} rowProps={rowProps} />
       </div>
@@ -500,8 +456,6 @@ function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone,
   const late = tasks.filter((t) => isTaskOverdue(t, today)).sort((a, b) => b.due_date.localeCompare(a.due_date) || byHour(a, b));
   const next = tasks.filter((t) => !t.completed && t.due_date && t.due_date > today);
   const undated = tasks.filter((t) => !t.completed && !t.due_date).sort((a, b) => (PRIORITY_RANK[a.priority] ?? 3) - (PRIORITY_RANK[b.priority] ?? 3) || (b.created_at || "").localeCompare(a.created_at || ""));
-  const last = next.reduce((m, t) => (t.due_date > m ? t.due_date : m), today);
-  const nShown = todays.filter((t) => !t.completed).length + next.length;
   // where the "Adesso" line goes: before the first task with an hour still to come (after the last one with an hour, if none)
   const timed = todays.filter((t) => t.due_time);
   let nowAt = timed.findIndex((t) => t.due_time > nowHm);
@@ -516,7 +470,7 @@ function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone,
   const todayRows = [];
   todays.forEach((t, k) => {
     if (k === nowAt && t.due_time) todayRows.push(nowLine);
-    todayRows.push(<TaskRow key={t.id} task={t} {...rowProps(t)} whenClass={!t.completed && t.due_time && t.due_time <= nowHm ? "tt-now" : "text-white/90"} />);
+    todayRows.push(<TaskRow key={t.id} task={t} {...rowProps(t)} />);
     if (k === timed.length - 1 && nowAt === timed.length) todayRows.push(nowLine);
   });
   if (!timed.length && todays.length) todayRows.unshift(nowLine);
@@ -525,21 +479,10 @@ function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone,
 
   return (
     <div className="flex flex-col gap-6" data-testid="giornate">
-      <div className="flex items-center justify-center gap-3 text-[13px] tracking-[0.16em] uppercase text-white/85">
-        <button type="button" onClick={onCalendar} aria-label="Apri il calendario" title="Apri il calendario" data-testid="period-btn" className="text-white/90">
-          <CalendarDays size={20} strokeWidth={1.7} />
-        </button>
-        <span data-testid="period-label">
-          {shortDay(today)}{last > today ? ` — ${shortDay(last, true)}` : ` ${d.getFullYear()}`}
-          <span className="text-white/60"> · {nShown === 1 ? "1 task" : `${nShown} task`}</span>
-        </span>
-      </div>
-
       {/* TODAY: always first, by the hour they start */}
       <section className="flex flex-col" data-testid="giornate-oggi">
-        <BlockHead className="text-white/90" right={`${todays.length} task`}>
-          <span className="w-2 h-2 rounded-full tt-now-bg shrink-0" />
-          <span className="truncate">Oggi · {IT_WD_LONG[d.getDay()]} {d.getDate()} {IT_MONTHS_LONG[d.getMonth()]}</span>
+        <BlockHead className="text-white/90">
+          <span className="w-2 h-2 rounded-full tt-now-bg shrink-0" />Oggi
         </BlockHead>
         <div className="grid grid-cols-[52px_minmax(0,1fr)] pt-3.5">
           <DayNum iso={today} />
@@ -556,8 +499,7 @@ function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone,
           <div className="text-[12px] tracking-[0.18em] uppercase tt-late">Scaduti · {late.length}</div>
           <div className="mt-1 flex flex-col">
             {lateShown.map((t) => (
-              <TaskRow key={t.id} task={t} {...rowProps(t)} whenClass="tt-late"
-                when={`${lateDay(t.due_date, today)}${t.due_time ? ` · ${t.due_time}` : ""}`} />
+              <TaskRow key={t.id} task={t} {...rowProps(t)} whenClass="tt-late" when={lateDay(t.due_date, today)} />
             ))}
           </div>
           {late.length > 3 && (
@@ -573,25 +515,19 @@ function Giornate({ tasks, status, now, today, orgMembers, onOpen, onToggleDone,
 
       {undated.length > 0 && (
         <section className="flex flex-col" data-testid="giornate-senza-data">
-          <BlockHead right={`${undated.length} task`}>Senza data</BlockHead>
+          <BlockHead>Senza data</BlockHead>
           <div className="pt-1.5 flex flex-col">
-            {undated.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} when="Senza data" whenClass="text-white/60" />)}
+            {undated.map((t) => <TaskRow key={t.id} task={t} {...rowProps(t)} />)}
           </div>
         </section>
       )}
 
-      {next.length === 0 && undated.length === 0 && (
-        <div className="text-center text-[13px] text-white/60" data-testid="giornate-end">
-          Nessun altro task in programma. Le cose senza un giorno preciso stanno bene nei{" "}
-          <button type="button" onClick={onTodo} className="underline underline-offset-2 text-white/85">To-Do</button>.
-        </div>
-      )}
     </div>
   );
 }
 
 // the month as a grid (week numbers on the left, the priority of the day's open tasks as dots); under it the chosen day
-function MonthView({ tasks, today, day, onDay, orgMembers, onOpen, onToggleDone }) {
+function MonthView({ tasks, today, day, onDay, onOpen, onToggleDone }) {
   const [month, setMonth] = useState(() => day.slice(0, 7));
   useEffect(() => { setMonth(day.slice(0, 7)); }, [day]);
   const [y, m] = month.split("-").map(Number);
@@ -611,13 +547,6 @@ function MonthView({ tasks, today, day, onDay, orgMembers, onOpen, onToggleDone 
   }
   const byDay = {};
   tasks.forEach((t) => { if (t.due_date) (byDay[t.due_date] = byDay[t.due_date] || []).push(t); });
-  const weekNum = (iso) => {
-    const dt = dateOf(iso);
-    const u = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
-    u.setUTCDate(u.getUTCDate() - ((u.getUTCDay() + 6) % 7) + 3);
-    const ft = new Date(Date.UTC(u.getUTCFullYear(), 0, 4));
-    return 1 + Math.round((u - ft) / (7 * 86400000));
-  };
   const shift = (n) => { const dt = new Date(y, m - 1 + n, 1); setMonth(isoOf(dt).slice(0, 7)); };
   const dayTasks = (byDay[day] || []).slice().sort(byHour);
   const dd = dateOf(day);
@@ -629,12 +558,10 @@ function MonthView({ tasks, today, day, onDay, orgMembers, onOpen, onToggleDone 
           <div className="text-[15px] font-semibold text-white capitalize" data-testid="cal-month">{IT_MONTHS_LONG[m - 1]} {y}</div>
           <button type="button" onClick={() => shift(1)} aria-label="Mese dopo" data-testid="cal-next" className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center text-white"><ChevronRight size={18} /></button>
         </div>
-        <div className="mt-3 grid grid-cols-[24px_repeat(7,minmax(0,1fr))] gap-y-1 text-center">
-          <span />
+        <div className="mt-3 grid grid-cols-7 gap-y-1 text-center">
           {["L", "M", "M", "G", "V", "S", "D"].map((w, k) => <span key={k} className="text-[11px] text-white/55 py-1">{w}</span>)}
           {weeks.map((row) => (
             <React.Fragment key={row[0]}>
-              <span className="text-[10px] text-white/40 self-center tabular-nums" data-testid="cal-weeknum">{weekNum(row[0])}</span>
               {row.map((iso) => {
                 const inMonth = iso.slice(0, 7) === month;
                 const open = (byDay[iso] || []).filter((t) => !t.completed);
@@ -655,12 +582,12 @@ function MonthView({ tasks, today, day, onDay, orgMembers, onOpen, onToggleDone 
         </div>
       </div>
       <section className="flex flex-col" data-testid="cal-day-list">
-        <BlockHead className="text-white/90" right={`${dayTasks.length} task`}>
+        <BlockHead className="text-white/90">
           {day === today ? "Oggi · " : ""}{IT_WD_LONG[dd.getDay()]} {dd.getDate()} {IT_MONTHS_LONG[dd.getMonth()]}
         </BlockHead>
         <div className="pt-1.5 flex flex-col">
           {dayTasks.map((t) => (
-            <TaskRow key={t.id} task={t} orgMembers={orgMembers} onOpen={() => onOpen(t.id)} onToggleDone={() => onToggleDone(t.id, !!t.completed)} />
+            <TaskRow key={t.id} task={t} onOpen={() => onOpen(t.id)} onToggleDone={() => onToggleDone(t.id, !!t.completed)} />
           ))}
           {dayTasks.length === 0 && <div className="py-3 text-[14px] text-white/60">Nessun task in questo giorno.</div>}
         </div>
@@ -681,17 +608,17 @@ function TodoGroups({ todos, sortTodos, onOpen, onAdd, onMove, onDelete, onToggl
           <section key={g.key} className="flex flex-col" data-testid={`todo-group-${g.key}`}>
             <div className="flex items-center justify-between gap-3 pb-2 border-b border-white/30">
               <span className="flex items-center gap-2 text-[12px] tracking-[0.18em] uppercase text-white/90">
-                <span className="w-2 h-2 rounded-full" style={{ background: g.dot }} />{g.label} · <span data-testid={`todo-count-${g.key}`}>{items.length}</span>
+                <span className="w-2 h-2 rounded-full" style={{ background: g.dot }} />{g.label} <span className="text-white/55" data-testid={`todo-count-${g.key}`}>{items.length}</span>
               </span>
               <button type="button" onClick={() => onAdd(g.key)} data-testid={`todo-add-${g.key}`} aria-label={`Nuovo to-do in ${g.label}`} title={`Nuovo to-do in ${g.label}`}
-                className="h-8 w-8 rounded-full bg-white/15 text-white flex items-center justify-center">
-                <Plus size={16} />
+                className="h-7 w-7 rounded-full bg-white/15 text-white flex items-center justify-center">
+                <Plus size={14} />
               </button>
             </div>
             {list.map((t) => (
               <TodoRow key={t.id} todo={t} onOpen={() => onOpen(t)} onMove={(s) => onMove(t, s)} onDelete={() => onDelete(t.id)} onToggleFav={() => onToggleFav(t.id, !!t.favorite)} />
             ))}
-            {items.length === 0 && <div className="py-3 text-[14px] text-white/55">Nessun to-do.</div>}
+            {items.length === 0 && <div className="py-2.5 text-[13px] text-white/50">Nessuno</div>}
             {g.key === "fatto" && items.length > 5 && (
               <button type="button" onClick={() => setAllDone((v) => !v)} data-testid="todo-done-more" className="mt-2 self-start text-[13px] font-medium text-white/75">
                 {allDone ? "Mostra meno" : `Mostra tutti (${items.length})`}
@@ -719,34 +646,28 @@ function TodoRow({ todo, onOpen, onMove, onDelete, onToggleFav }) {
   const stepsDone = steps.filter((x) => x.done).length;
   const pct = steps.length ? Math.round((stepsDone / steps.length) * 100) : todo.completion_percent || 0;
   const done = todo.status === "fatto";
-  const meta = [
-    prio?.label,
-    steps.length ? `${stepsDone}/${steps.length} passi` : "nessun passo",
-    todo.start_date ? `inizio ${shortDay(todo.start_date)}` : null,
-  ].filter(Boolean).join(" · ");
   const pick = (fn) => () => { setMenu(false); fn(); };
+  // one line: the priority as a dot, the title, how many steps are done; in corso a thin bar under it
   return (
-    <div className="flex items-start gap-2.5 pt-3 pb-2.5 border-b border-white/10" data-testid={`todo-${todo.id}`}>
+    <div className="flex items-center gap-2 py-2 border-b border-white/10" data-testid={`todo-${todo.id}`}>
       <button type="button" onClick={onOpen} className="flex-1 min-w-0 text-left flex flex-col gap-1.5" data-testid="todo-open">
-        <span className="flex items-center gap-2 text-[13px] text-white/60 min-w-0">
-          <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: prio?.color || "rgba(255,255,255,.45)" }} />
-          <span className="truncate">{meta}</span>
-          {todo.favorite && <Star size={14} className="shrink-0 fill-current" aria-label="Preferito" />}
-          {!!todo.notes && <StickyNote size={14} className="shrink-0" aria-label="Ha delle note" />}
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className={`min-w-0 flex-1 text-[15px] leading-[1.35] break-words ${done ? "line-through text-white/50" : "text-white"}`}>
+            {prio && <span className="inline-block w-[7px] h-[7px] rounded-full mr-2 align-middle -mt-0.5" style={{ background: prio.color }} title={`Priorità ${prio.label.toLowerCase()}`} />}
+            {todo.title}
+            {todo.favorite && <Star size={12} className="inline ml-1.5 -mt-0.5 fill-current text-white/60" aria-label="Preferito" />}
+          </span>
+          {steps.length > 0 && <span className="shrink-0 text-[12px] text-white/55 tabular-nums" title="Passi fatti" data-testid="todo-steps">{stepsDone}/{steps.length}</span>}
         </span>
-        <span className={`text-[16px] leading-[1.35] break-words ${done ? "line-through text-white/55" : "text-white"}`}>{todo.title}</span>
-        {todo.status === "in_corso" && (
-          <span className="flex items-center gap-2.5">
-            <span className="flex-1 h-[5px] rounded-full bg-white/20 overflow-hidden">
-              <span className="block h-full rounded-full bg-white/85" style={{ width: `${pct}%` }} />
-            </span>
-            <span className="text-[12px] text-white/75 tabular-nums">{pct}%</span>
+        {todo.status === "in_corso" && pct > 0 && (
+          <span className="block h-[3px] rounded-full bg-white/20 overflow-hidden" title={`${pct}%`}>
+            <span className="block h-full rounded-full bg-white/85" style={{ width: `${pct}%` }} />
           </span>
         )}
       </button>
       <button ref={btn} type="button" onClick={() => setMenu((v) => !v)} data-testid="todo-menu" aria-label="Sposta, segna fatto o elimina" aria-expanded={menu}
-        className="h-9 w-9 shrink-0 rounded-[10px] bg-white/10 border border-white/15 text-white/85 flex items-center justify-center">
-        <MoreHorizontal size={18} />
+        className="h-7 w-7 shrink-0 rounded-full text-white/60 hover:bg-white/10 flex items-center justify-center">
+        <MoreHorizontal size={16} />
       </button>
       {menu && (
         <GlassMenu anchorRef={btn} panelRef={panel} testid="todo-move-menu" width={236}>

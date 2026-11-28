@@ -114,18 +114,15 @@ L'agente Task trasforma quello che scrivi in **task** (con una data) o **to-do**
 ## Task
 <!-- id: task · path: /dashboard/tasks · verticale: tutti -->
 La sezione **Task** (pagina «Task e To-Do») tiene insieme i task, cioè gli impegni con un giorno, e i **to-do**, le cose da fare senza una data precisa. È fatta come il diario di commessa.
-- In alto il pulsante **+ Nuovo task** (o **+ Nuovo to-do** se sei nei To-Do) e tre numeri: i task di **oggi**, quelli **scaduti** e i **to-do aperti** (sul computer: oggi, scaduti, to-do da fare, in corso e fatti).
-- Sotto, le tre viste a parole grandi: **To-Do · Giornate · Calendario**. Si apre su **Giornate**; tocca una parola di lato (o scorri col dito) per cambiare vista.
-- **Filtri** (menu a tendina): **Attivi / Completati**, **priorità**, **#tag**, e la **stella** per vedere solo i preferiti. Priorità, tag e stella valgono anche per i to-do.
-- **Giornate**:
-  - **oggi è sempre in cima**, con il numero del giorno a sinistra: i task in ordine di **ora di avvio**; quelli senza ora sono «**In giornata**», in fondo. Una linea arancio «**Adesso 10:12**» segna l'ora attuale; l'ora dei task già passati è arancio. I task fatti restano barrati;
-  - subito dopo il riquadro giallo degli **Scaduti** (i primi tre, «Mostra tutti» per gli altri);
-  - poi i **giorni successivi**, raggruppati per **mese**, ciascuno con il numero e il giorno della settimana; in fondo quelli **senza data**;
-  - su ogni riga: l'ora, il pallino della priorità, le icone di ripetizione, promemoria, calendario, note, preferito e l'iniziale di chi l'ha in carico; sotto il titolo da dove è nato o a chi è assegnato;
-  - il **tondo** a destra segna il task come **fatto** (toccalo di nuovo per riaprirlo); l'icona del calendario accanto alle date apre il Calendario.
-- **Completati** (dal filtro): i task fatti, per giorno, dal più recente.
-- **Calendario**: il mese con il numero delle settimane; sotto ogni giorno i pallini delle priorità dei task aperti; oggi è pieno, il giorno scelto ha il bordo. Sotto il mese, i task del giorno scelto (con le frecce cambi mese).
-- **+ Nuovo task**: scrivi cosa, il giorno (**Quando**), l'ora (**Alle**, facoltativa) e la priorità. Il resto si imposta aprendo il task.
+- In alto le tre viste a parole grandi: **To-Do · Giornate · Calendario**. Si apre su **Giornate**; tocca una parola di lato (o scorri col dito) per cambiare vista.
+- Sotto, una riga di **filtri** piccoli: **Attivi / Fatti**, **Priorità**, **#** (i tag, se ce ne sono) e la **stella** (solo i preferiti); a destra il pulsante **+ task** (nei To-Do **+ to-do**). Priorità, tag e stella valgono anche per i to-do.
+- **Giornate**: ogni task è una riga sola: l'**ora** a sinistra («—» se non ce l'ha), il pallino della **priorità** e il titolo; il **tondo** a destra lo segna come fatto (toccalo di nuovo per riaprirlo).
+  - **Oggi** è sempre in cima, con il numero del giorno a sinistra e i task in ordine di **ora di avvio**; quelli senza ora in fondo. Una linea arancio «**Adesso 10:12**» segna l'ora attuale. I task fatti restano barrati;
+  - subito dopo il riquadro giallo degli **Scaduti** con il giorno («Ieri», «24 nov»; i primi tre, «Mostra tutti» per gli altri);
+  - poi i **giorni successivi**, raggruppati per **mese**; in fondo quelli **senza data**.
+- **Fatti** (dal filtro): i task fatti, per giorno, dal più recente.
+- **Calendario**: il mese; sotto ogni giorno i pallini delle priorità dei task aperti; oggi è pieno, il giorno scelto ha il bordo. Sotto il mese, i task del giorno scelto (con le frecce cambi mese).
+- **+ task**: scrivi cosa, il giorno (**Quando**), l'ora (**Alle**, facoltativa) e la priorità. Il resto si imposta aprendo il task.
 - **Aprendo un task** (tocca la riga) puoi:
   - modificarlo scrivendo in linguaggio naturale ("spostalo a giovedì alle 10, priorità alta");
   - cambiare la data e l'ora, la **priorità** (tocca «Priorità alta»), la ripetizione, il promemoria e il calendario; metterlo tra i preferiti, segnarlo come fatto, eliminarlo;
@@ -138,8 +135,8 @@ La sezione **Task** (pagina «Task e To-Do») tiene insieme i task, cioè gli im
 ## To-Do
 <!-- id: todo · path: /dashboard/tasks · verticale: tutti -->
 I to-do sono le cose da fare senza una data precisa. Stanno nella sezione **Task**, vista **To-Do** (il vecchio indirizzo della sezione To-Do porta qui).
-- Tre gruppi, come i mesi del diario: **Da fare**, **In corso** (con la barra di avanzamento), **Fatto** (gli ultimi cinque, «Mostra tutti» per gli altri). I preferiti stanno in cima.
-- Su ogni riga: il pallino della priorità, quanti **passi** sono fatti (es. «2/3 passi»), la data di **inizio**, la stella se è preferito, il titolo.
+- Tre gruppi, come i mesi del diario: **Da fare**, **In corso**, **Fatto**, ognuno con quanti sono (i fatti: gli ultimi cinque, «Mostra tutti» per gli altri). I preferiti stanno in cima.
+- Ogni to-do è una riga: il pallino della priorità, il titolo, la stellina se è preferito e a destra i **passi** fatti (es. «2/3»); per quelli in corso una barra sottile mostra l'avanzamento.
 - Il **+** di un gruppo crea un to-do già in quello stato: scrivi cosa c'è da fare, le note e la priorità.
 - Il pulsante **…** di una riga: **Sposta in** un altro stato (In corso, Fatto, Da fare), aggiungi o togli dai **preferiti**, **Elimina**.
 - **Aprendo un to-do** si apre **a tutto schermo**:

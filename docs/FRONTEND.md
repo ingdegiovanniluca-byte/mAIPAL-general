@@ -222,20 +222,14 @@ Sul telefono è costruita come la pagina iniziale di un browser. Dall'alto:
 
 Una sola sezione, «Task» nei menu, titolo «Task e To-Do», fatta come il diario di commessa. L'indirizzo `?v=todo` / `?v=calendario` sceglie la vista (senza, Giornate).
 
-- **In alto**: il pulsante a pillola **+ Nuovo task** (in To-Do: **+ Nuovo to-do**) e gli indicatori (`StatTile`): Oggi, Scaduti, To-Do aperti (sul computer: Oggi, Scaduti, To-Do da fare, In corso, Fatti).
-- **Le viste** a parole grandi, come le sezioni del diario: **To-Do · Giornate · Calendario**; quella scelta al centro, un tocco o uno scorrimento su quelle di lato cambia vista.
-- **Filtri** a tendina: Attivi/Completati (solo task), priorità, #tag, e la stella dei preferiti (priorità, tag e stella valgono anche per i to-do).
-- **Giornate**:
-  - il periodo con l'icona del calendario (apre Calendario);
-  - **Oggi** sempre per primo: il numero del giorno a sinistra, i task per **ora di avvio** (`due_time`), quelli senza ora «In giornata»; la linea arancio **«Adesso HH:MM»** si aggiorna da sola; i fatti barrati;
-  - il riquadro giallo **Scaduti** (primi tre, «Mostra tutti»);
-  - i giorni successivi raggruppati per **mese**; in fondo «Senza data»;
-  - ogni riga: ora, pallino di priorità, icone (ripete, promemoria, calendario, condiviso, note, preferito, iniziale dell'assegnatario), titolo, origine o assegnatario; il **tondo** a destra completa o riapre.
-- **Calendario**: il mese con i numeri delle settimane e i pallini delle priorità; oggi pieno, il giorno scelto con il bordo; sotto, i task di quel giorno.
-- **To-Do**: tre gruppi come i mesi del diario, **Da fare · In corso · Fatto**, ognuno con il numero e il «+» (`NewTodoSheet` di `TodoFolders.jsx`). Riga: priorità, passi n/m, data di inizio, stella, titolo, barra di avanzamento per In corso, menu **«…»** (`GlassMenu`: Sposta in, preferiti, Elimina).
+- **In alto** le viste a parole grandi, come le sezioni del diario: **To-Do · Giornate · Calendario**; quella scelta al centro, un tocco o uno scorrimento su quelle di lato cambia vista. Niente titolo e niente indicatori: la barra in alto dice già «Task».
+- **Una riga di filtri piccoli** (`PillSelect`, pillole alte 28 px; la tendina nativa invisibile sopra, a 16 px, così l'iPhone non ingrandisce): Attivi/Fatti (solo task), Priorità, # (tag, solo se ce ne sono), stella dei preferiti; a destra **+ task** / **+ to-do**.
+- **Giornate**: ogni task su **una riga**: ora (o «—»), pallino di priorità, titolo, tondo per completare. **Oggi** per primo (numero del giorno a sinistra, task per `due_time`, linea **«Adesso HH:MM»**), poi il riquadro **Scaduti** (giorno corto: «Ieri», «24 nov»), poi i giorni per **mese**, in fondo «Senza data».
+- **Calendario**: il mese con i pallini delle priorità; oggi pieno, il giorno scelto con il bordo; sotto, i task di quel giorno.
+- **To-Do**: tre gruppi **Da fare · In corso · Fatto** con il numero e il «+» (`NewTodoSheet` di `TodoFolders.jsx`). Riga: pallino di priorità, titolo, stellina, passi «n/m» a destra, barra sottile per In corso, menu **«…»** (`GlassMenu`: Sposta in, preferiti, Elimina).
 - **Aprire un task**: la scheda di sempre (`TaskDialog`): modifica scrivendo, data e ora, **priorità** (prima si cambiava trascinando tra le colonne), ripetizione, promemoria, calendario, note, condivisione e assegnazione, eliminazione (per i ricorrenti: solo questo o anche i successivi).
 - **Aprire un to-do**: il dettaglio a tutto schermo di sempre (`TodoDetail.jsx`, invariato): titolo, passi fatti, copertina con descrizione e foto, Avvio/Stato, note, **passi** (anche suggeriti dall'AI).
-- **Sul computer**, con almeno 860 px per la sezione: Giornate (o Calendario) a sinistra e To-Do a destra, affiancati; con meno spazio la pagina è quella del telefono.
+- **Sul computer**, con almeno 860 px per la sezione: i filtri in alto, poi Giornate (o Calendario, con «+ task») a sinistra e To-Do (con «+ to-do») a destra, affiancati; con meno spazio la pagina è quella del telefono.
 
 ### 4.4 To-Do
 
