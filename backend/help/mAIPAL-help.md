@@ -31,7 +31,7 @@ mAIPAL è il tuo assistente personale: scrivi o detti in italiano quello che ti 
 - Su **Telegram**, dopo averlo collegato da Impostazioni.
 - Sull'**orologio Galaxy Watch**, dopo averlo collegato da Impostazioni.
 
-**Verticali**: se lavori in un settore specifico (Artigiano, Veterinario, Fitness), sceglilo in Impostazioni → Verticale. Compaiono gli agenti e le sezioni dedicati al tuo lavoro.
+**Verticali**: se lavori in un settore specifico (Artigiano, Veterinario, Fitness), sceglilo in Impostazioni → Verticale. Compaiono gli agenti e le sezioni dedicati al tuo lavoro. Si possono scegliere solo i verticali inclusi per la tua organizzazione (in futuro li decide l'abbonamento); se ne è incluso uno solo, l'amministratore e chi è già in un team lo hanno da subito.
 
 ## Help
 <!-- id: help · verticale: tutti -->
@@ -560,7 +560,7 @@ La sezione Fitness (per istruttori e studi) ha quattro parti: Lezioni, Esercizi,
 Dalle Impostazioni (popup del profilo → Impostazioni, o dal menu) gestisci:
 - **Profilo**: foto, professione, settore, ambito di utilizzo (lavoro, vita privata, tempo libero: puoi accenderne più di uno), interessi, tono delle risposte (dal menu), indirizzi di casa e lavoro, orario delle news e del riepilogo del mattino. Ricorda di toccare **Salva profilo**.
 - **Logo organizzazione** (solo amministratori, sotto il Profilo): carica il logo dell'organizzazione (PNG o JPG, meglio con lo sfondo trasparente). Viene usato nei report e nei documenti generati per l'organizzazione. Da **Nei documenti** scegli **Usa il logo** o **Non usarlo**; con **Sostituisci** e **Togli** lo cambi o lo elimini. Quando è attivo, i report Word generati da te e dal tuo team (sopralluogo, intervento, SAL, report di commessa, varianti, referti) hanno il logo in alto a sinistra su ogni pagina. I documenti già generati non cambiano; una nuova revisione di un report usa il logo di adesso. Un'altra organizzazione non vede mai il tuo logo.
-- **Verticale**: il tuo settore (Veterinario, Fitness, Artigiano); quello scelto è evidenziato con la spunta. Cambia gli agenti e le sezioni dedicate.
+- **Verticale**: il tuo settore (Veterinario, Fitness, Artigiano); quello scelto è evidenziato con la spunta. Cambia gli agenti e le sezioni dedicate. Vedi solo i verticali inclusi per la tua organizzazione; se non ne è incluso nessuno la voce non c'è. Se un verticale viene tolto all'organizzazione, sparisce dal tuo account (i dati restano: tornano se viene incluso di nuovo e lo scegli).
 - **Collegamenti**: ogni servizio ha la sua scheda con lo stato (**Collegato** / **Non configurato**), l'account collegato e un solo pulsante largo (**Collega …** o **Scollega**).
 - **Google Workspace**: collega Drive (cartella mAIPAL per file e allegati) e Calendar (eventi dai task).
 - **Microsoft**: collega OneDrive e Outlook.

@@ -103,6 +103,9 @@ export default function SettingsPage() {
   const [businessVertical, setBusinessVertical] = useState(null);
   const [logo, setLogo] = useState(null);
   const [savingVertical, setSavingVertical] = useState(false);
+  // the verticals the organization may use (the file of the organizations, later the subscription); null: all
+  const allowedVerticals = Array.isArray(user?.tenant?.verticals) ? user.tenant.verticals : null;
+  const shownVerticals = allowedVerticals ? BUSINESS_VERTICALS.filter((v) => allowedVerticals.includes(v.key)) : BUSINESS_VERTICALS;
 
   const chooseBusinessVertical = async (key) => {
     if (key === businessVertical) return;
@@ -342,12 +345,15 @@ export default function SettingsPage() {
       <OrgLogoPanel logo={logo} setLogo={setLogo} />
     </Section>
   ) : null);
-  const secVertical = (mode) => (
+  const secVertical = (mode) => (!shownVerticals.length ? null :
     <Section mode={mode} id="vertical" testid="vertical-card" icon={Compass} title="Verticale"
-      subtitle="Il settore in cui operi: personalizza le funzionalità dedicate di mAIPAL. In futuro sarà legato al tuo abbonamento.">
+      subtitle={allowedVerticals
+        ? "Il settore in cui operi, tra quelli inclusi per la tua organizzazione: personalizza le funzionalità dedicate di mAIPAL."
+        : "Il settore in cui operi: personalizza le funzionalità dedicate di mAIPAL. In futuro sarà legato al tuo abbonamento."}>
       {/* one row of tiles: the chosen one lit up with the lists' check dot, the others dimmed */}
-      <div className="grid grid-cols-3 gap-2.5" role="radiogroup" aria-label="Verticale">
-        {BUSINESS_VERTICALS.map((v) => {
+      <div className="grid gap-2.5" role="radiogroup" aria-label="Verticale"
+        style={{ gridTemplateColumns: `repeat(${Math.max(2, shownVerticals.length)}, minmax(0, 1fr))` }}>
+        {shownVerticals.map((v) => {
           const on = businessVertical === v.key;
           const Icon = v.icon;
           return (
@@ -565,7 +571,7 @@ export default function SettingsPage() {
   const linksOn = linkServices.filter((l) => l.on).length;
   const tiles = [
     { id: "profile", icon: UserIcon, title: "Profilo", sub: profession || "Incompleto", on: !!profession },
-    { id: "vertical", icon: Compass, title: "Verticale", sub: BUSINESS_VERTICALS.find((v) => v.key === businessVertical)?.label || "Nessuno", on: !!businessVertical },
+    ...(shownVerticals.length ? [{ id: "vertical", icon: Compass, title: "Verticale", sub: BUSINESS_VERTICALS.find((v) => v.key === businessVertical)?.label || "Nessuno", on: !!businessVertical }] : []),
     { id: "links", icon: Link2, title: "Collegamenti", sub: linksOn ? `${linksOn} attiv${linksOn === 1 ? "o" : "i"}` : "Nessuno attivo", on: linksOn > 0, services: linkServices },
     { id: "notifications", icon: Bell, title: "Notifiche", sub: "Cosa ti mando e dove", on: false },
     { id: "team", icon: Users, title: "Team", sub: user?.org_id ? (orgName || "Nel tuo team") : "Nessun team", on: !!user?.org_id },

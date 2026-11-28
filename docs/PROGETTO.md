@@ -139,7 +139,7 @@ La guida completa per l'utente, una sezione per funzione, è in `backend/help/mA
 │   ├── qr_tags.py, file_store.py   QR (stili, codici) e file (GridFS)
 │   ├── site_presence.py, team_presence_tg.py, nearby.py, weather.py, recurrence.py, …
 │   ├── help/mAIPAL-help.md   la guida per l'utente
-│   ├── data/access/          chi può entrare come amministratore (org_admins.txt)
+│   ├── data/access/          chi può entrare come amministratore, con limiti e verticali dell'organizzazione (org_admins.txt)
 │   ├── scripts/              router_eval.py (misura del router), isolation_probe.py, …
 │   └── tests/                test unitari + tests/integration/it_*.py (DB finto, modelli finti)
 ├── frontend/

@@ -726,6 +726,49 @@ def _plan(tenant: Optional[dict]) -> dict:
     return {**orgaccess.DEFAULT_PLAN, **(tenant.get("plan") or {}), **((e or {}).get("plan") or {})}
 
 
+def _allowed_verticals(tenant: Optional[dict]) -> Optional[list]:
+    """The vertical packs the organization may use - for now the local file's verticali= (read live), later the
+    subscription's. None: all of them (no organization, or nothing written)."""
+    if not tenant:
+        return None
+    e = orgaccess.entry(tenant.get("owner_email") or "", ADMIN_EMAIL)
+    return (e or {}).get("verticals")
+
+
+async def _sync_user_vertical(user_doc: dict) -> dict:
+    """The account's vertical as its organization allows: one no longer included is taken off (its data stay, it
+    comes back when it is included again and chosen); an organization with a single vertical gives it to its
+    administrators and to who is already in a team (the others choose it in Impostazioni -> Verticale)."""
+    t = await db.tenants.find_one({"id": user_doc.get("tenant_id")}, {"_id": 0}) if user_doc.get("tenant_id") else None
+    allowed = _allowed_verticals(t)
+    if allowed is None:
+        return user_doc
+    bv = user_doc.get("business_vertical")
+    if bv and bv not in allowed:
+        await db.users.update_one({"user_id": user_doc["user_id"]}, {"$set": {"business_vertical": None}})
+        user_doc = {**user_doc, "business_vertical": None}
+        bv = None
+    if not bv and len(allowed) == 1 and (user_doc.get("role") == "admin" or user_doc.get("org_id")):
+        await db.users.update_one({"user_id": user_doc["user_id"]}, {"$set": {"business_vertical": allowed[0]}})
+        user_doc = {**user_doc, "business_vertical": allowed[0]}
+        await _apply_vertical(User(**user_doc), allowed[0])
+        user_doc = await db.users.find_one({"user_id": user_doc["user_id"]}, {"_id": 0}) or user_doc
+    return user_doc
+
+
+async def _sync_tenant_verticals() -> int:
+    """(periodic) Every organization's accounts with a vertical it no longer includes: taken off. -> how many."""
+    n = 0
+    for t in await db.tenants.find({}, {"_id": 0, "id": 1, "owner_email": 1}).to_list(None):
+        allowed = _allowed_verticals(t)
+        if allowed is None:
+            continue
+        r = await db.users.update_many({"tenant_id": t["id"], "business_vertical": {"$nin": allowed + [None]}},
+                                       {"$set": {"business_vertical": None}})
+        n += getattr(r, "modified_count", 0) or 0
+    return n
+
+
 async def _migrate_added_quotes() -> int:
     """The quotes added to a commessa's value before they were marked so: found in its diary ("💶 Valore della commessa:
     … (preventivo v2 aggiunto: € …)") and marked - their works shown under the description. Idempotent. -> how many."""
@@ -992,6 +1035,9 @@ async def google_login_callback(code: Optional[str] = None, state: Optional[str]
 
 @api_router.get("/auth/me", response_model=User)
 async def me(current: User = Depends(get_current_user)):
+    doc = await _sync_user_vertical(current.model_dump(exclude={"can_collaborators", "tenant"}))
+    if doc.get("business_vertical") != current.business_vertical:
+        current = User(**doc)
     return current.model_copy(update={"can_collaborators": await _can_manage_collaborators(current),
                                       "tenant": await _tenant_view(current)})
 
@@ -1054,7 +1100,8 @@ async def _tenant_view(current: User) -> Optional[dict]:
     if not t:
         return None
     out = {"id": t["id"], "name": t.get("name"), "is_owner": t.get("owner_user_id") == current.user_id,
-           "sharing": {"users_share": True, "collab_contacts": False, "users_see_costs": False, **(t.get("sharing") or {})}}
+           "sharing": {"users_share": True, "collab_contacts": False, "users_see_costs": False, **(t.get("sharing") or {})},
+           "verticals": _allowed_verticals(t)}
     if current.role == "admin":
         out.update(plan=_plan(t), usage=await _tenant_usage(t))
     return out
@@ -1318,6 +1365,11 @@ async def save_onboarding(payload: OnboardingPayload, current: User = Depends(ge
 @api_router.patch("/profile")
 async def update_profile(payload: ProfilePatch, current: User = Depends(get_current_user)):
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if updates.get("business_vertical"):
+        allowed = _allowed_verticals(await _tenant_of(current))
+        if allowed is not None and updates["business_vertical"] not in allowed:
+            label = (vx.pack(updates["business_vertical"]) or {}).get("label") or updates["business_vertical"]
+            raise HTTPException(status_code=403, detail=f"Il verticale «{label}» non è incluso per la tua organizzazione.")
     if updates:
         await db.users.update_one({"user_id": current.user_id}, {"$set": updates})
     user_doc = await db.users.find_one({"user_id": current.user_id}, {"_id": 0})
@@ -19552,6 +19604,7 @@ async def start_services():
     # ===== Organizations: every account already in gets one (see _migrate_tenants) =====
     try:
         await _migrate_tenants()
+        await _sync_tenant_verticals()
     except Exception:
         logger.exception("organizations migration failed")
     try:
@@ -19591,6 +19644,7 @@ async def start_services():
 
     J = lambda name, period, fn, first=0, max_run=1800: jobs.every(db, name, period, lambda: _in_tick(fn), first, max_run)
     J("geo_backfill", 600, _geo_backfill_tick, 90)
+    J("tenant_verticals", 600, _sync_tenant_verticals, 100)
     J("todo_step_reminders", 600, _todo_step_reminders, 120)
     J("task_reminders", 30 * 60, _reminders_tick, 30)
     J("exact_reminders", 60, _exact_reminders_tick, 15)

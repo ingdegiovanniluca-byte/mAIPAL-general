@@ -5,10 +5,19 @@
 # when it changes, no restart needed. Without org_admins.txt only ADMIN_EMAIL (.env) is admin.
 #
 # One administrator per line; only the e-mail is needed, the rest is optional:
-#   email ; Organization name ; max_users=N ; max_collaborators=N ; max_admins=N
-# Defaults: max_users=5, max_collaborators=5, max_admins=1.
+#   email ; Organization name ; max_users=N ; max_collaborators=N ; max_admins=N ; verticali=...
+# Defaults: max_users=5, max_collaborators=5, max_admins=1, all the verticals.
+#
+# verticali = the vertical packs the organization may use (later they will come from the subscription):
+#   artigiano, fitness, veterinario - several separated by commas (verticali=artigiano,fitness);
+#   verticali=tutti (or nothing written) = all of them; verticali=nessuno = only the general app.
+# With one only, it is the organization's vertical: its administrators (and who is already in a team) get it by
+# themselves; in Impostazioni -> Verticale everyone sees only those listed. A vertical taken off the list is taken
+# off its accounts within 10 minutes (the data stay: it comes back if you list it again and they choose it).
 # The users and collaborators are then added by the administrator, in the app:
 # Impostazioni -> Organizzazione and Impostazioni -> Collaboratori.
 
-# mario.rossi@impresarossi.it ; Impresa Rossi ; max_users=5 ; max_collaborators=5 ; max_admins=1
-# anna@studiobianchi.it ; Studio Bianchi
+# mario.rossi@impresarossi.it ; Impresa Rossi ; max_users=5 ; max_collaborators=5 ; max_admins=1 ; verticali=artigiano
+# anna@studiobianchi.it ; Studio Bianchi ; verticali=veterinario
+# luca@palestraluca.it ; Palestra Luca ; max_users=3 ; verticali=fitness
+# info@gruppoverdi.it ; Gruppo Verdi ; verticali=artigiano,fitness

@@ -137,7 +137,7 @@ async def reg(email, name):
 
 async def main():
     # 0) the file: who may come in as an administrator; everyone else only when added
-    assert orgaccess.parse("a@b.it ; X ; max_users=9 ; junk\nnot-an-email\n# c@d.it")["a@b.it"] == {"org": "X", "plan": {"max_users": 9, "max_collaborators": 5, "max_admins": 1}}
+    assert orgaccess.parse("a@b.it ; X ; max_users=9 ; junk\nnot-an-email\n# c@d.it")["a@b.it"] == {"org": "X", "plan": {"max_users": 9, "max_collaborators": 5, "max_admins": 1}, "verticals": None}
     assert (await server._access_gate("BOSS@alfa.it "))[0] == "admin"
     assert await server._access_gate("nobody@x.it") is None
     assert "non è abilitato" in await denied(reg("nobody@x.it", "Nessuno"))
